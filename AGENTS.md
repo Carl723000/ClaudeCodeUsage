@@ -5,16 +5,18 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
 
 ## Product identity and scope
 
-- Claude Code Usage is a VS Code extension that reads Claude Code's local JSONL
-  usage logs and displays exact token totals, cost estimates, and OAuth quota.
-- The product remains Claude-only in v2.2.1. Codex is a development tool in
-  this release, not a completed usage provider or a reason to rename the product.
+- Claude Code Usage is a VS Code extension that reads local Claude Code and
+  Codex usage logs. Claude keeps its exact token totals, cost estimates, and
+  OAuth quota; Codex Beta in v2.3.0 has provider-specific local usage and
+  optimization views without pretending its metrics equal Claude billing.
+- Preserve the established product identity and Claude workflows while adding
+  provider-neutral contracts and provider-specific presentation.
 - Prefer token-attribution accuracy over billing precision. Keep exact totals,
   labelled estimates, and point-in-time quota observations as separate concepts.
 - Keep the extension local-first, lightweight, and read-mostly. Never modify
-  Claude conversation JSONL files. Treat credential handling as security-sensitive
+  Claude or Codex conversation JSONL files. Treat credential handling as security-sensitive
   and preserve the existing reviewed behavior.
-- Add no new runtime dependencies in v2.2.1.
+- Add no new runtime dependencies in v2.3.0.
 
 ## Architecture boundaries
 
@@ -22,6 +24,12 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
   coalescing, settings changes, and diagnostic output.
 - `src/dataLoader.ts`: JSONL discovery/parsing, deduplication, attribution,
   content analysis, and usage aggregation.
+- `src/providers/providerTypes.ts` and provider adapters: provider-neutral token,
+  coverage, confidence, and limit contracts. Do not erase provider semantics.
+- `src/providers/codex/`: allowed-root discovery, schema guards, cumulative
+  high-water parsing, per-file aggregate index, worker protocol, and Codex facade.
+- `src/codexView.ts`: dependency-free Codex and Compare rendering; Compare never
+  sums cost or quota across providers.
 - `src/settings.ts`: the `SETTINGS` catalog and `SettingsStore`; do not scatter
   direct configuration reads.
 - `src/statusBar.ts`: status-bar token/cost/quota/context presentation.
@@ -35,16 +43,43 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
 ## Safety and privacy invariants
 
 - Never upload prompt text, response text, raw JSONL lines, absolute paths, raw
-  session IDs, credentials, or local usernames. New v2.2.1 performance
+  session IDs, credentials, or local usernames. New v2.3.0 performance
   diagnostics must not log them either; do not broaden older diagnostic output
   without an explicit privacy review.
+- Codex discovery is allowlisted to `$CODEX_HOME/sessions/**/*.jsonl` and
+  `$CODEX_HOME/archived_sessions/**/*.jsonl` (default `~/.codex`). Never read
+  `auth.json`, SQLite databases, config secrets, keychains, browser state, or
+  unknown files for Codex usage.
+- Raw Codex paths/session/parent IDs may exist only in short-lived local worker
+  memory. Persist machine-salted pseudonymous keys and numeric aggregates only.
 - Advice and optimizer network calls remain explicit user actions and may send
   only the documented digest or text the user pasted.
-- New settings default to existing behavior. Experimental or approximate
-  features default off.
+- New settings default to documented, non-surprising behavior. A beta provider
+  may default enabled only when its allowed local directory exists and absence
+  is a no-op; other experimental/approximate features default off unless an
+  approved spec explicitly says otherwise.
 - Do not read secret or credential files merely to diagnose a feature. Use
   redacted metadata and fixtures.
 - Do not hand-edit generated files in `out/`; edit `src/` and compile.
+
+## Codex Beta data and performance invariants
+
+- Codex processed tokens are `input + output`. Fresh input + output is
+  `max(0, input - cached input) + output`; it is a behavior aid, not a cost or
+  quota equivalent. Cached input is a subset of input and reasoning is a subset
+  of output, so never add either twice.
+- Parse cumulative `total_token_usage` with per-lineage high-water baselines.
+  Counter regressions, unknown parents, and schema drift produce explicit
+  quality flags instead of invented precision.
+- Codex rate limits recovered from local logs are `last-observed` only. Drop
+  them after their reset time; do not access credentials or call a network API
+  merely to make them current.
+- 2.4-GB-class history must be indexed in a background worker with a persistent
+  per-file aggregate index. Unchanged warm refresh reads no JSONL body; append
+  refresh reads only the tail. Support progress, cancellation, resume, and
+  single-flight refresh.
+- Codex optimization advice uses structural numeric signals only. Never inspect
+  or persist prompt/response/command bodies or tool arguments.
 
 ## Development and tests
 
@@ -124,7 +159,11 @@ An unreviewed automated Codex first pass uses exactly:
   defaults to DeepSeek and must not be relabelled Codex.
 - The wrapper, not model output, owns the trusted footer and emits exactly one.
 - Credit Claude Code and OpenAI Codex as development tools in all seven README
-  files. Do not put tools in Release Drafter's human contributor list and do
-  not invent a `Co-Authored-By` identity.
+  files. Do not put tools in Release Drafter's human contributor list. A commit
+  mainly written by OpenAI Codex must include this exact trailer:
+
+```text
+Co-authored-by: OpenAI Codex <215057067+openai-codex[bot]@users.noreply.github.com>
+```
 - Keep controlled comment-only first-pass automation separate from the
   privileged maintainer-only mention workflow.

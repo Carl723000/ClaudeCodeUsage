@@ -4,7 +4,7 @@ All notable changes to this fork compared to upstream
 [`ClaudeCodeUsage/ClaudeCodeUsage`](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage) (last
 upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased]
+## [2.3.0] — Unreleased
 
 ### Fixed
 - **Per-model weekly limits are read again** — Anthropic's usage API stopped
@@ -22,6 +22,17 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ### Added
 - **Usage credits in the quota tooltip** — the amount spent this month and the date it resets, once you have actually spent some.
   The figure stays visible after you switch credits off, since the spend already happened.
+- **Codex Beta** — local-only Codex usage views for processed, fresh input +
+  output, cached input, output, reasoning, model, effort, thread structure,
+  index coverage, quality flags, and last-observed limit snapshots.
+- **Provider-aware dashboard** — Claude, Codex Beta, and side-by-side Compare
+  modes preserve provider-specific semantics; Compare does not sum cost or quota.
+- **Local Codex optimization guidance** — structural signals explain unusually
+  high subagent, effort, approval-reviewer, command, and cache overhead without
+  reading prompt, response, command, or tool-argument bodies.
+- **Scalable Codex indexing** — a cancellable background worker and persistent
+  per-file aggregate index support recent-first progress, tail-only append reads,
+  resume, and zero JSONL body reads for unchanged warm refreshes.
 
 ### Changed
 - **`showOpusWeekly` is now `showScopedWeekly`** — the setting no longer names a
@@ -42,6 +53,18 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Quota warns at the same points as the official Claude app.**
   The quota indicator and every bar in its tooltip now turn amber at 75% and red at 90%, instead of 80% and 95%.
   The context-window indicator keeps the earlier 80% and 95% steps.
+- **Exact-version release announcements** — the default-on notification can be
+  disabled, stays quiet on a fresh install, and shows only the content for the
+  complete installed version instead of falling back to stale v2.2 notes.
+- Repository policy and architecture now define provider-neutral contracts,
+  Codex privacy boundaries, eight-locale/seven-README parity, and the real
+  OpenAI Codex co-author trailer for Codex-led commits.
+
+### Privacy
+- Codex discovery is restricted to `sessions/**/*.jsonl` and
+  `archived_sessions/**/*.jsonl`. The extension does not read Codex credentials,
+  SQLite databases, browser/keychain state, or unknown files, and persists only
+  machine-salted pseudonymous keys with numeric aggregates.
 
 ## [2.2.2] — Unreleased
 
@@ -58,7 +81,6 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Opus 5 context window (#81, reported in #84)** — recognise the bare
   `claude-opus-5` model id as a 1M-context model and remove its spurious
   unknown-model pricing diagnostic. Thanks [@e7d](https://github.com/e7d).
-
 ## [2.2.1] — 2026-07-18
 
 ### Added

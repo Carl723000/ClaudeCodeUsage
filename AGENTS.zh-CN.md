@@ -5,20 +5,28 @@
 
 ## 产品定位与范围
 
-- Claude Code Usage 是一个 VS Code 扩展，读取 Claude Code 本地 JSONL 用量
-  日志，展示精确 token 总量、成本估算和 OAuth 配额。
-- v2.2.1 保持 Claude-only。Codex 在这个版本中是开发工具，不是已经完成的
-  用量 provider，也不构成产品改名的理由。
+- Claude Code Usage 是一个读取本地 Claude Code 与 Codex 用量日志的
+  VS Code 扩展。Claude 保留精确 token 总量、成本估算与 OAuth 配额；
+  v2.3.0 直接包含 Codex Beta，提供 provider-specific 的本地用量与优化视图，
+  不假定其指标与 Claude 账单等价。
+- 保留既有产品身份与 Claude 工作流，同时增加 provider-neutral contract
+  和 provider-specific 展示。
 - 优先保证 token 归因准确，不追求账单级精度。精确总量、明确标注的估算、
   某一时点的配额观测必须保持为不同概念。
-- 扩展保持 local-first、轻量和 read-mostly。绝不修改 Claude 对话 JSONL；
+- 扩展保持 local-first、轻量和 read-mostly。绝不修改 Claude 或 Codex 对话 JSONL；
   credential 处理属于安全敏感范围，只保留已经审阅的既有行为。
-- v2.2.1 不新增 runtime dependency。
+- v2.3.0 不新增 runtime dependency。
 
 ## 架构边界
 
 - `src/extension.ts`：激活、命令、刷新调度、watcher、合并刷新、设置变化和诊断输出。
 - `src/dataLoader.ts`：JSONL 发现/解析、去重、归因、内容分析和用量聚合。
+- `src/providers/providerTypes.ts` 与 provider adapter：provider-neutral token、
+  coverage、confidence 与 limit contract；不得抹平 provider 语义。
+- `src/providers/codex/`：允许目录发现、schema guard、cumulative high-water 解析、
+  per-file 聚合索引、worker protocol 和 Codex facade。
+- `src/codexView.ts`：无依赖的 Codex/Compare 渲染；Compare 绝不跨 provider
+  求和成本或配额。
 - `src/settings.ts`：`SETTINGS` catalog 与 `SettingsStore`；不要散落直接配置读取。
 - `src/statusBar.ts`：状态栏 token、成本、配额和 context 展示。
 - `src/webview.ts`：dashboard HTML 与客户端行为。
@@ -30,13 +38,35 @@
 ## 安全与隐私不变量
 
 - 绝不上传 prompt、response、原始 JSONL 行、绝对路径、原始 session ID、
-  credential 或本地用户名。v2.2.1 新增的性能诊断也不得记录这些内容；未经过
+  credential 或本地用户名。v2.3.0 新增的诊断也不得记录这些内容；未经过
   明确隐私审阅，不扩大历史诊断输出范围。
+- Codex 只发现 `$CODEX_HOME/sessions/**/*.jsonl` 与
+  `$CODEX_HOME/archived_sessions/**/*.jsonl`（默认 `~/.codex`）。不得为用量
+  读取 `auth.json`、SQLite、config secret、keychain、浏览器状态或未知文件。
+- Codex raw path/session/parent ID 只允许存在于本地 worker 的短期内存；
+  持久化只保留 machine-salted 伪名 key 与数字聚合。
 - Advice 和 optimizer 的网络调用必须由用户明确触发，只能发送文档约定的摘要
   或用户亲自粘贴的文字。
-- 新设置默认保持既有行为；实验性或近似功能默认关闭。
+- 新设置默认行为必须有明确文档且符合直觉。Beta provider 只能在允许的本地目录
+  存在时默认启用，目录不存在时必须 no-op；其他实验性/近似功能默认关闭，
+  除非已批准 spec 明确规定例外。
 - 不要仅为了诊断功能而读取 secret 或 credential 文件；使用脱敏 metadata 与 fixture。
 - 不要手改 `out/` 生成物；修改 `src/` 后编译。
+
+## Codex Beta 数据与性能不变量
+
+- Codex processed tokens 是 `input + output`；fresh input + output 是
+  `max(0, input - cached input) + output`，它只是行为优化指标，不是成本或配额等价。
+  Cached input 是 input 子集，reasoning 是 output 子集，绝不重复相加。
+- 用每个 lineage 的 high-water baseline 解析 cumulative `total_token_usage`。Counter
+  regression、unknown parent 和 schema drift 产生明确 quality flag，不伪造精度。
+- 从 Codex 本地日志恢复的 rate limit 只是 `last-observed`；到达 reset 时间后丢弃，
+  不为了追求“实时”而读 credential 或发网络请求。
+- 2.4-GB-class 历史必须由 background worker 与持久化 per-file 聚合索引处理。
+  Unchanged warm refresh 不读 JSONL body，append refresh 只读 tail；支持 progress、cancel、resume
+  与 single-flight。
+- Codex 优化建议只使用结构化数字信号，不读取或持久化 prompt/response/command body
+  或 tool arguments。
 
 ## 开发与测试
 
@@ -104,6 +134,11 @@ npx @vscode/vsce package
 - 归因必须写实际 generator。当前 first-pass runner 默认使用 DeepSeek，不得改标 Codex。
 - trusted footer 由 wrapper 而不是模型输出负责，并且只能出现一次。
 - 在七份 README 中把 Claude Code 与 OpenAI Codex 记为开发工具；不得把工具放入
-  Release Drafter 的人类 contributor 列表，也不得编造 `Co-Authored-By` 身份。
+  Release Drafter 的人类 contributor 列表。主要撰写代码的 OpenAI Codex commit 必须
+  带以下精确 trailer：
+
+```text
+Co-authored-by: OpenAI Codex <215057067+openai-codex[bot]@users.noreply.github.com>
+```
 - comment-only 的受控 first-pass automation 与 maintainer-only 的高权限 mention
   workflow 必须保持分离。
