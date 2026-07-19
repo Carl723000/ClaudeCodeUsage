@@ -4,7 +4,7 @@
 
 ---
 
-**看清你的 Claude Code 用量，讓 AI 幫你用得更好。** 不是帳單工具，不是多 provider 監控面板。一個專注於 token 精確歸因、並以 AI 幫你優化使用習慣的輕量 VS Code 插件。
+**看清 Claude Code 與 Codex 的本地用量，讓 AI 幫你用得更好。** 不是帳單工具。Claude 保留成本與配額檢視；Codex Beta 依自己的 token 與行為語意提供分析。
 
 > **它是什麼**：一個 VS Code 狀態列小工具，讀取本地 Claude Code 對話日誌，按 token × 公開單價估算用量與成本；並提供可選的 AI 建議功能，幫你優化提示詞、減少不必要的 token 消耗。
 >
@@ -35,6 +35,13 @@
 - **AI 建議**（選用）— 將用量摘要加上你近期提示的樣本送往 OpenAI 相容 API（預設 DeepSeek V4 Pro），給出具體改寫建議。需自備 key，或先預覽靜態示範。
 - **多廠商定價** — Opus 4.x / Sonnet 4.x / Haiku 4.5 對照 Anthropic 官方定價；OpenAI / Gemini / DeepSeek / Kimi / GLM / Qwen 參考價，含家族感知回退。`Refresh Token Pricing` 可拉取 LiteLLM 即時價格。
 - **個人化** — 語言、時區、小數位數、精簡數字、專案分組、儀表板自動刷新開關。
+
+## v2.3 Codex Beta
+
+- 僅讀取本地 Codex 的 `sessions/**/*.jsonl` 與 `archived_sessions/**/*.jsonl`；確定性洞察不讀取憑證、資料庫、提示、回覆、命令或工具參數正文。
+- **已處理** = 輸入 + 輸出；**新鮮** = 未快取輸入 + 輸出；**快取輸入**仍是輸入的子集，reasoning 仍是輸出的子集。Codex 不顯示人為估算成本。
+- Claude / Codex / Compare 檢視包含模型、effort、根任務 / 子任務占比、approval-reviewer 活動、索引覆蓋率、品質標記與**最後觀測**到的主要額度快照。
+- 本地建議會標出高 effort、多 agent、重複檢查與低快取模式，並提供可直接貼上的約束。背景索引預設監聽延遲為 30 秒，也可關閉或改用更長間隔。
 
 ## 安裝
 

@@ -4,7 +4,7 @@
 
 ---
 
-**The Claude Code coach in your status bar.** Not a billing tool. Not a multi-provider monitor. A focused token tracker that uses AI to help you use Claude Code better.
+**The local Claude Code and Codex usage coach in your status bar.** Not a billing tool. Claude retains its cost and quota views; Codex Beta adds token and behaviour insights with Codex-native semantics.
 
 > **What it is:** a VS Code status-bar monitor that reads your local Claude Code conversation logs and shows **token-derived** usage and cost estimates — plus an optional AI advisor that suggests how to improve your prompts and reduce waste.
 >
@@ -35,6 +35,13 @@ Hover the quota indicator for a breakdown:
 - **AI advice** (opt-in) — sends a usage summary plus a sample of your prompts to an OpenAI-compatible API (DeepSeek V4 Pro by default) and suggests concrete rewrites. Bring your own key, or preview a static demo first.
 - **Multi-vendor pricing** — Opus 4.x / Sonnet 4.x / Haiku 4.5 verified against Anthropic's public pricing; reference rates for OpenAI / Gemini / DeepSeek / Kimi / GLM / Qwen with family-aware fallback. `Refresh Token Pricing` pulls live LiteLLM data.
 - **Personalisation** — language, timezone, decimal places, compact numbers, project grouping, dashboard auto-refresh toggle.
+
+## Codex Beta in v2.3
+
+- Reads only local Codex `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; it never reads credentials, databases, prompts, responses, commands, or tool-argument bodies for its deterministic insights.
+- **Processed** means input + output, **fresh** means uncached input + output, **cached input** remains a subset of input, and reasoning remains a subset of output. Codex cost is not estimated.
+- Claude / Codex / Compare views include model, effort, root/child task share, approval-reviewer activity, index coverage, quality flags, and the **last-observed** primary limit snapshot.
+- Local recommendations highlight high-effort, multi-agent, repeated-check, and low-cache patterns and provide paste-ready constraints. The background index uses a configurable watcher delay (30 seconds by default; Off is available).
 
 ## Install
 

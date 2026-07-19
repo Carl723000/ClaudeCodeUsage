@@ -4,7 +4,7 @@
 
 ---
 
-**Pelatih Claude Code Anda di status bar.** Bukan alat billing. Bukan monitor multi-provider. Pelacak token yang fokus, dan memakai AI untuk membantu Anda memakai Claude Code dengan lebih baik.
+**Pelatih penggunaan lokal Claude Code dan Codex di status bar.** Bukan alat billing. Tampilan biaya / kuota Claude tetap ada; Codex Beta menganalisis token dan perilaku sesuai semantik Codex.
 
 > **Apa ini:** monitor status bar VS Code yang membaca log percakapan Claude Code lokal Anda dan menampilkan estimasi penggunaan serta biaya **berbasis token** — plus penasihat AI opsional yang menyarankan cara memperbaiki prompt Anda dan mengurangi pemborosan.
 
@@ -35,6 +35,13 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 - **Saran AI** (opsional) — mengirim ringkasan penggunaan plus sampel prompt Anda ke API yang kompatibel dengan OpenAI (DeepSeek V4 Pro secara default) dan menyarankan penulisan ulang yang konkret. Gunakan API key Anda sendiri, atau pratinjau demo statis terlebih dahulu.
 - **Harga multi-vendor** — Opus 4.x / Sonnet 4.x / Haiku 4.5 diverifikasi terhadap harga publik Anthropic; tarif referensi untuk OpenAI / Gemini / DeepSeek / Kimi / GLM / Qwen dengan fallback berbasis family model. `Refresh Token Pricing` menarik data LiteLLM langsung.
 - **Personalisasi** — bahasa, zona waktu, angka desimal, angka ringkas, pengelompokan proyek, toggle penyegaran otomatis dashboard.
+
+## Codex Beta di v2.3
+
+- Hanya membaca `sessions/**/*.jsonl` dan `archived_sessions/**/*.jsonl` Codex lokal. Insight deterministik tidak membaca kredensial, database, prompt, respons, perintah, atau isi argumen tool.
+- **Diproses** = input + output, **baru (fresh)** = input non-cache + output, **cached input** tetap bagian dari input, dan reasoning bagian dari output. Biaya Codex tidak diestimasi.
+- Tampilan Claude / Codex / Compare mencakup model, effort, porsi task root / child, aktivitas approval-reviewer, cakupan indeks, penanda kualitas, dan snapshot batas utama **terakhir diamati**.
+- Rekomendasi lokal menandai high effort, multi-agent, pemeriksaan berulang, dan pola cache rendah, lalu memberi batasan siap-tempel. Jeda watcher indeks latar adalah 30 detik secara default dan dapat dimatikan atau diperpanjang.
 
 ## Instalasi
 

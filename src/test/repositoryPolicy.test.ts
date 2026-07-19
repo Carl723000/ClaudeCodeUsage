@@ -107,6 +107,37 @@ test('all seven README files credit both development tools', () => {
   }
 });
 
+test('all seven README editions explain Codex Beta in their own language', () => {
+  const expectations: Record<string, RegExp[]> = {
+    'README.md': [/Codex Beta/, /processed/i, /fresh/i, /cached/i, /last-observed/i],
+    'README-en.md': [/Codex Beta/, /processed/i, /fresh/i, /cached/i, /last-observed/i],
+    'README-zh-CN.md': [/Codex Beta/, /已处理/, /新鲜/, /缓存/, /最后观测/],
+    'README-zh-TW.md': [/Codex Beta/, /已處理/, /新鮮/, /快取/, /最後觀測/],
+    'README-ja.md': [/Codex Beta/, /処理済み/, /新規入力/, /キャッシュ/, /最終観測/],
+    'README-ko.md': [/Codex Beta/, /처리된/, /새 입력/, /캐시/, /마지막 관측/],
+    'README-id.md': [/Codex Beta/, /diproses/i, /baru/i, /cache/i, /terakhir diamati/i],
+  };
+
+  for (const [readme, patterns] of Object.entries(expectations)) {
+    const body = repoFile(readme);
+    for (const pattern of patterns) {
+      assert.match(body, pattern, `${readme} is missing ${pattern}`);
+    }
+    assert.doesNotMatch(body, /showOpusWeekly/, `${readme} still documents the retired setting key`);
+  }
+});
+
+test('Marketplace metadata presents Claude and Codex local usage support', () => {
+  const packageJson = JSON.parse(repoFile('package.json')) as {
+    description: string;
+    keywords: string[];
+  };
+  assert.match(packageJson.description, /Claude.*Codex|Codex.*Claude/i);
+  assert.ok(packageJson.keywords.includes('codex'));
+  assert.ok(packageJson.keywords.includes('openai'));
+  assert.ok(packageJson.keywords.includes('local-usage'));
+});
+
 test('pull request checklist names the actual eight UI locales', () => {
   const packageJson = JSON.parse(repoFile('package.json')) as {
     contributes: { configuration: { properties: Record<string, { enum?: string[] }> } };
