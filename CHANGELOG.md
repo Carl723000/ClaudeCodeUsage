@@ -16,7 +16,7 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   high subagent, effort, approval-reviewer, command, and cache overhead without
   reading prompt, response, command, or tool-argument bodies.
 - **Scalable Codex indexing** — a cancellable background worker and persistent
-  per-file aggregate index support recent-first progress, tail-only append reads,
+  per-file aggregate index support incremental progress, tail-only append reads,
   resume, and zero JSONL body reads for unchanged warm refreshes.
 
 ### Changed

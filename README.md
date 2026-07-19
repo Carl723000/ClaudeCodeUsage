@@ -4,24 +4,24 @@
 [![Open VSX Registry](https://img.shields.io/open-vsx/v/GrowthJack/claude-code-usage?style=flat-square&logo=eclipseide&label=Open%20VSX)](https://marketplace.cursorapi.com/items/?itemName=GrowthJack.claude-code-usage)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
-**The Claude Code coach in your status bar.** Not a billing tool. Not a
-multi-provider monitor. A focused token tracker that uses AI to help you
-use Claude Code better.
+**The local Claude Code and Codex usage coach in your status bar.** Not a
+billing tool. Claude keeps its cost and quota views; the v2.3 Codex Beta adds
+provider-specific token and behaviour insights instead of pretending both
+providers expose the same data.
 
 > **What this is:** A VS Code status-bar monitor that reads your local
-> Claude Code conversation logs and shows **token-derived** usage and cost
-> estimates — plus an optional AI advisor that suggests how to improve
-> your prompts and reduce waste.
+> Claude Code and Codex logs and shows provider-appropriate usage views — plus
+> optional guidance that helps reduce avoidable token and workflow overhead.
 >
 > **What this is _not_:** a billing tool. All amounts are estimates based
 > on public per-million-token rates. Refer to your Anthropic account for
 > actual charges.
 
-> **看清你的 Claude Code 用量，让 AI 帮你用得更好。**
+> **看清 Claude Code 与 Codex 的本地用量，让 AI 帮你用得更好。**
 >
-> **简介**：一个 VS Code 状态栏小工具，读取本地 Claude Code 对话日志，
-> 按 token × 公开单价估算用量与成本；并提供可选的 AI 建议功能，帮你优化
-> 提示词、减少不必要的 token 消耗。
+> **简介**：一个 VS Code 状态栏小工具。Claude 保留成本与配额视图；
+> v2.3 的 Codex Beta 则按 Codex 自身的数据语义展示 token、effort、任务结构
+> 和本地优化建议，而不是强行套用 Claude 的统计方式。
 >
 > **它不是什么**：账单工具。显示金额均为估算值，实际费用请以官方账单为准。
 
@@ -100,6 +100,31 @@ consent prompt.
 
 ---
 
+## What's new in 2.3
+
+- **Codex Beta, enabled by default** — reads only local
+  `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`. Disable it at any
+  time in the dashboard's **Settings → Providers** section.
+- **Codex-native metrics** — **processed** = input + output; **fresh** =
+  uncached input + output; **cached input** is a subset of input; **reasoning**
+  is a subset of output. No artificial Codex cost estimate is shown.
+- **Claude / Codex / Compare modes** — keep each provider's meaning intact.
+  Compare shows input, output, and cache side by side; it never adds unrelated
+  costs or quota windows together.
+- **Behaviour insights** — inspect model and effort mix, root/child task share,
+  approval-reviewer activity, command-round proxies, and cache reuse. The
+  recommendations specifically flag patterns such as high-effort or multi-agent
+  overhead on exploratory work and include localized, paste-ready constraints.
+- **Coverage you can audit** — indexing coverage, incomplete-record quality
+  flags, and the **last-observed** primary limit snapshot are labelled rather
+  than presented as live billing truth.
+- **Private, scalable local index** — prompt, response, command, and tool-argument
+  bodies are never read for Codex insights; credentials and databases are out of
+  scope. A background worker incrementally scans large histories, with a default
+  30-second watcher delay (Off / 10 / 30 / 60 / 120 / 300 seconds).
+- **Exact-version release notice** — the upgrade message only describes the
+  installed release. It is on by default and can be disabled in Settings.
+
 ## What's new in 2.2
 
 - **Usage share card** (opt-in, `enableShareCard`) — a themed, configurable
@@ -176,8 +201,10 @@ consent prompt.
   icon as a way back into the dashboard.
 - **Status-bar metric** (`statusBarMetric`) — keep showing today's cost, or
   switch the first item to today's total **token** count (compact k/M).
-- **Weekly Opus limit** (`showOpusWeekly`, opt-in) — append `opus:NN%` to the
-  quota item for heavy Opus users. (PR #38, [@wheelbarrel00](https://github.com/wheelbarrel00).)
+- **Original model-specific weekly-limit contribution** — PR #38 by
+  [@wheelbarrel00](https://github.com/wheelbarrel00) added the earlier status-bar
+  option. The obsolete model-specific surface is retired in v2.3; generic
+  5-hour and weekly quota windows remain.
 - **AI advice 2.0** — bring your own key: **Anthropic** (`/v1/messages`) by
   default, or any OpenAI-compatible endpoint (`advice.apiFormat`). Fed with the
   new signals (runs, cache hit rates, attribution, thinking share); optional
@@ -256,7 +283,7 @@ downloaded `.vsix`.
 tab — grouped into General, Status bar, Data & refresh, and AI advice &
 Optimizer. Changes apply immediately.
 
-To keep VS Code's own Settings UI uncluttered, only three settings stay there
+To keep VS Code's own Settings UI uncluttered, only four settings stay there
 (so they still travel with Settings Sync). Open Settings (`Ctrl+,`) and search
 for **`Claude Code Usage`**:
 
@@ -264,6 +291,7 @@ for **`Claude Code Usage`**:
 |---|---|---|
 | `language` | `"auto"` | UI language: `auto` / `en` / `de-DE` / `zh-TW` / `zh-CN` / `ja` / `ko` / `pt-BR` / `id`. |
 | `dataDirectory` | `""` | Custom Claude data dir; empty = auto-detect. |
+| `codex.dataDirectory` | `""` | Custom Codex home; empty = `CODEX_HOME` or `~/.codex`. |
 | `advice.apiKey` | `""` | API key for AI advice + the Usage Optimizer (empty = advice opens a demo instead). |
 
 Everything else — refresh interval, status-bar items, number/date formatting,
@@ -305,6 +333,11 @@ authoritative.
 
 - All token / cost / session analysis runs **locally** by reading your
   `~/.claude/projects/**/*.jsonl` files.
+- Codex Beta reads only `sessions/**/*.jsonl` and
+  `archived_sessions/**/*.jsonl` below your Codex home. Its deterministic
+  insights do not read prompt, response, command, or tool-argument bodies and
+  make no network request. The persistent index contains only machine-salted
+  pseudonymous keys and numeric aggregates.
 - The quota indicator calls **`api.anthropic.com/api/oauth/usage`** using
   Claude Code's existing OAuth token. No additional credentials are sent.
 - **AI advice** and the **Usage Optimizer** are the only features that call a
@@ -413,7 +446,8 @@ Contributors whose upstream PRs / issues are incorporated here:
   original status-bar context-window indicator and the `showCost` toggle.
 - [@wheelbarrel00](https://github.com/wheelbarrel00) —
   [PR #38](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/38), the opt-in
-  weekly Opus limit (`showOpusWeekly`) in the status bar.
+  model-specific weekly-limit option in the status bar (retired in v2.3 while
+  preserving credit for the original contribution).
 - [@brenoneill](https://github.com/brenoneill) —
   [PR #14](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/14), custom
   data directory (merged into upstream 1.0.8).

@@ -4,7 +4,7 @@
 
 ---
 
-**状态栏中的 Claude Code 使用教练。** 它不是账单工具，也不是多供应商监控面板，而是一个轻量级 VS Code 插件，专注于精确归因 token 消耗，并借助 AI 帮你更聪明地使用 Claude Code。
+**状态栏中的 Claude Code 与 Codex 本地用量教练。** 它不是账单工具。Claude 保留成本与配额视图；Codex Beta 按自己的 token 与行为语义提供分析，无需硬套 Claude 的结构。
 
 > **它是什么**：一个 VS Code 状态栏小工具，读取本地 Claude Code 对话日志，用 token 数量乘以公开单价来估算使用量和成本；并可提供 AI 建议，帮你优化提示、减少浪费。
 >
@@ -60,6 +60,13 @@ AI 建议生成的是一份 **Markdown 文档**，用文字展示比截图更直
 
 ---
 
+## 2.3 Codex Beta
+
+- 仅读取本地 Codex 的 `sessions/**/*.jsonl` 与 `archived_sessions/**/*.jsonl`；确定性洞察不读取凭据、数据库、提示词、回复、命令或工具参数正文。
+- **已处理** = 输入 + 输出；**新鲜** = 未缓存输入 + 输出；**缓存输入**仍是输入的子集，reasoning 仍是输出的子集。Codex 不显示人为估算的成本。
+- Claude / Codex / Compare 视图展示模型、effort、根任务 / 子任务占比、approval-reviewer 活动、索引覆盖率、质量标记和**最后观测**到的主要额度快照。
+- 本地建议会提示高 effort、多智能体、重复检查和低缓存模式，并给出可直接粘贴的约束。后台索引默认以 30 秒延迟监听，也可选择关闭或更长间隔。
+
 ## 2.2 新功能
 
 - **用量分享卡**（可选，`enableShareCard`）：一张可配置的单页 SVG 用量卡——自选时间范围 × 范围（总体 / 工程 / 会话）× 展示哪些指标，以及主题（**Claude 经典橙** / **奶油** / **极光暗色** / **自动**），可选带上 GitHub 头像与名称。自包含、可复现；提示词、路径、ID 一律不出本机。中文语言下使用 万/亿 单位。
@@ -85,7 +92,7 @@ AI 建议生成的是一份 **Markdown 文档**，用文字展示比截图更直
 - **工作流配额护栏**：当 5 小时窗口剩余不足以完成一次运行时，仪表板显示可关闭的警告横幅（`claudeCodeUsage.workflowQuotaWarnPercent`）。
 - **设置搬进仪表板**：新增 ⚙ 设置标签页，就地管理所有选项；VS Code 原生设置只保留三个适合同步的（`language`、`dataDirectory`、`advice.apiKey`）。右上角按钮精简为 ✨ AI 建议 和 ⚙ 设置（都跳到对应标签）；自动刷新开关挪进设置（暂停时右上角才出现手动 ↻）。如果你把成本、配额、上下文三项**全部隐藏**，状态栏会保留一个小图标作为回到仪表板的入口。
 - **状态栏指标**（`statusBarMetric`）：默认显示今日成本，也可切换为今日**总 token** 消耗（紧凑 k/M）。
-- **每周 Opus 上限**（`showOpusWeekly`，可选开启）：在配额项后追加 `opus:NN%`，方便重度 Opus 用户一眼看到每周 Opus 额度。（PR #38，[@wheelbarrel00](https://github.com/wheelbarrel00)。）
+- **原模型专属每周上限贡献**：PR #38（[@wheelbarrel00](https://github.com/wheelbarrel00)）曾加入状态栏选项；该过时入口在 v2.3 退役，通用 5 小时 / 每周配额仍保留。
 - **AI 建议 2.0**：自备 key：默认 **Anthropic**（`/v1/messages`），也支持任意 OpenAI 兼容端点（`advice.apiFormat`）。引入新信号（运行、缓存命中率、归因、思考占比）；可选 `advice.userContext` 会附上"针对本项目的个性化"一节；`advice.promptWindowDays`（默认 30）设定采样窗口。传输层加强了：超时、重试、curl 兜底。*（一个免 key 的"订阅"后端做过原型，但本版未上线 —— Anthropic 封禁用 Claude Code 的 OAuth token 直连 API；若日后放开会再启用。）*
 - **用量优化器**（实验性，`advice.optimizer.enabled`，默认关闭）：Content 标签页的一张卡，粘贴进粗略需求，返回一条精炼提示词，以**纯文本**形式（可直接粘贴、无 Markdown），并附推荐的 effort / thinking / 模型。三个可选微调项（标出含糊指代 · 压缩长粘贴内容 · 建议风格方向）。**只发送你粘贴的文字**，且首次有一次性同意确认。
 - **上下文窗口指示器**（实验性，默认关闭）：在设置里开启后，状态栏显示当前 session 的上下文占用。`~` 表示窗口大小是猜测；代理 / 自定义模型可用 `contextWindowOverride` 手填真实窗口。
@@ -215,7 +222,7 @@ ext install GrowthJack.claude-code-usage
 - [@Dobidop](https://github.com/Dobidop) —— [PR #9](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/9)，读取真实 `/usage` 数据的 OAuth 方案；配额指示器据此改编。
 - [@nickearnshaw](https://github.com/nickearnshaw) —— [PR #8](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/8) 本地化数字 / 日期；[PR #20](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/20) 修复 webview / 状态栏卡在 "Loading…"；[PR #21](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/21) `cleanupPeriodDays` 文档；[PR #24](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/24) 配额窗口滚动处理。
 - [@ScherbakovAl](https://github.com/ScherbakovAl) —— [PR #31](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/31)，状态栏上下文窗口指示器与 `showCost` 开关的原始实现。
-- [@wheelbarrel00](https://github.com/wheelbarrel00) —— [PR #38](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/38)，状态栏可选显示每周 Opus 上限（`showOpusWeekly`）。
+- [@wheelbarrel00](https://github.com/wheelbarrel00) —— [PR #38](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/38)，最初的状态栏模型专属每周上限选项（v2.3 已退役，但原贡献完整保留署名）。
 - [@brenoneill](https://github.com/brenoneill) —— [PR #14](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/14)，自定义数据目录（已并入上游 1.0.8）。
 - [@mxzinke](https://github.com/mxzinke) —— Opus 4.5 / Haiku 4.5 价格 + 德语翻译（上游 1.0.8）。
 
