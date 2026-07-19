@@ -1,7 +1,6 @@
 import {
   CodexInsight,
   CodexInsightKind,
-  pasteReadyConstraint,
 } from './providers/codex/codexInsights';
 import {
   CodexMetricTotals,
@@ -40,6 +39,10 @@ export interface CodexViewCopy {
   optimization: string;
   structuralProxy: string;
   pasteConstraint: string;
+  constraintNoAgents: string;
+  constraintLowerEffort: string;
+  constraintTests: string;
+  constraintStop: string;
   compareTitle: string;
   noRecentTask: string;
   insightTitles: Record<CodexInsightKind, string>;
@@ -76,6 +79,10 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   optimization: 'Local optimization signals',
   structuralProxy: 'Structural proxy; command bodies are not read.',
   pasteConstraint: 'Paste-ready constraint',
+  constraintNoAgents: 'Do not start unnecessary subagents or independent review passes.',
+  constraintLowerEffort: 'For this small change, compare one lower effort level on a representative task.',
+  constraintTests: 'Run one focused test tied to the change, then one full test pass.',
+  constraintStop: 'Stop when the acceptance criteria pass; do not expand this into production-grade hardening.',
   compareTitle: 'Provider comparison',
   noRecentTask: 'No recent Codex task is indexed yet.',
   insightTitles: {
@@ -166,6 +173,22 @@ function insightCard(insight: CodexInsight, copy: CodexViewCopy): string {
   return `<article class="codex-insight codex-insight-${escapeHtml(insight.severity)}"><h4>${escapeHtml(copy.insightTitles[insight.kind])}</h4><div class="codex-evidence">${evidence}</div>${insight.proxy ? `<p>${escapeHtml(copy.structuralProxy)}</p>` : ''}</article>`;
 }
 
+function localizedConstraint(
+  insights: CodexInsight[],
+  copy: CodexViewCopy,
+): string {
+  const kinds = new Set(insights.map((insight) => insight.kind));
+  const sentences: string[] = [];
+  if (kinds.has('multi-agent-tax') || kinds.has('approval-reviewer')) {
+    sentences.push(copy.constraintNoAgents);
+  }
+  if (kinds.has('effort-comparison')) {
+    sentences.push(copy.constraintLowerEffort);
+  }
+  sentences.push(copy.constraintTests, copy.constraintStop);
+  return sentences.join(' ');
+}
+
 export function renderCodexView(
   view: CodexUsageView,
   insights: CodexInsight[],
@@ -212,7 +235,7 @@ export function renderCodexView(
     ${projectPanels}
     <div class="codex-coverage-card"><strong>${escapeHtml(copy.coverage)}</strong>: ${number(view.coverage.indexedFiles)}/${number(view.coverage.totalFiles)} files · ${number(view.coverage.indexedBytes)}/${number(view.coverage.totalBytes)} bytes · ${escapeHtml(view.coverage.complete ? copy.complete : copy.partial)}<br><strong>${escapeHtml(copy.quality)}</strong>: ${quality}</div>
     <div class="codex-limit-card">${limitText}</div>
-    <section class="codex-insights"><h3>${escapeHtml(copy.optimization)}</h3>${insightHtml}<details><summary>${escapeHtml(copy.pasteConstraint)}</summary><pre>${escapeHtml(pasteReadyConstraint(insights))}</pre></details></section>
+    <section class="codex-insights"><h3>${escapeHtml(copy.optimization)}</h3>${insightHtml}<details><summary>${escapeHtml(copy.pasteConstraint)}</summary><pre>${escapeHtml(localizedConstraint(insights, copy))}</pre></details></section>
   </section>`;
 }
 
