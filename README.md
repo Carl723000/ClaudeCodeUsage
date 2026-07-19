@@ -119,9 +119,9 @@ consent prompt.
   flags, and the **last-observed** primary limit snapshot are labelled rather
   than presented as live billing truth.
 - **Private, scalable local index** — prompt, response, command, and tool-argument
-  bodies are never read for Codex insights; credentials and databases are out of
-  scope. A background worker incrementally scans large histories, with a default
-  30-second watcher delay (Off / 10 / 30 / 60 / 120 / 300 seconds).
+  content is not inspected, used, or retained for Codex insights; credential and
+  database files are out of scope. A background worker scans large histories,
+  with a default 30-second watcher delay (Off / 10 / 30 / 60 / 120 / 300 seconds).
 - **Exact-version release notice** — the upgrade message only describes the
   installed release. It is on by default and can be disabled in Settings.
 
@@ -334,9 +334,9 @@ authoritative.
   `~/.claude/projects/**/*.jsonl` files.
 - Codex Beta reads only `sessions/**/*.jsonl` and
   `archived_sessions/**/*.jsonl` below your Codex home. Its deterministic
-  insights do not read prompt, response, command, or tool-argument bodies and
-  make no network request. The persistent index contains only machine-salted
-  pseudonymous keys and numeric aggregates.
+  insights do not inspect, use, or retain prompt, response, command, or
+  tool-argument content and make no network request. The persistent index
+  contains only machine-salted pseudonymous keys and numeric aggregates.
 - The quota indicator calls **`api.anthropic.com/api/oauth/usage`** using
   Claude Code's existing OAuth token. No additional credentials are sent.
 - **AI advice** and the **Usage Optimizer** are the only features that call a

@@ -38,7 +38,7 @@ Hover the quota indicator for a breakdown:
 
 ## Codex Beta in v2.3
 
-- Reads only local Codex `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; it never reads credentials, databases, prompts, responses, commands, or tool-argument bodies for its deterministic insights.
+- Reads only local Codex `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; credential and database files are excluded, while prompt, response, command, and tool-argument content is not inspected, used, or retained for deterministic insights.
 - **Processed** means input + output, **fresh** means uncached input + output, **cached input** remains a subset of input, and reasoning remains a subset of output. Codex cost is not estimated.
 - Claude / Codex / Compare views include model, effort, root/child task share, approval-reviewer activity, index coverage, quality flags, and the **last-observed** primary limit snapshot.
 - Local recommendations highlight high-effort, multi-agent, repeated-check, and low-cache patterns and provide paste-ready constraints. The background index uses a configurable watcher delay (30 seconds by default; Off is available).

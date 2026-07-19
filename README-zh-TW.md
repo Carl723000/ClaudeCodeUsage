@@ -38,7 +38,7 @@
 
 ## v2.3 Codex Beta
 
-- 僅讀取本地 Codex 的 `sessions/**/*.jsonl` 與 `archived_sessions/**/*.jsonl`；確定性洞察不讀取憑證、資料庫、提示、回覆、命令或工具參數正文。
+- 僅讀取本地 Codex 的 `sessions/**/*.jsonl` 與 `archived_sessions/**/*.jsonl`；憑證與資料庫檔案明確排除，確定性洞察不檢查、不使用、不保留提示、回覆、命令或工具參數正文。
 - **已處理** = 輸入 + 輸出；**新鮮** = 未快取輸入 + 輸出；**快取輸入**仍是輸入的子集，reasoning 仍是輸出的子集。Codex 不顯示人為估算成本。
 - Claude / Codex / Compare 檢視包含模型、effort、根任務 / 子任務占比、approval-reviewer 活動、索引覆蓋率、品質標記與**最後觀測**到的主要額度快照。
 - 本地建議會標出高 effort、多 agent、重複檢查與低快取模式，並提供可直接貼上的約束。背景索引預設監聽延遲為 30 秒，也可關閉或改用更長間隔。
