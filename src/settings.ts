@@ -9,6 +9,7 @@ import { LIVE_REFRESH_SECONDS } from './refreshPolicy';
 // Settings Sync:
 //   - language        (UI language; people sync this)
 //   - dataDirectory   (machine-specific path a power user may script)
+//   - codex.dataDirectory (optional machine-specific Codex home)
 //   - advice.apiKey   (a secret some keep in their synced settings)
 //
 // The catalog below drives BOTH the read/write plumbing and the dashboard
@@ -19,7 +20,7 @@ import { LIVE_REFRESH_SECONDS } from './refreshPolicy';
 
 export type SettingType = 'boolean' | 'number' | 'enum' | 'string';
 export type SettingStorage = 'config' | 'state';
-export type SettingGroup = 'general' | 'features' | 'statusBar' | 'data' | 'advice';
+export type SettingGroup = 'general' | 'providers' | 'features' | 'statusBar' | 'data' | 'advice';
 
 export interface SettingDef {
   key: string; // dotted config key, e.g. 'advice.backend'
@@ -200,6 +201,37 @@ export const SETTINGS: SettingDef[] = [
     label: 'Release announcements',
     help: "Show one What's New notification after an extension upgrade.",
   },
+
+  // --- Providers ---
+  {
+    key: 'codex.enabled',
+    type: 'boolean',
+    default: true,
+    storage: 'state',
+    group: 'providers',
+    label: 'Enable Codex Beta',
+    help: 'Read privacy-safe usage aggregates from local Codex session logs.',
+  },
+  {
+    key: 'codex.dataDirectory',
+    type: 'string',
+    default: '',
+    storage: 'config',
+    group: 'providers',
+    label: 'Custom Codex data directory',
+    help: 'Empty = CODEX_HOME, then ~/.codex. Authentication files are never read.',
+  },
+  {
+    key: 'codex.fileWatchSeconds',
+    type: 'enum',
+    default: '30',
+    storage: 'state',
+    group: 'providers',
+    label: 'Codex live refresh delay',
+    help: 'Quiet debounce after local Codex JSONL changes. Off disables watching.',
+    enumValues: ['0', '10', '30', '60', '120', '300'],
+    enumLabels: ['Off', '10s', '30s', '60s', '120s', '300s'],
+  },
   {
     key: 'showHeatmap',
     type: 'boolean',
@@ -287,6 +319,28 @@ export const SETTINGS: SettingDef[] = [
   },
 
   // --- Status bar ---
+  {
+    key: 'statusBarProvider',
+    type: 'enum',
+    default: 'auto',
+    storage: 'state',
+    group: 'statusBar',
+    label: 'Status-bar provider',
+    help: 'Auto prefers Claude when both providers have data.',
+    enumValues: ['auto', 'claude', 'codex'],
+    enumLabels: ['Auto', 'Claude', 'Codex'],
+  },
+  {
+    key: 'codex.statusMetric',
+    type: 'enum',
+    default: 'fresh',
+    storage: 'state',
+    group: 'statusBar',
+    label: 'Codex status metric',
+    help: 'Fresh input + output, processed tokens, or output tokens.',
+    enumValues: ['fresh', 'processed', 'output'],
+    enumLabels: ['Fresh', 'Processed', 'Output'],
+  },
   {
     key: 'showCost',
     type: 'boolean',

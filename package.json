@@ -46,6 +46,11 @@
           "default": "",
           "description": "Custom Claude data directory path (leave empty for auto-detection)"
         },
+        "claudeCodeUsage.codex.dataDirectory": {
+          "type": "string",
+          "default": "",
+          "description": "Custom Codex data directory (leave empty for CODEX_HOME or ~/.codex)"
+        },
         "claudeCodeUsage.language": {
           "type": "string",
           "enum": [

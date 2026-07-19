@@ -265,6 +265,11 @@ export interface UsageAttribution {
 export interface ExtensionConfig {
   refreshInterval: number;
   dataDirectory: string;
+  codexEnabled: boolean;
+  codexDataDirectory: string;
+  codexFileWatchSeconds: number;
+  statusBarProvider: 'auto' | 'claude' | 'codex';
+  codexStatusMetric: 'fresh' | 'processed' | 'output';
   language: string;
   decimalPlaces: number;
   // Decimals for compact token display only (1.2M / 345.6K).
