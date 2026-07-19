@@ -732,6 +732,14 @@ export class ClaudeCodeUsageExtension {
     return {
       refreshInterval: s.get<number>('refreshInterval'),
       dataDirectory: s.get<string>('dataDirectory'),
+      codexEnabled: s.get<boolean>('codex.enabled'),
+      codexDataDirectory: s.get<string>('codex.dataDirectory'),
+      codexFileWatchSeconds:
+        Number(s.get<string>('codex.fileWatchSeconds') ?? '30') || 0,
+      statusBarProvider: s.get<'auto' | 'claude' | 'codex'>('statusBarProvider'),
+      codexStatusMetric: s.get<'fresh' | 'processed' | 'output'>(
+        'codex.statusMetric',
+      ),
       language: s.get<string>('language'),
       decimalPlaces: s.get<number>('decimalPlaces'),
       tokenDecimalPlaces: s.get<number>('tokenDecimalPlaces'),
