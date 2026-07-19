@@ -11,6 +11,13 @@ import { parseConversation } from './conversationLog';
 import { renderConversationViewer } from './conversationViewerHtml';
 import { formatUsageDate, shortUsageDate } from './usageDateLabels';
 import { normalizeQuotaWindows } from './quotaWindows';
+import {
+  defaultDashboardProvider,
+  renderCodexView,
+  renderProviderCompare,
+} from './codexView';
+import { CodexInsight } from './providers/codex/codexInsights';
+import { CodexUsageView } from './providers/codex/codexUsage';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -42,6 +49,11 @@ export class UsageWebviewProvider {
   private error: string | null = null;
   private dataDirectory: string | null = null;
   private currentTab: string = 'today';
+  private currentProvider: 'claude' | 'codex' | 'compare' = 'claude';
+  private codexView: CodexUsageView | null = null;
+  private codexInsights: CodexInsight[] = [];
+  private providerAvailability = { claude: false, codex: false };
+  private providerSelectionInitialized = false;
   private hourlyDataCache: Map<string, { hour: string; data: UsageData }[]> = new Map();
   private allRecords: any[] = [];
   private sessionBreakdown: SessionUsage[] = [];
@@ -234,6 +246,28 @@ export class UsageWebviewProvider {
         case 'tabChanged':
           this.currentTab = message.tab;
           break;
+        case 'providerChanged': {
+          const requested = String(message.provider ?? '');
+          const allowed =
+            (requested === 'claude' &&
+              (this.providerAvailability.claude || message.tab === 'settings')) ||
+            (requested === 'codex' && this.providerAvailability.codex) ||
+            (requested === 'compare' &&
+              this.providerAvailability.claude &&
+              this.providerAvailability.codex);
+          if (allowed) {
+            this.currentProvider = requested as 'claude' | 'codex' | 'compare';
+            if (
+              requested === 'claude' &&
+              typeof message.tab === 'string' &&
+              ['today', 'month', 'all', 'sessions', 'projects', 'content', 'branches', 'workflows', 'settings'].includes(message.tab)
+            ) {
+              this.currentTab = message.tab;
+            }
+            this.updateWebview();
+          }
+          break;
+        }
         case 'resumeSession': {
           // Resume a past session via the official extension, or a terminal fallback.
           const sessionId = message.sessionId;
@@ -452,7 +486,40 @@ export class UsageWebviewProvider {
     this.branchBreakdown = branchBreakdown;
     this.workflowBreakdown = workflowBreakdown;
     this.costliestMessages = costliestMessages;
+    this.providerAvailability.claude = Boolean(
+      sessionData || todayData || monthData || allTimeData,
+    );
 
+    if (this.panel) {
+      this.updateWebview();
+    }
+  }
+
+  updateProviderData(
+    codexView: CodexUsageView | null,
+    insights: CodexInsight[],
+    providerAvailability: { claude: boolean; codex: boolean },
+  ): void {
+    this.codexView = codexView;
+    this.codexInsights = insights;
+    this.providerAvailability = { ...providerAvailability };
+    if (!this.providerSelectionInitialized) {
+      this.currentProvider = defaultDashboardProvider(
+        providerAvailability.claude,
+        providerAvailability.codex,
+      );
+      this.providerSelectionInitialized = true;
+    } else if (
+      (this.currentProvider === 'claude' && !providerAvailability.claude) ||
+      (this.currentProvider === 'codex' && !providerAvailability.codex) ||
+      (this.currentProvider === 'compare' &&
+        (!providerAvailability.claude || !providerAvailability.codex))
+    ) {
+      this.currentProvider = defaultDashboardProvider(
+        providerAvailability.claude,
+        providerAvailability.codex,
+      );
+    }
     if (this.panel) {
       this.updateWebview();
     }
@@ -532,11 +599,16 @@ export class UsageWebviewProvider {
       return this.getLoadingContent();
     }
 
-    if (this.error) {
+    if (this.error && !this.providerAvailability.codex) {
       return this.getErrorContent();
     }
 
-    if (!this.currentSessionData && !this.todayData && !this.monthData) {
+    if (
+      !this.currentSessionData &&
+      !this.todayData &&
+      !this.monthData &&
+      !this.providerAvailability.codex
+    ) {
       return this.getNoDataContent();
     }
 
@@ -616,7 +688,90 @@ export class UsageWebviewProvider {
     `;
   }
 
+  private renderProviderTabs(): string {
+    const button = (
+      provider: 'claude' | 'codex' | 'compare',
+      label: string,
+    ): string =>
+      `<button class="provider-tab ${this.currentProvider === provider ? 'active' : ''}" onclick="showProvider('${provider}')">${this.escapeHtml(label)}</button>`;
+    let html = '<nav class="provider-tabs" aria-label="Usage provider">';
+    const labels = I18n.t.providers;
+    if (this.providerAvailability.claude) {
+      html += button('claude', labels.claude);
+    }
+    if (this.providerAvailability.codex) {
+      html += button('codex', labels.codexBeta);
+    }
+    if (this.providerAvailability.claude && this.providerAvailability.codex) {
+      html += button('compare', labels.compare);
+    }
+    return html + '</nav>';
+  }
+
+  private renderCodexCompare(): string {
+    const claude = this.allTimeData;
+    const codexTotals = (this.codexView?.projects ?? []).reduce(
+      (total, project) => ({
+        input: total.input + project.scope.total.input,
+        output: total.output + project.scope.total.output,
+        cache: total.cache + project.scope.total.cachedInput,
+      }),
+      { input: 0, output: 0, cache: 0 },
+    );
+    return renderProviderCompare(
+      {
+        claude: {
+          label: I18n.t.providers.claude,
+          input: claude?.totalInputTokens ?? 0,
+          output: claude?.totalOutputTokens ?? 0,
+          cache:
+            (claude?.totalCacheCreationTokens ?? 0) +
+            (claude?.totalCacheReadTokens ?? 0),
+        },
+        codex: { label: I18n.t.providers.codexBeta, ...codexTotals },
+      },
+      I18n.t.providers.codex,
+    );
+  }
+
+  private getAlternateProviderContent(): string {
+    const content =
+      this.currentProvider === 'compare'
+        ? this.renderCodexCompare()
+        : this.codexView
+          ? renderCodexView(
+              this.codexView,
+              this.codexInsights,
+              I18n.t.providers.codex,
+            )
+          : `<p>${this.escapeHtml(I18n.t.providers.codex.noRecentTask)}</p>`;
+    return `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
+        <title>${this.escapeHtml(I18n.t.popup.title)}</title>
+        <style>${this.getStyles()}</style>
+      </head>
+      <body class="${this.setting<boolean>('dashboardAutoRefresh', true) ? '' : 'auto-off'}">
+        <div class="container">
+          <header><h1>${this.escapeHtml(I18n.t.popup.title)}</h1><div class="actions">
+            <button onclick="refresh()" class="btn-secondary">↻ ${this.escapeHtml(I18n.t.popup.refresh)}</button>
+            <button onclick="showProvider('claude', 'settings')" class="btn-secondary">⚙ ${this.escapeHtml(I18n.t.popup.settings)}</button>
+          </div></header>
+          ${this.renderProviderTabs()}
+          ${content}
+        </div>
+        <script>${this.getScript()}</script>
+      </body>
+      </html>`;
+  }
+
   private getMainContent(): string {
+    if (this.currentProvider !== 'claude') {
+      return this.getAlternateProviderContent();
+    }
     // Pre-resolve I18n values to avoid template literal issues
     const title = I18n.t.popup.title;
     const refresh = I18n.t.popup.refresh;
@@ -686,6 +841,7 @@ export class UsageWebviewProvider {
       `</button>
             </div>
           </header>` +
+      this.renderProviderTabs() +
       this.renderQuotaBanner() +
       `
           <div class="tabs">
@@ -5129,6 +5285,83 @@ export class UsageWebviewProvider {
       .cf-5 {
         background: var(--vscode-charts-red);
       }
+
+      .provider-tabs {
+        display: flex;
+        gap: 6px;
+        margin: 4px 0 18px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+      }
+      .provider-tab {
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 999px;
+        padding: 5px 13px;
+        background: transparent;
+        color: var(--vscode-foreground);
+        cursor: pointer;
+      }
+      .provider-tab.active {
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border-color: var(--vscode-button-background);
+      }
+      .codex-header, .codex-thread-card, .codex-evidence,
+      .provider-compare-grid, .codex-dimension-grid {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 12px;
+      }
+      .codex-header { align-items: center; justify-content: space-between; }
+      .codex-beta {
+        font-size: 11px;
+        padding: 2px 7px;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 999px;
+        color: var(--vscode-descriptionForeground);
+      }
+      .codex-metric-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+        margin: 14px 0;
+      }
+      .codex-metric-card, .codex-thread-card, .codex-coverage-card,
+      .codex-limit-card, .codex-insight, .provider-compare-card {
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 9px;
+        padding: 12px;
+        background: var(--vscode-editorWidget-background, transparent);
+      }
+      .codex-metric-label { color: var(--vscode-descriptionForeground); font-size: 12px; }
+      .codex-metric-value { font-size: 24px; font-weight: 700; margin-top: 4px; }
+      .codex-thread-card span, .codex-evidence span { font-size: 12px; }
+      .codex-dimension { flex: 1 1 320px; overflow-x: auto; }
+      .codex-dimension table { width: 100%; }
+      .codex-coverage-card, .codex-limit-card { margin: 12px 0; line-height: 1.6; }
+      .codex-insight { margin: 8px 0; }
+      .codex-insight-strong { border-left: 4px solid var(--vscode-charts-red); }
+      .codex-insight-normal { border-left: 4px solid var(--vscode-charts-orange); }
+      .codex-insight-info { border-left: 4px solid var(--vscode-charts-blue); }
+      .codex-insights pre { white-space: pre-wrap; word-break: break-word; }
+      .provider-compare-card { flex: 1 1 240px; }
+      .provider-compare-card dl {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px 16px;
+      }
+      .provider-compare-card dd { margin: 0; font-weight: 700; }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
     `;
   }
 
@@ -5181,7 +5414,18 @@ function restoreActiveTab() {
     }
   } catch (e) {}
 }
-function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); }
+function restoreCodexScope() {
+  var selector = document.querySelector('[data-codex-scope]');
+  if (!selector) { return; }
+  var activate = function(value) {
+    document.querySelectorAll('[data-codex-scope-panel]').forEach(function(panel) {
+      panel.hidden = panel.getAttribute('data-codex-scope-panel') !== value;
+    });
+  };
+  selector.addEventListener('change', function() { activate(selector.value); });
+  activate(selector.value);
+}
+function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); restoreCodexScope(); }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreUi);
 } else {
@@ -5200,6 +5444,10 @@ const __dateOpts = (extra) => {
 };
 
 // Define basic functions
+function showProvider(provider, tab) {
+  vscode.postMessage({ command: 'providerChanged', provider: provider, tab: tab || '' });
+}
+
 function scReadConfig() {
   var rangeEl = document.getElementById('scRange');
   var scopeEl = document.getElementById('scScope');
