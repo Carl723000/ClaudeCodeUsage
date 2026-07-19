@@ -124,3 +124,13 @@ test('changelog records the released baseline and the v2.2.1 tooling transition'
   assert.match(changelog, /OpenAI Codex/);
   assert.doesNotMatch(changelog, /^## \[2\.2\.0\] — Unreleased$/m);
 });
+
+test('release announcements are exact-version and user-disableable', () => {
+  const extension = repoFile('src/extension.ts');
+  const settings = repoFile('src/settings.ts');
+
+  assert.match(extension, /'2\.3\.0'/);
+  assert.doesNotMatch(extension, /'2\.2'\s*:/);
+  assert.match(settings, /key:\s*'releaseAnnouncements'/);
+  assert.match(settings, /default:\s*true/);
+});

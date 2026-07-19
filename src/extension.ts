@@ -39,20 +39,24 @@ import {
   shouldReloadUsage,
 } from './refreshPolicy';
 import { formatRefreshDiagnostic } from './refreshDiagnostics';
+import {
+  announcementForUpgrade,
+  latestAnnouncementVersion,
+  ReleaseAnnouncementCatalog,
+} from './releaseAnnouncements';
 
-// One-line "what's new" per major.minor, shown once after an upgrade (see
-// maybeAnnounceWhatsNew) so users discover new — including opt-in — features.
-// Keep it short and point at the dashboard / ⚙ Settings.
-const WHATS_NEW: Record<string, string> = {
-  '2.2':
-    'what’s new —\n' +
-    '• Conversation viewer — re-read a past session read-only, without spending model context\n' +
-    '• Shareable usage card (themed)\n' +
-    '• Token heatmap you can publish to your GitHub profile\n' +
-    '• Sessions “Active time” column\n' +
-    '• Live-refresh delay control\n' +
-    '• Experimental insights — cache-churn bill, cache warmth by model, big one-shot turns, your active hours, skill ROI\n' +
-    'Most are opt-in — turn them on in ⚙ Settings (they show up on the Content / Sessions tabs).',
+interface LocalizedReleaseAnnouncement {
+  version: string;
+  body: () => string;
+}
+
+// Full-version entries only: an installed patch must never inherit stale notes
+// from an older major/minor release.
+const WHATS_NEW: ReleaseAnnouncementCatalog<LocalizedReleaseAnnouncement> = {
+  '2.3.0': {
+    version: '2.3.0',
+    body: () => I18n.t.releaseAnnouncement.v230,
+  },
 };
 
 export class ClaudeCodeUsageExtension {
@@ -148,26 +152,29 @@ export class ClaudeCodeUsageExtension {
   private maybeAnnounceWhatsNew(): void {
     const current = (this.context.extension?.packageJSON?.version as string) || '';
     const last = this.context.globalState.get<string>('ccu.lastSeenVersion');
-    if (!current || last === current) {
+    if (!current) {
       return;
     }
+    const announcement = announcementForUpgrade(
+      current,
+      last,
+      this.getConfiguration().releaseAnnouncements,
+      WHATS_NEW,
+    );
     void this.context.globalState.update('ccu.lastSeenVersion', current);
-    if (!last) {
-      return; // fresh install — don't interrupt
+    if (announcement) {
+      this.showWhatsNew(announcement.version);
     }
-    // Keyed by major.minor so patch releases don't re-nag.
-    const mm = current.split('.').slice(0, 2).join('.');
-    this.showWhatsNew(mm);
   }
 
-  /** Show the what's-new toast for a given major.minor, if one exists. */
-  private showWhatsNew(mm: string): void {
-    const news = WHATS_NEW[mm];
-    if (!news) {
+  /** Show the what's-new toast for one exact release, if it is catalogued. */
+  private showWhatsNew(version: string): void {
+    const announcement = WHATS_NEW[version];
+    if (!announcement) {
       return;
     }
     const open = I18n.t.popup.title; // "Show details" entry point label
-    void vscode.window.showInformationMessage(`Claude Code Usage ${mm}: ${news}`, open).then((pick) => {
+    void vscode.window.showInformationMessage(`Claude Code Usage ${version}: ${announcement.body()}`, open).then((pick) => {
       if (pick === open) {
         vscode.commands.executeCommand('claudeCodeUsage.showDetails');
       }
@@ -178,7 +185,7 @@ export class ClaudeCodeUsageExtension {
    * guard — for re-reading the announcement or testing it during development
    * (a fresh F5 install otherwise just sets the baseline and shows nothing). */
   private previewWhatsNew(): void {
-    const latest = Object.keys(WHATS_NEW).sort().pop();
+    const latest = latestAnnouncementVersion(WHATS_NEW);
     if (latest) {
       this.showWhatsNew(latest);
     } else {
@@ -719,6 +726,7 @@ export class ClaudeCodeUsageExtension {
       decimalPlaces: s.get<number>('decimalPlaces'),
       tokenDecimalPlaces: s.get<number>('tokenDecimalPlaces'),
       compactNumbers: s.get<boolean>('compactNumbers'),
+      releaseAnnouncements: s.get<boolean>('releaseAnnouncements'),
       timezone: s.get<string>('timezone'),
       showCost: s.get<boolean>('showCost'),
       showContext: s.get<boolean>('showContext'),
