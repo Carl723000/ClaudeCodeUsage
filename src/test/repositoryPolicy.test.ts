@@ -134,3 +134,15 @@ test('release announcements are exact-version and user-disableable', () => {
   assert.match(settings, /key:\s*'releaseAnnouncements'/);
   assert.match(settings, /default:\s*true/);
 });
+
+test('retired showOpusWeekly is absent from active product code', () => {
+  for (const file of [
+    'src/settings.ts',
+    'src/types.ts',
+    'src/extension.ts',
+    'src/statusBar.ts',
+    'src/quotaFormat.ts',
+  ]) {
+    assert.doesNotMatch(repoFile(file), /showOpusWeekly/, `${file} still exposes showOpusWeekly`);
+  }
+});

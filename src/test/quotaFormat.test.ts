@@ -17,33 +17,28 @@ const live = {
 };
 
 test('default format is clean: "5h 6% · wk 1%" (no reset, middot)', () => {
-  const s = formatQuotaStatusText(live, { showReset: false, fiveHourOnly: false, showOpusWeekly: false, now: NOW });
+  const s = formatQuotaStatusText(live, { showReset: false, fiveHourOnly: false, now: NOW });
   assert.equal(s, '5h 6% · wk 1%');
 });
 
 test('showResetInStatusBar adds compact countdowns with a bar separator', () => {
-  const s = formatQuotaStatusText(live, { showReset: true, fiveHourOnly: false, showOpusWeekly: false, now: NOW });
+  const s = formatQuotaStatusText(live, { showReset: true, fiveHourOnly: false, now: NOW });
   assert.equal(s, '5h 6% ↻4.8h | wk 1% ↻1.6d');
 });
 
 test('quotaFiveHourOnly shows only the 5-hour window', () => {
-  const s = formatQuotaStatusText(live, { showReset: false, fiveHourOnly: true, showOpusWeekly: false, now: NOW });
+  const s = formatQuotaStatusText(live, { showReset: false, fiveHourOnly: true, now: NOW });
   assert.equal(s, '5h 6%');
 });
 
-test('showOpusWeekly appends the weekly Opus segment', () => {
-  const s = formatQuotaStatusText(live, { showReset: false, fiveHourOnly: false, showOpusWeekly: true, now: NOW });
-  assert.equal(s, '5h 6% · wk 1% · opus 12%');
-});
-
-test('fiveHourOnly suppresses Opus even when showOpusWeekly is on', () => {
-  const s = formatQuotaStatusText(live, { showReset: false, fiveHourOnly: true, showOpusWeekly: true, now: NOW });
-  assert.equal(s, '5h 6%');
+test('weekly formatter ignores retired model-specific windows', () => {
+  const s = formatQuotaStatusText(live, { showReset: false, fiveHourOnly: false, now: NOW });
+  assert.equal(s, '5h 6% · wk 1%');
 });
 
 test('no windows → empty string (caller hides the item)', () => {
-  assert.equal(formatQuotaStatusText(null, { showReset: false, fiveHourOnly: false, showOpusWeekly: false }), '');
-  assert.equal(formatQuotaStatusText({}, { showReset: true, fiveHourOnly: false, showOpusWeekly: false }), '');
+  assert.equal(formatQuotaStatusText(null, { showReset: false, fiveHourOnly: false }), '');
+  assert.equal(formatQuotaStatusText({}, { showReset: true, fiveHourOnly: false }), '');
 });
 
 test('compactReset: hours under a day, days beyond, 0h past, "" invalid', () => {
@@ -76,15 +71,13 @@ test('showResetInStatusBar honours resetFormat', () => {
   const s = formatQuotaStatusText(live, {
     showReset: true,
     fiveHourOnly: false,
-    showOpusWeekly: false,
     resetFormat: 'units',
     now: NOW,
   });
   assert.equal(s, '5h 6% ↻4h 48m | wk 1% ↻1d 14h');
 });
 
-test('worstShownUtilisation honours fiveHourOnly and showOpusWeekly', () => {
-  assert.equal(worstShownUtilisation(live, { showReset: false, fiveHourOnly: false, showOpusWeekly: false }), 6);
-  assert.equal(worstShownUtilisation(live, { showReset: false, fiveHourOnly: false, showOpusWeekly: true }), 12);
-  assert.equal(worstShownUtilisation(live, { showReset: false, fiveHourOnly: true, showOpusWeekly: true }), 6);
+test('worst utilisation uses only generic windows', () => {
+  assert.equal(worstShownUtilisation(live, { showReset: false, fiveHourOnly: false }), 6);
+  assert.equal(worstShownUtilisation(live, { showReset: false, fiveHourOnly: true }), 6);
 });

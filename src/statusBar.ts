@@ -14,9 +14,6 @@ export class StatusBarManager {
   private usageLimitTracking: boolean = true;
   // First item shows today's cost ('cost'), this month's cost ('monthly-cost'), or today's token count ('tokens').
   private metric: 'cost' | 'monthly-cost' | 'tokens' = 'cost';
-  // Opt-in: append the weekly Opus limit (opus:NN%) to the quota item (PR #38,
-  // @wheelbarrel00).
-  private showOpusWeekly: boolean = false;
   // Quota display preferences.
   private quotaFiveHourOnly: boolean = false; // show only the 5h window
   private showResetInBar: boolean = false;    // append reset countdown to the bar
@@ -55,7 +52,6 @@ export class StatusBarManager {
     showContext: boolean,
     usageLimitTracking: boolean = true,
     metric: 'cost' | 'monthly-cost' | 'tokens' = 'cost',
-    showOpusWeekly: boolean = false,
     quotaFiveHourOnly: boolean = false,
     showResetInBar: boolean = false,
     resetCountdownFormat: ResetCountdownFormat = 'decimal'
@@ -64,7 +60,6 @@ export class StatusBarManager {
     this.showContext = showContext;
     this.usageLimitTracking = usageLimitTracking;
     this.metric = metric;
-    this.showOpusWeekly = showOpusWeekly;
     this.quotaFiveHourOnly = quotaFiveHourOnly;
     this.showResetInBar = showResetInBar;
     this.resetCountdownFormat = resetCountdownFormat;
@@ -243,7 +238,6 @@ export class StatusBarManager {
     const opts: QuotaStatusOptions = {
       showReset: this.showResetInBar,
       fiveHourOnly: this.quotaFiveHourOnly,
-      showOpusWeekly: this.showOpusWeekly,
       resetFormat: this.resetCountdownFormat
     };
     const text = formatQuotaStatusText(live, opts);

@@ -692,7 +692,7 @@ export class ClaudeCodeUsageExtension {
     I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
     I18n.setCompactNumbers(config.compactNumbers);
     I18n.setTimezone(config.timezone);
-    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showOpusWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
+    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
 
     // Listen for configuration changes
     vscode.workspace.onDidChangeConfiguration(e => {
@@ -732,7 +732,6 @@ export class ClaudeCodeUsageExtension {
       showContext: s.get<boolean>('showContext'),
       contextWindowOverride: s.get<number>('contextWindowOverride'),
       statusBarMetric: s.get<'cost' | 'monthly-cost' | 'tokens'>('statusBarMetric'),
-      showOpusWeekly: s.get<boolean>('showOpusWeekly'),
       showResetInStatusBar: s.get<boolean>('showResetInStatusBar'),
       quotaFiveHourOnly: s.get<boolean>('quotaFiveHourOnly'),
       resetCountdownFormat: s.get<'decimal' | 'units' | 'clock'>('resetCountdownFormat'),
@@ -762,14 +761,14 @@ export class ClaudeCodeUsageExtension {
     // /usage fetch (the full reload path), else the quota stays empty until the
     // next tick.
     'showCost', 'showContext', 'statusBarMetric',
-    'showOpusWeekly', 'quotaFiveHourOnly', 'showResetInStatusBar', 'resetCountdownFormat',
+    'quotaFiveHourOnly', 'showResetInStatusBar', 'resetCountdownFormat',
   ]);
 
   /** Dashboard Settings change — status-bar-only toggles apply in place, others reload. */
   private onSettingsChangedFromPanel(key?: string): void {
     if (key && ClaudeCodeUsageExtension.STATUS_BAR_ONLY_SETTINGS.has(key)) {
       const config = this.getConfiguration();
-      this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showOpusWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
+      this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
       this.statusBar.updateQuota(this.cache.usageLimits ?? null);
       return;
     }
@@ -783,7 +782,7 @@ export class ClaudeCodeUsageExtension {
     I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
     I18n.setCompactNumbers(config.compactNumbers);
     I18n.setTimezone(config.timezone);
-    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showOpusWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
+    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
 
     // Restart auto-refresh with new interval
     this.startAutoRefresh();

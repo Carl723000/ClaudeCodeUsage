@@ -23,7 +23,6 @@ export type ResetCountdownFormat = 'decimal' | 'units' | 'clock';
 export interface QuotaStatusOptions {
   showReset: boolean; // showResetInStatusBar (default false)
   fiveHourOnly: boolean; // quotaFiveHourOnly (default false)
-  showOpusWeekly: boolean; // existing opt-in weekly Opus cap
   resetFormat?: ResetCountdownFormat; // resetCountdownFormat (default 'decimal')
   now?: number; // for the countdown; defaults to Date.now()
 }
@@ -122,12 +121,6 @@ export function formatQuotaStatusText(live: LiveQuotaWindows | null, opts: Quota
     if (wk) {
       parts.push(wk);
     }
-    if (opts.showOpusWeekly) {
-      const op = seg('opus', live.seven_day_opus);
-      if (op) {
-        parts.push(op);
-      }
-    }
   }
   if (parts.length === 0) {
     return '';
@@ -147,9 +140,6 @@ export function worstShownUtilisation(live: LiveQuotaWindows | null, opts: Quota
   if (!opts.fiveHourOnly) {
     if (live.seven_day) {
       worst = Math.max(worst, live.seven_day.utilization);
-    }
-    if (opts.showOpusWeekly && live.seven_day_opus) {
-      worst = Math.max(worst, live.seven_day_opus.utilization);
     }
   }
   return worst;

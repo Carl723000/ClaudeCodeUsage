@@ -284,8 +284,6 @@ export interface ExtensionConfig {
   contextWindowOverride: number;
   // First status-bar item: today's cost, this month's cost, or today's total token count.
   statusBarMetric: 'cost' | 'monthly-cost' | 'tokens';
-  // Opt-in: append the weekly Opus limit (opus:NN%) to the quota item (PR #38).
-  showOpusWeekly: boolean;
   // Quota status-bar display (V2.2): inline reset countdown; 5h-only.
   showResetInStatusBar: boolean;
   quotaFiveHourOnly: boolean;
