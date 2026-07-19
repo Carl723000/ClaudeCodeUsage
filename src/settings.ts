@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
-import { LIVE_REFRESH_SECONDS } from './refreshPolicy';
+import {
+  CODEX_LIVE_REFRESH_SECONDS,
+  LIVE_REFRESH_SECONDS,
+} from './refreshPolicy';
 
 // Single source of truth for every user setting (V2.1: "settings in the
 // dashboard"). Most settings moved OUT of VS Code's Settings UI to keep it
@@ -234,7 +237,7 @@ export const SETTINGS: SettingDef[] = [
     group: 'providers',
     label: 'Codex live refresh delay',
     help: 'Quiet debounce after local Codex JSONL changes. Off disables watching.',
-    enumValues: ['0', '10', '30', '60', '120', '300'],
+    enumValues: [...CODEX_LIVE_REFRESH_SECONDS],
     enumLabels: ['Off', '10s', '30s', '60s', '120s', '300s'],
   },
   {
