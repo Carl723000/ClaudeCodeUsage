@@ -2,6 +2,7 @@ import * as fs from 'fs';
 import * as https from 'https';
 import * as path from 'path';
 import * as os from 'os';
+import { randomBytes } from 'crypto';
 import { renderHeatmapSvg } from './heatmapSvg';
 import { DEFAULT_SECTIONS, ShareRange, buildShareCardData, shareCardFilename } from './shareCard';
 import { renderShareCardSvg } from './shareCardSvg';
@@ -38,7 +39,14 @@ import {
   shouldCommitUsageLoad,
   shouldReloadUsage,
 } from './refreshPolicy';
-import { formatRefreshDiagnostic } from './refreshDiagnostics';
+import {
+  formatCodexIndexDiagnostic,
+  formatRefreshDiagnostic,
+} from './refreshDiagnostics';
+import { CodexProvider } from './providers/codex/codexProvider';
+import { resolveCodexHome } from './providers/codex/codexManifest';
+import { buildCodexUsageView, CodexUsageView } from './providers/codex/codexUsage';
+import { buildCodexInsights, CodexInsight } from './providers/codex/codexInsights';
 import {
   announcementForUpgrade,
   latestAnnouncementVersion,
@@ -66,6 +74,9 @@ export class ClaudeCodeUsageExtension {
   private settings: SettingsStore;
   private refreshTimer: NodeJS.Timeout | undefined;
   private fileWatcher: fs.FSWatcher | undefined;
+  private codexWatchers: fs.FSWatcher[] = [];
+  private readonly codexWatchDebounce = new QuietDebounce();
+  private codexWatchedHome: string | null = null;
   private readonly watchDebounce = new QuietDebounce();
   private readonly refreshGate = new RefreshSingleFlight();
   private watcherEventsSinceRefresh = 0;
@@ -109,6 +120,11 @@ export class ClaudeCodeUsageExtension {
   // flaky network and the very first /usage fetch fails, try once more shortly
   // after so the indicator appears without waiting for the next regular tick.
   private quotaColdRetryDone: boolean = false;
+  private codexProvider: CodexProvider;
+  private readonly codexSalt: string;
+  private codexView: CodexUsageView | null = null;
+  private codexInsights: CodexInsight[] = [];
+  private codexHasData = false;
 
   constructor(private context: vscode.ExtensionContext) {
     console.log('Claude Code Usage Extension: Constructor called');
@@ -118,6 +134,12 @@ export class ClaudeCodeUsageExtension {
     this.settings = new SettingsStore(context);
     this.webviewProvider = new UsageWebviewProvider(context);
     this.apiClient = new ClaudeApiClient(this.outputChannel);
+    const existingCodexSalt = context.globalState.get<string>('ccu.codex.machineSalt');
+    this.codexSalt = existingCodexSalt ?? randomBytes(32).toString('hex');
+    if (!existingCodexSalt) {
+      void context.globalState.update('ccu.codex.machineSalt', this.codexSalt);
+    }
+    this.codexProvider = this.createCodexProvider(this.getConfiguration());
     // Migrate any pre-2.1 settings.json values for the keys that have moved out
     // of the VS Code Settings UI into the dashboard-managed store. Runs once.
     void this.settings.migrateOnce();
@@ -138,7 +160,10 @@ export class ClaudeCodeUsageExtension {
     this.loadConfiguration();
     this.loadPersistedQuota();
     this.startAutoRefresh();
-    this.refreshData(false, 'startup').then(() => this.startFileWatching());
+    this.refreshData(false, 'startup').then(() => {
+      void this.startFileWatching();
+      this.startCodexWatching();
+    });
     this.startCredentialsWatching();
     this.startWindowFocusRefresh();
     this.maybeAnnounceWhatsNew();
@@ -763,12 +788,127 @@ export class ClaudeCodeUsageExtension {
     };
   }
 
+  private codexHome(config: ExtensionConfig): string {
+    return resolveCodexHome(
+      config.codexDataDirectory,
+      process.env,
+      os.homedir(),
+    );
+  }
+
+  private createCodexProvider(config: ExtensionConfig): CodexProvider {
+    return new CodexProvider({
+      enabled: config.codexEnabled,
+      codexHome: this.codexHome(config),
+      indexPath: path.join(
+        this.context.globalStorageUri.fsPath,
+        'codex-index-v1.json',
+      ),
+      salt: this.codexSalt,
+    });
+  }
+
+  private syncProviderUi(): void {
+    const config = this.getConfiguration();
+    const claudeHasData = this.cache.records.length > 0;
+    this.webviewProvider.updateProviderData(
+      this.codexView,
+      this.codexInsights,
+      { claude: claudeHasData, codex: this.codexHasData },
+    );
+
+    const selected =
+      config.statusBarProvider === 'auto'
+        ? claudeHasData
+          ? 'claude'
+          : this.codexHasData
+            ? 'codex'
+            : 'claude'
+        : config.statusBarProvider;
+    if (selected === 'codex') {
+      if (this.codexView?.lastTask) {
+        this.statusBar.updateCodex(
+          this.codexView.lastTask,
+          config.codexStatusMetric,
+          this.codexView.limit,
+        );
+      }
+      this.statusBar.setProvider('codex');
+    } else {
+      this.statusBar.setProvider('claude');
+    }
+  }
+
+  private async refreshCodexData(trigger: RefreshTrigger): Promise<void> {
+    try {
+      await this.runCodexRefresh(trigger);
+    } catch {
+      this.outputChannel.appendLine(
+        formatCodexIndexDiagnostic({
+          outcome: 'error',
+          indexedFiles: 0,
+          totalFiles: 0,
+          indexedBytes: 0,
+          totalBytes: 0,
+          bodyReads: 0,
+          failedFiles: 1,
+          metadataMs: 0,
+          parseMs: 0,
+          qualityFlags: { 'refresh-failed': 1 },
+        }),
+      );
+      this.syncProviderUi();
+    }
+  }
+
+  private async runCodexRefresh(_trigger: RefreshTrigger): Promise<void> {
+    const config = this.getConfiguration();
+    if (!config.codexEnabled) {
+      this.codexView = null;
+      this.codexInsights = [];
+      this.codexHasData = false;
+      this.syncProviderUi();
+      return;
+    }
+    const result = await this.codexProvider.refresh();
+    if (result.outcome === 'unavailable') {
+      this.codexView = null;
+      this.codexInsights = [];
+      this.codexHasData = false;
+      this.syncProviderUi();
+      return;
+    }
+
+    this.codexView = buildCodexUsageView(result.snapshot);
+    this.codexInsights = this.codexView.lastTask
+      ? buildCodexInsights(this.codexView.lastTask)
+      : [];
+    this.codexHasData = result.snapshot.coverage.totalFiles > 0;
+    this.syncProviderUi();
+    const diagnostic = result.diagnostic;
+    this.outputChannel.appendLine(
+      formatCodexIndexDiagnostic({
+        outcome: result.outcome,
+        indexedFiles: result.snapshot.coverage.indexedFiles,
+        totalFiles: result.snapshot.coverage.totalFiles,
+        indexedBytes: result.snapshot.coverage.indexedBytes,
+        totalBytes: result.snapshot.coverage.totalBytes,
+        bodyReads: diagnostic?.bodyReads ?? 0,
+        failedFiles: diagnostic?.failedFiles ?? 0,
+        metadataMs: diagnostic?.metadataMs ?? 0,
+        parseMs: diagnostic?.parseMs ?? 0,
+        qualityFlags: result.snapshot.qualityFlags,
+      }),
+    );
+  }
+
   // Settings whose change only affects the status bar (no dashboard reload).
   private static readonly STATUS_BAR_ONLY_SETTINGS = new Set([
     // usageLimitTracking is intentionally excluded: turning it on must trigger a
     // /usage fetch (the full reload path), else the quota stays empty until the
     // next tick.
     'showCost', 'showContext', 'statusBarMetric',
+    'statusBarProvider', 'codex.statusMetric',
     'quotaFiveHourOnly', 'showResetInStatusBar', 'resetCountdownFormat',
   ]);
 
@@ -778,6 +918,7 @@ export class ClaudeCodeUsageExtension {
       const config = this.getConfiguration();
       this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
       this.statusBar.updateQuota(this.cache.usageLimits ?? null);
+      this.syncProviderUi();
       return;
     }
     this.onConfigurationChanged();
@@ -797,7 +938,13 @@ export class ClaudeCodeUsageExtension {
 
     // Apply watcher-delay changes immediately, then refresh and re-attach.
     this.stopFileWatching();
-    void this.refreshData(true, 'settings').then(() => this.startFileWatching());
+    this.stopCodexWatching();
+    this.codexProvider.dispose();
+    this.codexProvider = this.createCodexProvider(config);
+    void this.refreshData(true, 'settings').then(() => {
+      void this.startFileWatching();
+      this.startCodexWatching();
+    });
   }
 
   /**
@@ -856,6 +1003,62 @@ export class ClaudeCodeUsageExtension {
       this.fileWatcher = undefined;
     }
     this.watchedDir = null;
+  }
+
+  private startCodexWatching(): void {
+    const config = this.getConfiguration();
+    if (!config.codexEnabled || !(config.codexFileWatchSeconds > 0)) {
+      this.stopCodexWatching();
+      return;
+    }
+    const codexHome = this.codexHome(config);
+    if (this.codexWatchedHome === codexHome && this.codexWatchers.length > 0) {
+      return;
+    }
+    this.stopCodexWatching();
+    for (const child of ['sessions', 'archived_sessions']) {
+      const directory = path.join(codexHome, child);
+      if (!fs.existsSync(directory)) {
+        continue;
+      }
+      try {
+        const watcher = fs.watch(
+          directory,
+          { recursive: true },
+          (_event, filename) => {
+            if (!filename || !String(filename).endsWith('.jsonl')) {
+              return;
+            }
+            const delaySeconds = this.getConfiguration().codexFileWatchSeconds;
+            if (!(delaySeconds > 0)) {
+              this.stopCodexWatching();
+              return;
+            }
+            this.codexWatchDebounce.push(delaySeconds * 1000, () => {
+              void this.refreshCodexData('watch');
+            });
+          },
+        );
+        this.codexWatchers.push(watcher);
+      } catch {
+        // Polling remains available when recursive watches are unsupported.
+      }
+    }
+    this.codexWatchedHome =
+      this.codexWatchers.length > 0 ? codexHome : null;
+  }
+
+  private stopCodexWatching(): void {
+    this.codexWatchDebounce.clear();
+    for (const watcher of this.codexWatchers) {
+      try {
+        watcher.close();
+      } catch {
+        // Already closed.
+      }
+    }
+    this.codexWatchers = [];
+    this.codexWatchedHome = null;
   }
 
   /**
@@ -929,7 +1132,8 @@ export class ClaudeCodeUsageExtension {
       vscode.window.onDidChangeWindowState((state) => {
         if (state.focused && !wasFocused) {
           this.startAutoRefresh(); // reset a cadence that may have been throttled
-          this.startFileWatching(); // re-attach the watcher if it was dropped
+          void this.startFileWatching(); // re-attach the watcher if it was dropped
+          this.startCodexWatching();
           void this.refreshData(false, 'focus'); // catch up now
         }
         wasFocused = state.focused;
@@ -1047,6 +1251,7 @@ export class ClaudeCodeUsageExtension {
     forceReload: boolean = false,
     trigger: RefreshTrigger = 'poll'
   ): Promise<void> {
+    void this.refreshCodexData(trigger);
     const request = this.refreshGate.request(forceReload, trigger);
     if (request === null) {
       this.coalescedTriggersSinceRefresh += 1;
@@ -1296,6 +1501,7 @@ export class ClaudeCodeUsageExtension {
         totalMs: performance.now() - totalStarted,
       }));
     } finally {
+      this.syncProviderUi();
       const next = this.refreshGate.complete();
       if (next !== null) {
         setTimeout(() => void this.runRefresh(next), 0);
@@ -1309,7 +1515,9 @@ export class ClaudeCodeUsageExtension {
       this.refreshTimer = undefined;
     }
     this.stopFileWatching();
+    this.stopCodexWatching();
     this.stopCredentialsWatching();
+    this.codexProvider.dispose();
     this.statusBar.dispose();
     this.webviewProvider.dispose();
   }

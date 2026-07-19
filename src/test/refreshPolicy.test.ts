@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   commitRefreshSnapshot,
+  CODEX_LIVE_REFRESH_SECONDS,
   LIVE_REFRESH_SECONDS,
   mergeRefreshTrigger,
   pollIntervalMs,
@@ -22,6 +23,10 @@ test('poll interval always honors refreshInterval and never applies an active ov
 
 test('live refresh keeps the 2-second default choices and adds long quiet delays', () => {
   assert.deepEqual(LIVE_REFRESH_SECONDS, ['0', '1', '2', '5', '10', '20', '30', '60', '120', '300']);
+});
+
+test('Codex watcher defaults to quiet low-CPU delay choices', () => {
+  assert.deepEqual(CODEX_LIVE_REFRESH_SECONDS, ['0', '10', '30', '60', '120', '300']);
 });
 
 test('coalescing retains the strongest pending trigger', () => {

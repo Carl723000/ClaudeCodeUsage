@@ -2,6 +2,10 @@ export const LIVE_REFRESH_SECONDS = [
   '0', '1', '2', '5', '10', '20', '30', '60', '120', '300',
 ] as const;
 
+export const CODEX_LIVE_REFRESH_SECONDS = [
+  '0', '10', '30', '60', '120', '300',
+] as const;
+
 export type RefreshTrigger =
   | 'startup'
   | 'poll'

@@ -2,6 +2,9 @@ import * as vscode from 'vscode';
 import { ClaudeApiUsageResponse, ClaudeUsageLimit, ContextWindowInfo, UsageData } from './types';
 import { I18n } from './i18n';
 import { formatQuotaStatusText, worstShownUtilisation, QuotaStatusOptions, ResetCountdownFormat } from './quotaFormat';
+import { CodexStatusMetric, formatCodexStatus } from './codexStatus';
+import { CodexUsageScopeView } from './providers/codex/codexUsage';
+import { ProviderLimitSnapshot } from './providers/providerTypes';
 
 export class StatusBarManager {
   private statusBarItem: vscode.StatusBarItem;
@@ -18,6 +21,20 @@ export class StatusBarManager {
   private quotaFiveHourOnly: boolean = false; // show only the 5h window
   private showResetInBar: boolean = false;    // append reset countdown to the bar
   private resetCountdownFormat: ResetCountdownFormat = 'decimal'; // style of that countdown (#74)
+  private provider: 'claude' | 'codex' = 'claude';
+  private lastClaudeUsage: {
+    todayData: UsageData | null;
+    workspaceTodayData: UsageData | null;
+    error?: string;
+    monthData: UsageData | null;
+  } | null = null;
+  private lastClaudeQuota: ClaudeApiUsageResponse | null = null;
+  private lastClaudeContext: ContextWindowInfo | null = null;
+  private lastCodex: {
+    scope: CodexUsageScopeView;
+    metric: CodexStatusMetric;
+    limit: ProviderLimitSnapshot | null;
+  } | null = null;
 
   constructor() {
     this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
@@ -41,7 +58,42 @@ export class StatusBarManager {
 
   setLoading(loading: boolean): void {
     this.isLoading = loading;
+    if (this.provider === 'codex' && this.lastCodex) {
+      return;
+    }
     this.updateStatusBar();
+  }
+
+  setProvider(provider: 'claude' | 'codex'): void {
+    this.provider = provider;
+    if (provider === 'codex') {
+      this.contextItem.hide();
+      if (this.lastCodex) {
+        this.renderCodex(
+          this.lastCodex.scope,
+          this.lastCodex.metric,
+          this.lastCodex.limit,
+        );
+      } else {
+        this.statusBarItem.text = 'CX —';
+        this.statusBarItem.tooltip = I18n.t.providers.codex.noRecentTask;
+        this.statusBarItem.backgroundColor = undefined;
+        this.quotaItem.hide();
+        this.applyCostVisibility();
+      }
+      return;
+    }
+    if (this.lastClaudeUsage) {
+      this.updateUsageData(
+        this.lastClaudeUsage.todayData,
+        this.lastClaudeUsage.workspaceTodayData,
+        this.lastClaudeUsage.error,
+        undefined,
+        this.lastClaudeUsage.monthData,
+      );
+    }
+    this.updateQuota(this.lastClaudeQuota);
+    this.updateContext(this.lastClaudeContext);
   }
 
   /** Apply the showCost / showContext settings. Hiding takes effect
@@ -68,6 +120,13 @@ export class StatusBarManager {
     }
     // Re-apply the first item — it may need to become an icon-only entry point.
     this.applyCostVisibility();
+    if (this.provider === 'codex' && this.lastCodex) {
+      this.renderCodex(
+        this.lastCodex.scope,
+        this.lastCodex.metric,
+        this.lastCodex.limit,
+      );
+    }
   }
 
   /** Show / hide the first status-bar item per the showCost setting. When cost
@@ -99,6 +158,15 @@ export class StatusBarManager {
     usageLimits?: ClaudeApiUsageResponse | null,
     monthData?: UsageData | null
   ): void {
+    this.lastClaudeUsage = {
+      todayData,
+      workspaceTodayData: workspaceTodayData ?? null,
+      error,
+      monthData: monthData ?? null,
+    };
+    if (this.provider === 'codex') {
+      return;
+    }
     // Quota is account-level and decoupled from local-data state: the caller
     // is expected to call updateQuota() separately so workspaces without
     // history still see it. We only touch the cost item here.
@@ -169,6 +237,11 @@ export class StatusBarManager {
    * Hidden when there is no current session or the setting is off.
    */
   updateContext(info: ContextWindowInfo | null): void {
+    this.lastClaudeContext = info;
+    if (this.provider === 'codex') {
+      this.contextItem.hide();
+      return;
+    }
     if (!info || !this.showContext || info.windowTokens <= 0) {
       this.contextItem.hide();
       return;
@@ -218,6 +291,10 @@ export class StatusBarManager {
    * Public so it can be refreshed on its own while the rest of the UI is idle.
    */
   updateQuota(usageLimits: ClaudeApiUsageResponse | null): void {
+    this.lastClaudeQuota = usageLimits;
+    if (this.provider === 'codex') {
+      return;
+    }
     // A window's utilization is a point-in-time snapshot only valid until its
     // resets_at. When the OAuth fetch starts failing (expired creds, 401/403,
     // offline, rate-limited), maybeFetchUsageLimits keeps handing us the last
@@ -260,6 +337,49 @@ export class StatusBarManager {
 
     this.quotaItem.tooltip = this.createQuotaTooltip(live as ClaudeApiUsageResponse);
     this.quotaItem.show();
+  }
+
+  updateCodex(
+    scope: CodexUsageScopeView,
+    metric: CodexStatusMetric,
+    limit: ProviderLimitSnapshot | null,
+  ): void {
+    this.lastCodex = { scope, metric, limit };
+    if (this.provider === 'codex') {
+      this.renderCodex(scope, metric, limit);
+    }
+  }
+
+  private renderCodex(
+    scope: CodexUsageScopeView,
+    metric: CodexStatusMetric,
+    limit: ProviderLimitSnapshot | null,
+  ): void {
+    const formatted = formatCodexStatus(scope, metric, limit);
+    const copy = I18n.t.providers.codex;
+    this.isLoading = false;
+    this.statusBarItem.text = formatted.text;
+    this.statusBarItem.backgroundColor = undefined;
+    const md = new vscode.MarkdownString();
+    md.appendMarkdown(`**${copy.title} — ${copy.lastTask}**\n\n`);
+    md.appendMarkdown(`| ${copy.processed} | ${I18n.formatNumber(scope.total.processed)} |\n`);
+    md.appendMarkdown('|:--|--:|\n');
+    md.appendMarkdown(`| ${copy.fresh} | ${I18n.formatNumber(scope.total.fresh)} |\n`);
+    md.appendMarkdown(`| ${copy.output} | ${I18n.formatNumber(scope.total.output)} |\n`);
+    md.appendMarkdown(`| ${copy.reasoning} | ${I18n.formatNumber(scope.total.reasoning)} |\n`);
+    md.appendMarkdown(`| ${copy.childThreads} | ${I18n.formatNumber(scope.childThreads)} |\n`);
+    this.statusBarItem.tooltip = md;
+    this.applyCostVisibility();
+
+    if (formatted.limitText) {
+      this.quotaItem.text = `$(dashboard) ${formatted.limitText}`;
+      this.quotaItem.tooltip = `${copy.lastObserved} — ${formatted.limitText}`;
+      this.quotaItem.backgroundColor = undefined;
+      this.quotaItem.show();
+    } else {
+      this.quotaItem.hide();
+    }
+    this.contextItem.hide();
   }
 
   /**
