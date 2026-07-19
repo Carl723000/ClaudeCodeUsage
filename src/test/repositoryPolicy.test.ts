@@ -21,18 +21,21 @@ function activePatterns(relativePath: string): Set<string> {
 
 test('AGENTS is the canonical Codex repository policy', () => {
   const agents = repoFile('AGENTS.md');
-  assert.match(agents, /Claude-only in v2\.2\.1/);
+  assert.match(agents, /Codex Beta in v2\.3\.0/);
+  assert.match(agents, /2\.4-GB-class history.*worker/is);
   assert.match(agents, /no new runtime dependencies/i);
   assert.match(agents, /all eight UI locales/i);
   assert.match(agents, /push, open a pull request, merge, or publish a release/i);
   assert.match(agents, /Generated with \[OpenAI Codex\]/);
+  assert.match(agents, /Co-authored-by: OpenAI Codex <215057067\+openai-codex\[bot\]@users\.noreply\.github\.com>/);
 });
 
 test('AGENTS links a faithful Simplified-Chinese review copy', () => {
   const agents = repoFile('AGENTS.md');
   const chinese = repoFile('AGENTS.zh-CN.md');
   assert.match(agents, /AGENTS\.zh-CN\.md/);
-  assert.match(chinese, /v2\.2\.1 保持 Claude-only/);
+  assert.match(chinese, /v2\.3\.0.*Codex Beta/);
+  assert.match(chinese, /主要撰写.*OpenAI Codex.*Co-authored-by/is);
   assert.match(chinese, /中文链接排在英文链接之前/);
   assert.match(chinese, /推送、创建 PR、合并或发布 Release/);
 });
@@ -117,12 +120,13 @@ test('pull request checklist names the actual eight UI locales', () => {
   assert.match(template, /all seven README editions/);
 });
 
-test('changelog records the released baseline and the v2.2.1 tooling transition', () => {
+test('changelog records the v2.3.0 candidate and released v2.2.1 baseline', () => {
   const changelog = repoFile('CHANGELOG.md');
-  assert.match(changelog, /^## \[2\.2\.1\] — Unreleased$/m);
+  assert.match(changelog, /^## \[2\.3\.0\] — Unreleased$/m);
+  assert.match(changelog, /^## \[2\.2\.1\] — 2026-07-18$/m);
   assert.match(changelog, /^## \[2\.2\.0\] — 2026-07-07$/m);
   assert.match(changelog, /OpenAI Codex/);
-  assert.doesNotMatch(changelog, /^## \[2\.2\.0\] — Unreleased$/m);
+  assert.doesNotMatch(changelog, /^## \[2\.2\.[01]\] — Unreleased$/m);
 });
 
 test('release announcements are exact-version and user-disableable', () => {

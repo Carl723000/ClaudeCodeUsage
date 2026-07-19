@@ -4,7 +4,42 @@ All notable changes to this fork compared to upstream
 [`ClaudeCodeUsage/ClaudeCodeUsage`](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage) (last
 upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangelog.com).
 
-## [2.2.1] — Unreleased
+## [2.3.0] — Unreleased
+
+### Added
+- **Codex Beta** — local-only Codex usage views for processed, fresh input +
+  output, cached input, output, reasoning, model, effort, thread structure,
+  index coverage, quality flags, and last-observed limit snapshots.
+- **Provider-aware dashboard** — Claude, Codex Beta, and side-by-side Compare
+  modes preserve provider-specific semantics; Compare does not sum cost or quota.
+- **Local Codex optimization guidance** — structural signals explain unusually
+  high subagent, effort, approval-reviewer, command, and cache overhead without
+  reading prompt, response, command, or tool-argument bodies.
+- **Scalable Codex indexing** — a cancellable background worker and persistent
+  per-file aggregate index support recent-first progress, tail-only append reads,
+  resume, and zero JSONL body reads for unchanged warm refreshes.
+
+### Changed
+- **Exact-version release announcements** — the default-on notification can be
+  disabled, stays quiet on a fresh install, and shows only the content for the
+  complete installed version instead of falling back to stale v2.2 notes.
+- Repository policy and architecture now define provider-neutral contracts,
+  Codex privacy boundaries, eight-locale/seven-README parity, and the real
+  OpenAI Codex co-author trailer for Codex-led commits.
+
+### Removed
+- **Weekly Opus setting retired** — removed the obsolete model-specific
+  `showOpusWeekly` surface while retaining the generic 5-hour and weekly quota
+  windows. PR #38 and [@wheelbarrel00](https://github.com/wheelbarrel00) remain
+  credited for the original contribution.
+
+### Privacy
+- Codex discovery is restricted to `sessions/**/*.jsonl` and
+  `archived_sessions/**/*.jsonl`. The extension does not read Codex credentials,
+  SQLite databases, browser/keychain state, or unknown files, and persists only
+  machine-salted pseudonymous keys with numeric aggregates.
+
+## [2.2.1] — 2026-07-18
 
 ### Added
 - **Bahasa Indonesia (`id`) (#76)** — the extension's eighth UI language covers
