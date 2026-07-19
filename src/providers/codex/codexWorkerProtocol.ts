@@ -1,0 +1,35 @@
+import {
+  CodexIndexProgress,
+  CodexIndexV1,
+} from './codexIndex';
+
+export interface CodexWorkerRefreshInput {
+  codexHome: string;
+  indexPath: string;
+  salt: string;
+}
+
+export type CodexWorkerRequest =
+  | ({ type: 'refresh'; requestId: string } & CodexWorkerRefreshInput)
+  | { type: 'cancel'; requestId: string };
+
+export interface CodexWorkerResult {
+  index: CodexIndexV1;
+  bodyReads: number;
+  failedFiles: number;
+  metadataMs: number;
+  parseMs: number;
+}
+
+export type CodexWorkerMessage =
+  | {
+      type: 'progress';
+      requestId: string;
+      progress: CodexIndexProgress;
+    }
+  | { type: 'result'; requestId: string; result: CodexWorkerResult }
+  | {
+      type: 'error';
+      requestId: string;
+      error: { code: string; message: string };
+    };
