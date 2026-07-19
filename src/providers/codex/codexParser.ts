@@ -50,14 +50,12 @@ export interface CodexLineOutput {
 
 export function createCodexParserState(
   fileKey: string,
-  parentBaseline?: CodexRawTokenCounts,
 ): CodexParserState {
   return {
     schemaVersion: 1,
     fileKey,
     sessionKey: fileKey,
-    role: parentBaseline ? 'subagent' : 'root',
-    highWater: parentBaseline ? { ...parentBaseline } : undefined,
+    role: 'root',
     qualityFlags: [],
   };
 }
@@ -222,7 +220,11 @@ function roleFromMetadata(
   rawRole: string | undefined,
   hasParent: boolean,
 ): ProviderThreadRole {
-  if (rawRole === 'codex-auto-review' || rawRole === 'approval-reviewer') {
+  if (
+    rawRole === 'codex-auto-review' ||
+    rawRole === 'approval-reviewer' ||
+    rawRole === 'guardian'
+  ) {
     return 'approval-reviewer';
   }
   if (hasParent) {
@@ -240,6 +242,7 @@ function parseSessionMetadata(
     return { state: withFlag(state, 'invalid-session-meta'), events: [] };
   }
   const payload = entry.payload;
+  const subagent = nestedObject(payload, 'source', 'subagent');
   const spawn = nestedObject(payload, 'source', 'subagent', 'thread_spawn');
   const rawSession = stringField(payload, 'id');
   const rawParent =
@@ -249,7 +252,16 @@ function parseSessionMetadata(
   const rawProject = stringField(payload, 'cwd');
   const rawRole =
     stringField(payload, 'agent_role') ??
-    (spawn ? stringField(spawn, 'agent_role') : undefined);
+    (spawn ? stringField(spawn, 'agent_role') : undefined) ??
+    (subagent ? stringField(subagent, 'other') : undefined);
+  const parentSessionKey =
+    rawParent && pseudonymize
+      ? pseudonymize(rawParent)
+      : state.parentSessionKey;
+  const role =
+    rawRole === undefined && state.role === 'approval-reviewer'
+      ? state.role
+      : roleFromMetadata(rawRole, Boolean(parentSessionKey));
 
   let nextState = state;
   if (!pseudonymize && (rawSession || rawParent || rawProject)) {
@@ -259,11 +271,10 @@ function parseSessionMetadata(
     ...nextState,
     sessionKey:
       rawSession && pseudonymize ? pseudonymize(rawSession) : state.sessionKey,
-    parentSessionKey:
-      rawParent && pseudonymize ? pseudonymize(rawParent) : state.parentSessionKey,
+    parentSessionKey,
     projectKey:
       rawProject && pseudonymize ? pseudonymize(rawProject) : state.projectKey,
-    role: roleFromMetadata(rawRole, Boolean(rawParent)),
+    role,
   };
   return { state: nextState, events: [] };
 }
@@ -383,6 +394,13 @@ export function parseCodexLine(
   }
   if (type === 'response_item') {
     return { state, events: [], structural: structuralFromResponseItem(entry) };
+  }
+  if (
+    type === 'world_state' ||
+    type === 'compacted' ||
+    type === 'inter_agent_communication_metadata'
+  ) {
+    return { state, events: [] };
   }
   return { state: withFlag(state, 'unknown-event'), events: [] };
 }

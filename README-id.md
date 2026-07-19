@@ -38,7 +38,7 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 
 ## Codex Beta di v2.3
 
-- Hanya membaca `sessions/**/*.jsonl` dan `archived_sessions/**/*.jsonl` Codex lokal. Insight deterministik tidak membaca kredensial, database, prompt, respons, perintah, atau isi argumen tool.
+- Hanya membaca `sessions/**/*.jsonl` dan `archived_sessions/**/*.jsonl` Codex lokal. File kredensial dan database dikecualikan; insight deterministik tidak memeriksa, memakai, atau menyimpan isi prompt, respons, perintah, maupun argumen tool.
 - **Diproses** = input + output, **baru (fresh)** = input non-cache + output, **cached input** tetap bagian dari input, dan reasoning bagian dari output. Biaya Codex tidak diestimasi.
 - Tampilan Claude / Codex / Compare mencakup model, effort, porsi task root / child, aktivitas approval-reviewer, cakupan indeks, penanda kualitas, dan snapshot batas utama **terakhir diamati**.
 - Rekomendasi lokal menandai high effort, multi-agent, pemeriksaan berulang, dan pola cache rendah, lalu memberi batasan siap-tempel. Jeda watcher indeks latar adalah 30 detik secara default dan dapat dimatikan atau diperpanjang.

@@ -35,6 +35,22 @@ function sessionLine(id: string): string {
   });
 }
 
+function childSessionLine(id: string, parentId: string): string {
+  return JSON.stringify({
+    timestamp: '2026-07-20T00:00:00.000Z',
+    type: 'session_meta',
+    payload: {
+      id,
+      cwd: '/private/example-project',
+      source: {
+        subagent: {
+          thread_spawn: { parent_thread_id: parentId },
+        },
+      },
+    },
+  });
+}
+
 function contextLine(model = 'gpt-5.6-sol', effort = 'high'): string {
   return JSON.stringify({
     timestamp: '2026-07-20T00:00:01.000Z',
@@ -149,6 +165,45 @@ test('cold scan, appended tail, and persisted reload agree', async () => {
     assert.equal(io.bodyReads.get(key), 2);
     const persisted = await readFile(indexPath, 'utf8');
     assert.doesNotMatch(persisted, /raw-session|private\/example-project|rollout-active|\.jsonl/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('child token counters start at their own zero and are not parent deltas', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-child-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'a-parent.jsonl'),
+      completeSession('parent', 100, 20),
+      'utf8',
+    );
+    await writeFile(
+      path.join(sessions, 'b-child.jsonl'),
+      [
+        childSessionLine('child', 'parent'),
+        contextLine(),
+        tokenLine(50, 10, '2026-07-20T00:01:00.000Z'),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = await updateCodexIndex(
+      createEmptyCodexIndex(),
+      await scanCodexManifest(root, SALT),
+      { salt: SALT },
+    );
+    const child = Object.values(result.index.files).find(
+      (file) => file.aggregate.session.role === 'subagent',
+    );
+
+    assert.equal(result.index.aggregate.total.inputTotal, 150);
+    assert.equal(result.index.aggregate.total.outputTotal, 30);
+    assert.equal(child?.aggregate.total.inputTotal, 50);
+    assert.equal(child?.qualityFlags.includes('counter-regression'), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

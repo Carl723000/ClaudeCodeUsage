@@ -62,7 +62,7 @@ AI 建议生成的是一份 **Markdown 文档**，用文字展示比截图更直
 
 ## 2.3 Codex Beta
 
-- 仅读取本地 Codex 的 `sessions/**/*.jsonl` 与 `archived_sessions/**/*.jsonl`；确定性洞察不读取凭据、数据库、提示词、回复、命令或工具参数正文。
+- 仅读取本地 Codex 的 `sessions/**/*.jsonl` 与 `archived_sessions/**/*.jsonl`；凭据与数据库文件明确排除，确定性洞察不检查、不使用、不保存提示词、回复、命令或工具参数正文。
 - **已处理** = 输入 + 输出；**新鲜** = 未缓存输入 + 输出；**缓存输入**仍是输入的子集，reasoning 仍是输出的子集。Codex 不显示人为估算的成本。
 - Claude / Codex / Compare 视图展示模型、effort、根任务 / 子任务占比、approval-reviewer 活动、索引覆盖率、质量标记和**最后观测**到的主要额度快照。
 - 本地建议会提示高 effort、多智能体、重复检查和低缓存模式，并给出可直接粘贴的约束。后台索引默认以 30 秒延迟监听，也可选择关闭或更长间隔。

@@ -17,7 +17,6 @@ import {
 } from '../providerTypes';
 import {
   CodexParserState,
-  CodexRawTokenCounts,
   CodexStructuralEvent,
   createCodexParserState,
   parseCodexLine,
@@ -353,30 +352,11 @@ function assertNotCancelled(options: CodexIndexUpdateOptions): void {
   }
 }
 
-function applyParentBaseline(
-  before: CodexParserState,
-  after: CodexParserState,
-  baselines: Map<string, CodexRawTokenCounts>,
-): CodexParserState {
-  if (
-    before.parentSessionKey === undefined &&
-    after.parentSessionKey !== undefined &&
-    after.highWater === undefined
-  ) {
-    const baseline = baselines.get(after.parentSessionKey);
-    if (baseline) {
-      return { ...after, highWater: { ...baseline } };
-    }
-  }
-  return after;
-}
-
 async function updateContribution(
   contribution: CodexFileContribution,
   entry: CodexRuntimeManifestEntry,
   options: CodexIndexUpdateOptions,
   io: CodexIndexIo,
-  baselines: Map<string, CodexRawTokenCounts>,
 ): Promise<CodexFileContribution> {
   let pending = contribution.carry;
   let bytesRead = 0;
@@ -395,7 +375,6 @@ async function updateContribution(
       pending = pending.slice(newline + 1);
       if (line.trim() !== '') {
         const parsed = parseCodexLine(line, parserState, pseudonymize);
-        parsed.state = applyParentBaseline(parserState, parsed.state, baselines);
         parserState = parsed.state;
         for (const event of parsed.events) {
           reduceUsage(aggregate, event);
@@ -532,13 +511,6 @@ export async function updateCodexIndex(
     delete index.files[key];
   }
 
-  const baselines = new Map<string, CodexRawTokenCounts>();
-  for (const file of Object.values(index.files)) {
-    if (file.parserState.highWater) {
-      baselines.set(file.parserState.sessionKey, file.parserState.highWater);
-    }
-  }
-
   const resetFlags = new Map<string, string>();
   for (const key of diff.truncated) {
     resetFlags.set(key, 'truncated-jsonl');
@@ -571,15 +543,8 @@ export async function updateCodexIndex(
         entry,
         options,
         io,
-        baselines,
       );
       index.files[entry.fileKey] = contribution;
-      if (contribution.parserState.highWater) {
-        baselines.set(
-          contribution.parserState.sessionKey,
-          contribution.parserState.highWater,
-        );
-      }
     } catch (error) {
       if (error instanceof CodexIndexCancelledError) {
         throw error;

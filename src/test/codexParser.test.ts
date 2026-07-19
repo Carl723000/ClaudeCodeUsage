@@ -2,7 +2,6 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import {
-  CodexRawTokenCounts,
   createCodexParserState,
   parseCodexLine,
 } from '../providers/codex/codexParser';
@@ -136,6 +135,38 @@ test('invalid JSON is flagged and unknown events contribute no usage', () => {
   assert.ok(unknown.state.qualityFlags.includes('unknown-event'));
 });
 
+test('known non-usage envelopes do not become quality failures', () => {
+  let state = createCodexParserState('file-key');
+  for (const type of [
+    'world_state',
+    'inter_agent_communication_metadata',
+  ]) {
+    const result = parseCodexLine(
+      JSON.stringify({
+        timestamp: '2026-07-20T00:00:00.000Z',
+        type,
+        payload: { private: 'must not be returned' },
+      }),
+      state,
+    );
+    state = result.state;
+    assert.equal(result.events.length, 0);
+    assert.equal(result.structural, undefined);
+  }
+
+  const compacted = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:01:00.000Z',
+      type: 'compacted',
+      payload: { private: 'must not be returned' },
+    }),
+    state,
+  );
+  assert.equal(compacted.structural, undefined);
+  assert.deepEqual(compacted.state.qualityFlags, []);
+  assert.doesNotMatch(JSON.stringify(compacted), /private|must not be returned/);
+});
+
 test('rate limit is a last-observed local-log snapshot', () => {
   const resetsAtSeconds = Date.parse('2026-07-20T05:00:00.000Z') / 1_000;
   const result = parseCodexLine(
@@ -161,36 +192,6 @@ test('rate limit is a last-observed local-log snapshot', () => {
       },
     ],
   });
-});
-
-test('child contribution excludes the inherited parent high-water', () => {
-  const parentBaseline: CodexRawTokenCounts = {
-    inputTokens: 1_000,
-    cachedInputTokens: 800,
-    outputTokens: 100,
-    reasoningOutputTokens: 40,
-    totalTokens: 1_100,
-  };
-  const result = parseCodexLine(
-    tokenLine({
-      inputTotal: 1_050,
-      inputLast: 50,
-      cachedInput: 820,
-      outputTotal: 120,
-      outputLast: 20,
-      reasoningOutput: 50,
-    }),
-    createCodexParserState('child-file', parentBaseline),
-  );
-
-  assert.deepEqual(result.events[0].tokens, {
-    inputTotal: 50,
-    cachedInput: 20,
-    outputTotal: 20,
-    reasoningOutput: 10,
-    sourceTotal: 70,
-  });
-  assert.equal(result.events[0].role, 'subagent');
 });
 
 test('counter regression starts a partial lineage without negative usage', () => {
@@ -249,6 +250,58 @@ test('session metadata is pseudonymized and auto-review stays distinct', () => {
   assert.equal(sessionsState.projectKey, 'project:001');
   assert.equal(sessionsState.role, 'approval-reviewer');
   assert.doesNotMatch(JSON.stringify(sessionsState), /raw-session|raw-parent|private\/project/);
+});
+
+test('repeated metadata cannot erase an established child role', () => {
+  const pseudonymize = (raw: string): string => `safe:${raw}`;
+  let state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: 'child',
+        source: {
+          subagent: {
+            thread_spawn: { parent_thread_id: 'parent' },
+          },
+        },
+      },
+    }),
+    createCodexParserState('child-file'),
+    pseudonymize,
+  ).state;
+
+  state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:01.000Z',
+      type: 'session_meta',
+      payload: { id: 'child' },
+    }),
+    state,
+    pseudonymize,
+  ).state;
+
+  assert.equal(state.parentSessionKey, 'safe:parent');
+  assert.equal(state.role, 'subagent');
+});
+
+test('guardian subagent metadata maps to an approval reviewer', () => {
+  const state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: 'review',
+        parent_thread_id: 'parent',
+        source: { subagent: { other: 'guardian' } },
+      },
+    }),
+    createCodexParserState('review-file'),
+    (raw) => `safe:${raw}`,
+  ).state;
+
+  assert.equal(state.parentSessionKey, 'safe:parent');
+  assert.equal(state.role, 'approval-reviewer');
 });
 
 test('compaction and patch calls emit structural facts without bodies', () => {

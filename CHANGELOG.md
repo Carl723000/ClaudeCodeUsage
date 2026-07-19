@@ -14,7 +14,7 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   modes preserve provider-specific semantics; Compare does not sum cost or quota.
 - **Local Codex optimization guidance** — structural signals explain unusually
   high subagent, effort, approval-reviewer, command, and cache overhead without
-  reading prompt, response, command, or tool-argument bodies.
+  inspecting or retaining prompt, response, command, or tool-argument content.
 - **Scalable Codex indexing** — a cancellable background worker and persistent
   per-file aggregate index support incremental progress, tail-only append reads,
   resume, and zero JSONL body reads for unchanged warm refreshes.
@@ -26,6 +26,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - Repository policy and architecture now define provider-neutral contracts,
   Codex privacy boundaries, eight-locale/seven-README parity, and the real
   OpenAI Codex co-author trailer for Codex-led commits.
+- Codex indexing follows observed rollout semantics: child counters start from
+  their own zero, repeated metadata preserves lineage, `guardian` sessions are
+  approval reviewers, and known non-usage envelopes are not quality failures.
 
 ### Removed
 - **Weekly Opus setting retired** — removed the obsolete model-specific
