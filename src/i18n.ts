@@ -9,6 +9,9 @@ export interface Translations {
     refreshFailed: string;
     currentSession: string;
   };
+  releaseAnnouncement: {
+    v230: string;
+  };
   popup: {
     title: string;
     currentSession: string;
@@ -212,6 +215,9 @@ const translations: Record<SupportedLanguage, Translations> = {
       error: 'Error',
       refreshFailed: 'Usage refresh failed. Retry or check diagnostic logs.',
       currentSession: 'Session',
+    },
+    releaseAnnouncement: {
+      v230: "What's new — Codex Beta usage and local optimization guidance, exact-version release notes, and removal of the obsolete model-specific weekly Opus option.",
     },
     popup: {
       title: 'Claude Code Usage',
@@ -441,6 +447,9 @@ const translations: Record<SupportedLanguage, Translations> = {
       error: "Fehler",
       refreshFailed: "Aktualisierung fehlgeschlagen. Erneut versuchen oder Diagnoselogs prüfen.",
       currentSession: "Session",
+    },
+    releaseAnnouncement: {
+      v230: 'Neu: Codex-Beta-Nutzung und lokale Optimierungshinweise, versionsgenaue Release-Hinweise und Entfernung der veralteten modellspezifischen wöchentlichen Opus-Option.',
     },
     popup: {
       title: "Claude Code Nutzung",
@@ -674,6 +683,9 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: '使用量重新整理失敗。請重試或查看診斷日誌。',
       currentSession: '當前會話',
     },
+    releaseAnnouncement: {
+      v230: '新功能：Codex Beta 用量與本機優化建議、與安裝版本精確對應的更新說明，並移除已過時的特定模型每週 Opus 選項。',
+    },
     popup: {
       title: 'Claude Code 使用量',
       currentSession: '當前會話',
@@ -899,6 +911,9 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: '用量刷新失败。请重试或查看诊断日志。',
       currentSession: '当前会话',
     },
+    releaseAnnouncement: {
+      v230: '新功能：Codex Beta 用量与本地优化建议、与安装版本精确对应的更新说明，并移除已过时的特定模型每周 Opus 选项。',
+    },
     popup: {
       title: 'Claude Code 使用量',
       currentSession: '当前会话',
@@ -1123,6 +1138,9 @@ const translations: Record<SupportedLanguage, Translations> = {
       error: 'エラー',
       refreshFailed: '使用量の更新に失敗しました。再試行するか診断ログを確認してください。',
       currentSession: '現在のセッション',
+    },
+    releaseAnnouncement: {
+      v230: '新機能：Codex Beta の使用量とローカル最適化ガイド、完全なバージョンに対応するリリース通知、および古いモデル別の週間 Opus オプションの削除。',
     },
     popup: {
       title: 'Claude Code 使用量',
@@ -1354,6 +1372,9 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: '사용량 새로 고침에 실패했습니다. 다시 시도하거나 진단 로그를 확인하세요.',
       currentSession: '현재 세션',
     },
+    releaseAnnouncement: {
+      v230: '새 기능: Codex Beta 사용량과 로컬 최적화 안내, 설치된 전체 버전에 맞는 릴리스 알림, 그리고 오래된 모델별 주간 Opus 옵션 제거.',
+    },
     popup: {
       title: 'Claude Code 사용량',
       currentSession: '현재 세션',
@@ -1584,6 +1605,9 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: 'Falha ao atualizar o uso. Tente novamente ou verifique os logs de diagnóstico.',
       currentSession: 'Sessão',
     },
+    releaseAnnouncement: {
+      v230: 'Novidades: uso do Codex Beta e orientações locais de otimização, avisos da versão exata instalada e remoção da opção semanal obsoleta do Opus por modelo.',
+    },
     popup: {
       title: 'Uso do Claude Code',
       currentSession: 'Sessão atual',
@@ -1812,6 +1836,9 @@ const translations: Record<SupportedLanguage, Translations> = {
       error: 'Error',
       refreshFailed: 'Gagal menyegarkan penggunaan. Coba lagi atau periksa log diagnostik.',
       currentSession: 'Sesi',
+    },
+    releaseAnnouncement: {
+      v230: 'Yang baru: penggunaan Codex Beta dan panduan optimasi lokal, catatan rilis yang sesuai dengan versi lengkap terpasang, serta penghapusan opsi Opus mingguan khusus model yang sudah usang.',
     },
     popup: {
       title: 'Claude Code Usage',
@@ -2047,6 +2074,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: 'Kosten-Dezimalstellen', help: '' },
     'tokenDecimalPlaces': { label: 'Token-Dezimalstellen', help: 'Dezimalstellen für kompakte Token-Anzeige (1.2M / 345.6K). Volle Ganzzahlen bleiben unberührt.' },
     'compactNumbers': { label: 'Kompakte Token-Zahlen', help: 'Zeige 1.2M / 345K statt voller Zahlen.' },
+    'releaseAnnouncements': { label: 'Release-Hinweise', help: 'Nach einem Erweiterungs-Upgrade einmal die Neuerungen anzeigen.' },
     'timezone': { label: 'Zeitzone für Daten', help: 'Gängige Zone oder UTC-Offset (jeder Offset abgedeckt) oder Systemstandard. Labels zeigen den aktuellen UTC-Offset.' },
     'showHeatmap': { label: 'Token-Heatmap zeigen (Tab „Seit Aufzeichnungsbeginn“)', help: 'Standardmäßig aus. GitHub-artige Jahres-Heatmap; als SVG exportieren oder auf dein GitHub-Profil veröffentlichen.' },
     'showEfficiency': { label: 'Effizienz-Einblicke zeigen', help: 'Standardmäßig aus. Kosten/Nachricht, Token/Nachricht, Cache-Ersparnis und die Cache-Warmzeit-Schätzung.' },
@@ -2086,6 +2114,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: '費用小數位數', help: '' },
     'tokenDecimalPlaces': { label: 'Token 小數位數', help: '緊湊 token 顯示（1.2M / 345.6K）的小數位數。完整整數值不受影響。' },
     'compactNumbers': { label: '簡潔的 Token 計數', help: '顯示 1.2M / 345K 而非完整數字。' },
+    'releaseAnnouncements': { label: '版本更新通知', help: '擴充套件升級後顯示一次「新功能」通知。' },
     'timezone': { label: '日期時區', help: '常用時區或 UTC 偏移（涵蓋所有偏移），或系統預設。標籤顯示目前的 UTC 偏移。' },
     'showHeatmap': { label: '顯示 Token 熱力圖（「所有」分頁）', help: '預設關閉。全部分頁上的 GitHub 風格年度熱力圖；可匯出 SVG 或發佈到你的 GitHub 首頁。' },
     'showEfficiency': { label: '顯示效率洞察', help: '預設關閉。加入每則成本、每則 token、快取節省與快取保溫估計。' },
@@ -2125,6 +2154,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: '费用小数位数', help: '' },
     'tokenDecimalPlaces': { label: 'Token 小数位数', help: '紧凑 token 显示（1.2M / 345.6K）的小数位数。完整整数值不受影响。' },
     'compactNumbers': { label: '简洁的 token 计数', help: '显示 1.2M / 345K 而非完整数字。' },
+    'releaseAnnouncements': { label: '版本更新通知', help: '扩展升级后显示一次“新功能”通知。' },
     'timezone': { label: '日期时区', help: '常用时区或 UTC 偏移（涵盖所有偏移），或系统默认。标签显示当前的 UTC 偏移。' },
     'showHeatmap': { label: '显示 Token 热力图（“所有”选项卡）', help: '默认关闭。全部标签上的 GitHub 风格年度热力图；可导出 SVG 或发布到你的 GitHub 主页。' },
     'showEfficiency': { label: '显示效率洞察', help: '默认关闭。加入每条成本、每条 token、缓存节省与缓存保温估计。' },
@@ -2164,6 +2194,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: 'コストの小数点以下桁数', help: '' },
     'tokenDecimalPlaces': { label: 'トークンの小数点以下桁数', help: 'トークンの短縮表示（1.2M / 345.6K）の小数桁数。完全な整数値には影響しません。' },
     'compactNumbers': { label: 'トークン数を短縮表記', help: '完全な数値の代わりに 1.2M / 345K と表示します。' },
+    'releaseAnnouncements': { label: 'リリース通知', help: '拡張機能のアップグレード後に新機能を一度通知します。' },
     'timezone': { label: '日付のタイムゾーン', help: '一般的なゾーンまたは UTC オフセット（全オフセット対応）、あるいはシステム既定。ラベルは現在の UTC オフセットを表示。' },
     'showHeatmap': { label: 'トークンヒートマップを表示（「すべて」タブ）', help: '既定でオフ。GitHub 風の年間ヒートマップ。SVG 書き出しや GitHub プロフィールへの公開が可能。' },
     'showEfficiency': { label: '効率インサイトを表示', help: '既定でオフ。メッセージ単価、メッセージ当たりトークン、キャッシュ節約、キャッシュ保温推定を追加。' },
@@ -2203,6 +2234,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: '비용 소수점 자리수', help: '' },
     'tokenDecimalPlaces': { label: '토큰 소수점 자리수', help: '간략한 토큰 표시(1.2M / 345.6K)의 소수 자리수. 전체 정수 값에는 영향을 주지 않습니다.' },
     'compactNumbers': { label: '간략한 토큰 수 표시', help: '전체 숫자 대신 1.2M / 345K로 표시합니다.' },
+    'releaseAnnouncements': { label: '릴리스 알림', help: '확장 업그레이드 후 새 기능 알림을 한 번 표시합니다.' },
     'timezone': { label: '날짜 시간대', help: '일반 지역 또는 UTC 오프셋(모든 오프셋 지원), 또는 시스템 기본값. 라벨에 현재 UTC 오프셋 표시.' },
     'showHeatmap': { label: '토큰 히트맵 표시(전체 탭)', help: '기본 꺼짐. GitHub 스타일 연간 히트맵. SVG 내보내기 또는 GitHub 프로필에 게시 가능.' },
     'showEfficiency': { label: '효율 인사이트 표시', help: '기본 꺼짐. 메시지당 비용/토큰, 캐시 절감, 캐시 보온 추정치를 추가.' },
@@ -2242,6 +2274,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: 'Casas decimais do custo', help: '' },
     'tokenDecimalPlaces': { label: 'Casas decimais de tokens', help: 'Casas decimais para a exibição compacta de tokens (1.2M / 345.6K). As contagens inteiras completas não são afetadas.' },
     'compactNumbers': { label: 'Contagem de tokens compacta', help: 'Mostra 1.2M / 345K em vez dos números completos.' },
+    'releaseAnnouncements': { label: 'Avisos de versão', help: 'Mostra uma vez as novidades após atualizar a extensão.' },
     'timezone': { label: 'Fuso horário das datas', help: 'Zona comum ou deslocamento UTC (todos cobertos), ou padrão do sistema. Os rótulos mostram o deslocamento UTC atual.' },
     'showHeatmap': { label: 'Mostrar heatmap de tokens (aba Todo o período)', help: 'Desligado por padrão. Heatmap anual estilo GitHub; exporte SVG ou publique no seu perfil do GitHub.' },
     'showEfficiency': { label: 'Mostrar insights de eficiência', help: 'Desligado por padrão. Custo/mensagem, tokens/mensagem, economia de cache e a estimativa de aquecimento do cache.' },
@@ -2282,6 +2315,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: 'Angka desimal biaya', help: '' },
     'tokenDecimalPlaces': { label: 'Angka desimal token', help: 'Angka desimal untuk tampilan token ringkas (1.2M / 345.6K). Jumlah bilangan bulat penuh tidak terpengaruh.' },
     'compactNumbers': { label: 'Jumlah token ringkas', help: 'Tampilkan 1.2M / 345K, bukan angka penuh.' },
+    'releaseAnnouncements': { label: 'Pengumuman rilis', help: 'Tampilkan sekali hal baru setelah ekstensi ditingkatkan.' },
     'timezone': { label: 'Zona waktu untuk tanggal', help: 'Pilih zona umum atau offset UTC (semua offset tersedia), atau default sistem. Label menampilkan offset UTC saat ini.' },
     'showHeatmap': { label: 'Tampilkan heatmap token (tab Sepanjang Waktu)', help: 'Nonaktif secara default. Heatmap token tahunan bergaya GitHub di tab All; ekspor sebagai SVG atau publikasikan ke profil GitHub Anda.' },
     'showEfficiency': { label: 'Tampilkan wawasan efisiensi', help: 'Nonaktif secara default. Menambahkan biaya/pesan, token/pesan, penghematan cache, dan perkiraan cache warmth.' },

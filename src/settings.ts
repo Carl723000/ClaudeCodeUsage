@@ -197,6 +197,15 @@ export const SETTINGS: SettingDef[] = [
     help: 'Show 1.2M / 345K instead of full numbers.',
   },
   {
+    key: 'releaseAnnouncements',
+    type: 'boolean',
+    default: true,
+    storage: 'state',
+    group: 'general',
+    label: 'Release announcements',
+    help: "Show one What's New notification after an extension upgrade.",
+  },
+  {
     key: 'showHeatmap',
     type: 'boolean',
     default: false,
