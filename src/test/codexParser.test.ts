@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import {
+  CodexRawTokenCounts,
   createCodexParserState,
   parseCodexLine,
 } from '../providers/codex/codexParser';
@@ -160,4 +161,128 @@ test('rate limit is a last-observed local-log snapshot', () => {
       },
     ],
   });
+});
+
+test('child contribution excludes the inherited parent high-water', () => {
+  const parentBaseline: CodexRawTokenCounts = {
+    inputTokens: 1_000,
+    cachedInputTokens: 800,
+    outputTokens: 100,
+    reasoningOutputTokens: 40,
+    totalTokens: 1_100,
+  };
+  const result = parseCodexLine(
+    tokenLine({
+      inputTotal: 1_050,
+      inputLast: 50,
+      cachedInput: 820,
+      outputTotal: 120,
+      outputLast: 20,
+      reasoningOutput: 50,
+    }),
+    createCodexParserState('child-file', parentBaseline),
+  );
+
+  assert.deepEqual(result.events[0].tokens, {
+    inputTotal: 50,
+    cachedInput: 20,
+    outputTotal: 20,
+    reasoningOutput: 10,
+    sourceTotal: 70,
+  });
+  assert.equal(result.events[0].role, 'subagent');
+});
+
+test('counter regression starts a partial lineage without negative usage', () => {
+  let state = createCodexParserState('root-file');
+  state = parseCodexLine(
+    tokenLine({ inputTotal: 100, inputLast: 100 }),
+    state,
+  ).state;
+  const result = parseCodexLine(
+    tokenLine({ inputTotal: 90, inputLast: 0 }),
+    state,
+  );
+
+  assert.ok(result.state.qualityFlags.includes('counter-regression'));
+  assert.equal(result.events.length, 0);
+});
+
+test('session metadata is pseudonymized and auto-review stays distinct', () => {
+  const pseudonyms: Record<string, string> = {
+    'raw-session': 'session:001',
+    'raw-parent': 'session:000',
+    '/private/project': 'project:001',
+  };
+  const pseudonymize = (raw: string): string => pseudonyms[raw] ?? 'unknown:key';
+  const line = JSON.stringify({
+    timestamp: '2026-07-20T00:00:00.000Z',
+    type: 'session_meta',
+    payload: {
+      id: 'raw-session',
+      cwd: '/private/project',
+      source: {
+        subagent: {
+          thread_spawn: {
+            parent_thread_id: 'raw-parent',
+            agent_role: 'codex-auto-review',
+          },
+        },
+      },
+    },
+  });
+
+  const sessionsState = parseCodexLine(
+    line,
+    createCodexParserState('sessions-file'),
+    pseudonymize,
+  ).state;
+  const archiveState = parseCodexLine(
+    line,
+    createCodexParserState('archive-file'),
+    pseudonymize,
+  ).state;
+
+  assert.equal(sessionsState.sessionKey, 'session:001');
+  assert.equal(archiveState.sessionKey, 'session:001');
+  assert.equal(sessionsState.parentSessionKey, 'session:000');
+  assert.equal(sessionsState.projectKey, 'project:001');
+  assert.equal(sessionsState.role, 'approval-reviewer');
+  assert.doesNotMatch(JSON.stringify(sessionsState), /raw-session|raw-parent|private\/project/);
+});
+
+test('compaction and patch calls emit structural facts without bodies', () => {
+  let state = createCodexParserState('file-key');
+  const compacted = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T01:00:00.000Z',
+      type: 'event_msg',
+      payload: { type: 'context_compacted', message: 'must not be read' },
+    }),
+    state,
+  );
+  state = compacted.state;
+  const patched = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T01:01:00.000Z',
+      type: 'response_item',
+      payload: {
+        type: 'function_call',
+        name: 'apply_patch',
+        arguments: '{"private":"body"}',
+      },
+    }),
+    state,
+  );
+
+  assert.deepEqual(compacted.structural, {
+    kind: 'compaction',
+    timestamp: Date.parse('2026-07-20T01:00:00.000Z'),
+  });
+  assert.deepEqual(patched.structural, {
+    kind: 'patch',
+    name: 'apply_patch',
+    timestamp: Date.parse('2026-07-20T01:01:00.000Z'),
+  });
+  assert.doesNotMatch(JSON.stringify(patched), /private|body/);
 });
