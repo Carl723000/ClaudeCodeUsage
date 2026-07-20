@@ -2,7 +2,13 @@ import * as vscode from 'vscode';
 import { ClaudeDataLoader } from './dataLoader';
 import { I18n } from './i18n';
 import { getModelRatesPerMillion } from './pricing';
-import { SETTINGS, SettingsStore, SettingView } from './settings';
+import {
+  SETTINGS,
+  SettingsStore,
+  SettingProvider,
+  SettingView,
+  settingAppliesToProvider,
+} from './settings';
 import { buildResumeCommand, isUsableCwd, isValidSessionId, isUnderDir } from './sessionResume';
 import { renderHeatmapSvg } from './heatmapSvg';
 import { DEFAULT_SECTIONS, ShareSections, buildShareCardData, shareCardFilename } from './shareCard';
@@ -360,7 +366,13 @@ export class UsageWebviewProvider {
           break;
         case 'resetAllSettings':
           if (this.settings) {
+            const requested = Array.isArray(message.keys)
+              ? new Set(message.keys.filter((key: unknown) => typeof key === 'string'))
+              : null;
             for (const d of SETTINGS) {
+              if (requested && !requested.has(d.key)) {
+                continue;
+              }
               await this.settings.reset(d.key);
             }
             this.onSettingsChanged?.();
@@ -743,7 +755,7 @@ export class UsageWebviewProvider {
               I18n.t.providers.codex,
               {
                 formatNumber: (value) => I18n.formatNumber(value),
-                settingsHtml: this.renderSettingsPanel(),
+                settingsHtml: this.renderSettingsPanel('codex'),
                 optimizationEnabled: this.setting<boolean>(
                   'codex.optimization.enabled',
                   true,
@@ -964,7 +976,7 @@ export class UsageWebviewProvider {
       settingsActive +
       `">
             ` +
-      this.renderSettingsPanel() +
+      this.renderSettingsPanel('claude') +
       `
           </div>
         </div>
@@ -983,9 +995,10 @@ export class UsageWebviewProvider {
    * config; the rest write to the dashboard-managed store. Setting labels/help
    * are English (technical); group headers + chrome are localised.
    */
-  private renderSettingsPanel(): string {
+  private renderSettingsPanel(provider: SettingProvider): string {
     const t = I18n.t.popup;
     const snap: SettingView[] = this.settings ? this.settings.snapshot() : [];
+    const visible = snap.filter((setting) => settingAppliesToProvider(setting, provider));
     const groups: { key: string; label: string }[] = [
       { key: 'general', label: t.settingsGroupGeneral },
       { key: 'providers', label: t.settingsGroupProviders },
@@ -998,11 +1011,13 @@ export class UsageWebviewProvider {
     html += '<p class="table-hint">' + t.settingsIntro + '</p>';
     html +=
       '<div class="settings-toolbar">' +
-      '<button class="btn-secondary btn-small" onclick="resetAllSettings()">' +
+      '<button class="btn-secondary btn-small" onclick="resetAllSettings(' +
+      this.escapeHtml(JSON.stringify(visible.map((setting) => setting.key))) +
+      ')">' +
       t.settingsResetAll +
       '</button></div>';
     for (const g of groups) {
-      const items = snap.filter((s) => s.group === g.key);
+      const items = visible.filter((s) => s.group === g.key);
       if (items.length === 0) {
         continue;
       }
@@ -5665,8 +5680,8 @@ function setSetting(key, value, type) {
   vscode.postMessage({ command: 'updateSetting', key: key, value: value });
 }
 
-function resetAllSettings() {
-  vscode.postMessage({ command: 'resetAllSettings' });
+function resetAllSettings(keys) {
+  vscode.postMessage({ command: 'resetAllSettings', keys: Array.isArray(keys) ? keys : undefined });
 }
 
 function runOptimizer() {

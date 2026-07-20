@@ -24,6 +24,7 @@ import {
 export type SettingType = 'boolean' | 'number' | 'enum' | 'string';
 export type SettingStorage = 'config' | 'state';
 export type SettingGroup = 'general' | 'providers' | 'features' | 'statusBar' | 'data' | 'advice';
+export type SettingProvider = 'claude' | 'codex';
 
 export interface SettingDef {
   key: string; // dotted config key, e.g. 'advice.backend'
@@ -42,6 +43,16 @@ export interface SettingDef {
   max?: number;
   secret?: boolean; // mask the input (apiKey)
   multiline?: boolean; // render a textarea
+  // Dashboard visibility. Omitted settings are Claude-only; explicitly list
+  // both providers for truly shared controls.
+  providers?: SettingProvider[];
+}
+
+export function settingAppliesToProvider(
+  def: SettingDef,
+  provider: SettingProvider,
+): boolean {
+  return def.providers?.includes(provider) ?? provider === 'claude';
 }
 
 // globalState key prefix for moved settings — namespaced to avoid colliding
@@ -164,6 +175,7 @@ export const SETTINGS: SettingDef[] = [
     label: 'Display language',
     help: 'UI language. "auto" follows VS Code.',
     enumValues: ['auto', 'en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'],
+    providers: ['claude', 'codex'],
   },
   {
     key: 'decimalPlaces',
@@ -185,6 +197,7 @@ export const SETTINGS: SettingDef[] = [
     help: 'Decimals for compact token display (1.2M / 345.6K). Full integer counts are unaffected.',
     min: 0,
     max: 2,
+    providers: ['claude', 'codex'],
   },
   {
     key: 'compactNumbers',
@@ -194,6 +207,7 @@ export const SETTINGS: SettingDef[] = [
     group: 'general',
     label: 'Compact token counts',
     help: 'Show 1.2M / 345K instead of full numbers.',
+    providers: ['claude', 'codex'],
   },
   {
     key: 'releaseAnnouncements',
@@ -203,6 +217,7 @@ export const SETTINGS: SettingDef[] = [
     group: 'general',
     label: 'Release announcements',
     help: "Show one What's New notification after an extension upgrade.",
+    providers: ['claude', 'codex'],
   },
 
   // --- Providers ---
@@ -214,6 +229,7 @@ export const SETTINGS: SettingDef[] = [
     group: 'providers',
     label: 'Enable Codex Beta',
     help: 'Read privacy-safe usage aggregates from local Codex session logs.',
+    providers: ['claude', 'codex'],
   },
   {
     key: 'codex.dataDirectory',
@@ -223,6 +239,7 @@ export const SETTINGS: SettingDef[] = [
     group: 'providers',
     label: 'Custom Codex data directory',
     help: 'Empty = CODEX_HOME, then ~/.codex. Authentication files are never read.',
+    providers: ['codex'],
   },
   {
     key: 'codex.fileWatchSeconds',
@@ -234,6 +251,7 @@ export const SETTINGS: SettingDef[] = [
     help: 'Quiet debounce after local Codex JSONL changes. Off disables watching.',
     enumValues: [...CODEX_LIVE_REFRESH_SECONDS],
     enumLabels: ['Off', '10s', '30s', '60s', '120s', '300s'],
+    providers: ['codex'],
   },
   {
     key: 'codex.optimization.enabled',
@@ -243,6 +261,7 @@ export const SETTINGS: SettingDef[] = [
     group: 'providers',
     label: 'Show Codex behavior optimization',
     help: 'Show local, deterministic Codex behavior metrics and recommendations.',
+    providers: ['codex'],
   },
   {
     key: 'showHeatmap',
@@ -318,6 +337,7 @@ export const SETTINGS: SettingDef[] = [
     enumValues: TIMEZONE_VALUES,
     enumLabels: TIMEZONE_LABELS,
     enumGroups: TIMEZONE_GROUPS,
+    providers: ['claude', 'codex'],
   },
   {
     key: 'projectGroupingMode',
@@ -341,6 +361,7 @@ export const SETTINGS: SettingDef[] = [
     help: 'Auto prefers Claude when both providers have data.',
     enumValues: ['auto', 'claude', 'codex'],
     enumLabels: ['Auto', 'Claude', 'Codex'],
+    providers: ['claude', 'codex'],
   },
   {
     key: 'codex.statusMetric',
@@ -352,6 +373,7 @@ export const SETTINGS: SettingDef[] = [
     help: 'Fresh input + output, processed tokens, or output tokens.',
     enumValues: ['fresh', 'processed', 'output'],
     enumLabels: ['Fresh', 'Processed', 'Output'],
+    providers: ['codex'],
   },
   {
     key: 'showCost',
@@ -486,6 +508,7 @@ export const SETTINGS: SettingDef[] = [
     group: 'data',
     label: 'Dashboard auto-refresh',
     help: 'Auto-refresh the dashboard as new usage lands. Off = manual refresh only (the status bar still updates).',
+    providers: ['claude', 'codex'],
   },
   {
     key: 'enableContentAnalysis',

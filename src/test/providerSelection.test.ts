@@ -47,7 +47,16 @@ test('Codex settings and charts stay inside the provider view', () => {
     settings,
     /key:\s*'codex\.optimization\.enabled'[\s\S]*?default:\s*true/,
   );
-  assert.match(webview, /settingsHtml:\s*this\.renderSettingsPanel\(\)/);
+  assert.match(webview, /settingsHtml:\s*this\.renderSettingsPanel\('codex'\)/);
+  assert.match(webview, /this\.renderSettingsPanel\('claude'\)/);
+  assert.match(
+    webview,
+    /snap\.filter\(\(setting\)\s*=>\s*settingAppliesToProvider\(setting, provider\)\)/,
+  );
+  assert.match(
+    settings,
+    /export function settingAppliesToProvider[\s\S]*?def\.providers\?\.includes\(provider\)/,
+  );
   assert.match(
     webview,
     /formatNumber:\s*\(value\)[\s\S]*?I18n\.formatNumber\(value\)/,
