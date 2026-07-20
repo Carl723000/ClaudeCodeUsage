@@ -205,6 +205,26 @@ test('percent-encoded path separators are rejected in any hex case', () => {
   }
 });
 
+test('double-encoded path separators are rejected without recursive decoding', () => {
+  for (const separator of ['%252F', '%252f', '%255C', '%255c']) {
+    assert.equal(
+      normalizeRepositoryIdentity(
+        `https://example.com/Owner/${separator}Users${separator}alice${separator}Repo.git`,
+      ),
+      undefined,
+    );
+  }
+});
+
+test('encoded Unicode control and format characters are rejected', () => {
+  for (const repositoryUrl of [
+    'https://example.com/Owner/%C2%85Repo.git',
+    'https://example.com/Owner/%E2%80%8DRepo.git',
+  ]) {
+    assert.equal(normalizeRepositoryIdentity(repositoryUrl), undefined);
+  }
+});
+
 test('malformed and unsafe decoded repository segments are rejected', () => {
   for (const repositoryUrl of [
     'git@example.com:Owner/%ZZRepo.git',
