@@ -107,6 +107,10 @@ test('all-time, monthly, and behavior views stay provider-native', () => {
   assert.equal(view.behavior.approvalReviewerFreshShare, 0.21875);
   assert.equal(view.behavior.highEffortFreshShare, 0.625);
   assert.equal(view.behavior.reasoningOutputShare, 0.5);
+  assert.equal(view.behaviorScopes.recent?.childFreshShare, 0.5);
+  assert.equal(view.behaviorScopes.last7Days.childFreshShare, 0.5);
+  assert.equal(view.behaviorScopes.last30Days.approvalReviewerFreshShare, 140 / 540);
+  assert.equal(view.behaviorScopes.allTime.childFreshShare, view.behavior.childFreshShare);
 });
 
 test('token composition partitions processed tokens without counting reasoning twice', () => {
@@ -160,6 +164,8 @@ test('an empty snapshot has no recent task and safe zero scopes', () => {
   assert.equal(view.totalThreadCount, 0);
   assert.equal(view.allTime.total.processed, 0);
   assert.equal(view.behavior.processedToFreshRatio, 0);
+  assert.equal(view.behaviorScopes.recent, null);
+  assert.equal(view.behaviorScopes.last7Days.processedToFreshRatio, 0);
 });
 
 test('missing model and effort values are grouped as unknown', () => {

@@ -5355,6 +5355,8 @@ export class UsageWebviewProvider {
       .codex-tab-content.active {
         display: block;
       }
+      .codex-behavior-scope { display: none; }
+      .codex-behavior-scope.active { display: block; }
       .codex-period-chart .chart-container {
         margin-bottom: 12px;
       }
@@ -5542,6 +5544,19 @@ function showCodexTab(tabName) {
     try { localStorage.setItem('ccu.codexTab', tabName); } catch (e) {}
   }
 }
+function showCodexBehaviorScope(scopeName) {
+  var found = false;
+  document.querySelectorAll('[data-codex-behavior-button]').forEach(function(button) {
+    var selected = button.getAttribute('data-codex-behavior-button') === scopeName;
+    button.classList.toggle('active', selected);
+    if (selected) { found = true; }
+  });
+  if (!found) { return; }
+  document.querySelectorAll('[data-codex-behavior-panel]').forEach(function(panel) {
+    panel.classList.toggle('active', panel.getAttribute('data-codex-behavior-panel') === scopeName);
+  });
+  try { localStorage.setItem('ccu.codexBehaviorScope', scopeName); } catch (e) {}
+}
 function showCodexChartMetric(chartId, metric) {
   var root = null;
   document.querySelectorAll('[data-codex-chart-root]').forEach(function(candidate) {
@@ -5591,6 +5606,10 @@ function restoreCodexTab() {
     if (button.getAttribute('data-codex-tab-button') === tabName) { found = true; }
   });
   showCodexTab(found ? tabName : 'recent');
+  var activeBehavior = document.querySelector('[data-codex-behavior-button].active');
+  var behaviorScope = activeBehavior ? activeBehavior.getAttribute('data-codex-behavior-button') : 'recent';
+  try { behaviorScope = localStorage.getItem('ccu.codexBehaviorScope') || behaviorScope; } catch (e) {}
+  showCodexBehaviorScope(behaviorScope);
 }
 function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); restoreCodexTab(); filterCodexThreads(); }
 if (document.readyState === 'loading') {

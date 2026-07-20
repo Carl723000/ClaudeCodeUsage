@@ -66,6 +66,7 @@ test('Codex settings and charts stay inside the provider view', () => {
   assert.match(webview, /function filterCodexThreads/);
   assert.match(webview, /function toggleCodexProject/);
   assert.match(webview, /function toggleCodexThreadChildren/);
+  assert.match(webview, /function showCodexBehaviorScope/);
   assert.match(webview, /\.codex-chart-value\s*\{/);
   assert.match(webview, /\.codex-period-chart \.chart-container/);
   assert.match(extension, /codexOptimizationEnabled:/);

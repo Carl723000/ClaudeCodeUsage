@@ -105,6 +105,13 @@ export interface CodexBehaviorView {
   compactCount: number;
 }
 
+export interface CodexBehaviorScopesView {
+  recent: CodexBehaviorView | null;
+  last7Days: CodexBehaviorView;
+  last30Days: CodexBehaviorView;
+  allTime: CodexBehaviorView;
+}
+
 export interface CodexUsageView {
   lastTask: CodexUsageScopeView | null;
   lastTaskIdentity: CodexTaskIdentityView | null;
@@ -118,6 +125,8 @@ export interface CodexUsageView {
   monthly: CodexPeriodUsageView[];
   recentThreads: CodexThreadUsageView[];
   totalThreadCount: number;
+  behaviorScopes: CodexBehaviorScopesView;
+  /** Backward-compatible all-time behavior aggregate. */
   behavior: CodexBehaviorView;
   coverage: CodexIndexCoverage;
   qualityFlags: Array<{ flag: string; count: number }>;
@@ -525,6 +534,9 @@ export function buildCodexUsageView(
     group.push(file);
     projects.set(key, group);
   }
+  const recentScope = recent.length > 0 ? scope(recent) : null;
+  const last7DaysScope = scope(last7Days);
+  const last30DaysScope = scope(last30Days);
   const allTime = scope(snapshot.files);
   const daily = dailyRows(snapshot.files);
   const taskRoot = recent.find(
@@ -539,7 +551,7 @@ export function buildCodexUsageView(
   const limits = validLimits(sourceLimits, now);
 
   return {
-    lastTask: recent.length > 0 ? scope(recent) : null,
+    lastTask: recentScope,
     lastTaskIdentity: taskRoot
       ? {
           title: taskRoot.session.sessionTitle,
@@ -548,8 +560,8 @@ export function buildCodexUsageView(
           observedAt: observedAt(taskRoot),
         }
       : null,
-    last7Days: scope(last7Days),
-    last30Days: scope(last30Days),
+    last7Days: last7DaysScope,
+    last30Days: last30DaysScope,
     allTime,
     projects: [...projects.entries()]
       .map(([projectKey, files]) => {
@@ -580,6 +592,12 @@ export function buildCodexUsageView(
     monthly: monthlyRows(snapshot.files),
     recentThreads: recentThreadRows(snapshot.files),
     totalThreadCount: snapshot.files.length,
+    behaviorScopes: {
+      recent: recentScope ? behaviorView(recentScope) : null,
+      last7Days: behaviorView(last7DaysScope),
+      last30Days: behaviorView(last30DaysScope),
+      allTime: behaviorView(allTime),
+    },
     behavior: behaviorView(allTime),
     coverage: snapshot.coverage,
     qualityFlags: Object.entries(snapshot.qualityFlags)

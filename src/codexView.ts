@@ -4,6 +4,7 @@ import {
 } from './providers/codex/codexInsights';
 import {
   CodexDailyUsageView,
+  CodexBehaviorView,
   CodexMetricTotals,
   CodexPeriodUsageView,
   CodexThreadUsageView,
@@ -575,15 +576,14 @@ function localizedConstraint(
   return sentences.join(' ');
 }
 
-function behaviorPanel(
-  view: CodexUsageView,
-  insights: CodexInsight[],
-  quality: string,
-  limitText: string,
+function behaviorScopePanel(
+  scopeKey: string,
+  scopeView: CodexUsageScopeView,
+  behavior: CodexBehaviorView,
+  active: boolean,
   copy: CodexViewCopy,
   format: NumberFormatter,
 ): string {
-  const behavior = view.behavior;
   const rootOrOtherShare = Math.max(
     0,
     1 - behavior.childFreshShare - behavior.approvalReviewerFreshShare,
@@ -599,10 +599,7 @@ function behaviorPanel(
     label: string,
     share: number,
   ): string => `<span class="legend-item"><span class="legend-dot ${className}"></span>${escapeHtml(label)} ${percent(share)}</span>`;
-  const insightHtml = insights
-    .map((insight) => insightCard(insight, copy))
-    .join('');
-  return `<section class="codex-behavior">
+  return `<section class="codex-behavior-scope${active ? ' active' : ''}" data-codex-behavior-panel="${escapeHtml(scopeKey)}">
     <section class="usage-summary"><div class="summary-grid">
       ${summaryCard(copy.childThreadsPerRootTask, `${behavior.childThreadsPerRootTask.toFixed(1)}×`)}
       ${summaryCard(copy.childFreshShare, percent(behavior.childFreshShare))}
@@ -628,11 +625,39 @@ function behaviorPanel(
         ${roleLegend('seg-cache-creation', copy.approvalReviewerRole, behavior.approvalReviewerFreshShare)}
       </div>
     </section>
-    ${dimensionTable(copy.models, view.allTime.models, copy, format)}
-    ${dimensionTable(copy.efforts, view.allTime.efforts, copy, format)}
-    <div class="model-item codex-coverage"><strong>${escapeHtml(copy.coverage)}</strong>: ${formatted(format, view.coverage.indexedFiles)}/${formatted(format, view.coverage.totalFiles)} files · ${formatted(format, view.coverage.indexedBytes)}/${formatted(format, view.coverage.totalBytes)} bytes · ${escapeHtml(view.coverage.complete ? copy.complete : copy.partial)}<br><strong>${escapeHtml(copy.quality)}</strong>: ${quality}</div>
-    <div class="model-item codex-limit">${limitText}</div>
-    <section class="codex-insights"><h3>${escapeHtml(copy.optimization)}</h3>${insightHtml}<details class="model-item"><summary>${escapeHtml(copy.pasteConstraint)}</summary><pre>${escapeHtml(localizedConstraint(insights, copy))}</pre></details></section>
+    ${dimensionTable(copy.models, scopeView.models, copy, format)}
+    ${dimensionTable(copy.efforts, scopeView.efforts, copy, format)}
+  </section>`;
+}
+
+function behaviorPanel(
+  view: CodexUsageView,
+  insights: CodexInsight[],
+  quality: string,
+  copy: CodexViewCopy,
+  format: NumberFormatter,
+): string {
+  const scopes = [
+    { key: 'recent', label: copy.lastTask, scope: view.lastTask, behavior: view.behaviorScopes.recent },
+    { key: '7d', label: copy.last7Days, scope: view.last7Days, behavior: view.behaviorScopes.last7Days },
+    { key: '30d', label: copy.last30Days, scope: view.last30Days, behavior: view.behaviorScopes.last30Days },
+    { key: 'all', label: copy.allTime, scope: view.allTime, behavior: view.behaviorScopes.allTime },
+  ];
+  const defaultKey = view.lastTask && view.behaviorScopes.recent ? 'recent' : '7d';
+  const buttons = scopes.map(({ key, label }) =>
+    `<button class="chart-tab${key === defaultKey ? ' active' : ''}" data-codex-behavior-button="${key}" onclick="showCodexBehaviorScope('${key}')">${escapeHtml(label)}</button>`,
+  ).join('');
+  const panels = scopes.map(({ key, scope, behavior }) =>
+    scope && behavior
+      ? behaviorScopePanel(key, scope, behavior, key === defaultKey, copy, format)
+      : `<section class="codex-behavior-scope${key === defaultKey ? ' active' : ''}" data-codex-behavior-panel="${key}"><p>${escapeHtml(copy.noRecentTask)}</p></section>`,
+  ).join('');
+  const insightHtml = insights.map((insight) => insightCard(insight, copy)).join('');
+  return `<section class="codex-behavior">
+    <div class="chart-tabs codex-behavior-tabs">${buttons}</div>
+    ${panels}
+    <details class="model-item codex-coverage"><summary>${escapeHtml(copy.coverage)} · ${escapeHtml(copy.quality)}</summary><p><strong>${escapeHtml(copy.coverage)}</strong>: ${formatted(format, view.coverage.indexedFiles)}/${formatted(format, view.coverage.totalFiles)} files · ${formatted(format, view.coverage.indexedBytes)}/${formatted(format, view.coverage.totalBytes)} bytes · ${escapeHtml(view.coverage.complete ? copy.complete : copy.partial)}<br><strong>${escapeHtml(copy.quality)}</strong>: ${quality}</p></details>
+    <section class="codex-insights"><h3>${escapeHtml(copy.optimization)} · ${escapeHtml(copy.lastTask)}</h3>${insightHtml}<details class="model-item"><summary>${escapeHtml(copy.pasteConstraint)}</summary><pre>${escapeHtml(localizedConstraint(insights, copy))}</pre></details></section>
   </section>`;
 }
 
@@ -649,10 +674,6 @@ export function renderCodexView(
         .map((item) => `${escapeHtml(item.flag)}: ${formatted(format, item.count)}`)
         .join(', ')
     : copy.complete;
-  const limit = view.limit?.windows[0];
-  const limitText = limit
-    ? `${escapeHtml(copy.lastObserved)}: ${formatted(format, limit.usedPercent)}%`
-    : `${escapeHtml(copy.lastObserved)}: ${escapeHtml(copy.unavailable)}`;
   const identity = view.lastTaskIdentity;
   const taskIdentity = identity
     ? `<article class="model-item codex-task-identity"><h3>${escapeHtml(identity.title ?? copy.unnamedSession)}</h3><div class="model-details-stacked"><span><span class="model-stat-label">${escapeHtml(copy.projectLabel)}</span><strong>${escapeHtml(identity.projectName ?? copy.unidentifiedProject)}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.lastObserved)}</span><strong>${escapeHtml(observed(identity.observedAt, copy))}</strong></span>${identity.projectDirectoryName && identity.projectDirectoryName !== identity.projectName ? `<span><span class="model-stat-label">${escapeHtml(copy.localDirectory)}</span><strong>${escapeHtml(identity.projectDirectoryName)}</strong></span>` : ''}</div></article>`
@@ -679,7 +700,7 @@ export function renderCodexView(
     ? `<button class="tab" data-codex-tab-button="behavior" onclick="showCodexTab('behavior')">${escapeHtml(copy.behavior)}</button>`
     : '';
   const behaviorContent = optimizationEnabled
-    ? `<div class="codex-tab-content" data-codex-tab-content="behavior">${behaviorPanel(view, insights, quality, limitText, copy, format)}</div>`
+    ? `<div class="codex-tab-content" data-codex-tab-content="behavior">${behaviorPanel(view, insights, quality, copy, format)}</div>`
     : '';
 
   return `<section class="codex-view" data-provider="codex">
