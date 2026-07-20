@@ -60,11 +60,20 @@ test('Codex renderer reuses Claude visuals for eight truthful modules', () => {
   assert.match(html, /class="daily-table"/);
   assert.match(html, /2026-07-20/);
   assert.match(html, /Subagent/);
+  assert.match(html, /完成 Codex v2\.3\.0 仪表板/);
+  assert.match(html, /ClaudeCodeUsage/);
+  assert.match(html, /ClaudeCodeUsage-MyFix/);
+  assert.match(html, /Locke/);
+  assert.match(html, /data-codex-thread-search/);
+  assert.match(html, /data-codex-thread-filter="role"/);
+  assert.match(html, /class="sortable" data-sortkey="title"/);
+  assert.match(html, /data-codex-project-detail="p0"/);
   assert.match(html, /data-test-settings/);
   assert.match(html, /N:1200/);
   assert.match(html, /data-label-processed="N:/);
   assert.match(html, /data-label-threads="N:/);
-  assert.doesNotMatch(html, /codex-metric-card|project:a|session:/);
+  assert.doesNotMatch(html, /codex-metric-card|project:a|session:|Thread 1|Project 1/);
+  assert.doesNotMatch(html, /class="codex-header"/);
   assert.doesNotMatch(html, /\$/);
 });
 
@@ -110,10 +119,14 @@ test('all dynamic renderer values are escaped', () => {
   snapshot.files[0].byModel = {
     '<img src=x onerror=alert(1)>': snapshot.files[0].total,
   };
+  snapshot.files[0].session.sessionTitle = '<script>private title</script>';
+  snapshot.files[0].session.projectName = '<b>private project</b>';
   const view = buildCodexUsageView(snapshot, NOW);
   const html = renderCodexView(view, [], CODEX_COPY_EN);
 
   assert.doesNotMatch(html, /<img src=x/);
+  assert.doesNotMatch(html, /<script>private title|<b>private project/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
+  assert.match(html, /&lt;script&gt;private title&lt;\/script&gt;/);
   assert.doesNotMatch(html, /https?:\/\//);
 });
