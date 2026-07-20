@@ -27,6 +27,44 @@ test('Codex renderer labels provider semantics and never renders subscription co
   assert.doesNotMatch(html, /\$|subscription cost|raw-session|\/Users\//);
 });
 
+test('Codex renderer reuses Claude visuals for eight truthful modules', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(
+    view,
+    buildCodexInsights(view.lastTask!),
+    CODEX_COPY_EN,
+    {
+      formatNumber: (value) => `N:${value}`,
+      settingsHtml: '<section data-test-settings>settings</section>',
+    },
+  );
+
+  assert.match(html, /class="tabs codex-tabs"/);
+  for (const tab of [
+    'recent',
+    '7d',
+    '30d',
+    'all',
+    'threads',
+    'projects',
+    'behavior',
+    'settings',
+  ]) {
+    assert.match(html, new RegExp(`data-codex-tab-button="${tab}"`));
+  }
+  assert.match(html, /class="summary-grid"/);
+  assert.match(html, /class="chart-tabs"/);
+  assert.match(html, /class="chart-bars"/);
+  assert.match(html, /class="cost-composition codex-token-composition"/);
+  assert.match(html, /class="daily-table"/);
+  assert.match(html, /2026-07-20/);
+  assert.match(html, /Subagent/);
+  assert.match(html, /data-test-settings/);
+  assert.match(html, /N:1200/);
+  assert.doesNotMatch(html, /codex-metric-card|project:a|session:/);
+  assert.doesNotMatch(html, /\$/);
+});
+
 test('Compare is side-by-side and contains no summed total, cost, or quota', () => {
   const html = renderProviderCompare(
     {
