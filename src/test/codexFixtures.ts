@@ -109,9 +109,10 @@ function tokens(row: FixtureRow): ProviderTokenCounts {
 function aggregate(row: FixtureRow): CodexFileAggregate {
   const total = tokens(row);
   const endedAt = Date.parse(row.end);
+  const day = row.end.slice(0, 10);
   return {
     total,
-    byDay: { [row.end.slice(0, 10)]: { ...total } },
+    byDay: { [day]: { ...total } },
     byModel: { [row.model]: { ...total } },
     byEffort: { [row.effort]: { ...total } },
     session: {
@@ -127,6 +128,20 @@ function aggregate(row: FixtureRow): CodexFileAggregate {
       endedAt,
     },
     structural: { ...EMPTY_STRUCTURAL },
+    period: {
+      timeZone: 'UTC',
+      indexedThrough: 1,
+      days: {
+        [day]: {
+          total: { ...total },
+          byModel: { [row.model]: { ...total } },
+          byEffort: { [row.effort]: { ...total } },
+          structural: { ...EMPTY_STRUCTURAL },
+          firstObservedAt: endedAt - 10 * 60_000,
+          lastObservedAt: endedAt,
+        },
+      },
+    },
   };
 }
 

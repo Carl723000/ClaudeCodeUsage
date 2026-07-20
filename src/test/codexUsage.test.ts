@@ -13,6 +13,92 @@ import {
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
 
+test('rolling scopes use only selected promoted day slices from active sessions', () => {
+  const snapshot = snapshotFixture();
+  const file = snapshot.files[0];
+  file.session.role = 'subagent';
+  file.session.startedAt = Date.parse('2026-06-01T09:00:00.000Z');
+  file.session.endedAt = Date.parse('2026-07-20T11:05:00.000Z');
+  file.total = {
+    inputTotal: 800,
+    cachedInput: 700,
+    outputTotal: 200,
+    reasoningOutput: 120,
+  };
+  file.byModel = { aggregate: { ...file.total } };
+  file.byEffort = { ultra: { ...file.total } };
+  file.structural = {
+    patchCalls: 9,
+    toolCalls: 18,
+    postPatchToolCalls: 9,
+    compactCount: 2,
+    taskCompleteCount: 2,
+  };
+  file.period = {
+    timeZone: 'UTC',
+    indexedThrough: 1,
+    days: {
+      '2026-06-01': {
+        total: { inputTotal: 720, cachedInput: 630, outputTotal: 180, reasoningOutput: 110 },
+        byModel: { old: { inputTotal: 720, cachedInput: 630, outputTotal: 180, reasoningOutput: 110 } },
+        byEffort: { ultra: { inputTotal: 720, cachedInput: 630, outputTotal: 180, reasoningOutput: 110 } },
+        structural: {
+          patchCalls: 8,
+          toolCalls: 16,
+          postPatchToolCalls: 8,
+          compactCount: 2,
+          taskCompleteCount: 1,
+        },
+        firstObservedAt: Date.parse('2026-06-01T09:00:00.000Z'),
+        lastObservedAt: Date.parse('2026-06-01T09:10:00.000Z'),
+      },
+      '2026-07-20': {
+        total: { inputTotal: 80, cachedInput: 70, outputTotal: 20, reasoningOutput: 10 },
+        byModel: { current: { inputTotal: 80, cachedInput: 70, outputTotal: 20, reasoningOutput: 10 } },
+        byEffort: { low: { inputTotal: 80, cachedInput: 70, outputTotal: 20, reasoningOutput: 10 } },
+        structural: {
+          patchCalls: 1,
+          toolCalls: 2,
+          postPatchToolCalls: 1,
+          compactCount: 0,
+          taskCompleteCount: 1,
+        },
+        firstObservedAt: Date.parse('2026-07-20T11:00:00.000Z'),
+        lastObservedAt: Date.parse('2026-07-20T11:05:00.000Z'),
+      },
+    },
+  };
+  snapshot.files = [file];
+  snapshot.total = { ...file.total };
+  snapshot.coverage.period.allTime.complete = false;
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.last7Days.total.processed, 100);
+  assert.equal(view.last7Days.total.reasoning, 10);
+  assert.equal(view.allTime.total.processed, 1_000);
+  assert.equal(view.lastTask?.total.processed, 1_000);
+  assert.equal(view.last7Days.structural.patchCalls, 1);
+  assert.deepEqual(view.last7Days.models.map((row) => [row.key, row.totals.processed]), [['current', 100]]);
+  assert.deepEqual(view.last7Days.efforts.map((row) => [row.key, row.totals.processed]), [['low', 100]]);
+  assert.equal(view.last7Days.threads, 1);
+  assert.equal(view.last7Days.childThreads, 1);
+  assert.equal(view.last7Days.childProcessedShare, 1);
+  assert.equal(view.last7Days.durationMs, 5 * 60_000);
+  assert.equal(view.last7DaysDaily.length, 7);
+  const lastDaily = view.last7DaysDaily[view.last7DaysDaily.length - 1];
+  assert.equal(lastDaily?.day, '2026-07-20');
+  assert.equal(lastDaily?.total.processed, 100);
+  assert.equal(view.last7DaysDaily[0].total.processed, 0);
+  assert.equal(view.monthly.find((row) => row.period === '2026-06')?.total.processed, 900);
+  assert.equal(view.monthly.find((row) => row.period === '2026-07')?.total.processed, 100);
+  assert.equal(view.lastTask?.periodCoverage, undefined);
+  assert.equal(view.allTime.periodCoverage, undefined);
+  assert.equal(view.last7Days.periodCoverage, view.periodCoverage.last7Days);
+  assert.equal(view.last30Days.periodCoverage, view.periodCoverage.last30Days);
+  assert.equal(view.periodCoverage, snapshot.coverage.period);
+});
+
 test('view builds recent task, 7d, 30d, and projects without double counting subsets', () => {
   const view = buildCodexUsageView(snapshotFixture(), NOW);
 
@@ -101,11 +187,17 @@ test('all-time, monthly, and behavior views stay provider-native', () => {
   assert.equal(view.monthly[0].period, '2026-07');
   assert.equal(view.monthly[0].total.processed, 1_440);
   assert.equal(view.monthly[0].threads, 3);
-  assert.deepEqual(view.last7DaysDaily.map((row) => row.day), ['2026-07-20']);
-  assert.deepEqual(view.last30DaysDaily.map((row) => row.day), [
-    '2026-07-20',
-    '2026-07-10',
-  ]);
+  assert.equal(view.last7DaysDaily.length, 7);
+  assert.equal(view.last7DaysDaily[0].day, '2026-07-14');
+  assert.equal(view.last7DaysDaily[6].day, '2026-07-20');
+  assert.equal(view.last7DaysDaily[0].total.processed, 0);
+  assert.equal(view.last30DaysDaily.length, 30);
+  assert.equal(view.last30DaysDaily[0].day, '2026-06-21');
+  assert.equal(
+    view.last30DaysDaily.find((row) => row.day === '2026-07-10')?.total.processed,
+    240,
+  );
+  assert.equal(view.last30DaysDaily[29].day, '2026-07-20');
   assert.equal(view.behavior.childThreadsPerRootTask, 0.5);
   assert.equal(view.behavior.childFreshShare, 0.3125);
   assert.equal(view.behavior.approvalReviewerFreshShare, 0.21875);
@@ -206,8 +298,10 @@ test('an empty snapshot has no recent task and safe zero scopes', () => {
   assert.equal(view.last7Days.total.processed, 0);
   assert.deepEqual(view.projects, []);
   assert.deepEqual(view.daily, []);
-  assert.deepEqual(view.last7DaysDaily, []);
-  assert.deepEqual(view.last30DaysDaily, []);
+  assert.equal(view.last7DaysDaily.length, 7);
+  assert.equal(view.last7DaysDaily.every((row) => row.total.processed === 0), true);
+  assert.equal(view.last30DaysDaily.length, 30);
+  assert.equal(view.last30DaysDaily.every((row) => row.total.processed === 0), true);
   assert.deepEqual(view.monthly, []);
   assert.deepEqual(view.recentThreads, []);
   assert.equal(view.totalThreadCount, 0);
@@ -221,6 +315,10 @@ test('missing model and effort values are grouped as unknown', () => {
   const snapshot = snapshotFixture();
   snapshot.files[0].byModel = {};
   snapshot.files[0].byEffort = {};
+  const periodDay = snapshot.files[0].period?.days['2026-07-20'];
+  assert.ok(periodDay);
+  periodDay.byModel = {};
+  periodDay.byEffort = {};
   const view = buildCodexUsageView(snapshot, NOW);
 
   assert.equal(view.last7Days.models.find((row) => row.key === 'unknown')?.totals.processed, 600);
@@ -234,7 +332,7 @@ test('incomplete session timestamps never invent a multi-year duration', () => {
 
   assert.equal(view.recentThreads[1].role, 'root');
   assert.equal(view.recentThreads[1].durationMs, 0);
-  assert.equal(view.last7Days.durationMs, 600_000);
+  assert.equal(view.last7Days.durationMs, 1_200_000);
 });
 
 test('project and task identities use named representatives and the whole lineage', () => {

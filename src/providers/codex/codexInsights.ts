@@ -32,6 +32,9 @@ function isSmallChange(scope: CodexUsageScopeView): boolean {
 export function buildCodexInsights(
   scope: CodexUsageScopeView,
 ): CodexInsight[] {
+  if (scope.periodCoverage && !scope.periodCoverage.complete) {
+    return [];
+  }
   const insights: CodexInsight[] = [];
 
   if (scope.childThreads >= 3 && scope.childFreshShare >= 0.4) {
@@ -135,6 +138,9 @@ export function buildCodexInsights(
  * command body, or tool arguments are accepted by this function.
  */
 export function pasteReadyConstraint(insights: CodexInsight[]): string {
+  if (insights.length === 0) {
+    return '';
+  }
   const kinds = new Set(insights.map((insight) => insight.kind));
   const sentences: string[] = [];
   if (kinds.has('multi-agent-tax') || kinds.has('approval-reviewer')) {
