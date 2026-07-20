@@ -31,7 +31,14 @@ function sessionLine(id: string): string {
   return JSON.stringify({
     timestamp: '2026-07-20T00:00:00.000Z',
     type: 'session_meta',
-    payload: { id, cwd: '/private/example-project' },
+    payload: {
+      id,
+      cwd: '/private/example-project',
+      agent_nickname: 'Locke',
+      git: {
+        repository_url: 'https://github.com/example/ExampleProject.git',
+      },
+    },
   });
 }
 
@@ -161,10 +168,22 @@ test('cold scan, appended tail, and persisted reload agree', async () => {
     assert.deepEqual(reloaded.aggregate, warm.index.aggregate);
     assert.equal(warm.index.aggregate.total.inputTotal, 200);
     assert.equal(warm.index.aggregate.total.outputTotal, 50);
+    assert.equal(
+      warm.index.files[key].aggregate.session.projectName,
+      'ExampleProject',
+    );
+    assert.equal(
+      warm.index.files[key].aggregate.session.projectDirectoryName,
+      'example-project',
+    );
+    assert.equal(warm.index.files[key].aggregate.session.agentNickname, 'Locke');
     assert.deepEqual(io.readOffsets, [0, coldOffset]);
     assert.equal(io.bodyReads.get(key), 2);
     const persisted = await readFile(indexPath, 'utf8');
-    assert.doesNotMatch(persisted, /raw-session|private\/example-project|rollout-active|\.jsonl/);
+    assert.doesNotMatch(
+      persisted,
+      /raw-session|private\/example-project|github\.com|rollout-active|\.jsonl/,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -244,6 +263,47 @@ test('unchanged multi-gigabyte metadata performs zero body reads', async () => {
     assert.equal(result.index.coverage.totalBytes, simulatedSize);
     assert.equal(result.index.coverage.complete, true);
     assert.equal(io.bodyReads.size, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an old unchanged index receives one bounded identity metadata pass', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-identity-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'rollout-identity.jsonl'),
+      completeSession('identity', 100, 20),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(
+      createEmptyCodexIndex(),
+      manifest,
+      { salt: SALT },
+    );
+    const key = manifest.files[0].fileKey;
+    const oldIndex = structuredClone(cold.index);
+    delete oldIndex.files[key].aggregate.session.projectName;
+    delete oldIndex.files[key].aggregate.session.projectDirectoryName;
+    delete oldIndex.files[key].aggregate.session.agentNickname;
+    delete oldIndex.files[key].identityChecked;
+    const io = trackingIo();
+
+    const enriched = await updateCodexIndex(oldIndex, manifest, {
+      salt: SALT,
+      io,
+    });
+
+    assert.equal(
+      enriched.index.files[key].aggregate.session.projectName,
+      'ExampleProject',
+    );
+    assert.equal(enriched.index.files[key].identityChecked, true);
+    assert.deepEqual(io.readOffsets, [0]);
+    assert.equal(enriched.index.aggregate.total.inputTotal, 100);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
