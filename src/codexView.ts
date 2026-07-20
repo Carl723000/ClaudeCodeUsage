@@ -76,6 +76,10 @@ export interface CodexViewCopy {
   complete: string;
   partial: string;
   lastObserved: string;
+  usageLimits: string;
+  resets: string;
+  credits: string;
+  unlimited: string;
   unavailable: string;
   optimization: string;
   structuralProxy: string;
@@ -153,6 +157,10 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   complete: 'Complete',
   partial: 'Partial',
   lastObserved: 'Last observed',
+  usageLimits: 'Usage limits',
+  resets: 'Resets',
+  credits: 'Credits',
+  unlimited: 'Unlimited',
   unavailable: 'Unavailable',
   optimization: 'Local optimization signals',
   structuralProxy: 'Structural proxy; command bodies are not read.',
@@ -398,6 +406,34 @@ function observed(value: number, copy: CodexViewCopy): string {
     return copy.unavailable;
   }
   return new Date(value).toISOString().replace('T', ' ').slice(0, 16);
+}
+
+function limitPanel(
+  limits: CodexUsageView['limits'],
+  copy: CodexViewCopy,
+  format: NumberFormatter,
+): string {
+  if (limits.length === 0) {
+    return '';
+  }
+  const cards = limits.map((limit) => {
+    const name = limit.limitName ?? limit.limitId ?? copy.usageLimits;
+    const windows = limit.windows.map((window) => {
+      const used = Math.max(0, Math.min(100, window.usedPercent));
+      const reset = window.resetsAt
+        ? `${escapeHtml(copy.resets)}: ${escapeHtml(observed(window.resetsAt, copy))}`
+        : '';
+      const durationLabel = window.windowMinutes
+        ? ` · ${formatted(format, window.windowMinutes)}m`
+        : '';
+      return `<div class="codex-limit-window"><div class="cost-comp-head"><span>${escapeHtml(window.label ?? copy.usageLimits)}${durationLabel}</span><strong>${formatted(format, used)}%</strong></div><div class="cost-comp-bar"><div class="cost-comp-seg seg-input" style="width:${used.toFixed(2)}%"></div></div>${reset ? `<div class="model-details">${reset}</div>` : ''}</div>`;
+    }).join('');
+    const credit = limit.credits
+      ? `<div class="model-details"><strong>${escapeHtml(copy.credits)}</strong>: ${limit.credits.unlimited ? escapeHtml(copy.unlimited) : escapeHtml(limit.credits.balance ?? (limit.credits.hasCredits ? copy.unavailable : '0'))}</div>`
+      : '';
+    return `<article class="model-item codex-limit-card"><h3>${escapeHtml(name)}</h3><div class="model-details">${escapeHtml(copy.lastObserved)}: ${escapeHtml(observed(limit.observedAt, copy))}</div>${windows}${credit}</article>`;
+  }).join('');
+  return `<section class="codex-limits"><h3>${escapeHtml(copy.usageLimits)}</h3><div class="model-list">${cards}</div></section>`;
 }
 
 function threadTable(
@@ -657,7 +693,7 @@ export function renderCodexView(
       ${behaviorButton}
       <button class="tab" data-codex-tab-button="settings" onclick="showCodexTab('settings')">${escapeHtml(copy.settings)}</button>
     </nav>
-    <div class="codex-tab-content active" data-codex-tab-content="recent">${taskPanel}</div>
+    <div class="codex-tab-content active" data-codex-tab-content="recent">${limitPanel(view.limits, copy, format)}${taskPanel}</div>
     <div class="codex-tab-content" data-codex-tab-content="7d">${scopePanel(view.last7Days, copy, format)}${periodChart('codex-7d', dailyChartRows(view.last7DaysDaily), copy, format)}${dailyTable(view.last7DaysDaily, copy, format)}</div>
     <div class="codex-tab-content" data-codex-tab-content="30d">${scopePanel(view.last30Days, copy, format)}${periodChart('codex-30d', dailyChartRows(view.last30DaysDaily), copy, format)}${dailyTable(view.last30DaysDaily, copy, format)}</div>
     <div class="codex-tab-content" data-codex-tab-content="all">${scopePanel(view.allTime, copy, format)}${periodChart('codex-all', monthlyChartRows, copy, format)}${monthlyTable(view.monthly, copy, format)}</div>

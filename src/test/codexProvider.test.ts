@@ -177,6 +177,7 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
       '真实 Session 标题',
     );
     assert.equal(refreshed.snapshot.limit?.windows[0].usedPercent, 42);
+    assert.equal(refreshed.snapshot.limits.length, 1);
     assert.deepEqual(provider.snapshot(), refreshed.snapshot);
   } finally {
     await rm(root, { recursive: true, force: true });

@@ -164,28 +164,57 @@ function parsePrimaryLimit(
     : isObject(info.rate_limits)
       ? info.rate_limits
       : null;
-  if (!rateLimits || !isObject(rateLimits.primary)) {
+  if (!rateLimits) {
     return undefined;
   }
-  const primary = rateLimits.primary;
-  const usedPercent = numberField(primary, 'used_percent');
-  if (usedPercent === undefined) {
+  const windows = ['primary', 'secondary']
+    .flatMap((label) => {
+      const raw = rateLimits[label];
+      if (!isObject(raw)) {
+        return [];
+      }
+      const usedPercent = numberField(raw, 'used_percent');
+      if (usedPercent === undefined) {
+        return [];
+      }
+      return [{
+        label,
+        usedPercent,
+        windowMinutes: numberField(raw, 'window_minutes'),
+        resetsAt: resetTimestamp(raw.resets_at),
+      }];
+    });
+  if (windows.length === 0) {
     return undefined;
   }
+  const credits = isObject(rateLimits.credits) ? rateLimits.credits : undefined;
+  const balance = credits?.balance;
 
+  const limitId = stringField(rateLimits, 'limit_id');
+  const limitName = stringField(rateLimits, 'limit_name');
   return {
     provider: 'codex',
+    ...(limitId ? { limitId } : {}),
+    ...(limitName ? { limitName } : {}),
     observedAt,
     source: 'local-log',
     confidence: 'last-observed',
-    windows: [
-      {
-        label: 'primary',
-        usedPercent,
-        windowMinutes: numberField(primary, 'window_minutes'),
-        resetsAt: resetTimestamp(primary.resets_at),
-      },
-    ],
+    windows,
+    ...(credits
+      ? {
+          credits: {
+            ...(typeof credits.has_credits === 'boolean'
+              ? { hasCredits: credits.has_credits }
+              : {}),
+            ...(typeof credits.unlimited === 'boolean'
+              ? { unlimited: credits.unlimited }
+              : {}),
+            ...(typeof balance === 'string' || typeof balance === 'number'
+              ? { balance: String(balance) }
+              : {}),
+          },
+        }
+      : {}),
   };
 }
 

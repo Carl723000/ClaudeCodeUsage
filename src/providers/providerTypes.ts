@@ -37,10 +37,17 @@ export interface ProviderLimitWindow {
 
 export interface ProviderLimitSnapshot {
   provider: UsageProvider;
+  limitId?: string;
+  limitName?: string;
   observedAt: number;
   source: 'oauth' | 'local-log';
   windows: ProviderLimitWindow[];
   confidence: 'exact' | 'last-observed' | 'unknown';
+  credits?: {
+    hasCredits?: boolean;
+    unlimited?: boolean;
+    balance?: string;
+  };
 }
 
 export function processedTokens(tokens: ProviderTokenCounts): number {

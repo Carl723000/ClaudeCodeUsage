@@ -69,6 +69,7 @@ export interface CodexFileContribution {
   parserState: CodexParserState;
   aggregate: CodexFileAggregate;
   limit?: ProviderLimitSnapshot;
+  limits?: Record<string, ProviderLimitSnapshot>;
   qualityFlags: string[];
   identityChecked?: boolean;
 }
@@ -375,6 +376,7 @@ async function updateContribution(
   const aggregate = contribution.aggregate;
   const pseudonymize = pseudonymizer(options.salt);
   let limit = contribution.limit;
+  const limits = { ...(contribution.limits ?? {}) };
 
   for await (const chunk of io.read(entry, contribution.offset, entry.size)) {
     assertNotCancelled(options);
@@ -395,6 +397,17 @@ async function updateContribution(
         }
         if (!limit || (parsed.limit?.observedAt ?? 0) >= limit.observedAt) {
           limit = parsed.limit ?? limit;
+        }
+        if (parsed.limit) {
+          const limitKey =
+            parsed.limit.limitId ?? parsed.limit.limitName ?? 'default';
+          const previousLimit = limits[limitKey];
+          if (
+            !previousLimit ||
+            parsed.limit.observedAt >= previousLimit.observedAt
+          ) {
+            limits[limitKey] = parsed.limit;
+          }
         }
       }
       newline = pending.indexOf('\n');
@@ -418,6 +431,7 @@ async function updateContribution(
     parserState,
     aggregate,
     limit,
+    limits,
     qualityFlags: uniqueFlags(contribution.qualityFlags, parserState.qualityFlags),
     identityChecked: true,
   };

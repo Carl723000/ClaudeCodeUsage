@@ -92,6 +92,48 @@ test('Compare is side-by-side and contains no summed total, cost, or quota', () 
   assert.doesNotMatch(html, /combined|quota|\$/i);
 });
 
+test('Codex renderer shows every unexpired named last-observed limit', () => {
+  const snapshot = snapshotFixture();
+  snapshot.limit = {
+    provider: 'codex',
+    limitId: 'main',
+    limitName: 'Codex main',
+    observedAt: NOW - 60_000,
+    source: 'local-log',
+    confidence: 'last-observed',
+    windows: [
+      { label: 'primary', usedPercent: 31, windowMinutes: 300, resetsAt: NOW + 3_600_000 },
+      { label: 'secondary', usedPercent: 47, windowMinutes: 10080, resetsAt: NOW + 86_400_000 },
+    ],
+    credits: { hasCredits: true, unlimited: false, balance: '12.5' },
+  };
+  snapshot.limits = [
+    snapshot.limit,
+    {
+      provider: 'codex',
+      limitId: 'spark',
+      limitName: 'GPT-5.3-Codex-Spark',
+      observedAt: NOW - 30_000,
+      source: 'local-log',
+      confidence: 'last-observed',
+      windows: [
+        { label: 'primary', usedPercent: 4, windowMinutes: 10080, resetsAt: NOW + 172_800_000 },
+      ],
+    },
+  ];
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, [], CODEX_COPY_EN);
+
+  assert.match(html, /Codex main/);
+  assert.match(html, /GPT-5\.3-Codex-Spark/);
+  assert.match(html, /primary/);
+  assert.match(html, /secondary/);
+  assert.match(html, /31%/);
+  assert.match(html, /47%/);
+  assert.match(html, /12\.5/);
+  assert.match(html, /Last observed/);
+});
+
 test('Simplified Chinese Codex dashboard localizes the new Claude-style modules', () => {
   const previous = I18n.getCurrentLanguage();
   try {

@@ -121,6 +121,7 @@ export interface CodexUsageView {
   behavior: CodexBehaviorView;
   coverage: CodexIndexCoverage;
   qualityFlags: Array<{ flag: string; count: number }>;
+  limits: ProviderLimitSnapshot[];
   limit: ProviderLimitSnapshot | null;
 }
 
@@ -490,6 +491,22 @@ function validLimit(
   return windows.length > 0 ? { ...limit, windows } : null;
 }
 
+function validLimits(
+  limits: ProviderLimitSnapshot[],
+  now: number,
+): ProviderLimitSnapshot[] {
+  return limits
+    .map((limit) => validLimit(limit, now))
+    .filter((limit): limit is ProviderLimitSnapshot => limit !== null)
+    .sort(
+      (left, right) =>
+        right.observedAt - left.observedAt ||
+        (left.limitName ?? left.limitId ?? '').localeCompare(
+          right.limitName ?? right.limitId ?? '',
+        ),
+    );
+}
+
 export function buildCodexUsageView(
   snapshot: CodexProviderSnapshot,
   now: number = Date.now(),
@@ -514,6 +531,12 @@ export function buildCodexUsageView(
     (file) =>
       file.session.role === 'root' || !file.session.parentSessionKey,
   ) ?? recent[0];
+  const sourceLimits = snapshot.limits.length > 0
+    ? snapshot.limits
+    : snapshot.limit
+      ? [snapshot.limit]
+      : [];
+  const limits = validLimits(sourceLimits, now);
 
   return {
     lastTask: recent.length > 0 ? scope(recent) : null,
@@ -562,6 +585,7 @@ export function buildCodexUsageView(
     qualityFlags: Object.entries(snapshot.qualityFlags)
       .map(([flag, count]) => ({ flag, count }))
       .sort((left, right) => left.flag.localeCompare(right.flag)),
-    limit: validLimit(snapshot.limit, now),
+    limits,
+    limit: validLimit(snapshot.limit, now) ?? limits[0] ?? null,
   };
 }
