@@ -8,7 +8,7 @@ import {
 } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { resolveTimeZone } from '../../dateKeys';
+import { dayKeyInZone, resolveTimeZone, rollingDayKeys } from '../../dateKeys';
 import {
   NormalizedUsageEvent,
   ProviderLimitSnapshot,
@@ -23,6 +23,7 @@ import {
 } from './codexParser';
 import {
   CodexFilePeriodIndex,
+  CodexPeriodMigrationState,
   CodexStructuralSummary,
   reduceCodexStructuralSlice,
   reduceCodexUsageSlice,
@@ -37,6 +38,7 @@ import {
 } from './codexManifest';
 import {
   CodexJsonlReader,
+  CodexJsonlCursor,
   defaultCodexJsonlReader,
   scanCodexJsonlLines,
 } from './codexJsonlScanner';
@@ -45,7 +47,10 @@ import {
   classifyCodexSessionDuplicates,
 } from './codexDedup';
 
-export { CodexStructuralSummary } from './codexPeriodIndex';
+export {
+  CodexPeriodMigrationState,
+  CodexStructuralSummary,
+} from './codexPeriodIndex';
 
 export interface CodexFileAggregate {
   total: ProviderTokenCounts;
@@ -83,6 +88,30 @@ export interface CodexFileContribution {
   limits?: Record<string, ProviderLimitSnapshot>;
   qualityFlags: string[];
   identityChecked?: boolean;
+  periodMigration?: CodexPeriodMigrationState;
+}
+
+export const CODEX_REFRESH_MAX_FILE_PASSES = 16;
+export const CODEX_REFRESH_MAX_BYTES = 32 * 1024 * 1024;
+
+export interface CodexIndexWorkBudget {
+  maxFilePasses: number;
+  maxBytes: number;
+}
+
+export interface CodexRangeCoverage {
+  migratedFiles: number;
+  totalFiles: number;
+  migratedBytes: number;
+  totalBytes: number;
+  complete: boolean;
+}
+
+export interface CodexPeriodCoverage {
+  timeZone: string;
+  last7Days: CodexRangeCoverage;
+  last30Days: CodexRangeCoverage;
+  allTime: CodexRangeCoverage;
 }
 
 export interface CodexIndexCoverage {
@@ -92,6 +121,7 @@ export interface CodexIndexCoverage {
   totalBytes: number;
   complete: boolean;
   identity: CodexIdentityCoverage;
+  period: CodexPeriodCoverage;
 }
 
 export interface CodexIdentityCoverage {
@@ -128,16 +158,23 @@ export interface CodexIndexProgress {
 
 export interface CodexIndexUpdateOptions {
   salt: string;
-  timeZone?: string;
+  timeZone: string;
   io?: CodexIndexIo;
+  budget?: CodexIndexWorkBudget;
   shouldCancel?: () => boolean;
   onProgress?: (progress: CodexIndexProgress) => void;
+  onCheckpoint?: (index: CodexIndexV2) => Promise<void>;
 }
 
 export interface CodexIndexUpdateResult {
   index: CodexIndexV2;
   bodyReads: number;
   failedFiles: number;
+  migration: {
+    filePasses: number;
+    bytesRead: number;
+    pending: boolean;
+  };
 }
 
 export class CodexIndexCancelledError extends Error {
@@ -190,7 +227,15 @@ function emptyFileAggregate(
   };
 }
 
-export function createEmptyCodexIndex(_timeZone = 'UTC'): CodexIndexV2 {
+export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV2 {
+  const resolvedTimeZone = resolveTimeZone(timeZone);
+  const emptyRange = (): CodexRangeCoverage => ({
+    migratedFiles: 0,
+    totalFiles: 0,
+    migratedBytes: 0,
+    totalBytes: 0,
+    complete: true,
+  });
   return {
     schemaVersion: 2,
     files: {},
@@ -205,6 +250,12 @@ export function createEmptyCodexIndex(_timeZone = 'UTC'): CodexIndexV2 {
         exactDuplicateFiles: 0,
         ambiguousSessionGroups: 0,
         complete: true,
+      },
+      period: {
+        timeZone: resolvedTimeZone,
+        last7Days: emptyRange(),
+        last30Days: emptyRange(),
+        allTime: emptyRange(),
       },
     },
   };
@@ -370,28 +421,59 @@ function contributionFor(
   };
 }
 
-function assertNotCancelled(options: CodexIndexUpdateOptions): void {
-  if (options.shouldCancel?.()) {
-    throw new CodexIndexCancelledError();
-  }
+interface CodexFilePassResult {
+  contribution: CodexFileContribution;
+  bytesRead: number;
 }
+
+type ContributionChunkHandler = (
+  contribution: CodexFileContribution,
+  bytesRead: number,
+) => Promise<void>;
 
 async function updateContribution(
   contribution: CodexFileContribution,
   entry: CodexRuntimeManifestEntry,
   options: CodexIndexUpdateOptions,
   io: CodexIndexIo,
-): Promise<CodexFileContribution> {
+  endExclusive: number,
+  onChunk: ContributionChunkHandler,
+): Promise<CodexFilePassResult> {
   let parserState = contribution.parserState;
   const aggregate = contribution.aggregate;
   const pseudonymize = pseudonymizer(options.salt);
   let limit = contribution.limit;
   const limits = { ...(contribution.limits ?? {}) };
-  const timeZone = resolveTimeZone(options.timeZone ?? 'UTC');
+  const timeZone = resolveTimeZone(options.timeZone);
   const advancePeriod =
     aggregate.period?.timeZone === timeZone &&
     aggregate.period.indexedThrough === contribution.offset;
   let invalidEventTimestamp = false;
+
+  const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => {
+    syncSession(aggregate, parserState);
+    return {
+      ...contribution,
+      fileKey: entry.fileKey,
+      sourceArea: entry.sourceArea,
+      size: entry.size,
+      mtimeMs: entry.mtimeMs,
+      dev: entry.dev,
+      ino: entry.ino,
+      offset: cursor.offset,
+      discardingOversizedLine: cursor.discardingOversizedLine,
+      parserState,
+      aggregate,
+      limit,
+      limits,
+      qualityFlags: uniqueFlags(
+        contribution.qualityFlags,
+        parserState.qualityFlags,
+        invalidEventTimestamp ? ['invalid-event-timestamp'] : [],
+      ),
+      identityChecked: true,
+    };
+  };
 
   const scan = await scanCodexJsonlLines(
     entry,
@@ -400,9 +482,8 @@ async function updateContribution(
       offset: contribution.offset,
       discardingOversizedLine: contribution.discardingOversizedLine,
     },
-    entry.size,
+    endExclusive,
     (line) => {
-      assertNotCancelled(options);
       if (line.trim() !== '') {
         const parsed = parseCodexLine(line, parserState, pseudonymize);
         parserState = parsed.state;
@@ -445,38 +526,133 @@ async function updateContribution(
         }
       }
     },
+    async (progress) => {
+      await onChunk(snapshot(progress.cursor), progress.bytesRead);
+    },
   );
 
-  if (!scan.reachedEnd || contribution.offset + scan.bytesRead !== entry.size) {
+  if (!scan.reachedEnd) {
     throw new Error('Codex log changed during indexing');
   }
 
   if (advancePeriod && aggregate.period) {
     aggregate.period.indexedThrough = scan.cursor.offset;
   }
-  syncSession(aggregate, parserState);
-  return {
+  const updated = snapshot(scan.cursor);
+  updated.qualityFlags = uniqueFlags(
+    updated.qualityFlags,
+    scan.oversizedLines > 0 ? ['oversized-jsonl-line'] : [],
+  );
+  return { contribution: updated, bytesRead: scan.bytesRead };
+}
+
+async function migrateContributionPeriod(
+  contribution: CodexFileContribution,
+  entry: CodexRuntimeManifestEntry,
+  options: CodexIndexUpdateOptions,
+  io: CodexIndexIo,
+  endExclusive: number,
+  onChunk: ContributionChunkHandler,
+): Promise<CodexFilePassResult> {
+  const timeZone = resolveTimeZone(options.timeZone);
+  const initial = contribution.periodMigration?.timeZone === timeZone
+    ? contribution.periodMigration
+    : {
+        timeZone,
+        offset: 0,
+        discardingOversizedLine: false,
+        parserState: createCodexParserState(entry.fileKey),
+        days: {},
+        qualityFlags: [],
+      };
+  let parserState = initial.parserState;
+  const days = initial.days;
+  let invalidEventTimestamp = false;
+  const pseudonymize = pseudonymizer(options.salt);
+
+  const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => ({
     ...contribution,
-    fileKey: entry.fileKey,
-    sourceArea: entry.sourceArea,
-    size: entry.size,
-    mtimeMs: entry.mtimeMs,
-    dev: entry.dev,
-    ino: entry.ino,
-    offset: scan.cursor.offset,
-    discardingOversizedLine: scan.cursor.discardingOversizedLine,
-    parserState,
-    aggregate,
-    limit,
-    limits,
-    qualityFlags: uniqueFlags(
-      contribution.qualityFlags,
-      parserState.qualityFlags,
-      scan.oversizedLines > 0 ? ['oversized-jsonl-line'] : [],
-      invalidEventTimestamp ? ['invalid-event-timestamp'] : [],
-    ),
-    identityChecked: true,
-  };
+    aggregate: {
+      ...contribution.aggregate,
+      period: undefined,
+    },
+    periodMigration: {
+      timeZone,
+      offset: cursor.offset,
+      discardingOversizedLine: cursor.discardingOversizedLine,
+      parserState,
+      days,
+      qualityFlags: uniqueFlags(
+        initial.qualityFlags,
+        parserState.qualityFlags,
+        invalidEventTimestamp ? ['invalid-event-timestamp'] : [],
+      ),
+    },
+  });
+
+  const scan = await scanCodexJsonlLines(
+    entry,
+    io,
+    {
+      offset: initial.offset,
+      discardingOversizedLine: initial.discardingOversizedLine,
+    },
+    endExclusive,
+    (line) => {
+      if (line.trim() === '') {
+        return;
+      }
+      const parsed = parseCodexLine(line, parserState, pseudonymize);
+      parserState = parsed.state;
+      for (const event of parsed.events) {
+        if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
+          invalidEventTimestamp = true;
+        } else {
+          reduceCodexUsageSlice(days, event, timeZone);
+        }
+      }
+      if (parsed.structural) {
+        if (
+          !Number.isFinite(parsed.structural.timestamp) ||
+          parsed.structural.timestamp <= 0
+        ) {
+          invalidEventTimestamp = true;
+        } else {
+          reduceCodexStructuralSlice(days, parsed.structural, timeZone);
+        }
+      }
+    },
+    async (progress) => {
+      await onChunk(snapshot(progress.cursor), progress.bytesRead);
+    },
+  );
+  if (!scan.reachedEnd) {
+    throw new Error('Codex log changed during period migration');
+  }
+  const updated = snapshot(scan.cursor);
+  if (updated.periodMigration && scan.oversizedLines > 0) {
+    updated.periodMigration.qualityFlags = uniqueFlags(
+      updated.periodMigration.qualityFlags,
+      ['oversized-jsonl-line'],
+    );
+  }
+  if (
+    updated.periodMigration &&
+    updated.periodMigration.offset >= contribution.offset &&
+    !updated.periodMigration.discardingOversizedLine
+  ) {
+    updated.aggregate.period = {
+      timeZone,
+      indexedThrough: contribution.offset,
+      days: updated.periodMigration.days,
+    };
+    updated.qualityFlags = uniqueFlags(
+      updated.qualityFlags,
+      updated.periodMigration.qualityFlags,
+    );
+    delete updated.periodMigration;
+  }
+  return { contribution: updated, bytesRead: scan.bytesRead };
 }
 
 async function backfillIdentity(
@@ -484,6 +660,7 @@ async function backfillIdentity(
   entry: CodexRuntimeManifestEntry,
   options: CodexIndexUpdateOptions,
   io: CodexIndexIo,
+  onChunk?: () => Promise<void>,
 ): Promise<CodexFileContribution> {
   if (contribution.identityChecked === true) {
     return contribution;
@@ -498,7 +675,6 @@ async function backfillIdentity(
     { offset: 0, discardingOversizedLine: false },
     end,
     (line) => {
-      assertNotCancelled(options);
       const entryObject = parseJsonObject(line);
       if (
         result === undefined &&
@@ -520,6 +696,7 @@ async function backfillIdentity(
         };
       }
     },
+    onChunk,
   );
   return result ?? { ...contribution, identityChecked: true };
 }
@@ -551,6 +728,7 @@ function recomputeAggregate(
 function coverageFor(
   files: Record<string, CodexFileContribution>,
   manifest: CodexManifest,
+  timeZone: string,
   deduplication = classifyCodexSessionDuplicates(files),
 ): CodexIndexCoverage {
   let indexedFiles = 0;
@@ -576,6 +754,57 @@ function coverageFor(
     }
   }
   const totalFiles = manifest.files.length;
+  const rangeCoverage = (oldestDay?: string): CodexRangeCoverage => {
+    let migratedFiles = 0;
+    let migratedBytes = 0;
+    let rangeTotalFiles = 0;
+    let rangeTotalBytes = 0;
+    for (const entry of manifest.files) {
+      if (deduplication.exactDuplicateFileKeys.has(entry.fileKey)) {
+        continue;
+      }
+      const contribution = files[entry.fileKey];
+      const endedAt = contribution?.aggregate.session.endedAt;
+      if (oldestDay && endedAt !== undefined && Number.isFinite(endedAt)) {
+        const endedDay = dayKeyInZone(new Date(endedAt), timeZone);
+        if (endedDay && endedDay < oldestDay) {
+          continue;
+        }
+      }
+      rangeTotalFiles += 1;
+      rangeTotalBytes += entry.size;
+      const promoted = contribution?.aggregate.period?.timeZone === timeZone
+        ? Math.min(
+            contribution.aggregate.period.indexedThrough,
+            contribution.offset,
+            entry.size,
+          )
+        : 0;
+      const draft = contribution?.periodMigration?.timeZone === timeZone
+        ? Math.min(contribution.periodMigration.offset, contribution.offset, entry.size)
+        : 0;
+      const migrated = Math.max(0, Math.max(promoted, draft));
+      migratedBytes += migrated;
+      if (
+        contribution &&
+        contribution.offset >= entry.size &&
+        !contribution.discardingOversizedLine &&
+        contribution.aggregate.period?.timeZone === timeZone &&
+        contribution.aggregate.period.indexedThrough >= contribution.offset
+      ) {
+        migratedFiles += 1;
+      }
+    }
+    return {
+      migratedFiles,
+      totalFiles: rangeTotalFiles,
+      migratedBytes,
+      totalBytes: rangeTotalBytes,
+      complete: migratedFiles === rangeTotalFiles,
+    };
+  };
+  const last7Start = rollingDayKeys(Date.now(), timeZone, 7)[0];
+  const last30Start = rollingDayKeys(Date.now(), timeZone, 30)[0];
   return {
     indexedFiles,
     totalFiles,
@@ -587,16 +816,23 @@ function coverageFor(
       ambiguousSessionGroups: deduplication.ambiguousSessionGroups,
       complete: deduplication.ambiguousSessionGroups === 0,
     },
+    period: {
+      timeZone,
+      last7Days: rangeCoverage(last7Start),
+      last30Days: rangeCoverage(last30Start),
+      allTime: rangeCoverage(),
+    },
   };
 }
 
 function recomputeDerivedIndex(
   index: CodexIndexV2,
   manifest: CodexManifest,
+  timeZone: string,
 ): void {
   const deduplication = classifyCodexSessionDuplicates(index.files);
   index.aggregate = recomputeAggregate(index.files, deduplication);
-  index.coverage = coverageFor(index.files, manifest, deduplication);
+  index.coverage = coverageFor(index.files, manifest, timeZone, deduplication);
 }
 
 function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgress {
@@ -608,19 +844,53 @@ function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgr
   };
 }
 
-export async function updateCodexIndex(
+type LegacyCodexIndexUpdateOptions = Omit<CodexIndexUpdateOptions, 'timeZone'> & {
+  timeZone?: string;
+};
+
+export function updateCodexIndex(
   previous: CodexIndexV2,
   manifest: CodexManifest,
   options: CodexIndexUpdateOptions,
+): Promise<CodexIndexUpdateResult>;
+/** @deprecated Task-7 worker compatibility until refresh requests carry a timezone. */
+export function updateCodexIndex(
+  previous: CodexIndexV2,
+  manifest: CodexManifest,
+  options: LegacyCodexIndexUpdateOptions,
+): Promise<CodexIndexUpdateResult>;
+export async function updateCodexIndex(
+  previous: CodexIndexV2,
+  manifest: CodexManifest,
+  options: LegacyCodexIndexUpdateOptions,
 ): Promise<CodexIndexUpdateResult> {
-  assertNotCancelled(options);
   const index = cloneIndex(previous);
   const io = options.io ?? defaultIo();
   const timeZone = resolveTimeZone(options.timeZone ?? 'UTC');
+  const normalizedOptions: CodexIndexUpdateOptions = { ...options, timeZone };
+  const budget: CodexIndexWorkBudget = {
+    maxFilePasses: Math.max(
+      0,
+      Math.min(
+        CODEX_REFRESH_MAX_FILE_PASSES,
+        Math.floor(options.budget?.maxFilePasses ?? CODEX_REFRESH_MAX_FILE_PASSES),
+      ),
+    ),
+    maxBytes: Math.max(
+      0,
+      Math.min(
+        CODEX_REFRESH_MAX_BYTES,
+        Math.floor(options.budget?.maxBytes ?? CODEX_REFRESH_MAX_BYTES),
+      ),
+    ),
+  };
   const diff = diffCodexManifest(previousManifest(index), manifest.persistable);
   const entries = new Map(manifest.files.map((entry) => [entry.fileKey, entry]));
   let bodyReads = 0;
   let failedFiles = 0;
+  let filePasses = 0;
+  let bytesRead = 0;
+  let cancellationCheckpointed = false;
 
   for (const move of diff.moved) {
     const contribution = index.files[move.fromKey];
@@ -636,10 +906,21 @@ export async function updateCodexIndex(
     contribution.dev = entry.dev;
     contribution.ino = entry.ino;
     contribution.parserState.fileKey = move.toKey;
+    if (contribution.periodMigration) {
+      contribution.periodMigration.parserState.fileKey = move.toKey;
+    }
     index.files[move.toKey] = contribution;
   }
   for (const key of diff.removed) {
     delete index.files[key];
+  }
+  for (const contribution of Object.values(index.files)) {
+    if (contribution.aggregate.period?.timeZone !== timeZone) {
+      delete contribution.aggregate.period;
+    }
+    if (contribution.periodMigration?.timeZone !== timeZone) {
+      delete contribution.periodMigration;
+    }
   }
 
   const resetFlags = new Map<string, string>();
@@ -649,14 +930,70 @@ export async function updateCodexIndex(
   for (const key of diff.replaced) {
     resetFlags.set(key, 'replaced-jsonl');
   }
-  const work = [...diff.added, ...diff.appended, ...diff.truncated, ...diff.replaced]
+  const changedKeys = new Set([
+    ...diff.added,
+    ...diff.appended,
+    ...diff.truncated,
+    ...diff.replaced,
+  ]);
+  for (const entry of manifest.files) {
+    const contribution = index.files[entry.fileKey];
+    if (
+      contribution &&
+      (contribution.offset < entry.size ||
+        contribution.discardingOversizedLine ||
+        contribution.qualityFlags.includes('stale-file'))
+    ) {
+      changedKeys.add(entry.fileKey);
+    }
+  }
+  const recentFirst = (
+    left: CodexRuntimeManifestEntry,
+    right: CodexRuntimeManifestEntry,
+  ): number => right.mtimeMs - left.mtimeMs || left.fileKey.localeCompare(right.fileKey);
+  const mainWork = [...changedKeys]
     .map((key) => entries.get(key))
     .filter((entry): entry is CodexRuntimeManifestEntry => entry !== undefined)
-    .sort((left, right) => left.mtimeMs - right.mtimeMs);
+    .sort(recentFirst);
 
-  let scannedFiles = manifest.files.length - work.length;
-  for (const entry of work) {
-    assertNotCancelled(options);
+  const checkpoint = async (): Promise<void> => {
+    recomputeDerivedIndex(index, manifest, timeZone);
+    await options.onCheckpoint?.(cloneIndex(index));
+  };
+  const cancelBeforePass = async (): Promise<void> => {
+    if (!options.shouldCancel?.()) {
+      return;
+    }
+    if (!cancellationCheckpointed) {
+      await checkpoint();
+      cancellationCheckpointed = true;
+    }
+    throw new CodexIndexCancelledError();
+  };
+  const onChunk = (
+    entry: CodexRuntimeManifestEntry,
+    passStartingBytes: number,
+  ): ContributionChunkHandler => async (contribution, passBytesRead) => {
+    bytesRead = passStartingBytes + passBytesRead;
+    index.files[entry.fileKey] = contribution;
+    recomputeDerivedIndex(index, manifest, timeZone);
+    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
+    if (options.shouldCancel?.()) {
+      if (!cancellationCheckpointed) {
+        await options.onCheckpoint?.(cloneIndex(index));
+        cancellationCheckpointed = true;
+      }
+      throw new CodexIndexCancelledError();
+    }
+  };
+  const hasBudget = (): boolean =>
+    filePasses < budget.maxFilePasses && bytesRead < budget.maxBytes;
+
+  for (const entry of mainWork) {
+    if (!hasBudget()) {
+      break;
+    }
+    await cancelBeforePass();
     const resetFlag = resetFlags.get(entry.fileKey);
     const prior = index.files[entry.fileKey];
     const base = resetFlag || !prior
@@ -667,15 +1004,25 @@ export async function updateCodexIndex(
             (flag) => flag !== 'stale-file' && flag !== 'stale-reset-required',
           ),
         };
+    const remainingBytes = budget.maxBytes - bytesRead;
+    const endExclusive = Math.min(entry.size, base.offset + remainingBytes);
+    if (endExclusive <= base.offset) {
+      break;
+    }
     bodyReads += 1;
+    filePasses += 1;
+    const passStartingBytes = bytesRead;
     try {
-      const contribution = await updateContribution(
+      const pass = await updateContribution(
         base,
         entry,
-        options,
+        normalizedOptions,
         io,
+        endExclusive,
+        onChunk(entry, passStartingBytes),
       );
-      index.files[entry.fileKey] = contribution;
+      bytesRead = passStartingBytes + pass.bytesRead;
+      index.files[entry.fileKey] = pass.contribution;
     } catch (error) {
       if (error instanceof CodexIndexCancelledError) {
         throw error;
@@ -692,24 +1039,112 @@ export async function updateCodexIndex(
         };
       }
     }
-    scannedFiles += 1;
-    recomputeDerivedIndex(index, manifest);
-    options.onProgress?.(progressFor(index, scannedFiles));
+    recomputeDerivedIndex(index, manifest, timeZone);
+    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
+    await options.onCheckpoint?.(cloneIndex(index));
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  for (const entry of manifest.files) {
+  recomputeDerivedIndex(index, manifest, timeZone);
+  const canonical = classifyCodexSessionDuplicates(index.files).canonicalFileKeys;
+  const periodWork = manifest.files
+    .filter((entry) => {
+      if (!canonical.has(entry.fileKey) || changedKeys.has(entry.fileKey)) {
+        return false;
+      }
+      const contribution = index.files[entry.fileKey];
+      return Boolean(
+        contribution &&
+        contribution.offset > 0 &&
+        contribution.offset >= entry.size &&
+        !contribution.discardingOversizedLine &&
+        (
+          contribution.aggregate.period?.timeZone !== timeZone ||
+          contribution.aggregate.period.indexedThrough !== contribution.offset
+        ),
+      );
+    })
+    .sort(recentFirst);
+
+  for (const entry of periodWork) {
+    if (!hasBudget()) {
+      break;
+    }
+    await cancelBeforePass();
+    const prior = index.files[entry.fileKey];
+    if (!prior) {
+      continue;
+    }
+    const base = cloneContribution(prior);
+    const start = base.periodMigration?.timeZone === timeZone
+      ? base.periodMigration.offset
+      : 0;
+    const endExclusive = Math.min(
+      base.offset,
+      start + (budget.maxBytes - bytesRead),
+    );
+    if (endExclusive <= start) {
+      break;
+    }
+    bodyReads += 1;
+    filePasses += 1;
+    const passStartingBytes = bytesRead;
+    try {
+      const pass = await migrateContributionPeriod(
+        base,
+        entry,
+        normalizedOptions,
+        io,
+        endExclusive,
+        onChunk(entry, passStartingBytes),
+      );
+      bytesRead = passStartingBytes + pass.bytesRead;
+      index.files[entry.fileKey] = pass.contribution;
+    } catch (error) {
+      if (error instanceof CodexIndexCancelledError) {
+        throw error;
+      }
+      failedFiles += 1;
+      index.files[entry.fileKey] = prior;
+    }
+    recomputeDerivedIndex(index, manifest, timeZone);
+    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
+    await options.onCheckpoint?.(cloneIndex(index));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  for (const entry of manifest.files.sort(recentFirst)) {
+    if (!hasBudget()) {
+      break;
+    }
     const contribution = index.files[entry.fileKey];
     if (!contribution || contribution.identityChecked === true) {
       continue;
     }
+    await cancelBeforePass();
+    const identityBytes = Math.min(entry.size, MAX_IDENTITY_BYTES);
+    if (identityBytes > budget.maxBytes - bytesRead) {
+      break;
+    }
     bodyReads += 1;
+    filePasses += 1;
+    bytesRead += identityBytes;
     try {
       index.files[entry.fileKey] = await backfillIdentity(
         contribution,
         entry,
-        options,
+        normalizedOptions,
         io,
+        async () => {
+          options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
+          if (options.shouldCancel?.()) {
+            if (!cancellationCheckpointed) {
+              await checkpoint();
+              cancellationCheckpointed = true;
+            }
+            throw new CodexIndexCancelledError();
+          }
+        },
       );
     } catch (error) {
       if (error instanceof CodexIndexCancelledError) {
@@ -717,13 +1152,24 @@ export async function updateCodexIndex(
       }
       failedFiles += 1;
     }
+    recomputeDerivedIndex(index, manifest, timeZone);
+    await options.onCheckpoint?.(cloneIndex(index));
   }
 
-  recomputeDerivedIndex(index, manifest);
-  if (work.length === 0) {
+  recomputeDerivedIndex(index, manifest, timeZone);
+  if (filePasses === 0) {
     options.onProgress?.(progressFor(index, manifest.files.length));
   }
-  return { index, bodyReads, failedFiles };
+  return {
+    index,
+    bodyReads,
+    failedFiles,
+    migration: {
+      filePasses,
+      bytesRead,
+      pending: !index.coverage.complete || !index.coverage.period.allTime.complete,
+    },
+  };
 }
 
 interface LegacyCodexIndexV1 {
@@ -947,6 +1393,31 @@ function sanitizePeriod(value: unknown): CodexFilePeriodIndex | undefined {
   };
 }
 
+function sanitizePeriodMigration(
+  value: unknown,
+  fileKey: string,
+): CodexPeriodMigrationState | undefined {
+  if (!isRecord(value) || typeof value.timeZone !== 'string') {
+    return undefined;
+  }
+  const period = sanitizePeriod({
+    timeZone: value.timeZone,
+    indexedThrough: value.offset,
+    days: value.days,
+  });
+  if (!period) {
+    return undefined;
+  }
+  return {
+    timeZone: period.timeZone,
+    offset: Math.max(0, finiteNumber(value.offset)),
+    discardingOversizedLine: value.discardingOversizedLine === true,
+    parserState: sanitizeParserState(value.parserState, fileKey),
+    days: period.days,
+    qualityFlags: sanitizeQualityFlags(value.qualityFlags),
+  };
+}
+
 function sanitizeLimit(value: unknown): ProviderLimitSnapshot | undefined {
   if (!isRecord(value) || !Array.isArray(value.windows)) {
     return undefined;
@@ -1060,6 +1531,19 @@ function sanitizeFileAggregate(
 function sanitizeCoverage(value: unknown): CodexIndexCoverage {
   const coverage = isRecord(value) ? value : {};
   const identity = isRecord(coverage.identity) ? coverage.identity : {};
+  const period = isRecord(coverage.period) ? coverage.period : {};
+  const sanitizeRange = (value: unknown): CodexRangeCoverage => {
+    const range = isRecord(value) ? value : {};
+    const migratedFiles = Math.max(0, finiteNumber(range.migratedFiles));
+    const totalFiles = Math.max(0, finiteNumber(range.totalFiles));
+    return {
+      migratedFiles,
+      totalFiles,
+      migratedBytes: Math.max(0, finiteNumber(range.migratedBytes)),
+      totalBytes: Math.max(0, finiteNumber(range.totalBytes)),
+      complete: range.complete === true || migratedFiles === totalFiles,
+    };
+  };
   return {
     indexedFiles: finiteNumber(coverage.indexedFiles),
     totalFiles: finiteNumber(coverage.totalFiles),
@@ -1076,6 +1560,14 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
         finiteNumber(identity.ambiguousSessionGroups),
       ),
       complete: identity.complete !== false,
+    },
+    period: {
+      timeZone: resolveTimeZone(
+        typeof period.timeZone === 'string' ? period.timeZone : 'UTC',
+      ),
+      last7Days: sanitizeRange(period.last7Days),
+      last30Days: sanitizeRange(period.last30Days),
+      allTime: sanitizeRange(period.allTime),
     },
   };
 }
@@ -1111,8 +1603,16 @@ function sanitizeFileContribution(
   const contribution = isRecord(value) ? value : {};
   const fileKey = key;
   const parserState = sanitizeParserState(contribution.parserState, fileKey);
+  const safeOffset = offsetOverride ?? Math.max(0, finiteNumber(contribution.offset));
   const limit = sanitizeLimit(contribution.limit);
   const limits = sanitizeLimits(contribution.limits);
+  const periodMigration = sanitizePeriodMigration(
+    contribution.periodMigration,
+    fileKey,
+  );
+  if (periodMigration) {
+    periodMigration.offset = Math.min(periodMigration.offset, safeOffset);
+  }
   return {
     fileKey,
     ...(contribution.sourceArea === 'sessions' || contribution.sourceArea === 'archive'
@@ -1126,7 +1626,7 @@ function sanitizeFileContribution(
     ...(optionalNumber(contribution.ino) !== undefined
       ? { ino: optionalNumber(contribution.ino) }
       : {}),
-    offset: offsetOverride ?? Math.max(0, finiteNumber(contribution.offset)),
+    offset: safeOffset,
     discardingOversizedLine: discardingOverride ??
       contribution.discardingOversizedLine === true,
     parserState,
@@ -1137,6 +1637,7 @@ function sanitizeFileContribution(
     ...(typeof contribution.identityChecked === 'boolean'
       ? { identityChecked: contribution.identityChecked }
       : {}),
+    ...(periodMigration ? { periodMigration } : {}),
   };
 }
 

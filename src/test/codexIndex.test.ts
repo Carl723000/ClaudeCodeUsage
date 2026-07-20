@@ -13,12 +13,14 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+  CodexIndexCancelledError,
   CodexFileContribution,
   CodexIndexIo,
+  CodexIndexUpdateOptions,
   createEmptyCodexIndex,
   loadCodexIndex,
   saveCodexIndexAtomic,
-  updateCodexIndex,
+  updateCodexIndex as updateCodexIndexRaw,
 } from '../providers/codex/codexIndex';
 import {
   CodexManifest,
@@ -27,6 +29,17 @@ import {
 } from '../providers/codex/codexManifest';
 
 const SALT = 'test-machine-salt';
+
+function updateCodexIndex(
+  previous: Parameters<typeof updateCodexIndexRaw>[0],
+  manifest: Parameters<typeof updateCodexIndexRaw>[1],
+  options: Partial<CodexIndexUpdateOptions> & Pick<CodexIndexUpdateOptions, 'salt'>,
+): ReturnType<typeof updateCodexIndexRaw> {
+  return updateCodexIndexRaw(previous, manifest, {
+    ...options,
+    timeZone: options.timeZone ?? 'UTC',
+  });
+}
 
 function sessionLine(id: string): string {
   return JSON.stringify({
@@ -106,22 +119,288 @@ function completeSession(id: string, input: number, output: number): string {
 interface TrackingIo extends CodexIndexIo {
   bodyReads: Map<string, number>;
   readOffsets: number[];
+  fileKeysRead: string[];
 }
 
 function trackingIo(): TrackingIo {
   const bodyReads = new Map<string, number>();
   const readOffsets: number[] = [];
+  const fileKeysRead: string[] = [];
   return {
     bodyReads,
     readOffsets,
+    fileKeysRead,
     async *read(entry, start, endExclusive) {
       bodyReads.set(entry.fileKey, (bodyReads.get(entry.fileKey) ?? 0) + 1);
       readOffsets.push(start);
+      fileKeysRead.push(entry.fileKey);
       const body = await readFile(entry.absolutePath);
       yield body.subarray(start, endExclusive);
     },
   };
 }
+
+test('period backfill is recent-first and globally bounded by file passes', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-order-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    for (const [name, input] of [['oldest', 10], ['middle', 20], ['newest', 30]] as const) {
+      await writeFile(path.join(sessions, `${name}.jsonl`), completeSession(name, input, 1), 'utf8');
+    }
+    const manifest = await scanCodexManifest(root, SALT);
+    const mtimes: Record<string, number> = { oldest: 1, middle: 2, newest: 3 };
+    for (const entry of manifest.files) {
+      const name = path.basename(entry.absolutePath, '.jsonl');
+      entry.mtimeMs = mtimes[name];
+      manifest.persistable[entry.fileKey].mtimeMs = mtimes[name];
+    }
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    const legacy = structuredClone(cold.index);
+    for (const contribution of Object.values(legacy.files)) {
+      delete contribution.aggregate.period;
+    }
+    const io = trackingIo();
+    let checkpoints = 0;
+
+    const result = await updateCodexIndex(legacy, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      io,
+      budget: { maxFilePasses: 1, maxBytes: 32 * 1024 * 1024 },
+      onCheckpoint: async () => { checkpoints += 1; },
+    });
+    const newest = manifest.files.reduce((left, right) =>
+      left.mtimeMs > right.mtimeMs ? left : right);
+
+    assert.deepEqual(io.fileKeysRead, [newest.fileKey]);
+    assert.equal(path.basename(newest.absolutePath), 'newest.jsonl');
+    assert.equal(result.migration.filePasses, 1);
+    assert.equal(result.migration.pending, true);
+    assert.equal(result.index.aggregate.total.inputTotal, 60);
+    assert.ok(
+      checkpoints <= result.index.coverage.period.allTime.migratedFiles + 1,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('period migration respects a byte budget and resumes from its numeric checkpoint', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-budget-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    const filePath = path.join(sessions, 'large.jsonl');
+    const body = `${sessionLine('large')}\n${contextLine()}\n${Array.from(
+      { length: 100 },
+      (_, index) => tokenLine(index + 1, 1, `2026-07-20T00:${String(index % 60).padStart(2, '0')}:00.000Z`),
+    ).join('\n')}\n`;
+    await writeFile(filePath, body, 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    const key = manifest.files[0].fileKey;
+    const legacy = structuredClone(cold.index);
+    delete legacy.files[key].aggregate.period;
+    const budget = { maxFilePasses: 16, maxBytes: 1024 };
+
+    const first = await updateCodexIndex(legacy, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      budget,
+    });
+    const firstOffset = first.index.files[key].periodMigration!.offset;
+    const second = await updateCodexIndex(first.index, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      budget,
+    });
+
+    assert.ok(first.migration.bytesRead <= budget.maxBytes);
+    assert.ok(second.migration.bytesRead <= budget.maxBytes);
+    assert.ok(second.index.files[key].periodMigration!.offset > firstOffset);
+    assert.equal(second.index.aggregate.total.inputTotal, cold.index.aggregate.total.inputTotal);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('changed main contributions run before newer period backfill work', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-main-priority-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const changedPath = path.join(sessions, 'changed.jsonl');
+    const periodPath = path.join(sessions, 'period.jsonl');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(changedPath, completeSession('changed', 10, 1), 'utf8');
+    await writeFile(periodPath, completeSession('period', 20, 2), 'utf8');
+    const initialManifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), initialManifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    const periodKey = initialManifest.files.find((entry) => entry.absolutePath === periodPath)!.fileKey;
+    const changedKey = initialManifest.files.find((entry) => entry.absolutePath === changedPath)!.fileKey;
+    delete cold.index.files[periodKey].aggregate.period;
+    cold.index.files[periodKey].mtimeMs = 99;
+    cold.index.files[changedKey].mtimeMs = 1;
+    await appendFile(changedPath, `${tokenLine(30, 3, '2026-07-20T00:02:00.000Z')}\n`, 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const changed = manifest.files.find((entry) => entry.absolutePath === changedPath)!;
+    const period = manifest.files.find((entry) => entry.absolutePath === periodPath)!;
+    changed.mtimeMs = 1;
+    period.mtimeMs = 99;
+    manifest.persistable[changed.fileKey].mtimeMs = 1;
+    manifest.persistable[period.fileKey].mtimeMs = 99;
+    const io = trackingIo();
+
+    await updateCodexIndex(cold.index, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      io,
+      budget: { maxFilePasses: 1, maxBytes: 32 * 1024 * 1024 },
+    });
+
+    assert.deepEqual(io.fileKeysRead, [changed.fileKey]);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('period coverage can complete recent windows before all-time', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-coverage-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(path.join(sessions, 'old.jsonl'), completeSession('old', 100, 10), 'utf8');
+    await writeFile(path.join(sessions, 'recent.jsonl'), completeSession('recent', 20, 2), 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    const legacy = structuredClone(cold.index);
+    const recent = manifest.files.find((entry) => entry.absolutePath.endsWith('recent.jsonl'))!;
+    const old = manifest.files.find((entry) => entry.absolutePath.endsWith('old.jsonl'))!;
+    legacy.files[recent.fileKey].aggregate.session.endedAt = Date.now();
+    legacy.files[old.fileKey].aggregate.session.endedAt = Date.parse('2000-01-01T00:00:00.000Z');
+    delete legacy.files[recent.fileKey].aggregate.period;
+    delete legacy.files[old.fileKey].aggregate.period;
+    recent.mtimeMs = 2;
+    old.mtimeMs = 1;
+    manifest.persistable[recent.fileKey].mtimeMs = 2;
+    manifest.persistable[old.fileKey].mtimeMs = 1;
+
+    const migrated = await updateCodexIndex(legacy, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      budget: { maxFilePasses: 1, maxBytes: 32 * 1024 * 1024 },
+    });
+    const coverage = migrated.index.coverage.period;
+
+    assert.equal(coverage.last7Days.complete, true);
+    assert.equal(coverage.last30Days.complete, true);
+    assert.equal(coverage.allTime.complete, false);
+    assert.equal(migrated.index.aggregate.total.inputTotal, 120);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('unknown endedAt remains in every period coverage denominator', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-unknown-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(path.join(sessions, 'recent.jsonl'), completeSession('recent', 20, 2), 'utf8');
+    await writeFile(path.join(sessions, 'unknown.jsonl'), completeSession('unknown', 40, 4), 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    const legacy = structuredClone(cold.index);
+    const recent = manifest.files.find((entry) => entry.absolutePath.endsWith('recent.jsonl'))!;
+    const unknown = manifest.files.find((entry) => entry.absolutePath.endsWith('unknown.jsonl'))!;
+    legacy.files[recent.fileKey].aggregate.session.endedAt = Date.now();
+    delete legacy.files[unknown.fileKey].aggregate.session.endedAt;
+    delete legacy.files[recent.fileKey].aggregate.period;
+    delete legacy.files[unknown.fileKey].aggregate.period;
+    recent.mtimeMs = 2;
+    unknown.mtimeMs = 1;
+    manifest.persistable[recent.fileKey].mtimeMs = 2;
+    manifest.persistable[unknown.fileKey].mtimeMs = 1;
+
+    const result = await updateCodexIndex(legacy, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      budget: { maxFilePasses: 1, maxBytes: 32 * 1024 * 1024 },
+    });
+
+    assert.equal(result.index.coverage.period.last7Days.totalFiles, 2);
+    assert.equal(result.index.coverage.period.last30Days.totalFiles, 2);
+    assert.equal(result.index.coverage.period.allTime.totalFiles, 2);
+    assert.equal(result.index.coverage.period.last7Days.complete, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cancellation checkpoints a resumable period cursor without clearing all-time', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-cancel-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    const filePath = path.join(sessions, 'cancel.jsonl');
+    const checkpointPath = path.join(root, 'cache', 'checkpoint.json');
+    const line = `${tokenLine(1, 1, '2026-07-20T00:01:00.000Z')}\n`;
+    await writeFile(filePath, `${sessionLine('cancel')}\n${line.repeat(3000)}`, 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    const key = manifest.files[0].fileKey;
+    const legacy = structuredClone(cold.index);
+    delete legacy.files[key].aggregate.period;
+    let progressCalls = 0;
+    const checkpoints: typeof legacy[] = [];
+
+    await assert.rejects(
+      updateCodexIndex(legacy, manifest, {
+        salt: SALT,
+        timeZone: 'UTC',
+        onProgress: () => { progressCalls += 1; },
+        shouldCancel: () => progressCalls > 0,
+        onCheckpoint: async (index) => {
+          checkpoints.push(structuredClone(index));
+          await saveCodexIndexAtomic(checkpointPath, index);
+        },
+      }),
+      CodexIndexCancelledError,
+    );
+
+    assert.equal(checkpoints.length, 1);
+    assert.ok(checkpoints[0].files[key].periodMigration!.offset > 0);
+    assert.equal(checkpoints[0].aggregate.total.inputTotal, cold.index.aggregate.total.inputTotal);
+    const saved = await loadCodexIndex(checkpointPath, 'UTC');
+    assert.equal(saved.files[key].periodMigration?.offset, checkpoints[0].files[key].periodMigration?.offset);
+    assert.equal('carry' in (saved.files[key].periodMigration ?? {}), false);
+    const resumed = await updateCodexIndex(saved, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    assert.equal(resumed.index.files[key].aggregate.period?.indexedThrough, legacy.files[key].offset);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 function persistableManifest(files: CodexRuntimeManifestEntry[]): CodexManifest {
   return {
@@ -198,7 +477,7 @@ test('cold scan, appended tail, and persisted reload agree', async () => {
     const cold = await updateCodexIndex(
       createEmptyCodexIndex(),
       manifest1,
-      { salt: SALT, io },
+      { salt: SALT, timeZone: 'UTC', io },
     );
     const key = manifest1.files[0].fileKey;
     const coldOffset = cold.index.files[key].offset;
@@ -211,6 +490,7 @@ test('cold scan, appended tail, and persisted reload agree', async () => {
     const manifest2 = await scanCodexManifest(root, SALT);
     const warm = await updateCodexIndex(cold.index, manifest2, {
       salt: SALT,
+      timeZone: 'UTC',
       io,
     });
     await saveCodexIndexAtomic(indexPath, warm.index);
@@ -255,7 +535,7 @@ test('exact active and archive copies contribute usage only once', async () => {
     const result = await updateCodexIndex(
       createEmptyCodexIndex(),
       manifest,
-      { salt: SALT },
+      { salt: SALT, timeZone: 'UTC' },
     );
 
     assert.equal(result.index.aggregate.total.inputTotal, 100);
@@ -265,6 +545,32 @@ test('exact active and archive copies contribute usage only once', async () => {
       ambiguousSessionGroups: 0,
       complete: true,
     });
+    assert.equal(result.index.coverage.period.allTime.totalFiles, 1);
+    assert.equal(result.index.coverage.period.allTime.complete, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('ambiguous active and archive copies remain in period coverage', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-ambiguous-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const archive = path.join(root, 'archived_sessions');
+    await mkdir(sessions, { recursive: true });
+    await mkdir(archive, { recursive: true });
+    await writeFile(path.join(sessions, 'active.jsonl'), completeSession('shared', 100, 20), 'utf8');
+    await writeFile(path.join(archive, 'archive.jsonl'), completeSession('shared', 100, 21), 'utf8');
+
+    const result = await updateCodexIndex(
+      createEmptyCodexIndex('UTC'),
+      await scanCodexManifest(root, SALT),
+      { salt: SALT, timeZone: 'UTC' },
+    );
+
+    assert.equal(result.index.coverage.period.allTime.totalFiles, 2);
+    assert.equal(result.index.coverage.identity.ambiguousSessionGroups, 1);
+    assert.equal(result.index.coverage.identity.complete, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -317,10 +623,11 @@ test('safe DTO normalization uses outer file keys for exact dedupe', async () =>
     const updated = await updateCodexIndex(
       loaded,
       persistableManifest(entries),
-      { salt: SALT },
+      { salt: SALT, timeZone: 'UTC' },
     );
 
-    assert.equal(updated.bodyReads, 0);
+    assert.equal(updated.bodyReads, 1);
+    assert.equal(updated.migration.filePasses, 1);
     assert.equal(updated.index.aggregate.total.inputTotal, 100);
     assert.deepEqual(updated.index.coverage.identity, {
       exactDuplicateFiles: 1,
@@ -414,7 +721,7 @@ test('cold scan and append build target-timezone slices in the same body read', 
   }
 });
 
-test('append leaves a mismatched period for later migration while all-time advances', async () => {
+test('append invalidates a wrong-timezone period for later migration while all-time advances', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-mismatch-'));
   try {
     const sessions = path.join(root, 'sessions');
@@ -432,7 +739,6 @@ test('append leaves a mismatched period for later migration while all-time advan
       { salt: SALT, timeZone: 'UTC' },
     );
     const key = firstManifest.files[0].fileKey;
-    const priorPeriod = structuredClone(cold.index.files[key].aggregate.period!);
     await appendFile(
       activePath,
       `${tokenLine(150, 30, '2026-07-20T16:05:00.000Z')}\n`,
@@ -446,7 +752,10 @@ test('append leaves a mismatched period for later migration while all-time advan
     );
 
     assert.equal(changedZone.index.files[key].aggregate.total.inputTotal, 150);
-    assert.deepEqual(changedZone.index.files[key].aggregate.period, priorPeriod);
+    assert.equal(changedZone.index.files[key].aggregate.period, undefined);
+    assert.equal(changedZone.index.aggregate.total.inputTotal, 150);
+    assert.equal(changedZone.index.coverage.period.timeZone, 'Asia/Hong_Kong');
+    assert.equal(changedZone.index.coverage.period.allTime.complete, false);
 
     const staleCursor = structuredClone(cold.index);
     staleCursor.files[key].aggregate.period!.indexedThrough -= 1;
@@ -1039,7 +1348,7 @@ test('schema v2 legacy contributions do not invent a missing sourceArea', async 
   }
 });
 
-test('unchanged multi-gigabyte metadata performs zero body reads', async () => {
+test('unchanged multi-gigabyte all-time metadata gets only one bounded period pass', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-large-'));
   try {
     const sessions = path.join(root, 'sessions');
@@ -1073,7 +1382,10 @@ test('unchanged multi-gigabyte metadata performs zero body reads', async () => {
 
     assert.equal(result.index.coverage.totalBytes, simulatedSize);
     assert.equal(result.index.coverage.complete, true);
-    assert.equal(io.bodyReads.size, 0);
+    assert.equal(io.bodyReads.size, 1);
+    assert.equal(result.migration.filePasses, 1);
+    assert.ok(result.migration.bytesRead <= 32 * 1024 * 1024);
+    assert.equal(result.migration.pending, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

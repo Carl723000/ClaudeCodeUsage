@@ -2,6 +2,7 @@ import { CodexProviderSnapshot } from '../providers/codex/codexProvider';
 import {
   CodexFileAggregate,
   CodexStructuralSummary,
+  createEmptyCodexIndex,
 } from '../providers/codex/codexIndex';
 import { ProviderTokenCounts } from '../providers/providerTypes';
 
@@ -166,6 +167,7 @@ export function snapshotFixture(): CodexProviderSnapshot {
         ambiguousSessionGroups: 0,
         complete: true,
       },
+      period: createEmptyCodexIndex('UTC').coverage.period,
     },
     qualityFlags: { 'unknown-event': 1 },
     limits: [],

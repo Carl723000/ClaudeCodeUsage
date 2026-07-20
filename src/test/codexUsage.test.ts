@@ -164,6 +164,30 @@ test('expired limits are omitted while coverage and quality remain explicit', ()
       ambiguousSessionGroups: 0,
       complete: true,
     },
+    period: {
+      timeZone: 'UTC',
+      last7Days: {
+        migratedFiles: 0,
+        totalFiles: 0,
+        migratedBytes: 0,
+        totalBytes: 0,
+        complete: true,
+      },
+      last30Days: {
+        migratedFiles: 0,
+        totalFiles: 0,
+        migratedBytes: 0,
+        totalBytes: 0,
+        complete: true,
+      },
+      allTime: {
+        migratedFiles: 0,
+        totalFiles: 0,
+        migratedBytes: 0,
+        totalBytes: 0,
+        complete: true,
+      },
+    },
   });
   assert.deepEqual(view.qualityFlags, [{ flag: 'unknown-event', count: 1 }]);
 });

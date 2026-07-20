@@ -3,7 +3,8 @@ import {
   NormalizedUsageEvent,
   ProviderTokenCounts,
 } from '../providerTypes';
-import { CodexStructuralEvent } from './codexParser';
+import { CodexJsonlCursor } from './codexJsonlScanner';
+import { CodexParserState, CodexStructuralEvent } from './codexParser';
 
 export interface CodexStructuralSummary {
   patchCalls: number;
@@ -26,6 +27,13 @@ export interface CodexFilePeriodIndex {
   timeZone: string;
   indexedThrough: number;
   days: Record<string, CodexDailySlice>;
+}
+
+export interface CodexPeriodMigrationState extends CodexJsonlCursor {
+  timeZone: string;
+  parserState: CodexParserState;
+  days: Record<string, CodexDailySlice>;
+  qualityFlags: string[];
 }
 
 function zeroTokens(): ProviderTokenCounts {
