@@ -1603,7 +1603,9 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
       totalFiles,
       migratedBytes: Math.max(0, finiteNumber(range.migratedBytes)),
       totalBytes: Math.max(0, finiteNumber(range.totalBytes)),
-      complete: range.complete === true || migratedFiles === totalFiles,
+      complete: typeof range.complete === 'boolean'
+        ? range.complete
+        : migratedFiles === totalFiles,
     };
   };
   const timeZone = resolveTimeZone(
