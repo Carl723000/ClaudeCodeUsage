@@ -1,6 +1,12 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { dayKeyInZone, monthKeyInZone, resolveTimeZone, rollingDayKeys } from '../dateKeys';
+import {
+  dayKeyInZone,
+  monthKeyInZone,
+  resolveTimeZone,
+  rollingDayKeys,
+  rollingDayKeysFromDayKey,
+} from '../dateKeys';
 
 test('a post-midnight local record buckets into the local day, not the UTC day', () => {
   // 20:00 UTC on 30 Jun is 04:00 on 1 Jul in Hong Kong (UTC+8).
@@ -47,6 +53,20 @@ test('rolling day keys use civil dates across DST', () => {
     '2026-03-07',
     '2026-03-08',
   ]);
+});
+
+test('rolling day keys can be anchored to a persisted civil end day', () => {
+  assert.deepEqual(rollingDayKeysFromDayKey('2026-03-08', 7), [
+    '2026-03-02',
+    '2026-03-03',
+    '2026-03-04',
+    '2026-03-05',
+    '2026-03-06',
+    '2026-03-07',
+    '2026-03-08',
+  ]);
+  assert.deepEqual(rollingDayKeysFromDayKey('2026-02-30', 7), []);
+  assert.deepEqual(rollingDayKeysFromDayKey('not-a-day', 7), []);
 });
 
 test('a fractional-offset zone uses its local calendar day', () => {

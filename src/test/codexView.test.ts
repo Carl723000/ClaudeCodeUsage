@@ -28,6 +28,29 @@ test('Codex renderer labels provider semantics and never renders subscription co
   assert.doesNotMatch(html, /\$|subscription cost|raw-session|\/Users\//);
 });
 
+test('empty or partial insights render no paste-ready constraint fallback', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.last7Days.complete = false;
+  const view = buildCodexUsageView(snapshot, NOW);
+  const partialInsights = buildCodexInsights(view.last7Days);
+
+  for (const insights of [[], partialInsights]) {
+    const html = renderCodexView(view, insights, CODEX_COPY_EN);
+    assert.doesNotMatch(html, /Paste-ready constraint/);
+    assert.doesNotMatch(html, /Run one focused test tied to the change/);
+    assert.doesNotMatch(html, /Stop when the acceptance criteria pass/);
+  }
+
+  const evidenced = renderCodexView(
+    view,
+    buildCodexInsights(view.lastTask!),
+    CODEX_COPY_EN,
+  );
+  assert.match(evidenced, /Paste-ready constraint/);
+  assert.match(evidenced, /Run one focused test tied to the change/);
+  assert.match(evidenced, /Stop when the acceptance criteria pass/);
+});
+
 test('Codex renderer reuses Claude visuals for eight truthful modules', () => {
   const view = buildCodexUsageView(snapshotFixture(), NOW);
   const html = renderCodexView(

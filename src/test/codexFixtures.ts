@@ -167,6 +167,8 @@ function sum(files: CodexFileAggregate[]): ProviderTokenCounts {
 
 export function snapshotFixture(): CodexProviderSnapshot {
   const files = ROWS.map(aggregate);
+  const periodCoverage = createEmptyCodexIndex('UTC').coverage.period;
+  periodCoverage.asOfDay = '2026-07-20';
   return {
     provider: 'codex',
     total: sum(files),
@@ -182,7 +184,7 @@ export function snapshotFixture(): CodexProviderSnapshot {
         ambiguousSessionGroups: 0,
         complete: true,
       },
-      period: createEmptyCodexIndex('UTC').coverage.period,
+      period: periodCoverage,
     },
     qualityFlags: { 'unknown-event': 1 },
     limits: [],
