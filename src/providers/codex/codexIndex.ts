@@ -193,7 +193,7 @@ export function createEmptyCodexIndex(_timeZone = 'UTC'): CodexIndexV2 {
 }
 
 function cloneIndex(index: CodexIndexV2): CodexIndexV2 {
-  return JSON.parse(JSON.stringify(index)) as CodexIndexV2;
+  return sanitizeIndexV2(index);
 }
 
 function cloneContribution(
@@ -670,6 +670,7 @@ interface LegacyCodexFileContribution {
   readonly dev?: unknown;
   readonly ino?: unknown;
   readonly offset?: unknown;
+  readonly discardingOversizedLine?: unknown;
   readonly carry?: unknown;
   readonly parserState?: unknown;
   readonly aggregate?: unknown;
@@ -966,38 +967,74 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
 function migrateIndexV1(index: LegacyCodexIndexV1): CodexIndexV2 {
   const files: Record<string, CodexFileContribution> = {};
   for (const [key, old] of Object.entries(index.files)) {
-    const fileKey = optionalString(old.fileKey) ?? key;
-    const parserState = sanitizeParserState(old.parserState, fileKey);
     const offset = Math.max(0, finiteNumber(old.offset));
     const carryBytes = typeof old.carry === 'string'
       ? Buffer.byteLength(old.carry, 'utf8')
       : 0;
-    const limit = sanitizeLimit(old.limit);
-    const limits = sanitizeLimits(old.limits);
-    files[key] = {
-      fileKey,
-      ...(old.sourceArea === 'sessions' || old.sourceArea === 'archive'
-        ? { sourceArea: old.sourceArea }
-        : {}),
-      size: finiteNumber(old.size),
-      mtimeMs: finiteNumber(old.mtimeMs),
-      ...(optionalNumber(old.dev) !== undefined ? { dev: optionalNumber(old.dev) } : {}),
-      ...(optionalNumber(old.ino) !== undefined ? { ino: optionalNumber(old.ino) } : {}),
-      offset: Math.max(0, offset - carryBytes),
-      discardingOversizedLine: false,
-      parserState,
-      aggregate: sanitizeFileAggregate(old.aggregate, parserState),
-      ...(limit ? { limit } : {}),
-      ...(limits ? { limits } : {}),
-      qualityFlags: sanitizeQualityFlags(old.qualityFlags),
-      ...(typeof old.identityChecked === 'boolean'
-        ? { identityChecked: old.identityChecked }
-        : {}),
-    };
+    files[key] = sanitizeFileContribution(
+      key,
+      old,
+      Math.max(0, offset - carryBytes),
+      false,
+    );
   }
   return {
     schemaVersion: 2,
     files,
+    aggregate: sanitizeProviderAggregate(index.aggregate),
+    coverage: sanitizeCoverage(index.coverage),
+  };
+}
+
+function sanitizeFileContribution(
+  key: string,
+  value: unknown,
+  offsetOverride?: number,
+  discardingOverride?: boolean,
+): CodexFileContribution {
+  const contribution = isRecord(value) ? value : {};
+  const fileKey = optionalString(contribution.fileKey) ?? key;
+  const parserState = sanitizeParserState(contribution.parserState, fileKey);
+  const limit = sanitizeLimit(contribution.limit);
+  const limits = sanitizeLimits(contribution.limits);
+  return {
+    fileKey,
+    ...(contribution.sourceArea === 'sessions' || contribution.sourceArea === 'archive'
+      ? { sourceArea: contribution.sourceArea }
+      : {}),
+    size: finiteNumber(contribution.size),
+    mtimeMs: finiteNumber(contribution.mtimeMs),
+    ...(optionalNumber(contribution.dev) !== undefined
+      ? { dev: optionalNumber(contribution.dev) }
+      : {}),
+    ...(optionalNumber(contribution.ino) !== undefined
+      ? { ino: optionalNumber(contribution.ino) }
+      : {}),
+    offset: offsetOverride ?? Math.max(0, finiteNumber(contribution.offset)),
+    discardingOversizedLine: discardingOverride ??
+      contribution.discardingOversizedLine === true,
+    parserState,
+    aggregate: sanitizeFileAggregate(contribution.aggregate, parserState),
+    ...(limit ? { limit } : {}),
+    ...(limits ? { limits } : {}),
+    qualityFlags: sanitizeQualityFlags(contribution.qualityFlags),
+    ...(typeof contribution.identityChecked === 'boolean'
+      ? { identityChecked: contribution.identityChecked }
+      : {}),
+  };
+}
+
+function sanitizeIndexV2(value: unknown): CodexIndexV2 {
+  const index = isRecord(value) ? value : {};
+  const rawFiles = isRecord(index.files) ? index.files : {};
+  return {
+    schemaVersion: 2,
+    files: Object.fromEntries(
+      Object.entries(rawFiles).map(([key, contribution]) => [
+        key,
+        sanitizeFileContribution(key, contribution),
+      ]),
+    ),
     aggregate: sanitizeProviderAggregate(index.aggregate),
     coverage: sanitizeCoverage(index.coverage),
   };
@@ -1013,7 +1050,7 @@ export async function loadCodexIndex(
       return migrateIndexV1(parsed);
     }
     if (isIndexV2(parsed)) {
-      return parsed;
+      return sanitizeIndexV2(parsed);
     }
     throw new Error('Unsupported Codex index schema');
   } catch (error) {
@@ -1038,7 +1075,7 @@ export async function saveCodexIndexAtomic(
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(temporaryPath, 'w', 0o600);
-    await handle.writeFile(JSON.stringify(index), 'utf8');
+    await handle.writeFile(JSON.stringify(sanitizeIndexV2(index)), 'utf8');
     await handle.sync();
     await handle.close();
     handle = undefined;
