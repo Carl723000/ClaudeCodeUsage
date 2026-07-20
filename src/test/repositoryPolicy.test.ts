@@ -179,11 +179,12 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
       (receiver === 'Object' && member === 'fromEntries') ||
       (ts.isRegularExpressionLiteral(call.expression.expression) && member === 'test');
   };
-  const inspectFunction = (name: string): void => {
-    if (visited.has(name)) {
+  const inspectFunction = (name: string, taintedParameters = new Set<string>()): void => {
+    const visitKey = `${name}:${[...taintedParameters].sort().join(',')}`;
+    if (visited.has(visitKey)) {
       return;
     }
-    visited.add(name);
+    visited.add(visitKey);
     const declaration = declarations.get(name);
     if (!declaration?.body) {
       fail(`missing persisted helper ${name}`);
@@ -226,11 +227,43 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
     };
     collectLocals(declaration.body);
     const resolvingLocals = new Set<string>();
+    const resolvingTaint = new Set<string>();
     const unwrap = (expression: ts.Expression): ts.Expression =>
       ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) ||
       ts.isTypeAssertionExpression(expression)
         ? unwrap(expression.expression)
         : expression;
+    const isWholesaleTainted = (expression: ts.Expression): boolean => {
+      const value = unwrap(expression);
+      if (ts.isIdentifier(value)) {
+        if (taintedParameters.has(value.text)) {
+          return true;
+        }
+        if (localInitializers.has(value.text) && !resolvingTaint.has(value.text)) {
+          resolvingTaint.add(value.text);
+          const tainted = isWholesaleTainted(localInitializers.get(value.text)!);
+          resolvingTaint.delete(value.text);
+          return tainted;
+        }
+      }
+      return false;
+    };
+    const taintedCallParameters = (localName: string, arguments_: ts.NodeArray<ts.Expression>): Set<string> => {
+      const target = declarations.get(localName);
+      const tainted = new Set<string>();
+      if (!target) {
+        return tainted;
+      }
+      target.parameters.forEach((parameter, index) => {
+        const actual = parameter.dotDotDotToken
+          ? arguments_.slice(index).some((argument) => isWholesaleTainted(argument))
+          : arguments_[index] && isWholesaleTainted(arguments_[index]);
+        if (actual) {
+          bindingNames(parameter.name).forEach((binding) => tainted.add(binding));
+        }
+      });
+      return tainted;
+    };
     const inspectCallback = (callback: ts.Expression): void => {
       if (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) {
         fail(`${name} uses a non-local collection callback`);
@@ -294,8 +327,10 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
       } else if (ts.isIdentifier(value)) {
         if (localInitializers.has(value.text) && !resolvingLocals.has(value.text)) {
           resolvingLocals.add(value.text);
-          inspectCollection(localInitializers.get(value.text)!);
+          inspectCollection(localInitializers.get(value.text)!, viaProperty);
           resolvingLocals.delete(value.text);
+        } else if (taintedParameters.has(value.text) && !viaProperty) {
+          fail(`${name} uses tainted parameter ${value.text} as a constructed source`);
         } else if (!parameters.has(value.text) || (!viaProperty && !safeCollectionParameters.has(value.text))) {
           fail(`${name} uses an opaque constructed source ${value.text}`);
         }
@@ -303,7 +338,7 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
         fail(`${name} uses an opaque constructed source`);
       }
     };
-    const inspectCollection = (expression: ts.Expression): void => {
+    const inspectCollection = (expression: ts.Expression, fromExplicitProperty = false): void => {
       const value = unwrap(expression);
       if (ts.isArrayLiteralExpression(value)) {
         value.elements.forEach((element) => {
@@ -314,15 +349,15 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
       } else if (ts.isObjectLiteralExpression(value)) {
         inspectExpression(value);
       } else if (ts.isConditionalExpression(value)) {
-        inspectCollection(value.whenTrue);
-        inspectCollection(value.whenFalse);
+        inspectCollection(value.whenTrue, fromExplicitProperty);
+        inspectCollection(value.whenFalse, fromExplicitProperty);
       } else if (ts.isBinaryExpression(value) && (
         value.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
         value.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
         value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
       )) {
-        inspectCollection(value.left);
-        inspectCollection(value.right);
+        inspectCollection(value.left, fromExplicitProperty);
+        inspectCollection(value.right, fromExplicitProperty);
       } else if (ts.isCallExpression(value) && ts.isPropertyAccessExpression(value.expression)) {
         const receiver = value.expression.expression;
         const member = value.expression.name.text;
@@ -342,7 +377,7 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
         }
       } else if (ts.isIdentifier(value) || ts.isPropertyAccessExpression(value) ||
         ts.isElementAccessExpression(value)) {
-        inspectSafeSource(value);
+        inspectSafeSource(value, fromExplicitProperty);
       } else {
         fail(`${name} uses an opaque constructed source`);
       }
@@ -399,8 +434,7 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
       } else if (ts.isCallExpression(expression)) {
         const localName = expressionName(expression.expression);
         if (localName && declarations.has(localName)) {
-          inspectFunction(localName);
-          expression.arguments.forEach((argument) => inspectExpression(argument, false, false, true));
+          inspectFunction(localName, taintedCallParameters(localName, expression.arguments));
         } else if (ts.isPropertyAccessExpression(expression.expression) &&
           ['map', 'flatMap', 'filter'].includes(expression.expression.name.text)) {
           inspectCollection(expression);
@@ -441,9 +475,8 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
           fail(`${name} persists opaque constructed output`);
         }
       } else if (ts.isIdentifier(expression)) {
-        if (name === 'sanitizeIndexV2' && parameters.has(expression.text) &&
-          !asSanitizerArgument) {
-          fail(`${name} persists arbitrary parameter ${expression.text}`);
+        if (taintedParameters.has(expression.text) && !asSanitizerArgument) {
+          fail(`${name} persists tainted parameter ${expression.text}`);
         } else if (localInitializers.has(expression.text) && !resolvingLocals.has(expression.text)) {
           resolvingLocals.add(expression.text);
           inspectExpression(
@@ -483,7 +516,10 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
       inspectExpression(declaration.body);
     }
   };
-  inspectFunction('sanitizeIndexV2');
+  const rootParameters = declarations.get('sanitizeIndexV2')?.parameters.flatMap(
+    (parameter) => ts.isIdentifier(parameter.name) ? [parameter.name.text] : [],
+  ) ?? [];
+  inspectFunction('sanitizeIndexV2', new Set(rootParameters));
   const root = declarations.get('sanitizeIndexV2');
   const returned = root?.body && ts.isBlock(root.body)
     ? root.body.statements.find(ts.isReturnStatement)?.expression
@@ -729,7 +765,35 @@ test('semantic Codex policy validators reject nested DTO leaks, comment-only san
     '}',
     'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
   ].join('\n'), ts.ScriptTarget.ES2020, true);
-  assert.match(sanitizedDtoViolations(constructedRaw).join('\n'), /arbitrary parameter raw/);
+  assert.match(sanitizedDtoViolations(constructedRaw).join('\n'), /tainted parameter raw/);
+
+  const localHelperRawFlow = ts.createSourceFile('fixture.ts', [
+    'function build(value: any) { return { safe: value }; }',
+    'function sanitizeIndexV2(raw: any) {',
+    '  return { schemaVersion: 2, files: build(raw), aggregate: {}, coverage: {} };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(sanitizedDtoViolations(localHelperRawFlow).join('\n'), /tainted parameter value/);
+
+  const nestedLocalHelperRawFlow = ts.createSourceFile('fixture.ts', [
+    'function build(value: any) { return { safe: value }; }',
+    'function relay(value: any) { return build(value); }',
+    'function sanitizeIndexV2(raw: any) {',
+    '  return { schemaVersion: 2, files: relay(raw), aggregate: {}, coverage: {} };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(sanitizedDtoViolations(nestedLocalHelperRawFlow).join('\n'), /tainted parameter value/);
+
+  const safeLocalHelperProperty = ts.createSourceFile('fixture.ts', [
+    'function build(value: any) { return { safe: value.safe }; }',
+    'function sanitizeIndexV2(raw: any) {',
+    '  return { schemaVersion: 2, files: build(raw), aggregate: {}, coverage: {} };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.deepEqual(sanitizedDtoViolations(safeLocalHelperProperty), []);
 
   const opaqueMapReceiver = ts.createSourceFile('fixture.ts', [
     'function sanitizeIndexV2(input: any) {',
