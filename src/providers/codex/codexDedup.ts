@@ -7,6 +7,11 @@ export interface CodexDeduplication {
   ambiguousSessionGroups: number;
 }
 
+interface CodexDeduplicationCandidate {
+  recordKey: string;
+  contribution: CodexFileContribution;
+}
+
 type StableNumber = number | null;
 
 function stableNumber(value: number | undefined): StableNumber {
@@ -64,35 +69,40 @@ export function classifyCodexSessionDuplicates(
 ): CodexDeduplication {
   const canonicalFileKeys = new Set(Object.keys(files));
   const exactDuplicateFileKeys = new Set<string>();
-  const groups = new Map<string, CodexFileContribution[]>();
+  const groups = new Map<string, CodexDeduplicationCandidate[]>();
 
-  for (const contribution of Object.values(files)) {
+  for (const [recordKey, contribution] of Object.entries(files)) {
     const sessionKey = contribution.aggregate.session.sessionKey;
     if (!sessionKey) {
       continue;
     }
     const group = groups.get(sessionKey) ?? [];
-    group.push(contribution);
+    group.push({ recordKey, contribution });
     groups.set(sessionKey, group);
   }
 
   let ambiguousSessionGroups = 0;
   for (const group of groups.values()) {
-    const active = group.filter((file) => file.sourceArea === 'sessions');
-    const archive = group.filter((file) => file.sourceArea === 'archive');
-    if (active.length === 0 || archive.length === 0) {
+    if (group.length === 1) {
       continue;
     }
+    const active = group.filter(
+      (candidate) => candidate.contribution.sourceArea === 'sessions',
+    );
+    const archive = group.filter(
+      (candidate) => candidate.contribution.sourceArea === 'archive',
+    );
     if (
       group.length === 2 &&
       active.length === 1 &&
       archive.length === 1 &&
-      isVerified(active[0]) &&
-      isVerified(archive[0]) &&
-      contributionSignature(active[0]) === contributionSignature(archive[0])
+      isVerified(active[0].contribution) &&
+      isVerified(archive[0].contribution) &&
+      contributionSignature(active[0].contribution) ===
+        contributionSignature(archive[0].contribution)
     ) {
-      canonicalFileKeys.delete(archive[0].fileKey);
-      exactDuplicateFileKeys.add(archive[0].fileKey);
+      canonicalFileKeys.delete(archive[0].recordKey);
+      exactDuplicateFileKeys.add(archive[0].recordKey);
       continue;
     }
     ambiguousSessionGroups += 1;

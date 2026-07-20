@@ -1109,7 +1109,7 @@ function sanitizeFileContribution(
   discardingOverride?: boolean,
 ): CodexFileContribution {
   const contribution = isRecord(value) ? value : {};
-  const fileKey = optionalString(contribution.fileKey) ?? key;
+  const fileKey = key;
   const parserState = sanitizeParserState(contribution.parserState, fileKey);
   const limit = sanitizeLimit(contribution.limit);
   const limits = sanitizeLimits(contribution.limits);

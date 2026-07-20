@@ -102,6 +102,19 @@ test('a token-total mismatch retains both copies as one ambiguous group', () => 
   assert.equal(ambiguous.exactDuplicateFileKeys.size, 0);
 });
 
+test('a missing optional token field does not equal an explicit zero', () => {
+  const active = contribution('active-key', 'sessions');
+  const archive = contribution('archive-key', 'archive');
+  active.aggregate.total.cacheWriteInput = 0;
+  delete archive.aggregate.total.cacheWriteInput;
+
+  const result = classify(active, archive);
+
+  assert.equal(result.ambiguousSessionGroups, 1);
+  assert.equal(result.canonicalFileKeys.size, 2);
+  assert.equal(result.exactDuplicateFileKeys.size, 0);
+});
+
 test('identity, time, bucket, and structural mismatches are ambiguous', async (t) => {
   const cases: Array<[
     string,
@@ -136,7 +149,7 @@ test('identity, time, bucket, and structural mismatches are ambiguous', async (t
   }
 });
 
-test('same-area copies are never automatically deduplicated', () => {
+test('same-area copies are retained as an ambiguous duplicate group', () => {
   const result = classify(
     contribution('sessions-a', 'sessions'),
     contribution('sessions-b', 'sessions'),
@@ -144,7 +157,7 @@ test('same-area copies are never automatically deduplicated', () => {
 
   assert.deepEqual([...result.canonicalFileKeys], ['sessions-a', 'sessions-b']);
   assert.equal(result.exactDuplicateFileKeys.size, 0);
-  assert.equal(result.ambiguousSessionGroups, 0);
+  assert.equal(result.ambiguousSessionGroups, 1);
 });
 
 test('unverified cross-area copies are retained as ambiguous', async (t) => {
@@ -173,13 +186,21 @@ test('unverified cross-area copies are retained as ambiguous', async (t) => {
   }
 });
 
-test('missing legacy sourceArea is not guessed into a cross-area match', () => {
+test('a duplicate group with missing legacy sourceArea is ambiguous', () => {
   const result = classify(
     contribution('legacy-key'),
     contribution('archive-key', 'archive'),
   );
 
   assert.deepEqual([...result.canonicalFileKeys], ['legacy-key', 'archive-key']);
+  assert.equal(result.exactDuplicateFileKeys.size, 0);
+  assert.equal(result.ambiguousSessionGroups, 1);
+});
+
+test('a single session contribution is not ambiguous', () => {
+  const result = classify(contribution('only-key'));
+
+  assert.deepEqual([...result.canonicalFileKeys], ['only-key']);
   assert.equal(result.exactDuplicateFileKeys.size, 0);
   assert.equal(result.ambiguousSessionGroups, 0);
 });
