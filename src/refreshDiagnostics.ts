@@ -23,6 +23,24 @@ export interface RefreshDiagnostic extends LoadUsageDiagnostics {
 
 const ms = (value: number): string => value.toFixed(1);
 
+const KNOWN_CODEX_QUALITY_FLAGS = new Set([
+  'counter-regression',
+  'invalid-event-payload',
+  'invalid-event-timestamp',
+  'invalid-json',
+  'invalid-session-meta',
+  'invalid-token-count',
+  'invalid-turn-context',
+  'missing-pseudonymizer',
+  'missing-token-info',
+  'oversized-jsonl-line',
+  'replaced-jsonl',
+  'stale-file',
+  'stale-reset-required',
+  'truncated-jsonl',
+  'unknown-event',
+]);
+
 export function formatRefreshDiagnostic(value: RefreshDiagnostic): string {
   return `refresh: trigger=${value.trigger} ` +
     `files(discovered=${value.filesDiscovered} changed=${value.filesChanged} ` +
@@ -52,7 +70,7 @@ export interface CodexIndexDiagnostic {
 function safeFlagCounts(flags: Record<string, number>): string {
   const safe: Record<string, number> = {};
   for (const [key, rawCount] of Object.entries(flags)) {
-    const name = /^[a-z0-9][a-z0-9-]{0,63}$/.test(key) ? key : 'unknown';
+    const name = KNOWN_CODEX_QUALITY_FLAGS.has(key) ? key : 'unknown';
     const count = Number.isFinite(rawCount) ? Math.max(0, Math.floor(rawCount)) : 0;
     safe[name] = (safe[name] ?? 0) + count;
   }

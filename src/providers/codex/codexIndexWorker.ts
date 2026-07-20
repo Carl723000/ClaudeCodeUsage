@@ -42,6 +42,67 @@ function safeError(
   };
 }
 
+export interface CodexWorkerRefreshRuntime {
+  isCancelled(): boolean;
+  post(message: CodexWorkerMessage): void;
+  loadCodexIndex: typeof loadCodexIndex;
+  scanCodexManifest: typeof scanCodexManifest;
+  updateCodexIndex: typeof updateCodexIndex;
+  saveCodexIndexAtomic: typeof saveCodexIndexAtomic;
+  now?: () => number;
+}
+
+export async function runCodexWorkerRefresh(
+  request: Extract<CodexWorkerRequest, { type: 'refresh' }>,
+  runtime: CodexWorkerRefreshRuntime,
+): Promise<void> {
+  const now = runtime.now ?? Date.now;
+  try {
+    const metadataStarted = now();
+    const [previous, manifest] = await Promise.all([
+      runtime.loadCodexIndex(request.indexPath, request.timeZone),
+      runtime.scanCodexManifest(request.codexHome, request.salt),
+    ]);
+    const metadataMs = now() - metadataStarted;
+    const parseStarted = now();
+    const updated = await runtime.updateCodexIndex(previous, manifest, {
+      salt: request.salt,
+      timeZone: request.timeZone,
+      budget: {
+        maxFilePasses: CODEX_REFRESH_MAX_FILE_PASSES,
+        maxBytes: CODEX_REFRESH_MAX_BYTES,
+      },
+      shouldCancel: runtime.isCancelled,
+      onCheckpoint: (index) =>
+        runtime.saveCodexIndexAtomic(request.indexPath, index),
+      onProgress: (progress) =>
+        runtime.post({
+          type: 'progress',
+          requestId: request.requestId,
+          progress,
+        }),
+    });
+    if (runtime.isCancelled()) {
+      throw new CodexIndexCancelledError();
+    }
+    await runtime.saveCodexIndexAtomic(request.indexPath, updated.index);
+    if (runtime.isCancelled()) {
+      throw new CodexIndexCancelledError();
+    }
+    runtime.post({
+      type: 'result',
+      requestId: request.requestId,
+      result: {
+        ...updated,
+        metadataMs,
+        parseMs: now() - parseStarted,
+      },
+    });
+  } catch (error) {
+    runtime.post(safeError(request.requestId, error));
+  }
+}
+
 async function runRefresh(
   request: Extract<CodexWorkerRequest, { type: 'refresh' }>,
 ): Promise<void> {
@@ -58,45 +119,14 @@ async function runRefresh(
   }
   activeRequestId = request.requestId;
   try {
-    const metadataStarted = Date.now();
-    const [previous, manifest] = await Promise.all([
-      loadCodexIndex(request.indexPath, request.timeZone),
-      scanCodexManifest(request.codexHome, request.salt),
-    ]);
-    const metadataMs = Date.now() - metadataStarted;
-    const parseStarted = Date.now();
-    const updated = await updateCodexIndex(previous, manifest, {
-      salt: request.salt,
-      timeZone: request.timeZone,
-      budget: {
-        maxFilePasses: CODEX_REFRESH_MAX_FILE_PASSES,
-        maxBytes: CODEX_REFRESH_MAX_BYTES,
-      },
-      shouldCancel: () => cancelled.has(request.requestId),
-      onCheckpoint: (index) =>
-        saveCodexIndexAtomic(request.indexPath, index),
-      onProgress: (progress) =>
-        post({
-          type: 'progress',
-          requestId: request.requestId,
-          progress,
-        }),
+    await runCodexWorkerRefresh(request, {
+      isCancelled: () => cancelled.has(request.requestId),
+      post,
+      loadCodexIndex,
+      scanCodexManifest,
+      updateCodexIndex,
+      saveCodexIndexAtomic,
     });
-    if (cancelled.has(request.requestId)) {
-      throw new CodexIndexCancelledError();
-    }
-    await saveCodexIndexAtomic(request.indexPath, updated.index);
-    post({
-      type: 'result',
-      requestId: request.requestId,
-      result: {
-        ...updated,
-        metadataMs,
-        parseMs: Date.now() - parseStarted,
-      },
-    });
-  } catch (error) {
-    post(safeError(request.requestId, error));
   } finally {
     cancelled.delete(request.requestId);
     activeRequestId = null;
