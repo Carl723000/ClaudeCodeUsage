@@ -152,7 +152,7 @@ test('dispose terminates the worker and rejects later refreshes', async () => {
   await assert.rejects(client.refresh(request), { code: 'disposed' });
 });
 
-test('the compiled worker indexes synthetic logs without returning raw identifiers', async () => {
+test('the compiled worker keeps a safe project basename without raw identifiers or paths', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-worker-'));
   const client = new CodexIndexClient();
   try {
@@ -196,13 +196,17 @@ test('the compiled worker indexes synthetic logs without returning raw identifie
 
     assert.equal(indexed.index.aggregate.total.inputTotal, 75);
     assert.equal(indexed.index.coverage.complete, true);
+    const returned = JSON.stringify(indexed);
+    const persisted = await readFile(indexPath, 'utf8');
+    assert.match(returned, /"projectName":"raw-project"/);
+    assert.match(persisted, /"projectDirectoryName":"raw-project"/);
     assert.doesNotMatch(
-      JSON.stringify(indexed),
-      /private-session-id|raw-project|rollout-private-name|\.jsonl/,
+      returned,
+      /private-session-id|rollout-private-name|\.jsonl|\/private\/raw-project/,
     );
     assert.doesNotMatch(
-      await readFile(indexPath, 'utf8'),
-      /private-session-id|raw-project|rollout-private-name|\.jsonl/,
+      persisted,
+      /private-session-id|rollout-private-name|\.jsonl|\/private\/raw-project/,
     );
   } finally {
     client.dispose();
