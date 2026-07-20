@@ -68,6 +68,11 @@ test('Codex renderer reuses Claude visuals for eight truthful modules', () => {
   assert.match(html, /data-codex-thread-filter="role"/);
   assert.match(html, /class="sortable" data-sortkey="title"/);
   assert.match(html, /data-codex-project-detail="p0"/);
+  for (const scope of ['recent', '7d', '30d', 'all']) {
+    assert.match(html, new RegExp(`data-codex-behavior-button="${scope}"`));
+    assert.match(html, new RegExp(`data-codex-behavior-panel="${scope}"`));
+  }
+  assert.match(html, /<details class="model-item codex-coverage">/);
   assert.match(html, /data-test-settings/);
   assert.match(html, /N:1200/);
   assert.match(html, /data-label-processed="N:/);
