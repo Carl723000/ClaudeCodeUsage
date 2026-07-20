@@ -241,6 +241,15 @@ export const SETTINGS: SettingDef[] = [
     enumLabels: ['Off', '10s', '30s', '60s', '120s', '300s'],
   },
   {
+    key: 'codex.optimization.enabled',
+    type: 'boolean',
+    default: true,
+    storage: 'state',
+    group: 'providers',
+    label: 'Show Codex behavior optimization',
+    help: 'Show local, deterministic Codex behavior metrics and recommendations.',
+  },
+  {
     key: 'showHeatmap',
     type: 'boolean',
     default: false,

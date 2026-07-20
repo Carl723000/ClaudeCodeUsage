@@ -61,6 +61,8 @@ test('Codex renderer reuses Claude visuals for eight truthful modules', () => {
   assert.match(html, /Subagent/);
   assert.match(html, /data-test-settings/);
   assert.match(html, /N:1200/);
+  assert.match(html, /data-label-processed="N:/);
+  assert.match(html, /data-label-threads="N:/);
   assert.doesNotMatch(html, /codex-metric-card|project:a|session:/);
   assert.doesNotMatch(html, /\$/);
 });

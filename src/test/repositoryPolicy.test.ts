@@ -185,6 +185,7 @@ test('Codex beta settings use safe provider-aware defaults', () => {
   assert.match(settings, /key:\s*'codex\.fileWatchSeconds'[\s\S]*?default:\s*'30'/);
   assert.match(settings, /key:\s*'statusBarProvider'[\s\S]*?default:\s*'auto'/);
   assert.match(settings, /key:\s*'codex\.statusMetric'[\s\S]*?default:\s*'fresh'/);
+  assert.match(settings, /key:\s*'codex\.optimization\.enabled'[\s\S]*?default:\s*true/);
   assert.match(webview, /'general'[\s\S]*?'providers'[\s\S]*?'features'/);
   assert.match(packageJson, /claudeCodeUsage\.codex\.dataDirectory/);
   assert.doesNotMatch(settings, /codex\.(?:auth|telemetry)/i);

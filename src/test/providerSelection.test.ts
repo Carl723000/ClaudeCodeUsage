@@ -28,6 +28,34 @@ test('webview provider changes are allowlisted and kept outside time tabs', () =
   assert.match(source, /renderProviderTabs\(\)[\s\S]*renderQuotaBanner\(\)/);
 });
 
+test('Codex settings and charts stay inside the provider view', () => {
+  const webview = readFileSync(
+    path.resolve(__dirname, '..', '..', 'src', 'webview.ts'),
+    'utf8',
+  );
+  const settings = readFileSync(
+    path.resolve(__dirname, '..', '..', 'src', 'settings.ts'),
+    'utf8',
+  );
+  const extension = readFileSync(
+    path.resolve(__dirname, '..', '..', 'src', 'extension.ts'),
+    'utf8',
+  );
+
+  assert.match(
+    settings,
+    /key:\s*'codex\.optimization\.enabled'[\s\S]*?default:\s*true/,
+  );
+  assert.match(webview, /settingsHtml:\s*this\.renderSettingsPanel\(\)/);
+  assert.match(
+    webview,
+    /formatNumber:\s*\(value\)[\s\S]*?I18n\.formatNumber\(value\)/,
+  );
+  assert.match(webview, /showCodexTab\('settings'\)/);
+  assert.match(webview, /function showCodexChartMetric/);
+  assert.match(extension, /codexOptimizationEnabled:/);
+});
+
 test('provider and Codex view copy is complete in every UI locale', () => {
   const languages: SupportedLanguage[] = [
     'en',

@@ -743,8 +743,20 @@ export class UsageWebviewProvider {
               this.codexView,
               this.codexInsights,
               I18n.t.providers.codex,
+              {
+                formatNumber: (value) => I18n.formatNumber(value),
+                settingsHtml: this.renderSettingsPanel(),
+                optimizationEnabled: this.setting<boolean>(
+                  'codex.optimization.enabled',
+                  true,
+                ),
+              },
             )
           : `<p>${this.escapeHtml(I18n.t.providers.codex.noRecentTask)}</p>`;
+    const settingsAction =
+      this.currentProvider === 'codex' && this.codexView
+        ? "showCodexTab('settings')"
+        : "showProvider('claude', 'settings')";
     return `
       <!DOCTYPE html>
       <html>
@@ -758,7 +770,7 @@ export class UsageWebviewProvider {
         <div class="container">
           <header><h1>${this.escapeHtml(I18n.t.popup.title)}</h1><div class="actions">
             <button onclick="refresh()" class="btn-secondary">↻ ${this.escapeHtml(I18n.t.popup.refresh)}</button>
-            <button onclick="showProvider('claude', 'settings')" class="btn-secondary">⚙ ${this.escapeHtml(I18n.t.popup.settings)}</button>
+            <button onclick="${settingsAction}" class="btn-secondary">⚙ ${this.escapeHtml(I18n.t.popup.settings)}</button>
           </div></header>
           ${this.renderProviderTabs()}
           ${content}
@@ -5306,8 +5318,7 @@ export class UsageWebviewProvider {
         color: var(--vscode-button-foreground);
         border-color: var(--vscode-button-background);
       }
-      .codex-header, .codex-thread-card, .codex-evidence,
-      .provider-compare-grid, .codex-dimension-grid {
+      .codex-header, .codex-evidence, .provider-compare-grid {
         display: flex;
         flex-wrap: wrap;
         gap: 12px;
@@ -5320,25 +5331,32 @@ export class UsageWebviewProvider {
         border-radius: 999px;
         color: var(--vscode-descriptionForeground);
       }
-      .codex-metric-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 10px;
-        margin: 14px 0;
+      .codex-tabs {
+        overflow-x: auto;
       }
-      .codex-metric-card, .codex-thread-card, .codex-coverage-card,
-      .codex-limit-card, .codex-insight, .provider-compare-card {
-        border: 1px solid var(--vscode-panel-border);
-        border-radius: 9px;
-        padding: 12px;
-        background: var(--vscode-editorWidget-background, transparent);
+      .codex-tab-content {
+        display: none;
       }
-      .codex-metric-label { color: var(--vscode-descriptionForeground); font-size: 12px; }
-      .codex-metric-value { font-size: 24px; font-weight: 700; margin-top: 4px; }
-      .codex-thread-card span, .codex-evidence span { font-size: 12px; }
-      .codex-dimension { flex: 1 1 320px; overflow-x: auto; }
-      .codex-dimension table { width: 100%; }
-      .codex-coverage-card, .codex-limit-card { margin: 12px 0; line-height: 1.6; }
+      .codex-tab-content.active {
+        display: block;
+      }
+      .codex-scope-control {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 16px;
+        color: var(--vscode-descriptionForeground);
+        font-size: 12px;
+      }
+      .codex-scope-select {
+        background: var(--vscode-dropdown-background);
+        color: var(--vscode-dropdown-foreground);
+        border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border));
+        border-radius: 4px;
+        padding: 5px 8px;
+      }
+      .codex-evidence span { font-size: 12px; }
+      .codex-coverage, .codex-limit { margin: 12px 0; line-height: 1.6; }
       .codex-insight { margin: 8px 0; }
       .codex-insight-strong { border-left: 4px solid var(--vscode-charts-red); }
       .codex-insight-normal { border-left: 4px solid var(--vscode-charts-orange); }
@@ -5425,7 +5443,74 @@ function restoreCodexScope() {
   selector.addEventListener('change', function() { activate(selector.value); });
   activate(selector.value);
 }
-function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); restoreCodexScope(); }
+function showCodexTab(tabName) {
+  var selectedButton = null;
+  var selectedContent = null;
+  document.querySelectorAll('[data-codex-tab-button]').forEach(function(button) {
+    var selected = button.getAttribute('data-codex-tab-button') === tabName;
+    button.classList.toggle('active', selected);
+    if (selected) { selectedButton = button; }
+  });
+  document.querySelectorAll('[data-codex-tab-content]').forEach(function(content) {
+    var selected = content.getAttribute('data-codex-tab-content') === tabName;
+    content.classList.toggle('active', selected);
+    if (selected) { selectedContent = content; }
+  });
+  if (selectedButton && selectedContent) {
+    try { localStorage.setItem('ccu.codexTab', tabName); } catch (e) {}
+  }
+}
+function showCodexChartMetric(chartId, metric) {
+  var root = null;
+  document.querySelectorAll('[data-codex-chart-root]').forEach(function(candidate) {
+    if (candidate.getAttribute('data-codex-chart-root') === chartId) { root = candidate; }
+  });
+  if (!root) { return; }
+  var bars = root.querySelectorAll('[data-codex-chart]');
+  var maxValue = 0;
+  bars.forEach(function(bar) {
+    var value = Number(bar.getAttribute('data-' + metric) || '0');
+    if (value > maxValue) { maxValue = value; }
+  });
+  var classByMetric = {
+    processed: 'cache-creation-bar',
+    fresh: 'input-bar',
+    output: 'output-bar',
+    reasoning: 'cache-read-bar',
+    threads: 'messages-bar'
+  };
+  bars.forEach(function(bar) {
+    var value = Number(bar.getAttribute('data-' + metric) || '0');
+    var height = maxValue > 0 ? Math.max(2, Math.round((value / maxValue) * 140)) : 2;
+    bar.style.height = height + 'px';
+    bar.classList.remove('cache-creation-bar', 'input-bar', 'output-bar', 'cache-read-bar', 'messages-bar');
+    bar.classList.add(classByMetric[metric] || 'input-bar');
+    var formattedValue = bar.getAttribute('data-label-' + metric) || String(value);
+    var metricName = bar.getAttribute('data-name-' + metric) || metric;
+    var rowLabel = bar.getAttribute('data-row-label') || '';
+    bar.title = rowLabel + ' · ' + metricName + ': ' + formattedValue;
+    var container = bar.closest('.chart-bar-container');
+    var valueLabel = container ? container.querySelector('[data-codex-chart-value]') : null;
+    if (valueLabel) { valueLabel.textContent = formattedValue; }
+  });
+  root.querySelectorAll('[data-codex-chart-button]').forEach(function(button) {
+    button.classList.toggle(
+      'active',
+      button.getAttribute('data-codex-chart-button') === chartId + ':' + metric
+    );
+  });
+}
+function restoreCodexTab() {
+  if (!document.querySelector('[data-codex-tab-button]')) { return; }
+  var tabName = 'recent';
+  try { tabName = localStorage.getItem('ccu.codexTab') || tabName; } catch (e) {}
+  var found = false;
+  document.querySelectorAll('[data-codex-tab-button]').forEach(function(button) {
+    if (button.getAttribute('data-codex-tab-button') === tabName) { found = true; }
+  });
+  showCodexTab(found ? tabName : 'recent');
+}
+function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); restoreCodexTab(); }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreUi);
 } else {

@@ -342,10 +342,23 @@ function periodChart(
     .join('');
   const bars = ordered
     .map((row) => {
+      const values: Record<string, number> = {
+        processed: row.total.processed,
+        fresh: row.total.fresh,
+        output: row.total.output,
+        reasoning: row.total.reasoning,
+        threads: row.threads,
+      };
+      const labelAttributes = metrics
+        .map(
+          ([key, label]) =>
+            `data-label-${key}="${formatted(format, values[key])}" data-name-${key}="${escapeHtml(label)}"`,
+        )
+        .join(' ');
       const height = maxFresh > 0
         ? Math.max(2, Math.round((row.total.fresh / maxFresh) * 140))
         : 2;
-      return `<div class="chart-bar-container"><div class="codex-chart-value" data-codex-chart-value>${formatted(format, row.total.fresh)}</div><div class="chart-bar input-bar codex-chart-bar" style="height:${height}px" data-codex-chart="${escapeHtml(chartId)}" data-processed="${Math.max(0, row.total.processed)}" data-fresh="${Math.max(0, row.total.fresh)}" data-output="${Math.max(0, row.total.output)}" data-reasoning="${Math.max(0, row.total.reasoning)}" data-threads="${Math.max(0, row.threads)}" title="${escapeHtml(row.label)} · ${escapeHtml(copy.fresh)}: ${formatted(format, row.total.fresh)}"></div><div class="chart-label">${escapeHtml(row.label)}</div></div>`;
+      return `<div class="chart-bar-container"><div class="codex-chart-value" data-codex-chart-value>${formatted(format, row.total.fresh)}</div><div class="chart-bar input-bar codex-chart-bar" style="height:${height}px" data-codex-chart="${escapeHtml(chartId)}" data-row-label="${escapeHtml(row.label)}" data-processed="${Math.max(0, row.total.processed)}" data-fresh="${Math.max(0, row.total.fresh)}" data-output="${Math.max(0, row.total.output)}" data-reasoning="${Math.max(0, row.total.reasoning)}" data-threads="${Math.max(0, row.threads)}" ${labelAttributes} title="${escapeHtml(row.label)} · ${escapeHtml(copy.fresh)}: ${formatted(format, row.total.fresh)}"></div><div class="chart-label">${escapeHtml(row.label)}</div></div>`;
     })
     .join('');
   return `<section class="daily-breakdown codex-period-chart" data-codex-chart-root="${escapeHtml(chartId)}"><div class="chart-tabs">${buttons}</div><div class="chart-container"><div class="chart-content"><div class="chart-bars">${bars}</div></div></div></section>`;
