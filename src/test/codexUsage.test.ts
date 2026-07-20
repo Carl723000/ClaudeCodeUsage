@@ -132,6 +132,7 @@ test('expired limits are omitted while coverage and quality remain explicit', ()
   const view = buildCodexUsageView(snapshotFixture(), NOW);
 
   assert.equal(view.limit, null);
+  assert.deepEqual(view.limits, []);
   assert.deepEqual(view.coverage, {
     indexedFiles: 4,
     totalFiles: 5,

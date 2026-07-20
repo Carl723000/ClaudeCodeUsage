@@ -38,6 +38,7 @@ export interface CodexProviderSnapshot {
   files: CodexFileAggregate[];
   coverage: CodexIndexCoverage;
   qualityFlags: Record<string, number>;
+  limits: ProviderLimitSnapshot[];
   limit: ProviderLimitSnapshot | null;
 }
 
@@ -59,14 +60,28 @@ function emptySnapshot(): CodexProviderSnapshot {
   return snapshotFromIndex(createEmptyCodexIndex());
 }
 
-function latestLimit(index: CodexIndexV1): ProviderLimitSnapshot | null {
-  let latest: ProviderLimitSnapshot | null = null;
+function latestLimits(index: CodexIndexV1): ProviderLimitSnapshot[] {
+  const latest = new Map<string, ProviderLimitSnapshot>();
   for (const file of Object.values(index.files)) {
-    if (file.limit && (!latest || file.limit.observedAt > latest.observedAt)) {
-      latest = file.limit;
+    const snapshots = [
+      ...Object.values(file.limits ?? {}),
+      ...(file.limit ? [file.limit] : []),
+    ];
+    for (const snapshot of snapshots) {
+      const key = snapshot.limitId ?? snapshot.limitName ?? 'default';
+      const current = latest.get(key);
+      if (!current || snapshot.observedAt >= current.observedAt) {
+        latest.set(key, snapshot);
+      }
     }
   }
-  return latest;
+  return [...latest.values()].sort(
+    (left, right) =>
+      right.observedAt - left.observedAt ||
+      (left.limitName ?? left.limitId ?? '').localeCompare(
+        right.limitName ?? right.limitId ?? '',
+      ),
+  );
 }
 
 function qualityCounts(index: CodexIndexV1): Record<string, number> {
@@ -95,13 +110,15 @@ function snapshotFromIndex(
       (left, right) =>
         (right.session.startedAt ?? 0) - (left.session.startedAt ?? 0),
     );
+  const limits = latestLimits(index);
   return {
     provider: 'codex',
     total: index.aggregate.total,
     files,
     coverage: index.coverage,
     qualityFlags: qualityCounts(index),
-    limit: latestLimit(index),
+    limits,
+    limit: limits[0] ?? null,
   };
 }
 

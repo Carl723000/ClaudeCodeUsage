@@ -164,6 +164,7 @@ export function snapshotFixture(): CodexProviderSnapshot {
       complete: false,
     },
     qualityFlags: { 'unknown-event': 1 },
+    limits: [],
     limit: {
       provider: 'codex',
       observedAt: Date.parse('2026-07-20T09:00:00.000Z'),

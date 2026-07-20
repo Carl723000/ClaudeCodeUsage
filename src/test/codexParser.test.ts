@@ -194,6 +194,57 @@ test('rate limit is a last-observed local-log snapshot', () => {
   });
 });
 
+test('rate limits preserve named primary secondary and credit metadata', () => {
+  const result = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:00.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 100,
+            output_tokens: 20,
+            total_tokens: 120,
+          },
+        },
+        rate_limits: {
+          limit_id: 'codex-main',
+          limit_name: 'Codex',
+          primary: {
+            used_percent: 20,
+            window_minutes: 300,
+            resets_at: 1_785_000_000,
+          },
+          secondary: {
+            used_percent: 35,
+            window_minutes: 10080,
+            resets_at: 1_785_500_000,
+          },
+          credits: {
+            has_credits: true,
+            unlimited: false,
+            balance: '18.5',
+          },
+        },
+      },
+    }),
+    createCodexParserState('file-key'),
+  );
+
+  assert.equal(result.limit?.limitId, 'codex-main');
+  assert.equal(result.limit?.limitName, 'Codex');
+  assert.deepEqual(result.limit?.windows.map((window) => window.label), [
+    'primary',
+    'secondary',
+  ]);
+  assert.deepEqual(result.limit?.credits, {
+    hasCredits: true,
+    unlimited: false,
+    balance: '18.5',
+  });
+});
+
 test('counter regression starts a partial lineage without negative usage', () => {
   let state = createCodexParserState('root-file');
   state = parseCodexLine(
