@@ -197,6 +197,164 @@ test('cold scan, appended tail, and persisted reload agree', async () => {
   }
 });
 
+test('cold scan and append build target-timezone slices in the same body read', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-append-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const activePath = path.join(sessions, 'rollout-period.jsonl');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      activePath,
+      [
+        sessionLine('period-append'),
+        contextLine(),
+        tokenLine(100, 20, '2026-07-20T15:55:00.000Z'),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const io = trackingIo();
+    const firstManifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(
+      createEmptyCodexIndex('Asia/Hong_Kong'),
+      firstManifest,
+      { salt: SALT, timeZone: 'Asia/Hong_Kong', io },
+    );
+    const key = firstManifest.files[0].fileKey;
+    const preAppendOffset = cold.index.files[key].offset;
+
+    assert.equal(cold.bodyReads, 1);
+    assert.equal(io.bodyReads.get(key), 1);
+    assert.equal(
+      cold.index.files[key].aggregate.period?.days['2026-07-20'].total.inputTotal,
+      100,
+    );
+    assert.equal(
+      cold.index.files[key].aggregate.period?.indexedThrough,
+      preAppendOffset,
+    );
+
+    await appendFile(
+      activePath,
+      [
+        tokenLine(150, 30, '2026-07-20T16:05:00.000Z'),
+        structuralLine('2026-07-20T16:06:00.000Z', 'response_item', {
+          type: 'function_call',
+          name: 'apply_patch',
+        }),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const warm = await updateCodexIndex(
+      cold.index,
+      await scanCodexManifest(root, SALT),
+      { salt: SALT, timeZone: 'Asia/Hong_Kong', io },
+    );
+    const period = warm.index.files[key].aggregate.period!;
+
+    assert.equal(warm.bodyReads, 1);
+    assert.equal(io.bodyReads.get(key), 2);
+    assert.deepEqual(io.readOffsets, [0, preAppendOffset]);
+    assert.equal(period.timeZone, 'Asia/Hong_Kong');
+    assert.equal(period.indexedThrough, warm.index.files[key].offset);
+    assert.equal(period.days['2026-07-20'].total.inputTotal, 100);
+    assert.equal(period.days['2026-07-21'].total.inputTotal, 50);
+    assert.equal(
+      period.days['2026-07-21'].byModel['gpt-5.6-sol'].inputTotal,
+      50,
+    );
+    assert.equal(period.days['2026-07-21'].byEffort.high.inputTotal, 50);
+    assert.equal(period.days['2026-07-21'].structural.patchCalls, 1);
+    assert.equal(
+      period.days['2026-07-21'].firstObservedAt,
+      Date.parse('2026-07-20T16:05:00.000Z'),
+    );
+    assert.equal(
+      period.days['2026-07-21'].lastObservedAt,
+      Date.parse('2026-07-20T16:06:00.000Z'),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('append leaves a mismatched period for later migration while all-time advances', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-mismatch-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const activePath = path.join(sessions, 'rollout-period-mismatch.jsonl');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      activePath,
+      `${tokenLine(100, 20, '2026-07-20T15:55:00.000Z')}\n`,
+      'utf8',
+    );
+    const firstManifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(
+      createEmptyCodexIndex('UTC'),
+      firstManifest,
+      { salt: SALT, timeZone: 'UTC' },
+    );
+    const key = firstManifest.files[0].fileKey;
+    const priorPeriod = structuredClone(cold.index.files[key].aggregate.period!);
+    await appendFile(
+      activePath,
+      `${tokenLine(150, 30, '2026-07-20T16:05:00.000Z')}\n`,
+      'utf8',
+    );
+
+    const changedZone = await updateCodexIndex(
+      cold.index,
+      await scanCodexManifest(root, SALT),
+      { salt: SALT, timeZone: 'Asia/Hong_Kong' },
+    );
+
+    assert.equal(changedZone.index.files[key].aggregate.total.inputTotal, 150);
+    assert.deepEqual(changedZone.index.files[key].aggregate.period, priorPeriod);
+
+    const staleCursor = structuredClone(cold.index);
+    staleCursor.files[key].aggregate.period!.indexedThrough -= 1;
+    const stalePeriod = structuredClone(staleCursor.files[key].aggregate.period!);
+    const cursorMismatch = await updateCodexIndex(
+      staleCursor,
+      await scanCodexManifest(root, SALT),
+      { salt: SALT, timeZone: 'UTC' },
+    );
+
+    assert.equal(cursorMismatch.index.files[key].aggregate.total.inputTotal, 150);
+    assert.deepEqual(cursorMismatch.index.files[key].aggregate.period, stalePeriod);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('invalid timestamps add a quality flag without creating a period day', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-invalid-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'rollout-invalid-time.jsonl'),
+      [tokenLine(10, 2, 'not-a-timestamp'), ''].join('\n'),
+      'utf8',
+    );
+
+    const result = await updateCodexIndex(
+      createEmptyCodexIndex('UTC'),
+      await scanCodexManifest(root, SALT),
+      { salt: SALT, timeZone: 'UTC' },
+    );
+    const contribution = Object.values(result.index.files)[0];
+
+    assert.deepEqual(contribution.aggregate.period?.days, {});
+    assert.ok(contribution.qualityFlags.includes('invalid-event-timestamp'));
+    assert.equal('unknown' in (contribution.aggregate.period?.days ?? {}), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('child token counters start at their own zero and are not parent deltas', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-child-'));
   try {
@@ -498,6 +656,40 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
                 taskCompleteCount: 4,
                 responseBody: 'v2-secret-structural',
               },
+              period: {
+                timeZone: 'Asia/Hong_Kong',
+                indexedThrough: 100,
+                days: {
+                  '2026-07-20': {
+                    total: {
+                      inputTotal: 123,
+                      cachedInput: 23,
+                      outputTotal: 45,
+                      reasoningOutput: 5,
+                      sourceTotal: 168,
+                      promptBody: 'v2-secret-period-total',
+                    },
+                    byModel: {
+                      'gpt-5.6-sol': { inputTotal: 123, outputTotal: 45 },
+                    },
+                    byEffort: {
+                      high: { inputTotal: 123, outputTotal: 45 },
+                    },
+                    structural: {
+                      patchCalls: 1,
+                      toolCalls: 2,
+                      postPatchToolCalls: 2,
+                      compactCount: 3,
+                      taskCompleteCount: 4,
+                      commandBody: 'v2-secret-period-structural',
+                    },
+                    firstObservedAt: 10,
+                    lastObservedAt: 20,
+                    rawResponse: 'v2-secret-period-day',
+                  },
+                },
+                rawPath: '/v2-secret-period-path',
+              },
               rawResponse: 'v2-secret-file-aggregate',
             },
             limit: {
@@ -580,6 +772,24 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
     assert.equal(loaded.files.a.aggregate.session.startedAt, 10);
     assert.equal(loaded.files.a.aggregate.session.endedAt, 20);
     assert.equal(loaded.files.a.aggregate.structural.patchCalls, 1);
+    assert.equal(loaded.files.a.aggregate.period?.timeZone, 'Asia/Hong_Kong');
+    assert.equal(loaded.files.a.aggregate.period?.indexedThrough, 100);
+    assert.equal(
+      loaded.files.a.aggregate.period?.days['2026-07-20'].total.inputTotal,
+      123,
+    );
+    assert.equal(
+      loaded.files.a.aggregate.period?.days['2026-07-20'].structural.patchCalls,
+      1,
+    );
+    assert.equal(
+      loaded.files.a.aggregate.period?.days['2026-07-20'].firstObservedAt,
+      10,
+    );
+    assert.equal(
+      loaded.files.a.aggregate.period?.days['2026-07-20'].lastObservedAt,
+      20,
+    );
     assert.equal(loaded.files.a.limit?.observedAt, 30);
     assert.equal(loaded.files.a.limit?.windows[0].usedPercent, 25);
     assert.equal(loaded.files.a.limit?.credits?.balance, '42');
@@ -600,6 +810,10 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
     Object.assign(caller.files.a.aggregate.session, {
       cwd: '/v2-secret-caller-session-path',
     });
+    Object.assign(
+      caller.files.a.aggregate.period!.days['2026-07-20'],
+      { promptBody: 'v2-secret-caller-period-day' },
+    );
     Object.assign(caller.files.a.limit!.windows[0], {
       commandBody: 'v2-secret-caller-limit-window',
     });
@@ -614,6 +828,11 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
     assert.equal(saved.files.a.aggregate.total.inputTotal, 123);
     assert.equal(saved.files.a.parserState.sessionKey, 'anonymous-session-key');
     assert.equal(saved.files.a.limit?.windows[0].usedPercent, 25);
+    assert.equal(saved.files.a.aggregate.period?.timeZone, 'Asia/Hong_Kong');
+    assert.equal(
+      saved.files.a.aggregate.period?.days['2026-07-20'].lastObservedAt,
+      20,
+    );
     assert.equal(saved.aggregate.total.inputTotal, 123);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -755,9 +974,9 @@ test('truncate rebuilds only the affected contribution', async () => {
     await writeFile(secondPath, completeSession('second', 300, 60), 'utf8');
     const manifest1 = await scanCodexManifest(root, SALT);
     const cold = await updateCodexIndex(
-      createEmptyCodexIndex(),
+      createEmptyCodexIndex('Asia/Hong_Kong'),
       manifest1,
-      { salt: SALT },
+      { salt: SALT, timeZone: 'Asia/Hong_Kong' },
     );
     await writeFile(
       firstPath,
@@ -771,13 +990,78 @@ test('truncate rebuilds only the affected contribution', async () => {
 
     const rebuilt = await updateCodexIndex(cold.index, manifest2, {
       salt: SALT,
+      timeZone: 'Asia/Hong_Kong',
       io,
     });
 
     assert.equal(io.bodyReads.get(firstKey), 1);
     assert.equal(io.bodyReads.has(secondKey), false);
     assert.equal(rebuilt.index.aggregate.total.inputTotal, 310);
+    assert.equal(
+      rebuilt.index.files[firstKey].aggregate.period?.days['2026-07-20'].total
+        .inputTotal,
+      10,
+    );
+    assert.deepEqual(
+      rebuilt.index.files[secondKey].aggregate.period,
+      cold.index.files[secondKey].aggregate.period,
+    );
     assert.ok(rebuilt.index.files[firstKey].qualityFlags.includes('truncated-jsonl'));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('replacement rebuilds only the affected period contribution', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-replace-period-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const firstPath = path.join(sessions, 'rollout-replaced.jsonl');
+    const secondPath = path.join(sessions, 'rollout-unchanged.jsonl');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(firstPath, completeSession('replace-old', 100, 20), 'utf8');
+    await writeFile(secondPath, completeSession('unchanged', 300, 60), 'utf8');
+    const firstManifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(
+      createEmptyCodexIndex('Asia/Hong_Kong'),
+      firstManifest,
+      { salt: SALT, timeZone: 'Asia/Hong_Kong' },
+    );
+    await writeFile(
+      firstPath,
+      `${tokenLine(25, 5, '2026-07-20T16:05:00.000Z')}\n`,
+      'utf8',
+    );
+    const scanned = await scanCodexManifest(root, SALT);
+    const replacedEntry = scanned.files.find(
+      (file) => file.absolutePath === firstPath,
+    )!;
+    replacedEntry.ino = (replacedEntry.ino ?? 1) + 10_000;
+    const manifest = persistableManifest(scanned.files);
+    const firstKey = replacedEntry.fileKey;
+    const secondKey = scanned.files.find(
+      (file) => file.absolutePath === secondPath,
+    )!.fileKey;
+    const io = trackingIo();
+
+    const rebuilt = await updateCodexIndex(cold.index, manifest, {
+      salt: SALT,
+      timeZone: 'Asia/Hong_Kong',
+      io,
+    });
+
+    assert.equal(io.bodyReads.get(firstKey), 1);
+    assert.equal(io.bodyReads.has(secondKey), false);
+    assert.equal(
+      rebuilt.index.files[firstKey].aggregate.period?.days['2026-07-21'].total
+        .inputTotal,
+      25,
+    );
+    assert.deepEqual(
+      rebuilt.index.files[secondKey].aggregate.period,
+      cold.index.files[secondKey].aggregate.period,
+    );
+    assert.ok(rebuilt.index.files[firstKey].qualityFlags.includes('replaced-jsonl'));
   } finally {
     await rm(root, { recursive: true, force: true });
   }

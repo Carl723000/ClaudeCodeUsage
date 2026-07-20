@@ -8,6 +8,7 @@ import {
 } from 'node:fs/promises';
 import * as path from 'node:path';
 
+import { resolveTimeZone } from '../../dateKeys';
 import {
   NormalizedUsageEvent,
   ProviderLimitSnapshot,
@@ -20,6 +21,12 @@ import {
   createCodexParserState,
   parseCodexLine,
 } from './codexParser';
+import {
+  CodexFilePeriodIndex,
+  CodexStructuralSummary,
+  reduceCodexStructuralSlice,
+  reduceCodexUsageSlice,
+} from './codexPeriodIndex';
 import { parseJsonObject, stringField } from './codexSchema';
 import {
   CodexManifest,
@@ -34,13 +41,7 @@ import {
   scanCodexJsonlLines,
 } from './codexJsonlScanner';
 
-export interface CodexStructuralSummary {
-  patchCalls: number;
-  toolCalls: number;
-  postPatchToolCalls: number;
-  compactCount: number;
-  taskCompleteCount: number;
-}
+export { CodexStructuralSummary } from './codexPeriodIndex';
 
 export interface CodexFileAggregate {
   total: ProviderTokenCounts;
@@ -60,7 +61,7 @@ export interface CodexFileAggregate {
     endedAt?: number;
   };
   structural: CodexStructuralSummary;
-  period?: undefined;
+  period?: CodexFilePeriodIndex;
 }
 
 export interface CodexFileContribution {
@@ -116,6 +117,7 @@ export interface CodexIndexProgress {
 
 export interface CodexIndexUpdateOptions {
   salt: string;
+  timeZone?: string;
   io?: CodexIndexIo;
   shouldCancel?: () => boolean;
   onProgress?: (progress: CodexIndexProgress) => void;
@@ -326,6 +328,7 @@ function previousManifest(index: CodexIndexV2): CodexPersistedManifest {
 
 function contributionFor(
   entry: CodexRuntimeManifestEntry,
+  timeZone: string,
   flags: string[] = [],
 ): CodexFileContribution {
   const parserState = createCodexParserState(entry.fileKey);
@@ -339,7 +342,10 @@ function contributionFor(
     offset: 0,
     discardingOversizedLine: false,
     parserState,
-    aggregate: emptyFileAggregate(entry.fileKey, parserState.role),
+    aggregate: {
+      ...emptyFileAggregate(entry.fileKey, parserState.role),
+      period: { timeZone, indexedThrough: 0, days: {} },
+    },
     qualityFlags: [...flags],
   };
 }
@@ -361,6 +367,11 @@ async function updateContribution(
   const pseudonymize = pseudonymizer(options.salt);
   let limit = contribution.limit;
   const limits = { ...(contribution.limits ?? {}) };
+  const timeZone = resolveTimeZone(options.timeZone ?? 'UTC');
+  const advancePeriod =
+    aggregate.period?.timeZone === timeZone &&
+    aggregate.period.indexedThrough === contribution.offset;
+  let invalidEventTimestamp = false;
 
   const scan = await scanCodexJsonlLines(
     entry,
@@ -377,9 +388,26 @@ async function updateContribution(
         parserState = parsed.state;
         for (const event of parsed.events) {
           reduceUsage(aggregate, event);
+          if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
+            invalidEventTimestamp = true;
+          } else if (advancePeriod && aggregate.period) {
+            reduceCodexUsageSlice(aggregate.period.days, event, timeZone);
+          }
         }
         if (parsed.structural) {
           reduceStructural(aggregate, parsed.structural);
+          if (
+            !Number.isFinite(parsed.structural.timestamp) ||
+            parsed.structural.timestamp <= 0
+          ) {
+            invalidEventTimestamp = true;
+          } else if (advancePeriod && aggregate.period) {
+            reduceCodexStructuralSlice(
+              aggregate.period.days,
+              parsed.structural,
+              timeZone,
+            );
+          }
         }
         if (!limit || (parsed.limit?.observedAt ?? 0) >= limit.observedAt) {
           limit = parsed.limit ?? limit;
@@ -403,6 +431,9 @@ async function updateContribution(
     throw new Error('Codex log changed during indexing');
   }
 
+  if (advancePeriod && aggregate.period) {
+    aggregate.period.indexedThrough = scan.cursor.offset;
+  }
   syncSession(aggregate, parserState);
   return {
     ...contribution,
@@ -422,6 +453,7 @@ async function updateContribution(
       contribution.qualityFlags,
       parserState.qualityFlags,
       scan.oversizedLines > 0 ? ['oversized-jsonl-line'] : [],
+      invalidEventTimestamp ? ['invalid-event-timestamp'] : [],
     ),
     identityChecked: true,
   };
@@ -544,6 +576,7 @@ export async function updateCodexIndex(
   assertNotCancelled(options);
   const index = cloneIndex(previous);
   const io = options.io ?? defaultIo();
+  const timeZone = resolveTimeZone(options.timeZone ?? 'UTC');
   const diff = diffCodexManifest(previousManifest(index), manifest.persistable);
   const entries = new Map(manifest.files.map((entry) => [entry.fileKey, entry]));
   let bodyReads = 0;
@@ -587,7 +620,7 @@ export async function updateCodexIndex(
     const resetFlag = resetFlags.get(entry.fileKey);
     const prior = index.files[entry.fileKey];
     const base = resetFlag || !prior
-      ? contributionFor(entry, resetFlag ? [resetFlag] : [])
+      ? contributionFor(entry, timeZone, resetFlag ? [resetFlag] : [])
       : {
           ...cloneContribution(prior),
           qualityFlags: prior.qualityFlags.filter(
@@ -845,6 +878,37 @@ function sanitizeStructural(value: unknown): CodexStructuralSummary {
   };
 }
 
+function sanitizePeriod(value: unknown): CodexFilePeriodIndex | undefined {
+  if (!isRecord(value) || typeof value.timeZone !== 'string') {
+    return undefined;
+  }
+  const rawDays = isRecord(value.days) ? value.days : {};
+  const days = Object.fromEntries(
+    Object.entries(rawDays).flatMap(([key, rawSlice]) => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(key) || !isRecord(rawSlice)) {
+        return [];
+      }
+      return [[key, {
+        total: sanitizeTokens(rawSlice.total),
+        byModel: sanitizeBuckets(rawSlice.byModel),
+        byEffort: sanitizeBuckets(rawSlice.byEffort),
+        structural: sanitizeStructural(rawSlice.structural),
+        ...(optionalNumber(rawSlice.firstObservedAt) !== undefined
+          ? { firstObservedAt: optionalNumber(rawSlice.firstObservedAt) }
+          : {}),
+        ...(optionalNumber(rawSlice.lastObservedAt) !== undefined
+          ? { lastObservedAt: optionalNumber(rawSlice.lastObservedAt) }
+          : {}),
+      }]];
+    }),
+  );
+  return {
+    timeZone: resolveTimeZone(value.timeZone),
+    indexedThrough: Math.max(0, finiteNumber(value.indexedThrough)),
+    days,
+  };
+}
+
 function sanitizeLimit(value: unknown): ProviderLimitSnapshot | undefined {
   if (!isRecord(value) || !Array.isArray(value.windows)) {
     return undefined;
@@ -943,6 +1007,7 @@ function sanitizeFileAggregate(
   parserState: CodexParserState,
 ): CodexFileAggregate {
   const aggregate = isRecord(value) ? value : {};
+  const period = sanitizePeriod(aggregate.period);
   return {
     total: sanitizeTokens(aggregate.total),
     byDay: sanitizeBuckets(aggregate.byDay),
@@ -950,6 +1015,7 @@ function sanitizeFileAggregate(
     byEffort: sanitizeBuckets(aggregate.byEffort),
     session: sanitizeSession(aggregate.session, parserState),
     structural: sanitizeStructural(aggregate.structural),
+    ...(period ? { period } : {}),
   };
 }
 
