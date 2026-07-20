@@ -5357,9 +5357,7 @@ export class UsageWebviewProvider {
       }
       .codex-behavior-scope { display: none; }
       .codex-behavior-scope.active { display: block; }
-      .codex-period-chart .chart-container {
-        margin-bottom: 12px;
-      }
+      .codex-period-chart .hc-wrap { margin-bottom: 12px; }
       .codex-chart-value {
         color: var(--vscode-descriptionForeground);
         font-size: 9px;
@@ -5578,7 +5576,7 @@ function showCodexChartMetric(chartId, metric) {
   };
   bars.forEach(function(bar) {
     var value = Number(bar.getAttribute('data-' + metric) || '0');
-    var height = maxValue > 0 ? Math.max(2, Math.round((value / maxValue) * 140)) : 2;
+    var height = maxValue > 0 ? Math.max(2, Math.round((value / maxValue) * 100)) : 2;
     bar.style.height = height + 'px';
     bar.classList.remove('cache-creation-bar', 'input-bar', 'output-bar', 'cache-read-bar', 'messages-bar');
     bar.classList.add(classByMetric[metric] || 'input-bar');
@@ -5586,7 +5584,7 @@ function showCodexChartMetric(chartId, metric) {
     var metricName = bar.getAttribute('data-name-' + metric) || metric;
     var rowLabel = bar.getAttribute('data-row-label') || '';
     bar.title = rowLabel + ' · ' + metricName + ': ' + formattedValue;
-    var container = bar.closest('.chart-bar-container');
+    var container = bar.closest('.hc-col') || bar.closest('.chart-bar-container');
     var valueLabel = container ? container.querySelector('[data-codex-chart-value]') : null;
     if (valueLabel) { valueLabel.textContent = formattedValue; }
   });
@@ -5596,6 +5594,12 @@ function showCodexChartMetric(chartId, metric) {
       button.getAttribute('data-codex-chart-button') === chartId + ':' + metric
     );
   });
+  var yValues = root.querySelectorAll('.hc-yaxis .hc-yval');
+  if (yValues.length === 3) {
+    yValues[0].textContent = root.getAttribute('data-axis-top-' + metric) || String(maxValue);
+    yValues[1].textContent = root.getAttribute('data-axis-mid-' + metric) || String(Math.round(maxValue / 2));
+    yValues[2].textContent = '0';
+  }
 }
 function restoreCodexTab() {
   if (!document.querySelector('[data-codex-tab-button]')) { return; }
