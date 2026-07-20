@@ -268,6 +268,7 @@ export interface ExtensionConfig {
   codexEnabled: boolean;
   codexDataDirectory: string;
   codexFileWatchSeconds: number;
+  codexOptimizationEnabled: boolean;
   statusBarProvider: 'auto' | 'claude' | 'codex';
   codexStatusMetric: 'fresh' | 'processed' | 'output';
   language: string;

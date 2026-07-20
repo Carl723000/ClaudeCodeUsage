@@ -751,6 +751,7 @@ export class ClaudeCodeUsageExtension {
       codexDataDirectory: s.get<string>('codex.dataDirectory'),
       codexFileWatchSeconds:
         Number(s.get<string>('codex.fileWatchSeconds') ?? '30') || 0,
+      codexOptimizationEnabled: s.get<boolean>('codex.optimization.enabled'),
       statusBarProvider: s.get<'auto' | 'claude' | 'codex'>('statusBarProvider'),
       codexStatusMetric: s.get<'fresh' | 'processed' | 'output'>(
         'codex.statusMetric',
