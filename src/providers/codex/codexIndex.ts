@@ -21,6 +21,7 @@ import {
   createCodexParserState,
   parseCodexLine,
 } from './codexParser';
+import { parseJsonObject, stringField } from './codexSchema';
 import {
   CodexManifest,
   CodexPersistedManifest,
@@ -46,6 +47,10 @@ export interface CodexFileAggregate {
     sessionKey: string;
     parentSessionKey?: string;
     projectKey?: string;
+    projectName?: string;
+    projectDirectoryName?: string;
+    agentNickname?: string;
+    sessionTitle?: string;
     role: ProviderThreadRole;
     startedAt?: number;
     endedAt?: number;
@@ -65,6 +70,7 @@ export interface CodexFileContribution {
   aggregate: CodexFileAggregate;
   limit?: ProviderLimitSnapshot;
   qualityFlags: string[];
+  identityChecked?: boolean;
 }
 
 export interface CodexIndexCoverage {
@@ -125,6 +131,8 @@ export class CodexIndexCancelledError extends Error {
     this.name = 'CodexIndexCancelledError';
   }
 }
+
+const MAX_IDENTITY_BYTES = 256 * 1024;
 
 function zeroTokens(): ProviderTokenCounts {
   return {
@@ -277,6 +285,9 @@ function syncSession(
     sessionKey: state.sessionKey,
     parentSessionKey: state.parentSessionKey,
     projectKey: state.projectKey,
+    projectName: state.projectName,
+    projectDirectoryName: state.projectDirectoryName,
+    agentNickname: state.agentNickname,
     role: state.role,
   };
 }
@@ -408,7 +419,50 @@ async function updateContribution(
     aggregate,
     limit,
     qualityFlags: uniqueFlags(contribution.qualityFlags, parserState.qualityFlags),
+    identityChecked: true,
   };
+}
+
+async function backfillIdentity(
+  contribution: CodexFileContribution,
+  entry: CodexRuntimeManifestEntry,
+  options: CodexIndexUpdateOptions,
+  io: CodexIndexIo,
+): Promise<CodexFileContribution> {
+  if (contribution.identityChecked === true) {
+    return contribution;
+  }
+  let pending = '';
+  const end = Math.min(entry.size, MAX_IDENTITY_BYTES);
+  const pseudonymize = pseudonymizer(options.salt);
+  let parserState = contribution.parserState;
+  for await (const chunk of io.read(entry, 0, end)) {
+    assertNotCancelled(options);
+    pending += chunk;
+    let newline = pending.indexOf('\n');
+    while (newline >= 0) {
+      const line = pending.slice(0, newline).replace(/\r$/, '');
+      pending = pending.slice(newline + 1);
+      const entryObject = parseJsonObject(line);
+      if (entryObject && stringField(entryObject, 'type') === 'session_meta') {
+        parserState = parseCodexLine(
+          line,
+          parserState,
+          pseudonymize,
+        ).state;
+        const aggregate = cloneContribution(contribution).aggregate;
+        syncSession(aggregate, parserState);
+        return {
+          ...contribution,
+          parserState,
+          aggregate,
+          identityChecked: true,
+        };
+      }
+      newline = pending.indexOf('\n');
+    }
+  }
+  return { ...contribution, identityChecked: true };
 }
 
 function recomputeAggregate(
@@ -566,6 +620,27 @@ export async function updateCodexIndex(
     index.coverage = coverageFor(index.files, manifest);
     options.onProgress?.(progressFor(index, scannedFiles));
     await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  for (const entry of manifest.files) {
+    const contribution = index.files[entry.fileKey];
+    if (!contribution || contribution.identityChecked === true) {
+      continue;
+    }
+    bodyReads += 1;
+    try {
+      index.files[entry.fileKey] = await backfillIdentity(
+        contribution,
+        entry,
+        options,
+        io,
+      );
+    } catch (error) {
+      if (error instanceof CodexIndexCancelledError) {
+        throw error;
+      }
+      failedFiles += 1;
+    }
   }
 
   index.aggregate = recomputeAggregate(index.files);

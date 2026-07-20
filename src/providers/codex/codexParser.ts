@@ -11,6 +11,7 @@ import {
   parseJsonObject,
   stringField,
 } from './codexSchema';
+import { safeProjectIdentity } from './codexIdentity';
 
 export interface CodexRawTokenCounts {
   inputTokens: number;
@@ -26,6 +27,9 @@ export interface CodexParserState {
   sessionKey: string;
   parentSessionKey?: string;
   projectKey?: string;
+  projectName?: string;
+  projectDirectoryName?: string;
+  agentNickname?: string;
   currentTurnId?: string;
   model?: string;
   effort?: string;
@@ -250,6 +254,14 @@ function parseSessionMetadata(
     stringField(payload, 'forked_from_id') ??
     (spawn ? stringField(spawn, 'parent_thread_id') : undefined);
   const rawProject = stringField(payload, 'cwd');
+  const git = isObject(payload.git) ? payload.git : undefined;
+  const repositoryUrl = git
+    ? stringField(git, 'repository_url')
+    : undefined;
+  const projectIdentity = safeProjectIdentity(rawProject, repositoryUrl);
+  const agentNickname =
+    stringField(payload, 'agent_nickname') ??
+    (spawn ? stringField(spawn, 'agent_nickname') : undefined);
   const rawRole =
     stringField(payload, 'agent_role') ??
     (spawn ? stringField(spawn, 'agent_role') : undefined) ??
@@ -264,7 +276,10 @@ function parseSessionMetadata(
       : roleFromMetadata(rawRole, Boolean(parentSessionKey));
 
   let nextState = state;
-  if (!pseudonymize && (rawSession || rawParent || rawProject)) {
+  if (
+    !pseudonymize &&
+    (rawSession || rawParent || projectIdentity.keySource)
+  ) {
     nextState = withFlag(nextState, 'missing-pseudonymizer');
   }
   nextState = {
@@ -272,8 +287,13 @@ function parseSessionMetadata(
     sessionKey:
       rawSession && pseudonymize ? pseudonymize(rawSession) : state.sessionKey,
     parentSessionKey,
-    projectKey:
-      rawProject && pseudonymize ? pseudonymize(rawProject) : state.projectKey,
+    projectKey: projectIdentity.keySource && pseudonymize
+      ? pseudonymize(projectIdentity.keySource)
+      : state.projectKey,
+    projectName: projectIdentity.name ?? state.projectName,
+    projectDirectoryName:
+      projectIdentity.directoryName ?? state.projectDirectoryName,
+    agentNickname: agentNickname ?? state.agentNickname,
     role,
   };
   return { state: nextState, events: [] };

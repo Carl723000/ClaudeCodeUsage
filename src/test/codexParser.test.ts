@@ -214,6 +214,7 @@ test('session metadata is pseudonymized and auto-review stays distinct', () => {
     'raw-session': 'session:001',
     'raw-parent': 'session:000',
     '/private/project': 'project:001',
+    'https://github.com/example/AccurateProject.git': 'project:git',
   };
   const pseudonymize = (raw: string): string => pseudonyms[raw] ?? 'unknown:key';
   const line = JSON.stringify({
@@ -222,6 +223,10 @@ test('session metadata is pseudonymized and auto-review stays distinct', () => {
     payload: {
       id: 'raw-session',
       cwd: '/private/project',
+      agent_nickname: 'Locke',
+      git: {
+        repository_url: 'https://github.com/example/AccurateProject.git',
+      },
       source: {
         subagent: {
           thread_spawn: {
@@ -247,9 +252,15 @@ test('session metadata is pseudonymized and auto-review stays distinct', () => {
   assert.equal(sessionsState.sessionKey, 'session:001');
   assert.equal(archiveState.sessionKey, 'session:001');
   assert.equal(sessionsState.parentSessionKey, 'session:000');
-  assert.equal(sessionsState.projectKey, 'project:001');
+  assert.equal(sessionsState.projectKey, 'project:git');
+  assert.equal(sessionsState.projectName, 'AccurateProject');
+  assert.equal(sessionsState.projectDirectoryName, 'project');
+  assert.equal(sessionsState.agentNickname, 'Locke');
   assert.equal(sessionsState.role, 'approval-reviewer');
-  assert.doesNotMatch(JSON.stringify(sessionsState), /raw-session|raw-parent|private\/project/);
+  assert.doesNotMatch(
+    JSON.stringify(sessionsState),
+    /raw-session|raw-parent|private\/project|github\.com/,
+  );
 });
 
 test('repeated metadata cannot erase an established child role', () => {
