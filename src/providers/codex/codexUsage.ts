@@ -8,6 +8,7 @@ import {
   freshInputPlusOutput,
   processedTokens,
   ProviderLimitSnapshot,
+  ProviderThreadRole,
   ProviderTokenCounts,
 } from '../providerTypes';
 
@@ -36,15 +37,69 @@ export interface CodexUsageScopeView {
   efforts: Array<{ key: string; totals: CodexMetricTotals }>;
 }
 
+export interface CodexDailyUsageView {
+  day: string;
+  total: CodexMetricTotals;
+  threads: number;
+  childThreads: number;
+  approvalReviewerThreads: number;
+}
+
+export interface CodexThreadUsageView {
+  observedAt: number;
+  role: ProviderThreadRole;
+  projectKey: string;
+  models: string[];
+  efforts: string[];
+  total: CodexMetricTotals;
+  durationMs: number;
+}
+
+export interface CodexPeriodUsageView {
+  period: string;
+  total: CodexMetricTotals;
+  threads: number;
+}
+
+export interface CodexTokenComposition {
+  freshInput: number;
+  cachedInput: number;
+  output: number;
+  reasoningWithinOutput: number;
+}
+
+export interface CodexBehaviorView {
+  childThreadsPerRootTask: number;
+  childFreshShare: number;
+  approvalReviewerFreshShare: number;
+  highEffortFreshShare: number;
+  processedToFreshRatio: number;
+  cacheShare: number;
+  reasoningOutputShare: number;
+  postChangeCommandsPerFile: number;
+  patchRounds: number;
+  compactCount: number;
+}
+
 export interface CodexUsageView {
   lastTask: CodexUsageScopeView | null;
   last7Days: CodexUsageScopeView;
   last30Days: CodexUsageScopeView;
+  allTime: CodexUsageScopeView;
   projects: Array<{ projectKey: string; scope: CodexUsageScopeView }>;
+  daily: CodexDailyUsageView[];
+  monthly: CodexPeriodUsageView[];
+  recentThreads: CodexThreadUsageView[];
+  totalThreadCount: number;
+  behavior: CodexBehaviorView;
   coverage: CodexIndexCoverage;
   qualityFlags: Array<{ flag: string; count: number }>;
   limit: ProviderLimitSnapshot | null;
 }
+
+const MAX_DAILY_ROWS = 90;
+const MAX_RECENT_THREAD_ROWS = 100;
+const HIGH_EFFORTS = new Set(['high', 'xhigh', 'max', 'ultra']);
 
 function zeroTokens(): ProviderTokenCounts {
   return {
@@ -72,6 +127,20 @@ function metrics(tokens: ProviderTokenCounts): CodexMetricTotals {
     cachedInput: Math.max(0, tokens.cachedInput ?? 0),
     output: Math.max(0, tokens.outputTotal),
     reasoning: Math.max(0, tokens.reasoningOutput ?? 0),
+  };
+}
+
+export function tokenComposition(
+  total: CodexMetricTotals,
+): CodexTokenComposition {
+  const input = Math.max(0, total.input);
+  const cachedInput = Math.min(input, Math.max(0, total.cachedInput));
+  const output = Math.max(0, total.output);
+  return {
+    freshInput: Math.max(0, input - cachedInput),
+    cachedInput,
+    output,
+    reasoningWithinOutput: Math.min(output, Math.max(0, total.reasoning)),
   };
 }
 
@@ -134,6 +203,14 @@ function ratio(numerator: number, denominator: number): number {
   return denominator > 0 ? numerator / denominator : 0;
 }
 
+function sessionDuration(file: CodexFileAggregate): number {
+  const { startedAt, endedAt } = file.session;
+  if (startedAt === undefined || endedAt === undefined) {
+    return 0;
+  }
+  return Math.max(0, endedAt - startedAt);
+}
+
 function scope(files: CodexFileAggregate[]): CodexUsageScopeView {
   const totalTokens = zeroTokens();
   const childTokens = zeroTokens();
@@ -151,10 +228,7 @@ function scope(files: CodexFileAggregate[]): CodexUsageScopeView {
     addStructural(structural, file.structural);
     addBuckets(models, file.byModel, file.total);
     addBuckets(efforts, file.byEffort, file.total);
-    durationMs += Math.max(
-      0,
-      (file.session.endedAt ?? 0) - (file.session.startedAt ?? 0),
-    );
+    durationMs += sessionDuration(file);
     if (file.session.role === 'root') {
       rootTasks += 1;
     } else if (file.session.role === 'subagent') {
@@ -188,6 +262,138 @@ function scope(files: CodexFileAggregate[]): CodexUsageScopeView {
 
 function observedAt(file: CodexFileAggregate): number {
   return file.session.endedAt ?? file.session.startedAt ?? 0;
+}
+
+function sortedBucketKeys(
+  buckets: Record<string, ProviderTokenCounts>,
+): string[] {
+  const rows = Object.entries(buckets);
+  if (rows.length === 0) {
+    return ['unknown'];
+  }
+  return rows
+    .sort(
+      ([leftKey, left], [rightKey, right]) =>
+        processedTokens(right) - processedTokens(left) ||
+        leftKey.localeCompare(rightKey),
+    )
+    .map(([key]) => key || 'unknown');
+}
+
+function dailyRows(files: CodexFileAggregate[]): CodexDailyUsageView[] {
+  const days = new Map<
+    string,
+    {
+      tokens: ProviderTokenCounts;
+      threads: number;
+      childThreads: number;
+      approvalReviewerThreads: number;
+    }
+  >();
+  for (const file of files) {
+    for (const [day, tokens] of Object.entries(file.byDay)) {
+      const row = days.get(day) ?? {
+        tokens: zeroTokens(),
+        threads: 0,
+        childThreads: 0,
+        approvalReviewerThreads: 0,
+      };
+      addTokens(row.tokens, tokens);
+      row.threads += 1;
+      if (file.session.role === 'subagent') {
+        row.childThreads += 1;
+      } else if (file.session.role === 'approval-reviewer') {
+        row.approvalReviewerThreads += 1;
+      }
+      days.set(day, row);
+    }
+  }
+  return [...days.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .slice(0, MAX_DAILY_ROWS)
+    .map(([day, row]) => ({
+      day,
+      total: metrics(row.tokens),
+      threads: row.threads,
+      childThreads: row.childThreads,
+      approvalReviewerThreads: row.approvalReviewerThreads,
+    }));
+}
+
+function monthlyRows(files: CodexFileAggregate[]): CodexPeriodUsageView[] {
+  const months = new Map<
+    string,
+    { tokens: ProviderTokenCounts; files: Set<CodexFileAggregate> }
+  >();
+  for (const file of files) {
+    for (const [day, tokens] of Object.entries(file.byDay)) {
+      const period = day.slice(0, 7);
+      if (!/^\d{4}-\d{2}$/.test(period)) {
+        continue;
+      }
+      const row = months.get(period) ?? {
+        tokens: zeroTokens(),
+        files: new Set<CodexFileAggregate>(),
+      };
+      addTokens(row.tokens, tokens);
+      row.files.add(file);
+      months.set(period, row);
+    }
+  }
+  return [...months.entries()]
+    .sort(([left], [right]) => right.localeCompare(left))
+    .map(([period, row]) => ({
+      period,
+      total: metrics(row.tokens),
+      threads: row.files.size,
+    }));
+}
+
+function behaviorView(scopeView: CodexUsageScopeView): CodexBehaviorView {
+  const highEffortFresh = scopeView.efforts
+    .filter((row) => HIGH_EFFORTS.has(row.key.toLowerCase()))
+    .reduce((total, row) => total + row.totals.fresh, 0);
+  return {
+    childThreadsPerRootTask: ratio(
+      scopeView.childThreads,
+      scopeView.rootTasks,
+    ),
+    childFreshShare: scopeView.childFreshShare,
+    approvalReviewerFreshShare: scopeView.approvalReviewerFreshShare,
+    highEffortFreshShare: ratio(highEffortFresh, scopeView.total.fresh),
+    processedToFreshRatio: ratio(
+      scopeView.total.processed,
+      scopeView.total.fresh,
+    ),
+    cacheShare: scopeView.cacheShare,
+    reasoningOutputShare: ratio(
+      scopeView.total.reasoning,
+      scopeView.total.output,
+    ),
+    postChangeCommandsPerFile: ratio(
+      scopeView.structural.postChangeCommands,
+      scopeView.structural.filesChanged,
+    ),
+    patchRounds: scopeView.structural.patchRounds,
+    compactCount: scopeView.structural.compactCount,
+  };
+}
+
+function recentThreadRows(
+  files: CodexFileAggregate[],
+): CodexThreadUsageView[] {
+  return [...files]
+    .sort((left, right) => observedAt(right) - observedAt(left))
+    .slice(0, MAX_RECENT_THREAD_ROWS)
+    .map((file) => ({
+      observedAt: observedAt(file),
+      role: file.session.role,
+      projectKey: file.session.projectKey ?? 'project:unknown',
+      models: sortedBucketKeys(file.byModel),
+      efforts: sortedBucketKeys(file.byEffort),
+      total: metrics(file.total),
+      durationMs: sessionDuration(file),
+    }));
 }
 
 function recentTaskFiles(files: CodexFileAggregate[]): CodexFileAggregate[] {
@@ -247,11 +453,13 @@ export function buildCodexUsageView(
     group.push(file);
     projects.set(key, group);
   }
+  const allTime = scope(snapshot.files);
 
   return {
     lastTask: recent.length > 0 ? scope(recent) : null,
     last7Days: scope(last7Days),
     last30Days: scope(last30Days),
+    allTime,
     projects: [...projects.entries()]
       .map(([projectKey, files]) => ({ projectKey, scope: scope(files) }))
       .sort(
@@ -259,6 +467,11 @@ export function buildCodexUsageView(
           right.scope.total.fresh - left.scope.total.fresh ||
           left.projectKey.localeCompare(right.projectKey),
       ),
+    daily: dailyRows(snapshot.files),
+    monthly: monthlyRows(snapshot.files),
+    recentThreads: recentThreadRows(snapshot.files),
+    totalThreadCount: snapshot.files.length,
+    behavior: behaviorView(allTime),
     coverage: snapshot.coverage,
     qualityFlags: Object.entries(snapshot.qualityFlags)
       .map(([flag, count]) => ({ flag, count }))
