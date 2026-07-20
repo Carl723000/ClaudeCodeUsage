@@ -34,7 +34,7 @@ aggregate sync are deferred to v2.4.x after a separate privacy review.
 | `providers/codex/codexSchema.ts` | Minimal safe JSON guards; never flattens or returns message/command/tool bodies. |
 | `providers/codex/codexParser.ts` | Codex cumulative high-water parsing, pseudonymous lineage metadata, structural counters, quality flags, and last-observed limits. |
 | `providers/codex/codexManifest.ts` | Allowlisted Codex directory discovery, HMAC file keys, fingerprints, and manifest diffing. |
-| `providers/codex/codexIndex.ts` | Persistent per-file numeric aggregates, cold/tail parsing, coverage, and atomic save/load. |
+| `providers/codex/codexIndex.ts` | Schema-2 persistent per-file numeric aggregates, bounded cold/tail parsing, independent aggregate/period coverage, and atomic save/load. |
 | `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | Background worker, recent-first progress, cancellation, resume, and single-flight client. |
 | `providers/codex/codexProvider.ts` | Extension-facing Codex snapshot facade and partial/unavailable/error outcomes. |
 | `providers/codex/codexUsage.ts` | Codex-specific task/7-day/30-day/project view-model aggregation. |
@@ -112,6 +112,41 @@ The machine salt lives in VS Code `globalState`, not in the index file. Worker
 progress/results/errors and diagnostics contain anonymous counts and timings,
 not paths or identifiers.
 
+### Schema 2 index contract
+
+Schema 2 deliberately keeps the established `globalStorage` filename
+`codex-index-v1.json`; the filename is a compatibility path, not a statement
+about the JSON schema. Its persisted DTO is an explicit allowlist of numeric
+aggregates, enum values, pseudonymous keys, and cleaned labels. A v2 file never
+stores a raw incomplete line or a carry buffer. The only reader for those old
+fields is the explicitly named legacy schema-1 migration boundary; it discards
+the carry before the v2 index is saved.
+
+There are two separate truth layers. The all-time view is built from the
+verified aggregate of canonical file contributions. Time-bucketed period slices
+are promoted independently, so a partial migration cannot overwrite, inflate,
+or stand in for that all-time verified aggregate. Period coverage is anchored by
+the target-zone `asOfDay` and reports separate 7-day, 30-day, and all-time
+states. The 7/30-day views sum events in their natural calendar days; they do
+not pull an entire older session into a range merely because the session's last
+activity falls inside it.
+
+Identity is also a coverage contract. Git SCP-style SSH and HTTPS repository
+URLs are canonicalized to the same repository identity where their host/path
+matches. Root titles use the latest trusted `updated_at` title, subagents retain
+their reported nickname plus parent title, projects prefer the canonical
+repository name over a directory fallback, and recent-task ordering uses the
+maximum activity observed across a complete lineage. A strictly exact
+active/archive pair is deduplicated only after both copies are verified and
+their safe signatures agree; any other repeated session is ambiguous and keeps
+identity coverage incomplete rather than guessing.
+
+The five structural call proxies are `patchCalls`, `toolCalls`,
+`postPatchToolCalls`, `compactCount`, and `taskCompleteCount`. They describe
+observed structural envelopes only, not file, command, or review counts. They
+produce no dollar cost and are never derived from prompt, response, command
+body, or tool-argument content.
+
 ## Refresh and scale
 
 Claude polling always honors `refreshInterval`; its file watcher uses the
@@ -123,9 +158,13 @@ Codex history is designed for 2.4-GB-class local corpora:
 - discovery and parsing run outside the Extension Host in a worker;
 - files are indexed recent-first with progress and cancellation;
 - unchanged warm refresh reads no JSONL body;
-- append refresh reads only the new tail and preserves an incomplete line;
+- each refresh has a 16 file passes / 32 MiB budget; the safe minimum is
+  1 MiB + 1 byte, reads use 256 KiB chunks, and a JSONL line is capped at 1 MiB;
+- append refresh reads only the new tail; an incomplete line stays only in the
+  scanner's short-lived memory and is retried from the safe cursor, never in v2;
 - truncation/replacement reparses only the affected file;
-- atomic persistence and per-file contributions allow resume after interruption;
+- cancellation checkpoints atomically save per-file contributions and migration
+  progress, so the next run resumes from the verified cursor;
 - concurrent refresh requests share one worker run.
 
 ## Release invariants
