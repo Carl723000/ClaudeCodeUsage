@@ -134,6 +134,10 @@ test('provider and Codex view copy is complete in every UI locale', () => {
           'credits',
           'unlimited',
           'accountSnapshotLastObserved',
+          'sessions',
+          'modelsEffort',
+          'clearFilters',
+          'activeFilters',
         ] as const) {
           assert.notEqual(
             providers.codex[key],

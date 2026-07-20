@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { lstat } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -18,14 +18,49 @@ export interface NormalizedRepositoryIdentity {
   name: string;
 }
 
+declare const pseudonymousIdentityKeyBrand: unique symbol;
+export type PseudonymousIdentityKey = string & {
+  readonly [pseudonymousIdentityKeyBrand]: true;
+};
+
+export function parsePseudonymousIdentityKey(
+  value: unknown,
+): PseudonymousIdentityKey | undefined {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+    ? value as PseudonymousIdentityKey
+    : undefined;
+}
+
 export function pseudonymousIdentityKey(
   salt: string,
   raw: string,
-): string {
+): PseudonymousIdentityKey {
   return createHmac('sha256', salt)
     .update('codex-identity\0')
     .update(raw)
-    .digest('hex');
+    .digest('hex') as PseudonymousIdentityKey;
+}
+
+export const NEUTRAL_CODEX_SESSION_KEY = pseudonymousIdentityKey(
+  'codex-internal-neutral-v1',
+  'session',
+);
+export const NEUTRAL_CODEX_PROJECT_KEY = pseudonymousIdentityKey(
+  'codex-internal-neutral-v1',
+  'project',
+);
+
+/**
+ * Converts a persisted pseudonymous identity key into the shorter key allowed
+ * in webview DOM and client state. Callers must pass an existing local HMAC
+ * identity, never a raw session ID, path, or repository URL.
+ */
+export function stableCodexViewKey(value: PseudonymousIdentityKey): string {
+  const parsed = parsePseudonymousIdentityKey(value);
+  if (!parsed) {
+    throw new TypeError('Expected an existing pseudonymous identity key');
+  }
+  return createHash('sha256').update(parsed).digest('hex').slice(0, 16);
 }
 
 function cleanLabel(value: string, maxLength: number): string | undefined {

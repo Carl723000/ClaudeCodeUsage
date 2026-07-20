@@ -5,14 +5,227 @@ import {
   buildCodexUsageView,
   tokenComposition,
 } from '../providers/codex/codexUsage';
+import {
+  pseudonymousIdentityKey,
+  stableCodexViewKey,
+} from '../providers/codex/codexIdentity';
 import { buildCodexInsights } from '../providers/codex/codexInsights';
 import {
+  codexFixtureIdentityKey,
   identityLineageFixture,
   parentlessNonRootTitleFixture,
   snapshotFixture,
 } from './codexFixtures';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
+const VIEW_SALT = 'codex-usage-view-test';
+const pseudo = (label: string) => pseudonymousIdentityKey(VIEW_SALT, label);
+
+test('session period membership comes only from verified period slices', () => {
+  const snapshot = snapshotFixture();
+  const projectKey = pseudo('period-project');
+  const makeFile = (
+    source: (typeof snapshot.files)[number],
+    label: string,
+    title: string,
+    day: string,
+  ) => ({
+    ...source,
+    session: {
+      ...source.session,
+      sessionKey: pseudo(`period-${label}`),
+      parentSessionKey: undefined,
+      projectKey,
+      sessionTitle: title,
+    },
+    period: {
+      ...source.period!,
+      days: { [day]: source.period!.days[Object.keys(source.period!.days)[0]] },
+    },
+  });
+  snapshot.files = [
+    makeFile(snapshot.files[0], 'recent', 'Recent slice', '2026-07-20'),
+    makeFile(snapshot.files[2], 'month', 'Month slice', '2026-07-10'),
+    makeFile(snapshot.files[3], 'old', 'Old slice', '2026-06-01'),
+  ];
+  snapshot.coverage.period.last7Days.complete = true;
+  snapshot.coverage.period.last30Days.complete = true;
+  snapshot.coverage.period.allTime.complete = true;
+
+  const view = buildCodexUsageView(snapshot, NOW);
+  const periods = new Map(view.recentThreads.map((row) => [row.title, row.periodMembership]));
+
+  assert.deepEqual(periods.get('Recent slice'), ['recent', '7d', '30d', 'all']);
+  assert.deepEqual(periods.get('Month slice'), ['30d', 'all']);
+  assert.deepEqual(periods.get('Old slice'), ['all']);
+  assert.deepEqual(view.sessionPeriodAvailability, {
+    recent: true,
+    '7d': true,
+    '30d': true,
+    all: true,
+  });
+});
+
+test('partial period coverage disables unreliable session membership ranges', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.last7Days.complete = false;
+  snapshot.coverage.period.last30Days.complete = false;
+  snapshot.coverage.period.allTime.complete = false;
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.deepEqual(view.sessionPeriodAvailability, {
+    recent: true,
+    '7d': false,
+    '30d': false,
+    all: false,
+  });
+});
+
+test('Explore lineage uses stable view keys for three levels and safely degrades cycles and orphans', () => {
+  const snapshot = snapshotFixture();
+  const [root, child] = snapshot.files;
+  const rootKey = pseudo('lineage-root');
+  root.session.sessionKey = rootKey;
+  root.session.projectKey = pseudo('lineage-project');
+  child.session.sessionKey = pseudo('lineage-child');
+  child.session.parentSessionKey = root.session.sessionKey;
+  child.session.projectKey = root.session.projectKey;
+  const grandchild = {
+    ...child,
+    session: {
+      ...child.session,
+      sessionKey: pseudo('lineage-grandchild'),
+      parentSessionKey: child.session.sessionKey,
+      sessionTitle: 'Grandchild task',
+      endedAt: NOW - 1_000,
+    },
+  };
+  const cycle = {
+    ...root,
+    session: {
+      ...root.session,
+      sessionKey: pseudo('lineage-cycle'),
+      parentSessionKey: pseudo('lineage-cycle'),
+      sessionTitle: 'Cycle task',
+      endedAt: NOW - 2_000,
+    },
+  };
+  const orphan = {
+    ...root,
+    session: {
+      ...root.session,
+      sessionKey: pseudo('lineage-orphan'),
+      parentSessionKey: pseudo('lineage-missing-parent'),
+      sessionTitle: 'Orphan task',
+      endedAt: NOW - 3_000,
+    },
+  };
+  snapshot.files = [root, child, grandchild, cycle, orphan];
+
+  const view = buildCodexUsageView(snapshot, NOW);
+  const reordered = buildCodexUsageView(
+    { ...snapshot, files: [...snapshot.files].reverse() },
+    NOW,
+  );
+  const byTitle = new Map(view.recentThreads.map((row) => [row.title ?? row.agentNickname, row]));
+  const rootRow = byTitle.get(root.session.sessionTitle)!;
+  const childRow = byTitle.get(child.session.agentNickname)!;
+  const grandchildRow = byTitle.get('Grandchild task')!;
+  const cycleRow = byTitle.get('Cycle task')!;
+  const orphanRow = byTitle.get('Orphan task')!;
+
+  assert.equal(rootRow.depth, 0);
+  assert.equal(childRow.depth, 1);
+  assert.equal(grandchildRow.depth, 2);
+  assert.equal(grandchildRow.parentViewKey, childRow.viewKey);
+  assert.equal(grandchildRow.rootTaskViewKey, rootRow.viewKey);
+  assert.equal(cycleRow.depth, 0);
+  assert.equal(cycleRow.parentViewKey, undefined);
+  assert.equal(cycleRow.parentStatus, 'cycle');
+  assert.equal(orphanRow.depth, 0);
+  assert.equal(orphanRow.parentViewKey, undefined);
+  assert.equal(orphanRow.parentTitle, undefined);
+  assert.equal(orphanRow.parentStatus, 'missing');
+  assert.equal(rootRow.viewKey, stableCodexViewKey(rootKey));
+  assert.equal(
+    rootRow.viewKey,
+    reordered.recentThreads.find((row) => row.title === root.session.sessionTitle)?.viewKey,
+  );
+});
+
+test('Explore projects sort by lineage activity and expose a tree-to-flat filter contract', () => {
+  const snapshot = snapshotFixture();
+  const root = snapshot.files[0];
+  const projectKey = pseudo('project-sessions-project');
+  const sessions = Array.from({ length: 27 }, (_, index) => ({
+    ...root,
+    session: {
+      ...root.session,
+      sessionKey: pseudo(`project-session-${index}`),
+      projectKey,
+      sessionTitle: `Session ${index}`,
+      endedAt: NOW - index * 1_000,
+    },
+  }));
+  snapshot.files = [
+    ...sessions,
+    {
+      ...snapshot.files[3],
+      session: {
+        ...snapshot.files[3].session,
+        endedAt: NOW - 50_000,
+      },
+    },
+  ];
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.projects[0].name, 'ClaudeCodeUsage');
+  assert.equal(view.projects[0].viewKey, stableCodexViewKey(projectKey));
+  assert.equal(view.recentThreads[0].viewKey, stableCodexViewKey(pseudo('project-session-0')));
+  assert.equal(view.exploreSessions.defaultLayout, 'tree');
+  assert.equal(view.exploreSessions.filteredLayout, 'flat');
+});
+
+test('project previews use their complete project file set beyond the global recent cap', () => {
+  const snapshot = snapshotFixture();
+  const source = snapshot.files[0];
+  const busyProject = pseudo('busy-project');
+  const oldProject = pseudo('old-project');
+  const busyFiles = Array.from({ length: 1_001 }, (_, index) => ({
+    ...source,
+    session: {
+      ...source.session,
+      sessionKey: pseudo(`busy-session-${index}`),
+      projectKey: busyProject,
+      projectName: 'BusyProject',
+      sessionTitle: `Busy ${index}`,
+      endedAt: NOW - index,
+    },
+  }));
+  const oldFiles = Array.from({ length: 27 }, (_, index) => ({
+    ...source,
+    session: {
+      ...source.session,
+      sessionKey: pseudo(`old-session-${index}`),
+      projectKey: oldProject,
+      projectName: 'OldProject',
+      sessionTitle: `Old ${index}`,
+      endedAt: NOW - 100_000 - index,
+    },
+  }));
+  snapshot.files = [...busyFiles, ...oldFiles];
+
+  const view = buildCodexUsageView(snapshot, NOW);
+  const project = view.projects.find((item) => item.name === 'OldProject')!;
+
+  assert.equal(view.recentThreads.some((row) => row.projectViewKey === project.viewKey), false);
+  assert.equal(project.recentThreads.length, 20);
+  assert.equal(project.threadCount, 27);
+  assert.deepEqual(
+    project.recentThreads.map((row) => row.title),
+    Array.from({ length: 20 }, (_, index) => `Old ${index}`),
+  );
+});
 
 test('rolling scopes use only selected promoted day slices from active sessions', () => {
   const snapshot = snapshotFixture();
@@ -190,7 +403,7 @@ test('view builds recent task, 7d, 30d, and projects without double counting sub
   assert.equal(view.last7Days.childFreshShare, 0.5);
   assert.equal(view.last7Days.rootTasks, 1);
   assert.equal(view.last30Days.approvalReviewerThreads, 1);
-  assert.equal(view.projects[0].projectKey.startsWith('project:'), true);
+  assert.match(view.projects[0].projectKey, /^[a-f0-9]{64}$/);
   assert.equal(view.projects[0].name, 'ClaudeCodeUsage');
   assert.equal(view.projects[0].directoryName, 'claude-code-usage-v221');
   assert.equal(view.lastTaskIdentity?.title, '完成 Codex v2.3.0 仪表板');
@@ -217,6 +430,9 @@ test('model and effort buckets preserve provider-specific dimensions', () => {
 
 test('daily and recent-thread details explain where Codex usage came from', () => {
   const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const childKey = codexFixtureIdentityKey('session:child-a');
+  const rootKey = codexFixtureIdentityKey('session:root-a');
+  const projectKey = codexFixtureIdentityKey('project:a');
 
   assert.deepEqual(view.daily[0], {
     day: '2026-07-20',
@@ -235,18 +451,25 @@ test('daily and recent-thread details explain where Codex usage came from', () =
   assert.equal(view.daily[1].day, '2026-07-10');
   assert.equal(view.recentThreads.length, 4);
   assert.deepEqual(view.recentThreads[0], {
-    sessionKey: 'session:child-a',
-    parentSessionKey: 'session:root-a',
+    viewKey: stableCodexViewKey(childKey),
+    parentViewKey: stableCodexViewKey(rootKey),
+    rootTaskViewKey: stableCodexViewKey(rootKey),
+    depth: 1,
+    parentStatus: 'available',
+    sessionKey: childKey,
+    parentSessionKey: rootKey,
     title: undefined,
     parentTitle: '完成 Codex v2.3.0 仪表板',
     agentNickname: 'Locke',
     observedAt: Date.parse('2026-07-20T11:30:00.000Z'),
     role: 'subagent',
-    projectKey: 'project:a',
+    projectViewKey: stableCodexViewKey(projectKey),
+    projectKey,
     projectName: 'ClaudeCodeUsage',
     projectDirectoryName: 'claude-code-usage-v221',
     models: ['gpt-5.6-sol'],
     efforts: ['high'],
+    periodMembership: ['recent', '7d', '30d', 'all'],
     total: {
       processed: 600,
       fresh: 200,
@@ -330,8 +553,8 @@ test('usage view exposes classified limits and a safe recent task identity', () 
   const view = buildCodexUsageView(snapshotFixture(), NOW);
 
   assert.equal(view.limits[0]?.state, 'expired');
-  assert.equal(view.lastTaskIdentity?.taskKey.startsWith('task-'), true);
-  assert.equal(view.lastTaskIdentity?.projectKey.startsWith('project-'), true);
+  assert.match(view.lastTaskIdentity?.taskKey ?? '', /^[a-f0-9]{16}$/);
+  assert.match(view.lastTaskIdentity?.projectKey ?? '', /^[a-f0-9]{16}$/);
   assert.equal(view.lastTaskIdentity?.lastActiveAt, view.lastTaskIdentity?.observedAt);
   assert.equal(view.lastTaskIdentity?.taskKey.includes('session:'), false);
   assert.equal(view.lastTaskIdentity?.projectKey.includes('project:'), false);
@@ -491,6 +714,6 @@ test('a parentless non-root cannot supply the task title', () => {
     'parentless reviewer title must not become a task title',
   );
   assert.equal(view.lastTaskIdentity?.title, undefined);
-  assert.match(view.lastTaskIdentity?.taskKey ?? '', /^task-[a-z0-9]+$/);
+  assert.match(view.lastTaskIdentity?.taskKey ?? '', /^[a-f0-9]{16}$/);
   assert.doesNotMatch(JSON.stringify(view.lastTaskIdentity), /session:|project:/);
 });

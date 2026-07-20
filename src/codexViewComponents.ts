@@ -98,6 +98,11 @@ export interface CodexViewCopy {
   constraintStop: string;
   compareTitle: string;
   noRecentTask: string;
+  sessions: string;
+  modelsEffort: string;
+  clearFilters: string;
+  activeFilters: string;
+  parentTask?: string;
   fiveHourWindow?: string;
   weeklyWindow?: string;
   used?: string;
@@ -191,6 +196,11 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   constraintStop: 'Stop when the acceptance criteria pass; do not expand this into production-grade hardening.',
   compareTitle: 'Provider comparison',
   noRecentTask: 'No recent Codex task is indexed yet.',
+  sessions: 'Sessions',
+  modelsEffort: 'Models & effort',
+  clearFilters: 'Clear filters',
+  activeFilters: 'Active filters',
+  parentTask: 'Parent task',
   fiveHourWindow: '5-hour window',
   weeklyWindow: 'Weekly window',
   used: 'used',
@@ -225,6 +235,16 @@ export interface CodexRenderOptions {
   optimizationEnabled?: boolean;
   locale?: string;
   timeZone?: string;
+  exploreFilters?: CodexExploreFilters;
+}
+
+export interface CodexExploreFilters {
+  query?: string;
+  role?: string;
+  projectViewKey?: string;
+  model?: string;
+  effort?: string;
+  period?: string;
 }
 
 export interface CodexScopedInsights {
@@ -250,6 +270,7 @@ export interface CodexRenderContext {
   now: number;
   settingsHtml: string;
   optimizationEnabled: boolean;
+  exploreFilters: CodexExploreFilters;
 }
 
 type NumberFormatter = (value: number) => string;
@@ -531,77 +552,171 @@ function renderLimitsSection(ctx: CodexRenderContext): string {
 
 function threadTable(
   rows: CodexThreadUsageView[],
-  projects: Map<string, string>,
   totalCount: number,
   copy: CodexViewCopy,
   format: NumberFormatter,
+  filters: CodexExploreFilters = {},
+  periodAvailability: CodexUsageView['sessionPeriodAvailability'],
   formatDateTime: (timestamp: number) => string = (timestamp) => observed(timestamp, copy),
   formatDuration: (milliseconds: number) => string = duration,
 ): string {
   if (rows.length === 0) {
     return `<p>${escapeHtml(copy.noThreadData)}</p>`;
   }
-  const threadIds = new Map(
-    rows.map((row, index) => [row.sessionKey, `t${index}`]),
+  const query = filters.query ?? '';
+  const normalizedQuery = query.trim().toLowerCase();
+  const roles = new Set(['root', 'subagent', 'approval-reviewer', 'unknown']);
+  const projects = new Map(
+    rows.map((row) => [
+      row.projectViewKey,
+      row.projectName ?? copy.unidentifiedProject,
+    ]),
   );
+  const models = new Set(rows.flatMap((row) => row.models));
+  const efforts = new Set(rows.flatMap((row) => row.efforts));
+  const periods = new Set(['recent', '7d', '30d', 'all']);
+  const roleFilter = filters.role && roles.has(filters.role) ? filters.role : '';
+  const projectFilter = filters.projectViewKey && projects.has(filters.projectViewKey)
+    ? filters.projectViewKey
+    : '';
+  const modelFilter = filters.model && models.has(filters.model) ? filters.model : '';
+  const effortFilter = filters.effort && efforts.has(filters.effort) ? filters.effort : '';
+  const requestedPeriod = filters.period && periods.has(filters.period)
+    ? filters.period
+    : '';
+  const periodFilter = requestedPeriod &&
+    periodAvailability[requestedPeriod as keyof typeof periodAvailability]
+    ? requestedPeriod
+    : '';
+  const hasFilters = Boolean(
+    normalizedQuery || roleFilter || projectFilter || modelFilter ||
+    effortFilter || periodFilter,
+  );
+  const matching = rows.filter((row) => {
+    const searchable = [row.title, row.agentNickname, row.parentTitle, row.projectName, ...row.models, ...row.efforts]
+      .filter(Boolean).join(' ').toLowerCase();
+    return (!normalizedQuery || searchable.includes(normalizedQuery)) &&
+      (!roleFilter || row.role === roleFilter) &&
+      (!projectFilter || row.projectViewKey === projectFilter) &&
+      (!modelFilter || row.models.includes(modelFilter)) &&
+      (!effortFilter || row.efforts.includes(effortFilter)) &&
+      (!periodFilter || row.periodMembership.includes(
+        periodFilter as CodexThreadUsageView['periodMembership'][number],
+      ));
+  });
+  const byParent = new Map<string, CodexThreadUsageView[]>();
+  for (const row of matching) {
+    if (row.parentViewKey) {
+      const children = byParent.get(row.parentViewKey) ?? [];
+      children.push(row);
+      byParent.set(row.parentViewKey, children);
+    }
+  }
+  const sortRecent = (left: CodexThreadUsageView, right: CodexThreadUsageView) =>
+    right.observedAt - left.observedAt || left.viewKey.localeCompare(right.viewKey);
+  const tree: CodexThreadUsageView[] = [];
+  const visit = (row: CodexThreadUsageView, visited: Set<string>): void => {
+    if (visited.has(row.viewKey)) return;
+    visited.add(row.viewKey);
+    tree.push(row);
+    for (const child of (byParent.get(row.viewKey) ?? []).sort(sortRecent)) visit(child, visited);
+  };
+  const rowKeys = new Set(matching.map((row) => row.viewKey));
+  for (const row of matching.filter((row) => !row.parentViewKey || !rowKeys.has(row.parentViewKey)).sort(sortRecent)) visit(row, new Set());
+  for (const row of matching.sort(sortRecent)) if (!tree.some((item) => item.viewKey === row.viewKey)) visit(row, new Set());
+  const displayed = hasFilters ? matching.sort(sortRecent) : tree;
   const children = new Map<string, number>();
-  for (const row of rows) {
-    if (row.parentSessionKey) {
+  for (const row of displayed) {
+    if (row.parentViewKey) {
       children.set(
-        row.parentSessionKey,
-        (children.get(row.parentSessionKey) ?? 0) + 1,
+        row.parentViewKey,
+        (children.get(row.parentViewKey) ?? 0) + 1,
       );
     }
   }
-  const projectOptions = [...new Map(
-    rows.map((row) => [
-      projects.get(row.projectKey) ?? '',
-      row.projectName ?? copy.unidentifiedProject,
-    ]),
-  ).entries()]
+  const option = (
+    value: string,
+    label: string,
+    selectedValue: string,
+    disabled = false,
+  ): string => `<option value="${escapeHtml(value)}"${value === selectedValue ? ' selected' : ''}${disabled ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(label)}</option>`;
+  const projectOptions = [...projects.entries()]
     .filter(([id]) => id)
     .sort((left, right) => left[1].localeCompare(right[1]))
-    .map(([id, label]) => `<option value="${escapeHtml(id)}">${escapeHtml(label)}</option>`)
+    .map(([id, label]) => option(id, label, projectFilter))
     .join('');
-  const modelOptions = [...new Set(rows.flatMap((row) => row.models))]
+  const modelOptions = [...models]
     .sort()
-    .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
+    .map((value) => option(value, value, modelFilter))
     .join('');
-  const effortOptions = [...new Set(rows.flatMap((row) => row.efforts))]
+  const effortOptions = [...efforts]
     .sort()
-    .map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value)}</option>`)
+    .map((value) => option(value, value, effortFilter))
     .join('');
   const select = (
     filter: string,
     label: string,
     options: string,
-  ): string => `<select class="sess-model-select" data-codex-thread-filter="${filter}" data-codex-action="filter-threads" aria-label="${escapeHtml(label)}"><option value="all">${escapeHtml(copy.all)} ${escapeHtml(label)}</option>${options}</select>`;
-  const filters = `<div class="sess-filters codex-thread-filters">
-    <input type="search" data-codex-thread-search data-codex-action="filter-threads" placeholder="${escapeHtml(copy.searchThreads)}">
-    ${select('role', copy.role, [
-      ['root', copy.rootRole],
-      ['subagent', copy.childRole],
-      ['approval-reviewer', copy.approvalReviewerRole],
-      ['unknown', copy.unknownRole],
-    ].map(([value, label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join(''))}
-    ${select('project', copy.projectLabel, projectOptions)}
-    ${select('model', copy.models, modelOptions)}
-    ${select('effort', copy.efforts, effortOptions)}
+    selectedValue: string,
+    describedBy = '',
+  ): string => `<select class="sess-model-select" data-codex-thread-filter="${filter}" data-codex-session-filter="${filter}" data-codex-action="filter-sessions" aria-label="${escapeHtml(label)}"${describedBy ? ` aria-describedby="${describedBy}"` : ''}>${option('', `${copy.all} ${label}`, selectedValue)}${options}</select>`;
+  const roleLabels = new Map<string, string>([
+    ['root', copy.rootRole],
+    ['subagent', copy.childRole],
+    ['approval-reviewer', copy.approvalReviewerRole],
+    ['unknown', copy.unknownRole],
+  ]);
+  const periodLabels = new Map<string, string>([
+    ['recent', copy.lastTask],
+    ['7d', copy.last7Days],
+    ['30d', copy.last30Days],
+    ['all', copy.allTime],
+  ]);
+  const periodOptions = [...periodLabels.entries()].map(([value, label]) =>
+    option(
+      value,
+      label,
+      periodFilter,
+      !periodAvailability[value as keyof typeof periodAvailability],
+    ),
+  ).join('');
+  const chip = (key: string, label: string, value: string): string =>
+    value ? `<span data-codex-filter-chip="${key}">${escapeHtml(label)}: ${escapeHtml(value)}</span>` : '';
+  const chips = [
+    chip('query', copy.searchThreads, query),
+    chip('role', copy.role, roleLabels.get(roleFilter) ?? ''),
+    chip('project', copy.projectLabel, projects.get(projectFilter) ?? ''),
+    chip('model', copy.models, modelFilter),
+    chip('effort', copy.efforts, effortFilter),
+    chip('period', copy.scope, periodLabels.get(periodFilter) ?? ''),
+  ].join('');
+  const hasUnavailablePeriods = Object.values(periodAvailability)
+    .some((available) => !available);
+  const periodNote = hasUnavailablePeriods
+    ? `<p id="codex-session-period-note" class="model-details" data-codex-period-availability-note>${escapeHtml(copy.coverage)}: ${escapeHtml(copy.partial)} · ${escapeHtml(copy.unavailable)}</p>`
+    : '';
+  const filterToolbar = `<div class="sess-filters codex-thread-filters">
+    <label for="codex-session-search">${escapeHtml(copy.searchThreads)}</label><input id="codex-session-search" type="search" value="${escapeHtml(query)}" data-codex-thread-search data-codex-session-search data-codex-action="filter-sessions" placeholder="${escapeHtml(copy.searchThreads)}">
+    ${select('role', copy.role, [...roleLabels.entries()].map(([value, label]) => option(value, label, roleFilter)).join(''), roleFilter)}
+    ${select('project', copy.projectLabel, projectOptions, projectFilter)}
+    ${select('model', copy.models, modelOptions, modelFilter)}
+    ${select('effort', copy.efforts, effortOptions, effortFilter)}
+    ${select('period', copy.scope, periodOptions, periodFilter, hasUnavailablePeriods ? 'codex-session-period-note' : '')}
+    ${periodNote}<div class="codex-filter-chips" aria-label="${escapeHtml(copy.activeFilters)}">${chips}</div><button class="btn-secondary" data-codex-action="clear-filters"${hasFilters ? '' : ' hidden'}>${escapeHtml(copy.clearFilters)}</button>
   </div>`;
-  const body = rows
+  const body = displayed
     .map((row) => {
-      const threadId = threadIds.get(row.sessionKey) ?? '';
-      const parentId = row.parentSessionKey
-        ? threadIds.get(row.parentSessionKey) ?? ''
-        : '';
-      const projectId = projects.get(row.projectKey) ?? '';
       const title = row.title ?? row.agentNickname ?? copy.unnamedSession;
-      const parent = row.parentTitle
-        ? `<div class="model-details">${escapeHtml(copy.parentThread)}: ${escapeHtml(row.parentTitle)}</div>`
+      const parentLabel = copy.parentTask ?? 'Parent task';
+      const parentValue = row.parentStatus === 'available'
+        ? row.parentTitle ?? copy.unavailable
+        : copy.unavailable;
+      const parent = hasFilters && row.parentStatus !== 'none'
+        ? `<div class="model-details">${escapeHtml(parentLabel)}: ${escapeHtml(parentValue)}</div>`
         : '';
-      const childCount = children.get(row.sessionKey) ?? 0;
+      const childCount = children.get(row.viewKey) ?? 0;
       const childToggle = childCount > 0
-        ? `<button class="group-toggle" aria-expanded="true" title="${escapeHtml(copy.expand)}" data-codex-action="toggle-thread-children" data-codex-thread-key="${escapeHtml(threadId)}">▼</button>`
+        ? `<button class="group-toggle" aria-expanded="true" title="${escapeHtml(copy.expand)}" data-codex-action="toggle-thread-children" data-codex-thread-key="${escapeHtml(row.viewKey)}">▼</button>`
         : '';
       const project = row.projectName ?? copy.unidentifiedProject;
       const directory = row.projectDirectoryName && row.projectDirectoryName !== project
@@ -611,12 +726,30 @@ function threadTable(
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
-      return `<tr class="sort-row codex-thread-row${parentId ? ' codex-child-thread' : ''}" data-codex-thread-row data-thread-id="${escapeHtml(threadId)}" data-parent-thread="${escapeHtml(parentId)}" data-search="${escapeHtml(search)}" data-role="${escapeHtml(row.role)}" data-project="${escapeHtml(projectId)}" data-models="${escapeHtml(row.models.join('|'))}" data-efforts="${escapeHtml(row.efforts.join('|'))}" data-sort-title="${escapeHtml(title.toLowerCase())}" data-sort-time="${Math.max(0, row.observedAt)}" data-sort-role="${escapeHtml(row.role)}" data-sort-project="${escapeHtml(project.toLowerCase())}" data-sort-model="${escapeHtml(row.models.join(',').toLowerCase())}" data-sort-effort="${escapeHtml(row.efforts.join(',').toLowerCase())}" data-sort-processed="${Math.max(0, row.total.processed)}" data-sort-fresh="${Math.max(0, row.total.fresh)}" data-sort-cache="${row.total.input > 0 ? row.total.cachedInput / row.total.input : 0}" data-sort-output="${Math.max(0, row.total.output)}" data-sort-reasoning="${Math.max(0, row.total.reasoning)}" data-sort-duration="${Math.max(0, row.durationMs)}"><td class="name-cell">${childToggle}<strong>${escapeHtml(title)}</strong>${parent}</td><td class="date-cell">${escapeHtml(formatDateTime(row.observedAt))}</td><td>${escapeHtml(roleLabel(row.role, copy))}</td><td><strong>${escapeHtml(project)}</strong>${directory}</td><td>${escapeHtml(row.models.join(', '))}</td><td>${escapeHtml(row.efforts.join(', '))}</td><td>${formatted(format, row.total.processed)}</td><td>${formatted(format, row.total.fresh)}</td><td>${percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)}</td><td>${formatted(format, row.total.output)}</td><td>${formatted(format, row.total.reasoning)}</td><td>${escapeHtml(formatDuration(row.durationMs))}</td></tr>`;
+      const mobileFacts = [
+        [copy.date, formatDateTime(row.observedAt)],
+        [copy.role, roleLabel(row.role, copy)],
+        [copy.projectLabel, project],
+        ...(row.projectDirectoryName && row.projectDirectoryName !== project
+          ? [[copy.localDirectory, row.projectDirectoryName]]
+          : []),
+        [parentLabel, row.parentStatus === 'none' ? copy.unavailable : parentValue],
+        [copy.models, row.models.join(', ')],
+        [copy.efforts, row.efforts.join(', ')],
+        [copy.processed, formatted(format, row.total.processed)],
+        [copy.fresh, formatted(format, row.total.fresh)],
+        [copy.cacheShare, percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)],
+        [copy.output, formatted(format, row.total.output)],
+        [copy.reasoning, formatted(format, row.total.reasoning)],
+        [copy.duration, formatDuration(row.durationMs)],
+      ].map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
+      const mobile = `<details class="codex-session-mobile"><summary aria-label="${escapeHtml(`${copy.threadLabel}: ${title}`)}">${escapeHtml(title)}</summary><dl>${mobileFacts}</dl></details>`;
+      return `<tr class="sort-row codex-thread-row${!hasFilters && row.parentViewKey ? ' codex-child-thread' : ''}" data-codex-thread-row data-codex-view-key="${escapeHtml(row.viewKey)}" data-parent-status="${row.parentStatus}"${row.parentViewKey ? ` data-codex-parent-view-key="${escapeHtml(row.parentViewKey)}"` : ''} data-search="${escapeHtml(search)}" data-role="${escapeHtml(row.role)}" data-project="${escapeHtml(row.projectViewKey)}" data-models="${escapeHtml(row.models.join('|'))}" data-efforts="${escapeHtml(row.efforts.join('|'))}" data-sort-title="${escapeHtml(title.toLowerCase())}" data-sort-time="${Math.max(0, row.observedAt)}" data-sort-role="${escapeHtml(row.role)}" data-sort-project="${escapeHtml(project.toLowerCase())}" data-sort-model="${escapeHtml(row.models.join(',').toLowerCase())}" data-sort-effort="${escapeHtml(row.efforts.join(',').toLowerCase())}" data-sort-processed="${Math.max(0, row.total.processed)}" data-sort-fresh="${Math.max(0, row.total.fresh)}" data-sort-cache="${row.total.input > 0 ? row.total.cachedInput / row.total.input : 0}" data-sort-output="${Math.max(0, row.total.output)}" data-sort-reasoning="${Math.max(0, row.total.reasoning)}" data-sort-duration="${Math.max(0, row.durationMs)}"><td class="name-cell">${childToggle}<strong>${escapeHtml(title)}</strong>${parent}${mobile}</td><td class="date-cell">${escapeHtml(formatDateTime(row.observedAt))}</td><td>${escapeHtml(roleLabel(row.role, copy))}</td><td><strong>${escapeHtml(project)}</strong>${directory}</td><td>${escapeHtml(row.models.join(', '))}</td><td>${escapeHtml(row.efforts.join(', '))}</td><td class="number-cell">${formatted(format, row.total.processed)}</td><td class="number-cell">${formatted(format, row.total.fresh)}</td><td class="number-cell">${percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)}</td><td class="number-cell">${formatted(format, row.total.output)}</td><td class="number-cell">${formatted(format, row.total.reasoning)}</td><td class="number-cell">${escapeHtml(formatDuration(row.durationMs))}</td></tr>`;
     })
     .join('');
   const th = (key: string, label: string): string =>
     `<th class="sortable" data-sortkey="${key}">${escapeHtml(label)}</th>`;
-  return `<section class="daily-breakdown"><h3>${escapeHtml(copy.threads)}</h3><p class="model-details"><span data-codex-thread-visible>${formatted(format, rows.length)}</span>/${formatted(format, totalCount)} ${escapeHtml(copy.threads)}</p>${filters}<div class="daily-table-container"><table class="daily-table sortable-table"><thead><tr>${th('title', copy.threadLabel)}${th('time', copy.date)}${th('role', copy.role)}${th('project', copy.projectLabel)}${th('model', copy.models)}${th('effort', copy.efforts)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('cache', copy.cacheShare)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('duration', copy.duration)}</tr></thead><tbody>${body}</tbody></table></div></section>`;
+  return `<section class="daily-breakdown" data-codex-session-layout="${hasFilters ? 'flat' : 'tree'}"><h3>${escapeHtml(copy.sessions)}</h3><p class="model-details" aria-live="polite"><span data-codex-thread-visible>${formatted(format, displayed.length)}</span>/${formatted(format, totalCount)} ${escapeHtml(copy.sessions)}</p>${filterToolbar}<div class="daily-table-container"><table class="daily-table sortable-table"><thead><tr>${th('title', copy.threadLabel)}${th('time', copy.date)}${th('role', copy.role)}${th('project', copy.projectLabel)}${th('model', copy.models)}${th('effort', copy.efforts)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('cache', copy.cacheShare)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('duration', copy.duration)}</tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
 
 function projectTable(
@@ -629,18 +762,16 @@ function projectTable(
     return `<p>${escapeHtml(copy.noRecentTask)}</p>`;
   }
   const body = view.projects
-    .map((project, index) => {
-      const projectId = `p${index}`;
+    .map((project) => {
       const name = project.name ?? copy.unidentifiedProject;
       const directory = project.directoryName && project.directoryName !== name
         ? `<div class="model-details">${escapeHtml(copy.localDirectory)}: ${escapeHtml(project.directoryName)}</div>`
         : '';
-      const threads = view.recentThreads
-        .filter((thread) => thread.projectKey === project.projectKey)
-        .slice(0, 20)
+      const threads = project.recentThreads
         .map((thread) => `<div class="codex-project-thread"><strong>${escapeHtml(thread.title ?? thread.agentNickname ?? copy.unnamedSession)}</strong><span>${escapeHtml(roleLabel(thread.role, copy))} · ${formatted(format, thread.total.fresh)} ${escapeHtml(copy.fresh)}</span></div>`)
         .join('');
-      return `<tr class="sort-row codex-project-row" data-sort-name="${escapeHtml(name.toLowerCase())}" data-sort-lastactive="${Math.max(0, project.lastActiveAt)}" data-sort-processed="${Math.max(0, project.scope.total.processed)}" data-sort-fresh="${Math.max(0, project.scope.total.fresh)}" data-sort-output="${Math.max(0, project.scope.total.output)}" data-sort-reasoning="${Math.max(0, project.scope.total.reasoning)}" data-sort-roots="${Math.max(0, project.scope.rootTasks)}" data-sort-children="${Math.max(0, project.scope.childThreads)}"><td><button class="group-toggle" data-codex-project-toggle="${projectId}" aria-expanded="false" data-codex-action="toggle-project" data-codex-project-key="${projectId}">▶</button><strong>${escapeHtml(name)}</strong>${directory}</td><td>${escapeHtml(formatDateTime(project.lastActiveAt))}</td><td>${formatted(format, project.scope.total.processed)}</td><td>${formatted(format, project.scope.total.fresh)}</td><td>${formatted(format, project.scope.total.output)}</td><td>${formatted(format, project.scope.total.reasoning)}</td><td>${formatted(format, project.scope.rootTasks)}</td><td>${formatted(format, project.scope.childThreads)}</td><td>${formatted(format, project.scope.approvalReviewerThreads)}</td></tr><tr class="sort-child codex-project-detail-row" data-codex-project-detail="${projectId}" hidden><td colspan="9">${threads || escapeHtml(copy.noThreadData)}</td></tr>`;
+      const shown = project.recentThreads.length;
+      return `<tr class="sort-row codex-project-row" data-codex-project-view-key="${escapeHtml(project.viewKey)}" data-sort-name="${escapeHtml(name.toLowerCase())}" data-sort-lastactive="${Math.max(0, project.lastActiveAt)}" data-sort-processed="${Math.max(0, project.scope.total.processed)}" data-sort-fresh="${Math.max(0, project.scope.total.fresh)}" data-sort-output="${Math.max(0, project.scope.total.output)}" data-sort-reasoning="${Math.max(0, project.scope.total.reasoning)}" data-sort-roots="${Math.max(0, project.scope.rootTasks)}" data-sort-children="${Math.max(0, project.scope.childThreads)}"><td><button class="group-toggle" aria-label="${escapeHtml(copy.expand)} ${escapeHtml(name)}" aria-expanded="false" data-codex-action="project-sessions" data-codex-project-view-key="${escapeHtml(project.viewKey)}">▶</button><strong>${escapeHtml(name)}</strong>${directory}<div class="model-details">${formatted(format, shown)}/${formatted(format, project.threadCount)} ${escapeHtml(copy.sessions)}</div></td><td>${escapeHtml(formatDateTime(project.lastActiveAt))}</td><td class="number-cell">${formatted(format, project.scope.total.processed)}</td><td class="number-cell">${formatted(format, project.scope.total.fresh)}</td><td class="number-cell">${formatted(format, project.scope.total.output)}</td><td class="number-cell">${formatted(format, project.scope.total.reasoning)}</td><td class="number-cell">${formatted(format, project.scope.rootTasks)}</td><td class="number-cell">${formatted(format, project.scope.childThreads)}</td><td class="number-cell">${formatted(format, project.scope.approvalReviewerThreads)}</td></tr><tr class="sort-child codex-project-detail-row" data-codex-project-detail="${escapeHtml(project.viewKey)}" hidden><td colspan="9">${threads || escapeHtml(copy.noThreadData)}</td></tr>`;
     })
     .join('');
   const th = (key: string, label: string): string =>
@@ -794,6 +925,7 @@ export function createCodexRenderContext(
     now,
     settingsHtml: options.settingsHtml ?? '',
     optimizationEnabled: options.optimizationEnabled !== false,
+    exploreFilters: options.exploreFilters ?? {},
     formatters: {
       number: options.formatNumber ?? number,
       dateTime: options.formatDateTime ?? localized.formatDateTime,
@@ -881,26 +1013,49 @@ export function renderCodexOverview(ctx: CodexRenderContext): string {
 export function renderCodexExplore(ctx: CodexRenderContext): string {
   const { view, copy } = ctx;
   const format = ctx.formatters.number;
-  const projectIndexes = new Map(
-    view.projects.map((project, index) => [project.projectKey, `p${index}`]),
-  );
-  const dailyChartRows = (
-    rows: CodexDailyUsageView[],
-  ): CodexChartRow[] => rows.map((row) => ({
-    label: row.day,
-    total: row.total,
-    threads: row.threads,
-  }));
+  const dailyChartRows = (rows: CodexDailyUsageView[]): CodexChartRow[] =>
+    rows.map((row) => ({ label: row.day, total: row.total, threads: row.threads }));
   const monthlyChartRows: CodexChartRow[] = view.monthly.map((row) => ({
     label: row.period,
     total: row.total,
     threads: row.threads,
   }));
-  return `<section class="codex-explore-scope" data-codex-scope="7d">${coverageMarker('7d', view.periodCoverage.last7Days, ctx)}${scopePanel(view.last7Days, copy, format, ctx.formatters.duration)}${periodChart('codex-7d', dailyChartRows(view.last7DaysDaily), copy, format)}${dailyTable(view.last7DaysDaily, copy, format)}</section>
-    <section class="codex-explore-scope" data-codex-scope="30d">${coverageMarker('30d', view.periodCoverage.last30Days, ctx)}${scopePanel(view.last30Days, copy, format, ctx.formatters.duration)}${periodChart('codex-30d', dailyChartRows(view.last30DaysDaily), copy, format)}${dailyTable(view.last30DaysDaily, copy, format)}</section>
-    <section class="codex-explore-scope" data-codex-scope="all"><div data-codex-scope-summary="all">${scopePanel(view.allTime, copy, format, ctx.formatters.duration)}</div><section class="codex-period-trend" data-codex-trend="all" data-codex-coverage-status="${view.periodCoverage.allTime.complete ? 'complete' : 'partial'}">${coverageMarker('all', view.periodCoverage.allTime, ctx)}${periodChart('codex-all', monthlyChartRows, copy, format, { range: 'all', complete: view.periodCoverage.allTime.complete })}${monthlyTable(view.monthly, copy, format)}</section></section>
-    ${threadTable(view.recentThreads, projectIndexes, view.totalThreadCount, copy, format, ctx.formatters.dateTime, ctx.formatters.duration)}
-    ${projectTable(view, copy, format, ctx.formatters.dateTime)}`;
+  const views = [
+    ['projects', copy.projects],
+    ['sessions', copy.sessions],
+    ['models-effort', copy.modelsEffort],
+  ];
+  const viewButtons = views.map(([key, label], index) =>
+    `<button class="chart-tab${index === 0 ? ' active' : ''}" id="codex-explore-tab-${key}" role="tab" aria-controls="codex-explore-panel-${key}" aria-selected="${index === 0 ? 'true' : 'false'}" tabindex="${index === 0 ? '0' : '-1'}" data-codex-explore-view-button="${key}" data-codex-action="select-explore-view" data-codex-explore-view="${key}">${escapeHtml(label)}</button>`,
+  ).join('');
+  const scopeRows: Array<[string, string, CodexUsageScopeView | null]> = [
+    ['recent', copy.lastTask, view.lastTask],
+    ['7d', copy.last7Days, view.last7Days],
+    ['30d', copy.last30Days, view.last30Days],
+    ['all', copy.allTime, view.allTime],
+  ];
+  const scopeButtons = scopeRows.map(([key, label], index) =>
+    `<button class="chart-tab${index === 0 ? ' active' : ''}" id="codex-model-effort-tab-${key}" role="tab" aria-controls="codex-model-effort-panel-${key}" aria-selected="${index === 0 ? 'true' : 'false'}" tabindex="${index === 0 ? '0' : '-1'}" data-codex-action="set-model-effort-scope" data-codex-model-effort-scope="${key}">${escapeHtml(label)}</button>`,
+  ).join('');
+  const scopePanels = scopeRows.map(([key, _label, scope], index) => {
+    let content: string;
+    if (!scope) {
+      content = `<p>${escapeHtml(copy.noRecentTask)}</p>`;
+    } else if (key === '7d') {
+      content = `${scopePanel(scope, copy, format, ctx.formatters.duration)}${coverageMarker('7d', view.periodCoverage.last7Days, ctx)}${periodChart('codex-7d', dailyChartRows(view.last7DaysDaily), copy, format)}`;
+    } else if (key === '30d') {
+      content = `${scopePanel(scope, copy, format, ctx.formatters.duration)}${coverageMarker('30d', view.periodCoverage.last30Days, ctx)}${periodChart('codex-30d', dailyChartRows(view.last30DaysDaily), copy, format)}`;
+    } else if (key === 'all') {
+      content = `<div data-codex-scope-summary="all">${scopePanel(scope, copy, format, ctx.formatters.duration)}</div><section class="codex-period-trend" data-codex-trend="all" data-codex-coverage-status="${view.periodCoverage.allTime.complete ? 'complete' : 'partial'}">${coverageMarker('all', view.periodCoverage.allTime, ctx)}${periodChart('codex-all', monthlyChartRows, copy, format, { range: 'all', complete: view.periodCoverage.allTime.complete })}${monthlyTable(view.monthly, copy, format)}</section>`;
+    } else {
+      content = scopePanel(scope, copy, format, ctx.formatters.duration);
+    }
+    return `<section class="codex-model-effort-scope${index === 0 ? ' active' : ''}" id="codex-model-effort-panel-${key}" role="tabpanel" aria-labelledby="codex-model-effort-tab-${key}"${index === 0 ? '' : ' hidden'} data-codex-model-effort-panel="${key}">${content}</section>`;
+  }).join('');
+  return `<nav class="chart-tabs codex-explore-views" id="codex-explore-tablist" role="tablist" aria-label="${escapeHtml(copy.explore ?? copy.projects)}">${viewButtons}</nav>
+    <section class="codex-explore-view active" id="codex-explore-panel-projects" role="tabpanel" aria-labelledby="codex-explore-tab-projects" data-codex-explore-view="projects">${projectTable(view, copy, format, ctx.formatters.dateTime)}</section>
+    <section class="codex-explore-view" id="codex-explore-panel-sessions" role="tabpanel" aria-labelledby="codex-explore-tab-sessions" hidden data-codex-explore-view="sessions">${threadTable(view.recentThreads, view.totalThreadCount, copy, format, ctx.exploreFilters, view.sessionPeriodAvailability, ctx.formatters.dateTime, ctx.formatters.duration)}</section>
+    <section class="codex-explore-view" id="codex-explore-panel-models-effort" role="tabpanel" aria-labelledby="codex-explore-tab-models-effort" hidden data-codex-explore-view="models-effort"><h3>${escapeHtml(copy.modelsEffort)}</h3><div class="chart-tabs" id="codex-model-effort-tablist" role="tablist" aria-label="${escapeHtml(copy.scope)}">${scopeButtons}</div>${scopePanels}</section>`;
 }
 
 export function renderCodexRecommendations(ctx: CodexRenderContext): string {

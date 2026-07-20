@@ -5,6 +5,13 @@ import {
   createEmptyCodexIndex,
 } from '../providers/codex/codexIndex';
 import { ProviderTokenCounts } from '../providers/providerTypes';
+import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
+
+const FIXTURE_IDENTITY_SALT = 'codex-fixture-identity';
+
+export function codexFixtureIdentityKey(label: string) {
+  return pseudonymousIdentityKey(FIXTURE_IDENTITY_SALT, label);
+}
 
 const EMPTY_STRUCTURAL: CodexStructuralSummary = {
   patchCalls: 0,
@@ -116,9 +123,11 @@ function aggregate(row: FixtureRow): CodexFileAggregate {
     byModel: { [row.model]: { ...total } },
     byEffort: { [row.effort]: { ...total } },
     session: {
-      sessionKey: row.sessionKey,
-      parentSessionKey: row.parentSessionKey,
-      projectKey: row.projectKey,
+      sessionKey: codexFixtureIdentityKey(row.sessionKey),
+      parentSessionKey: row.parentSessionKey
+        ? codexFixtureIdentityKey(row.parentSessionKey)
+        : undefined,
+      projectKey: codexFixtureIdentityKey(row.projectKey),
       sessionTitle: row.sessionTitle,
       agentNickname: row.agentNickname,
       projectName: row.projectName,

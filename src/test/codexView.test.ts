@@ -11,9 +11,19 @@ import { buildCodexInsights } from '../providers/codex/codexInsights';
 import { buildCodexUsageView } from '../providers/codex/codexUsage';
 import { I18n } from '../i18n';
 import { createCodexLocalizedFormatters } from '../codexFormat';
+import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 import { snapshotFixture } from './codexFixtures';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
+const VIEW_SALT = 'codex-view-render-test';
+const pseudo = (label: string) => pseudonymousIdentityKey(VIEW_SALT, label);
+
+function htmlBetween(html: string, start: string, end?: string): string {
+  const startAt = html.indexOf(start);
+  assert.notEqual(startAt, -1, `missing ${start}`);
+  const endAt = end ? html.indexOf(end, startAt + start.length) : -1;
+  return html.slice(startAt, endAt < 0 ? undefined : endAt);
+}
 
 type CodexFixtureView = ReturnType<typeof buildCodexUsageView>;
 
@@ -92,11 +102,12 @@ test('empty or partial insights render no paste-ready constraint fallback', () =
 
 test('Codex renderer exposes three product destinations and auxiliary settings', () => {
   const html = renderFixture();
+  const primaryNav = html.match(/<nav class="tabs codex-tabs"[\s\S]*?<\/nav>/)?.[0] ?? '';
 
   assert.match(html, /<section[^>]*data-codex-root(?:="")?[^>]*>/);
-  assert.equal(html.match(/<nav\b[^>]*role="tablist"[^>]*>/g)?.length, 1);
-  assert.equal(html.match(/\brole="tab"/g)?.length, 3);
-  assert.equal(html.match(/\brole="tabpanel"/g)?.length, 4);
+  assert.equal(primaryNav.match(/<nav\b[^>]*role="tablist"[^>]*>/g)?.length, 1);
+  assert.equal(primaryNav.match(/\brole="tab"/g)?.length, 3);
+  assert.equal(html.match(/id="codex-page-panel-[^"]+"/g)?.length, 4);
   for (const page of ['overview', 'explore', 'recommendations']) {
     assert.match(html, new RegExp(`data-codex-page-button="${page}"`));
     assert.match(html, new RegExp(`data-codex-page="${page}"`));
@@ -132,7 +143,7 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /data-codex-thread-search/);
   assert.match(html, /data-codex-thread-filter="role"/);
   assert.match(html, /class="sortable" data-sortkey="title"/);
-  assert.match(html, /data-codex-project-detail="p0"/);
+  assert.match(html, /data-codex-project-detail="[a-f0-9]{16}"/);
   for (const scope of ['recent', '7d', '30d', 'all']) {
     assert.match(html, new RegExp(`data-codex-behavior-button="${scope}"`));
     assert.match(html, new RegExp(`data-codex-behavior-panel="${scope}"`));
@@ -143,13 +154,326 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /data-label-processed="N:/);
   assert.match(html, /data-label-threads="N:/);
   assert.match(html, /data-codex-action="select-chart-metric"[^>]*data-codex-chart-id="codex-7d"[^>]*data-codex-chart-metric="processed"/);
-  assert.match(html, /data-codex-action="toggle-thread-children"[^>]*data-codex-thread-key="t1"/);
-  assert.match(html, /data-codex-action="toggle-project"[^>]*data-codex-project-key="p0"/);
+  assert.match(html, /data-codex-action="toggle-thread-children"[^>]*data-codex-thread-key="[a-f0-9]{16}"/);
+  assert.match(html, /data-codex-action="project-sessions"[^>]*data-codex-project-view-key="[a-f0-9]{16}"/);
   assert.match(html, /data-codex-action="select-behavior-scope"[^>]*data-codex-behavior-scope="recent"/);
   assert.doesNotMatch(html, /\sonclick=/);
   assert.doesNotMatch(html, /codex-metric-card|project:a|session:|Thread 1|Project 1/);
   assert.doesNotMatch(html, /class="codex-header"/);
   assert.doesNotMatch(html, /\$|raw-session|\/Users\/|https?:\/\//);
+});
+
+test('Explore renders Projects, Sessions, and Models & effort with private view keys', () => {
+  const snapshot = snapshotFixture();
+  const root = snapshot.files[0];
+  snapshot.files = Array.from({ length: 27 }, (_, index) => ({
+    ...root,
+    session: {
+      ...root.session,
+      sessionKey: `session:explore-${index}`,
+      sessionTitle: `Session ${index}`,
+      endedAt: NOW - index * 1_000,
+    },
+  }));
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+
+  assert.match(html, /data-codex-explore-view-button="projects"/);
+  assert.match(html, /data-codex-explore-view-button="sessions"/);
+  assert.match(html, /data-codex-explore-view-button="models-effort"/);
+  assert.match(html, /20\/27 Sessions/);
+  assert.match(html, /data-codex-action="project-sessions"/);
+  assert.match(html, /aria-label="Expand .*ClaudeCodeUsage"/);
+  assert.match(html, /aria-live="polite"/);
+  assert.match(html, /data-codex-action="clear-filters"/);
+  assert.match(html, /class="number-cell"/);
+  assert.match(html, /data-codex-session-layout="tree"/);
+  assert.doesNotMatch(html, /project:a|session:explore-|Thread 1|Project 1/);
+});
+
+test('Explore filtered session contract is flat and retains a parent-task label', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+    exploreFilters: { query: 'locke' },
+  });
+
+  assert.match(html, /data-codex-session-layout="flat"/);
+  assert.match(html, /Parent task/);
+});
+
+test('Explore and Models scope tabs are complete ARIA tabs with inactive panels hidden', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+
+  assert.match(html, /id="codex-explore-tablist"[^>]*role="tablist"/);
+  for (const [key, selected] of [
+    ['projects', true],
+    ['sessions', false],
+    ['models-effort', false],
+  ] as const) {
+    assert.match(html, new RegExp(
+      `id="codex-explore-tab-${key}"[^>]*role="tab"[^>]*aria-controls="codex-explore-panel-${key}"[^>]*aria-selected="${selected}"[^>]*tabindex="${selected ? '0' : '-1'}"`,
+    ));
+    assert.match(html, new RegExp(
+      `id="codex-explore-panel-${key}"[^>]*role="tabpanel"[^>]*aria-labelledby="codex-explore-tab-${key}"${selected ? '' : '[^>]*hidden'}`,
+    ));
+  }
+  assert.match(html, /id="codex-model-effort-tablist"[^>]*role="tablist"/);
+  for (const [key, selected] of [
+    ['recent', true], ['7d', false], ['30d', false], ['all', false],
+  ] as const) {
+    assert.match(html, new RegExp(
+      `id="codex-model-effort-tab-${key}"[^>]*role="tab"[^>]*aria-controls="codex-model-effort-panel-${key}"[^>]*aria-selected="${selected}"[^>]*tabindex="${selected ? '0' : '-1'}"`,
+    ));
+    assert.match(html, new RegExp(
+      `id="codex-model-effort-panel-${key}"[^>]*role="tabpanel"[^>]*aria-labelledby="codex-model-effort-tab-${key}"${selected ? '' : '[^>]*hidden'}`,
+    ));
+  }
+});
+
+test('Sessions renderer echoes controlled filters as selected escaped values and active-only chips', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const project = view.projects[0];
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+    exploreFilters: {
+      query: 'Locke <needle>',
+      role: 'subagent',
+      projectViewKey: project.viewKey,
+      model: 'gpt-5.6-sol',
+      effort: 'high',
+      period: '7d',
+    },
+  });
+  const sessions = htmlBetween(
+    html,
+    'id="codex-explore-panel-sessions"',
+    'id="codex-explore-panel-models-effort"',
+  );
+
+  assert.match(sessions, /id="codex-session-search"[^>]*value="Locke &lt;needle&gt;"/);
+  assert.match(sessions, /option value="subagent" selected/);
+  assert.match(sessions, new RegExp(`option value="${project.viewKey}" selected`));
+  assert.match(sessions, /option value="gpt-5\.6-sol" selected/);
+  assert.match(sessions, /option value="high" selected/);
+  assert.match(sessions, /option value="7d" selected/);
+  assert.equal((sessions.match(/data-codex-filter-chip=/g) ?? []).length, 6);
+  assert.match(sessions, /Locke &lt;needle&gt;/);
+  assert.match(sessions, /data-codex-action="clear-filters"(?![^>]*hidden)/);
+  assert.match(sessions, /aria-live="polite"/);
+  assert.equal((sessions.match(/option value="all"/g) ?? []).length, 1);
+  assert.doesNotMatch(sessions, /data-codex-filter-chip="[^"]+"><\/span>/);
+});
+
+test('Sessions period filters produce different sets from verified slices', () => {
+  const snapshot = snapshotFixture();
+  const projectKey = pseudo('period-project');
+  const makeFile = (
+    source: (typeof snapshot.files)[number],
+    label: string,
+    title: string,
+    day: string,
+  ) => ({
+    ...source,
+    session: {
+      ...source.session,
+      sessionKey: pseudo(`period-${label}`),
+      parentSessionKey: undefined,
+      projectKey,
+      sessionTitle: title,
+    },
+    period: {
+      ...source.period!,
+      days: { [day]: source.period!.days[Object.keys(source.period!.days)[0]] },
+    },
+  });
+  snapshot.files = [
+    makeFile(snapshot.files[0], 'recent', 'Recent slice', '2026-07-20'),
+    makeFile(snapshot.files[2], 'month', 'Month slice', '2026-07-10'),
+    makeFile(snapshot.files[3], 'old', 'Old slice', '2026-06-01'),
+  ];
+  snapshot.coverage.period.last7Days.complete = true;
+  snapshot.coverage.period.last30Days.complete = true;
+  snapshot.coverage.period.allTime.complete = true;
+  const view = buildCodexUsageView(snapshot, NOW);
+  const sessionsFor = (period: '7d' | '30d' | 'all') => htmlBetween(
+    renderCodexView(view, [], CODEX_COPY_EN, { exploreFilters: { period } }),
+    'id="codex-explore-panel-sessions"',
+    'id="codex-explore-panel-models-effort"',
+  );
+
+  const seven = sessionsFor('7d');
+  assert.match(seven, /Recent slice/);
+  assert.doesNotMatch(seven, /Month slice|Old slice/);
+  const thirty = sessionsFor('30d');
+  assert.match(thirty, /Recent slice/);
+  assert.match(thirty, /Month slice/);
+  assert.doesNotMatch(thirty, /Old slice/);
+  const all = sessionsFor('all');
+  assert.match(all, /Recent slice/);
+  assert.match(all, /Month slice/);
+  assert.match(all, /Old slice/);
+});
+
+test('Sessions disables incomplete period filters and explains their unavailable coverage', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.last7Days.complete = false;
+  snapshot.coverage.period.last30Days.complete = false;
+  snapshot.coverage.period.allTime.complete = false;
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, [], CODEX_COPY_EN);
+  const sessions = htmlBetween(
+    html,
+    'id="codex-explore-panel-sessions"',
+    'id="codex-explore-panel-models-effort"',
+  );
+
+  for (const period of ['7d', '30d', 'all']) {
+    assert.match(sessions, new RegExp(`option value="${period}"[^>]*disabled[^>]*aria-disabled="true"`));
+  }
+  assert.match(sessions, /data-codex-period-availability-note/);
+  assert.match(sessions, /Coverage.*Partial/);
+});
+
+test('Sessions canonicalizes a stale unavailable period to the unfiltered UI state', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.last7Days.complete = false;
+  snapshot.coverage.period.last30Days.complete = false;
+  snapshot.coverage.period.allTime.complete = false;
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, [], CODEX_COPY_EN, {
+    exploreFilters: { period: '7d' },
+  });
+  const sessions = htmlBetween(
+    html,
+    'id="codex-explore-panel-sessions"',
+    'id="codex-explore-panel-models-effort"',
+  );
+
+  assert.match(sessions, /option value="" selected/);
+  assert.match(sessions, /option value="7d"(?![^>]*selected)[^>]*disabled/);
+  assert.doesNotMatch(sessions, /data-codex-filter-chip="period"/);
+  assert.match(sessions, /data-codex-session-layout="tree"/);
+  assert.match(
+    sessions,
+    new RegExp(`<span data-codex-thread-visible>${view.recentThreads.length}<\\/span>/${view.totalThreadCount}`),
+  );
+  assert.equal(
+    (sessions.match(/data-codex-thread-row(?:\s|>)/g) ?? []).length,
+    view.recentThreads.length,
+  );
+  assert.match(sessions, /data-codex-action="clear-filters"[^>]*hidden/);
+});
+
+test('flat orphan and cycle rows retain distinct neutral parent status without identifiers', () => {
+  const snapshot = snapshotFixture();
+  const root = snapshot.files[0];
+  const projectKey = pseudo('parent-status-project');
+  const orphan = {
+    ...root,
+    session: {
+      ...root.session,
+      sessionKey: pseudo('parent-status-orphan'),
+      parentSessionKey: pseudo('parent-status-missing'),
+      projectKey,
+      sessionTitle: 'Orphan display',
+    },
+  };
+  const cycleKey = pseudo('parent-status-cycle');
+  const cycle = {
+    ...root,
+    session: {
+      ...root.session,
+      sessionKey: cycleKey,
+      parentSessionKey: cycleKey,
+      projectKey,
+      sessionTitle: 'Cycle display',
+    },
+  };
+  snapshot.files = [orphan, cycle];
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, [], CODEX_COPY_EN, {
+    exploreFilters: { role: 'root' },
+  });
+  const sessions = htmlBetween(
+    html,
+    'id="codex-explore-panel-sessions"',
+    'id="codex-explore-panel-models-effort"',
+  );
+
+  assert.match(sessions, /data-parent-status="missing"/);
+  assert.match(sessions, /data-parent-status="cycle"/);
+  assert.equal((sessions.match(/Parent task: Unavailable/g) ?? []).length >= 2, true);
+  assert.doesNotMatch(sessions, /parent-status-missing|parent-status-cycle/);
+});
+
+test('mobile session details preserve every desktop fact with injected formatters', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, [], CODEX_COPY_EN, {
+    formatNumber: (value) => `N(${value})`,
+    formatDateTime: (value) => `DATE(${value})`,
+    formatDuration: (value) => `DURATION(${value})`,
+  });
+  const mobile = html.match(/<details class="codex-session-mobile">[\s\S]*?<\/details>/)?.[0] ?? '';
+
+  assert.match(mobile, /<summary[^>]*aria-label=/);
+  for (const label of [
+    'Date', 'Role', 'Project', 'Parent task', 'Models', 'Effort',
+    'Processed tokens', 'Fresh input \\+ output', 'Input cache share',
+    'Output tokens', 'Reasoning output', 'Observed session duration total \\(proxy\\)',
+  ]) {
+    assert.match(mobile, new RegExp(`<dt>${label}<\\/dt>`));
+  }
+  assert.match(mobile, /DATE\(/);
+  assert.match(mobile, /N\(/);
+  assert.match(mobile, /DURATION\(/);
+});
+
+test('desktop and mobile sessions include an escaped distinct local directory', () => {
+  const snapshot = snapshotFixture();
+  snapshot.files[0].session.projectDirectoryName = '<img src=x onerror="alert(1)">';
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, [], CODEX_COPY_EN);
+  const sessions = htmlBetween(
+    html,
+    'id="codex-explore-panel-sessions"',
+    'id="codex-explore-panel-models-effort"',
+  );
+  const mobile = sessions.match(/<details class="codex-session-mobile">[\s\S]*?<\/details>/)?.[0] ?? '';
+  const escapedDirectory = '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;';
+
+  assert.ok(sessions.includes(
+    `<div class="model-details">Local folder: ${escapedDirectory}</div>`,
+  ));
+  assert.ok(mobile.includes(
+    `<dt>Local folder</dt><dd>${escapedDirectory}</dd>`,
+  ));
+  assert.doesNotMatch(sessions, /<img\s/i);
+});
+
+test('Models recent scope renders an accurate empty state instead of seven-day data', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  view.lastTask = null;
+  const html = renderCodexView(view, [], CODEX_COPY_EN);
+  const recent = htmlBetween(
+    html,
+    'id="codex-model-effort-panel-recent"',
+    'id="codex-model-effort-panel-7d"',
+  );
+
+  assert.match(recent, /No recent Codex task is indexed yet\./);
+  assert.doesNotMatch(recent, /Processed tokens|gpt-5\.6-sol/);
+});
+
+test('non-English Explore fallbacks never expose internal project or session identifiers', () => {
+  const previous = I18n.getCurrentLanguage();
+  try {
+    I18n.setLanguage('zh-CN');
+    const view = buildCodexUsageView(snapshotFixture(), NOW);
+    const html = renderCodexView(view, scopedInsights(view), I18n.t.providers.codex);
+    assert.doesNotMatch(html, /project:a|session:root-a|Project 1|Thread 1/);
+  } finally {
+    I18n.setLanguage(previous);
+  }
 });
 
 test('Codex renderer scopes period coverage and keeps verified all-time aggregates available', () => {
@@ -504,14 +828,14 @@ test('every Codex locale labels structural data as patch and tool-call proxies',
     'id',
   ] as const;
   const expected = {
-    en: ['Patch calls', 'Post-patch tool-call proxy / patch call'],
-    'de-DE': ['Patch-Aufrufe', 'Tool-Call-Proxy nach Patch / Patch-Aufruf'],
-    'zh-TW': ['修補呼叫次數', '每次修補呼叫的修補後工具呼叫代理量'],
-    'zh-CN': ['补丁调用次数', '每次补丁调用的补丁后工具调用代理量'],
-    ja: ['パッチ呼び出し', 'パッチ呼び出しあたりのパッチ後ツール呼び出しプロキシ'],
-    ko: ['패치 호출', '패치 호출당 패치 후 도구 호출 프록시'],
-    'pt-BR': ['Chamadas de patch', 'Proxy de chamadas de ferramenta pós-patch / chamada de patch'],
-    id: ['Panggilan patch', 'Proksi panggilan alat pasca-patch / panggilan patch'],
+    en: ['Patch calls', 'Post-patch tool-call proxy / patch call', 'Parent task'],
+    'de-DE': ['Patch-Aufrufe', 'Tool-Call-Proxy nach Patch / Patch-Aufruf', 'Übergeordnete Aufgabe'],
+    'zh-TW': ['修補呼叫次數', '每次修補呼叫的修補後工具呼叫代理量', '父任務'],
+    'zh-CN': ['补丁调用次数', '每次补丁调用的补丁后工具调用代理量', '父任务'],
+    ja: ['パッチ呼び出し', 'パッチ呼び出しあたりのパッチ後ツール呼び出しプロキシ', '親タスク'],
+    ko: ['패치 호출', '패치 호출당 패치 후 도구 호출 프록시', '상위 작업'],
+    'pt-BR': ['Chamadas de patch', 'Proxy de chamadas de ferramenta pós-patch / chamada de patch', 'Tarefa pai'],
+    id: ['Panggilan patch', 'Proksi panggilan alat pasca-patch / panggilan patch', 'Tugas induk'],
   };
   const prohibited = /files changed|commands per file|post-change commands \/ file|patch rounds|command intensity|Befehle nach Änderung \/ Datei|Patch-Runden|Befehlsintensität|每個檔案的修改後命令數|修補輪次|修改後命令密度|每个文件的修改后命令数|补丁轮次|修改后命令密度|ファイルあたり変更後コマンド|パッチ回数|変更後のコマンド密度|파일당 변경 후 명령|패치 라운드|변경 후 명령 밀도|Comandos após mudança \/ arquivo|Rodadas de patch|Intensidade de comandos após mudanças|Perintah setelah perubahan \/ file|Putaran patch|Intensitas perintah setelah perubahan/i;
   const previous = I18n.getCurrentLanguage();
@@ -520,12 +844,15 @@ test('every Codex locale labels structural data as patch and tool-call proxies',
     for (const language of languages) {
       I18n.setLanguage(language);
       const copy = I18n.t.providers.codex as unknown as Record<string, unknown>;
-      const html = renderCodexView(view, [], I18n.t.providers.codex);
+      const html = renderCodexView(view, [], I18n.t.providers.codex, {
+        exploreFilters: { query: 'locke' },
+      });
 
       assert.equal('postChangeCommandsPerFile' in copy, false, `${language} retains the legacy copy key`);
       assert.equal('patchRounds' in copy, false, `${language} retains the legacy copy key`);
       assert.match(html, new RegExp(expected[language][0]));
       assert.match(html, new RegExp(expected[language][1]));
+      assert.match(html, new RegExp(expected[language][2]));
       assert.doesNotMatch(html, prohibited);
     }
   } finally {
