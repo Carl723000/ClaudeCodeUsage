@@ -30,6 +30,15 @@ test('session index keeps the latest clean title behind an anonymous key', async
           updated_at: '2026-07-20T02:00:00.000Z',
         }),
         JSON.stringify({ id: 'raw-session-b', thread_name: 'Second title' }),
+        JSON.stringify({
+          id: 'raw-session-c',
+          thread_name:
+            'Inspect /Users/carl/Jiaming/private.ts and C:\\Users\\Carl\\secret.ts',
+        }),
+        JSON.stringify({
+          id: 'raw-session-d',
+          thread_name: '检查路径：/Users/bob/private.ts',
+        }),
         '',
       ].join('\n'),
       'utf8',
@@ -44,6 +53,15 @@ test('session index keeps the latest clean title behind an anonymous key', async
     assert.equal(
       titles.get(pseudonymousIdentityKey(SALT, 'raw-session-b')),
       'Second title',
+    );
+    const redacted = titles.get(
+      pseudonymousIdentityKey(SALT, 'raw-session-c'),
+    ) ?? '';
+    assert.match(redacted, /\[path\]/);
+    assert.doesNotMatch(redacted, /\/Users\/|C:\\Users\\Carl/);
+    assert.doesNotMatch(
+      titles.get(pseudonymousIdentityKey(SALT, 'raw-session-d')) ?? '',
+      /\/Users\//,
     );
     assert.doesNotMatch(JSON.stringify([...titles]), /raw-session/);
   } finally {

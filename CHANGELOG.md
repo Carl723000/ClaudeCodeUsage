@@ -59,6 +59,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   `archived_sessions/**/*.jsonl`. The extension does not read Codex credentials,
   SQLite databases, browser/keychain state, or unknown files, and persists only
   machine-salted pseudonymous keys with numeric aggregates.
+- Absolute filesystem paths embedded by Codex in a generated thread title are
+  replaced with `[path]` before display; the remaining truthful title stays in
+  memory only.
 
 ## [2.2.1] — 2026-07-18
 
