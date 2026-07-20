@@ -159,6 +159,11 @@ test('expired limits are omitted while coverage and quality remain explicit', ()
     indexedBytes: 1_300,
     totalBytes: 1_500,
     complete: false,
+    identity: {
+      exactDuplicateFiles: 0,
+      ambiguousSessionGroups: 0,
+      complete: true,
+    },
   });
   assert.deepEqual(view.qualityFlags, [{ flag: 'unknown-event', count: 1 }]);
 });

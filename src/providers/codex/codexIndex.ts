@@ -40,6 +40,10 @@ import {
   defaultCodexJsonlReader,
   scanCodexJsonlLines,
 } from './codexJsonlScanner';
+import {
+  CodexDeduplication,
+  classifyCodexSessionDuplicates,
+} from './codexDedup';
 
 export { CodexStructuralSummary } from './codexPeriodIndex';
 
@@ -86,6 +90,13 @@ export interface CodexIndexCoverage {
   totalFiles: number;
   indexedBytes: number;
   totalBytes: number;
+  complete: boolean;
+  identity: CodexIdentityCoverage;
+}
+
+export interface CodexIdentityCoverage {
+  exactDuplicateFiles: number;
+  ambiguousSessionGroups: number;
   complete: boolean;
 }
 
@@ -190,6 +201,11 @@ export function createEmptyCodexIndex(_timeZone = 'UTC'): CodexIndexV2 {
       indexedBytes: 0,
       totalBytes: 0,
       complete: true,
+      identity: {
+        exactDuplicateFiles: 0,
+        ambiguousSessionGroups: 0,
+        complete: true,
+      },
     },
   };
 }
@@ -312,17 +328,21 @@ function defaultIo(): CodexIndexIo {
 
 function previousManifest(index: CodexIndexV2): CodexPersistedManifest {
   return Object.fromEntries(
-    Object.values(index.files).map((file) => [
-      file.fileKey,
-      {
-        fileKey: file.fileKey,
-        sourceArea: file.sourceArea ?? 'sessions',
-        size: file.size,
-        mtimeMs: file.mtimeMs,
-        dev: file.dev,
-        ino: file.ino,
-      },
-    ]),
+    Object.values(index.files).flatMap((file) =>
+      file.sourceArea
+        ? [[
+            file.fileKey,
+            {
+              fileKey: file.fileKey,
+              sourceArea: file.sourceArea,
+              size: file.size,
+              mtimeMs: file.mtimeMs,
+              dev: file.dev,
+              ino: file.ino,
+            },
+          ]]
+        : [],
+    ),
   );
 }
 
@@ -506,9 +526,14 @@ async function backfillIdentity(
 
 function recomputeAggregate(
   files: Record<string, CodexFileContribution>,
+  deduplication = classifyCodexSessionDuplicates(files),
 ): CodexProviderAggregate {
   const aggregate = emptyAggregate();
-  for (const file of Object.values(files)) {
+  for (const fileKey of deduplication.canonicalFileKeys) {
+    const file = files[fileKey];
+    if (!file) {
+      continue;
+    }
     addTokens(aggregate.total, file.aggregate.total);
     for (const [key, value] of Object.entries(file.aggregate.byDay)) {
       addTokens(bucket(aggregate.byDay, key), value);
@@ -526,6 +551,7 @@ function recomputeAggregate(
 function coverageFor(
   files: Record<string, CodexFileContribution>,
   manifest: CodexManifest,
+  deduplication = classifyCodexSessionDuplicates(files),
 ): CodexIndexCoverage {
   let indexedFiles = 0;
   let indexedBytes = 0;
@@ -556,7 +582,21 @@ function coverageFor(
     indexedBytes,
     totalBytes,
     complete: indexedFiles === totalFiles,
+    identity: {
+      exactDuplicateFiles: deduplication.exactDuplicateFileKeys.size,
+      ambiguousSessionGroups: deduplication.ambiguousSessionGroups,
+      complete: deduplication.ambiguousSessionGroups === 0,
+    },
   };
+}
+
+function recomputeDerivedIndex(
+  index: CodexIndexV2,
+  manifest: CodexManifest,
+): void {
+  const deduplication = classifyCodexSessionDuplicates(index.files);
+  index.aggregate = recomputeAggregate(index.files, deduplication);
+  index.coverage = coverageFor(index.files, manifest, deduplication);
 }
 
 function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgress {
@@ -653,8 +693,7 @@ export async function updateCodexIndex(
       }
     }
     scannedFiles += 1;
-    index.aggregate = recomputeAggregate(index.files);
-    index.coverage = coverageFor(index.files, manifest);
+    recomputeDerivedIndex(index, manifest);
     options.onProgress?.(progressFor(index, scannedFiles));
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
@@ -680,8 +719,7 @@ export async function updateCodexIndex(
     }
   }
 
-  index.aggregate = recomputeAggregate(index.files);
-  index.coverage = coverageFor(index.files, manifest);
+  recomputeDerivedIndex(index, manifest);
   if (work.length === 0) {
     options.onProgress?.(progressFor(index, manifest.files.length));
   }
@@ -1021,12 +1059,24 @@ function sanitizeFileAggregate(
 
 function sanitizeCoverage(value: unknown): CodexIndexCoverage {
   const coverage = isRecord(value) ? value : {};
+  const identity = isRecord(coverage.identity) ? coverage.identity : {};
   return {
     indexedFiles: finiteNumber(coverage.indexedFiles),
     totalFiles: finiteNumber(coverage.totalFiles),
     indexedBytes: finiteNumber(coverage.indexedBytes),
     totalBytes: finiteNumber(coverage.totalBytes),
     complete: coverage.complete === true,
+    identity: {
+      exactDuplicateFiles: Math.max(
+        0,
+        finiteNumber(identity.exactDuplicateFiles),
+      ),
+      ambiguousSessionGroups: Math.max(
+        0,
+        finiteNumber(identity.ambiguousSessionGroups),
+      ),
+      complete: identity.complete !== false,
+    },
   };
 }
 

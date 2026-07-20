@@ -197,6 +197,36 @@ test('cold scan, appended tail, and persisted reload agree', async () => {
   }
 });
 
+test('exact active and archive copies contribute usage only once', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-dedup-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const archive = path.join(root, 'archived_sessions');
+    await mkdir(sessions, { recursive: true });
+    await mkdir(archive, { recursive: true });
+    const body = completeSession('shared-raw-session', 100, 20);
+    await writeFile(path.join(sessions, 'active.jsonl'), body, 'utf8');
+    await writeFile(path.join(archive, 'archive.jsonl'), body, 'utf8');
+
+    const manifest = await scanCodexManifest(root, SALT);
+    const result = await updateCodexIndex(
+      createEmptyCodexIndex(),
+      manifest,
+      { salt: SALT },
+    );
+
+    assert.equal(result.index.aggregate.total.inputTotal, 100);
+    assert.equal(result.index.aggregate.total.outputTotal, 20);
+    assert.deepEqual(result.index.coverage.identity, {
+      exactDuplicateFiles: 1,
+      ambiguousSessionGroups: 0,
+      complete: true,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('cold scan and append build target-timezone slices in the same body read', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-append-'));
   try {
@@ -755,6 +785,13 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
           indexedBytes: 100,
           totalBytes: 120,
           complete: false,
+          identity: {
+            exactDuplicateFiles: 2,
+            ambiguousSessionGroups: 3,
+            complete: false,
+            rawSessionId: 'v2-secret-identity-session',
+            absolutePath: '/v2-secret-identity-path',
+          },
           absolutePath: '/v2-secret-coverage-path',
         },
       }),
@@ -797,6 +834,12 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
     assert.deepEqual(loaded.files.a.qualityFlags, ['legacy-quality']);
     assert.equal(loaded.aggregate.total.inputTotal, 123);
     assert.equal(loaded.coverage.indexedBytes, 100);
+    assert.equal(loaded.files.a.sourceArea, 'sessions');
+    assert.deepEqual(loaded.coverage.identity, {
+      exactDuplicateFiles: 2,
+      ambiguousSessionGroups: 3,
+      complete: false,
+    });
 
     const caller = structuredClone(loaded) as typeof loaded & {
       carry?: string;
@@ -834,6 +877,58 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
       20,
     );
     assert.equal(saved.aggregate.total.inputTotal, 123);
+    assert.equal(saved.files.a.sourceArea, 'sessions');
+    assert.deepEqual(saved.coverage.identity, {
+      exactDuplicateFiles: 2,
+      ambiguousSessionGroups: 3,
+      complete: false,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('schema v2 legacy contributions do not invent a missing sourceArea', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-source-area-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const legacy = createEmptyCodexIndex();
+    const body = JSON.parse(JSON.stringify(legacy)) as Record<string, unknown>;
+    body.files = {
+      legacy: {
+        fileKey: 'legacy-key',
+        size: 0,
+        mtimeMs: 0,
+        offset: 0,
+        discardingOversizedLine: false,
+        parserState: {
+          schemaVersion: 1,
+          fileKey: 'legacy-key',
+          sessionKey: 'legacy-session-key',
+          role: 'root',
+          qualityFlags: [],
+        },
+        aggregate: {
+          total: { inputTotal: 0, outputTotal: 0 },
+          byDay: {},
+          byModel: {},
+          byEffort: {},
+          session: { sessionKey: 'legacy-session-key', role: 'root' },
+          structural: {},
+        },
+        qualityFlags: [],
+      },
+    };
+    await writeFile(indexPath, JSON.stringify(body), 'utf8');
+
+    const loaded = await loadCodexIndex(indexPath);
+    await saveCodexIndexAtomic(indexPath, loaded);
+    const saved = JSON.parse(await readFile(indexPath, 'utf8')) as {
+      files: Record<string, { sourceArea?: string }>;
+    };
+
+    assert.equal(loaded.files.legacy.sourceArea, undefined);
+    assert.equal(saved.files.legacy.sourceArea, undefined);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
