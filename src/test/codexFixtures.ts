@@ -216,3 +216,20 @@ export function identityLineageFixture(): CodexProviderSnapshot {
   snapshot.total = sum(snapshot.files);
   return snapshot;
 }
+
+export function parentlessNonRootTitleFixture(): CodexProviderSnapshot {
+  const snapshot = snapshotFixture();
+  const root = aggregate({
+    ...ROWS[0],
+    sessionTitle: undefined,
+  });
+  const reviewer = aggregate({
+    ...ROWS[2],
+    sessionKey: 'session:review-newest',
+    end: '2026-07-20T11:55:00.000Z',
+    sessionTitle: 'parentless reviewer title must not become a task title',
+  });
+  snapshot.files = [root, reviewer];
+  snapshot.total = sum(snapshot.files);
+  return snapshot;
+}

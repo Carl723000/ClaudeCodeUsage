@@ -513,14 +513,9 @@ function taskRootFile(
   files: CodexFileAggregate[],
 ): CodexFileAggregate | undefined {
   return [...files]
-    .filter(
-      (file) =>
-        file.session.role === 'root' || !file.session.parentSessionKey,
-    )
+    .filter((file) => file.session.role === 'root')
     .sort(
       (left, right) =>
-        Number(right.session.role === 'root') -
-          Number(left.session.role === 'root') ||
         observedAt(right) - observedAt(left) ||
         left.session.sessionKey.localeCompare(right.session.sessionKey),
     )[0];
