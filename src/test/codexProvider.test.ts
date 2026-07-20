@@ -48,10 +48,9 @@ function contribution(): CodexFileContribution {
         endedAt: Date.parse('2026-07-20T00:05:00.000Z'),
       },
       structural: {
-        filesChanged: 1,
-        patchRounds: 1,
-        commands: 2,
-        postChangeCommands: 1,
+        patchCalls: 1,
+        toolCalls: 2,
+        postPatchToolCalls: 1,
         compactCount: 0,
         taskCompleteCount: 1,
       },
