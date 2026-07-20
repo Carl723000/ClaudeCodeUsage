@@ -10,6 +10,7 @@ import {
 import { buildCodexInsights } from '../providers/codex/codexInsights';
 import { buildCodexUsageView } from '../providers/codex/codexUsage';
 import { I18n } from '../i18n';
+import { createCodexLocalizedFormatters } from '../codexFormat';
 import { snapshotFixture } from './codexFixtures';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
@@ -237,7 +238,9 @@ test('all-time partial coverage stays visible when trend rows are empty', () => 
   };
   const view = buildCodexUsageView(snapshot, NOW);
   view.monthly = [];
-  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+    formatBytes: (bytes) => String(bytes),
+  });
 
   assert.match(html, /data-codex-trend="all"[^>]*data-codex-coverage-status="partial"/);
   assert.match(html, /data-codex-coverage-range="all"[^>]*>Coverage: 3\/5 files · 300\/500 bytes · Partial<\/p>/);
@@ -304,7 +307,7 @@ test('Compare is side-by-side and contains no summed total, cost, or quota', () 
   assert.doesNotMatch(html, /combined|quota|\$/i);
 });
 
-test('Codex renderer shows every unexpired named last-observed limit', () => {
+test('Codex renderer shows every current named last-observed limit with human window labels', () => {
   const snapshot = snapshotFixture();
   snapshot.limit = {
     provider: 'codex',
@@ -338,12 +341,133 @@ test('Codex renderer shows every unexpired named last-observed limit', () => {
 
   assert.match(html, /Codex main/);
   assert.match(html, /GPT-5\.3-Codex-Spark/);
-  assert.match(html, /primary/);
-  assert.match(html, /secondary/);
+  assert.match(html, /5-hour window/);
+  assert.match(html, /Weekly window/);
   assert.match(html, /31%/);
   assert.match(html, /47%/);
-  assert.match(html, /12\.5/);
   assert.match(html, /Last observed/);
+  assert.match(html, /Local log.*not live/);
+  assert.doesNotMatch(html, />primary<|>secondary<|300m/);
+});
+
+test('Overview renders all limit states distinctly and keeps reasoning inside the three-part composition', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  view.limits = [
+    { state: 'current', windowMinutes: 300, usedPercent: 0, remainingPercent: 100, observedAt: NOW, resetsAt: NOW + 60_000, source: 'local-log' },
+    { state: 'expired', windowMinutes: 300, usedPercent: 20, remainingPercent: 80, observedAt: NOW - 60_000, source: 'local-log' },
+    { state: 'missing' },
+    { state: 'unlimited', observedAt: NOW, source: 'local-log' },
+  ];
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, { now: NOW });
+
+  for (const state of ['current', 'expired', 'missing', 'unlimited']) {
+    assert.match(html, new RegExp(`data-codex-limit-state="${state}"`));
+  }
+  assert.match(html, /0% used.*100% remaining/s);
+  assert.match(html, /Expired \/ stale last-observed limit/);
+  assert.match(html, /No locally observed usage limit/);
+  assert.match(html, /Unlimited/);
+  assert.equal((html.match(/cost-comp-seg seg-(?:input|cache-read|output)/g) ?? []).length >= 3, true);
+  assert.doesNotMatch(html, /cost-comp-seg[^>]*reasoning/);
+});
+
+test('Overview labels an unknown limit window with a localized duration instead of a provider alias', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  view.limits = [{
+    state: 'current',
+    windowMinutes: 90,
+    usedPercent: 20,
+    remainingPercent: 80,
+    observedAt: NOW,
+    resetsAt: NOW + 60_000,
+    source: 'local-log',
+  }];
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, { now: NOW });
+
+  assert.match(html, /1 hour 30 minutes/);
+  assert.doesNotMatch(html, />primary<|>secondary<|90m/);
+});
+
+test('production-shaped Codex render localizes time duration countdown and bytes together', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.indexedBytes = 1_300;
+  snapshot.coverage.totalBytes = 1_500;
+  snapshot.limit = {
+    provider: 'codex',
+    observedAt: Date.parse('2026-07-20T11:59:00.000Z'),
+    source: 'local-log',
+    confidence: 'last-observed',
+    windows: [{
+      usedPercent: 31,
+      windowMinutes: 90,
+      resetsAt: Date.parse('2026-07-20T23:30:00.000Z'),
+    }],
+  };
+  const view = buildCodexUsageView(snapshot, NOW);
+  const previous = I18n.getCurrentLanguage();
+  try {
+    I18n.setLanguage('de-DE');
+    const html = renderCodexView(
+      view,
+      scopedInsights(view),
+      I18n.t.providers.codex,
+      {
+        now: NOW,
+        formatNumber: (value) => I18n.formatNumber(value),
+        ...createCodexLocalizedFormatters('de-DE', 'Asia/Hong_Kong'),
+      },
+    );
+
+    assert.match(html, /1 Stunde.*30 Minuten/);
+    assert.match(html, /20 Minuten/);
+    assert.match(html, /21\.07\.2026.*07:30/);
+    assert.match(html, /12 Stunden/);
+    assert.match(html, /1,3 KB.*1,5 KB/s);
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
+test('Overview labels local-log and OAuth limit sources truthfully', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  view.limits = [
+    { state: 'current', usedPercent: 1, remainingPercent: 99, observedAt: NOW, resetsAt: NOW + 60_000, source: 'local-log' },
+    { state: 'current', usedPercent: 2, remainingPercent: 98, observedAt: NOW, resetsAt: NOW + 60_000, source: 'oauth' },
+  ];
+  const html = renderCodexView(view, [], CODEX_COPY_EN, { now: NOW });
+
+  assert.match(html, /Local log · not live/);
+  assert.match(html, /Account snapshot · last observed/);
+  assert.equal((html.match(/Local log · not live/g) ?? []).length, 1);
+});
+
+test('Overview orders limits, recent task, and one cohesive trend without internal limit names', () => {
+  const snapshot = snapshotFixture();
+  snapshot.limit = {
+    provider: 'codex',
+    observedAt: NOW - 60_000,
+    source: 'local-log',
+    confidence: 'last-observed',
+    windows: [{ label: 'primary', usedPercent: 31, windowMinutes: 300, resetsAt: NOW + 60_000 }],
+  };
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+    now: NOW,
+  });
+
+  assert.ok(html.indexOf('data-codex-section="limits"') < html.indexOf('data-codex-section="recent-task"'));
+  assert.ok(html.indexOf('data-codex-section="recent-task"') < html.indexOf('data-codex-section="trend"'));
+  assert.match(html, /5-hour window/);
+  assert.match(html, /31% used.*69% remaining/s);
+  assert.match(html, /Local log.*not live/s);
+  assert.match(html, /data-codex-action="view-task"/);
+  assert.match(html, /Reasoning is included within output/);
+  assert.match(html, /Observed session duration total \(proxy\)/);
+  assert.match(html, /data-codex-action="set-overview-scope"/);
+  assert.match(html, /data-codex-action="set-chart-metric"/);
+  assert.match(html, /data-codex-action="drilldown-date"/);
+  assert.equal((html.match(/class="daily-breakdown codex-overview-trend/g) ?? []).length, 1);
+  assert.doesNotMatch(html, />primary<|>secondary<|300m|Task-reported duration|session:|project:/);
 });
 
 test('Simplified Chinese Codex dashboard localizes the new Claude-style modules', () => {
