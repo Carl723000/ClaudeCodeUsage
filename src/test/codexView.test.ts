@@ -163,6 +163,47 @@ test('Simplified Chinese Codex dashboard localizes the new Claude-style modules'
   }
 });
 
+test('every Codex locale labels structural data as patch and tool-call proxies', () => {
+  const languages = [
+    'en',
+    'de-DE',
+    'zh-TW',
+    'zh-CN',
+    'ja',
+    'ko',
+    'pt-BR',
+    'id',
+  ] as const;
+  const expected = {
+    en: ['Patch calls', 'Post-patch tool-call proxy / patch call'],
+    'de-DE': ['Patch-Aufrufe', 'Tool-Call-Proxy nach Patch / Patch-Aufruf'],
+    'zh-TW': ['修補呼叫次數', '每次修補呼叫的修補後工具呼叫代理量'],
+    'zh-CN': ['补丁调用次数', '每次补丁调用的补丁后工具调用代理量'],
+    ja: ['パッチ呼び出し', 'パッチ呼び出しあたりのパッチ後ツール呼び出しプロキシ'],
+    ko: ['패치 호출', '패치 호출당 패치 후 도구 호출 프록시'],
+    'pt-BR': ['Chamadas de patch', 'Proxy de chamadas de ferramenta pós-patch / chamada de patch'],
+    id: ['Panggilan patch', 'Proksi panggilan alat pasca-patch / panggilan patch'],
+  };
+  const prohibited = /files changed|commands per file|post-change commands \/ file|patch rounds|command intensity|Befehle nach Änderung \/ Datei|Patch-Runden|Befehlsintensität|每個檔案的修改後命令數|修補輪次|修改後命令密度|每个文件的修改后命令数|补丁轮次|修改后命令密度|ファイルあたり変更後コマンド|パッチ回数|変更後のコマンド密度|파일당 변경 후 명령|패치 라운드|변경 후 명령 밀도|Comandos após mudança \/ arquivo|Rodadas de patch|Intensidade de comandos após mudanças|Perintah setelah perubahan \/ file|Putaran patch|Intensitas perintah setelah perubahan/i;
+  const previous = I18n.getCurrentLanguage();
+  try {
+    const view = buildCodexUsageView(snapshotFixture(), NOW);
+    for (const language of languages) {
+      I18n.setLanguage(language);
+      const copy = I18n.t.providers.codex as unknown as Record<string, unknown>;
+      const html = renderCodexView(view, [], I18n.t.providers.codex);
+
+      assert.equal('postChangeCommandsPerFile' in copy, false, `${language} retains the legacy copy key`);
+      assert.equal('patchRounds' in copy, false, `${language} retains the legacy copy key`);
+      assert.match(html, new RegExp(expected[language][0]));
+      assert.match(html, new RegExp(expected[language][1]));
+      assert.doesNotMatch(html, prohibited);
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
 test('all dynamic renderer values are escaped', () => {
   const snapshot = snapshotFixture();
   snapshot.files[0].byModel = {
