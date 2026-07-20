@@ -48,6 +48,10 @@ test('Codex diagnostics expose only anonymous coverage, timing, and safe flags',
     qualityFlags: {
       'unknown-event': 2,
       '/Users/carl/private-session.jsonl': 1,
+      'private-session-key': 3,
+      'github-token-abc': 4,
+      'private-repository-name': 5,
+      'https://github.com/example/private-repo': 7,
     },
     indexPath: '/Users/carl/codex-index-v1.json',
     sessionKey: 'private-session-key',
@@ -60,10 +64,10 @@ test('Codex diagnostics expose only anonymous coverage, timing, and safe flags',
     line,
     'codex-index outcome=partial files=4/5 bytes=1300/1500 periodBytes=900/1500 ' +
       'migrationPending=true bodyReads=1 failed=1 metadataMs=12.3 parseMs=45.7 ' +
-      'flags=unknown:1,unknown-event:2',
+      'flags=unknown:20,unknown-event:2',
   );
   assert.equal(
-    /Users|carl|private-session|private-repository|secret\.example|\.jsonl|prompt|command|credential|auth\.json/i.test(line),
+    /Users|carl|private-session|private-repository|github-token|private-repo|secret\.example|\.jsonl|prompt|command|credential|auth\.json/i.test(line),
     false,
   );
 });

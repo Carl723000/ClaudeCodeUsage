@@ -12,9 +12,11 @@ import {
 } from '../providers/codex/codexIndexClient';
 import {
   CodexIndexProgress,
+  CodexIndexV1,
   createEmptyCodexIndex,
   loadCodexIndex,
 } from '../providers/codex/codexIndex';
+import { runCodexWorkerRefresh } from '../providers/codex/codexIndexWorker';
 import {
   CodexWorkerMessage,
   CodexWorkerRequest,
@@ -318,4 +320,58 @@ test('worker cancellation persists a resumable atomic checkpoint', async () => {
     client.dispose();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('cancel during the final atomic save returns cancelled after preserving the save', async () => {
+  const savedIndex = createEmptyCodexIndex(request.timeZone);
+  const messages: CodexWorkerMessage[] = [];
+  let cancelled = false;
+  let releaseSave!: () => void;
+  let markSaveStarted!: () => void;
+  const saveStarted = new Promise<void>((resolve) => {
+    markSaveStarted = resolve;
+  });
+  const saveReleased = new Promise<void>((resolve) => {
+    releaseSave = resolve;
+  });
+  let persisted: CodexIndexV1 | undefined;
+
+  const running = runCodexWorkerRefresh(
+    { type: 'refresh', requestId: 'final-save-race', ...request },
+    {
+      isCancelled: () => cancelled,
+      post: (message: CodexWorkerMessage) => messages.push(message),
+      loadCodexIndex: async () => savedIndex,
+      scanCodexManifest: async () => ({ files: [], persistable: {} }),
+      updateCodexIndex: async () => ({
+        index: savedIndex,
+        bodyReads: 0,
+        failedFiles: 0,
+        migration: { filePasses: 0, bytesRead: 0, pending: false },
+      }),
+      saveCodexIndexAtomic: async (
+        _indexPath: string,
+        index: CodexIndexV1,
+      ) => {
+        persisted = index;
+        markSaveStarted();
+        await saveReleased;
+      },
+    },
+  );
+
+  await saveStarted;
+  cancelled = true;
+  releaseSave();
+  await running;
+
+  assert.deepEqual(persisted, savedIndex);
+  assert.deepEqual(messages, [{
+    type: 'error',
+    requestId: 'final-save-race',
+    error: {
+      code: 'cancelled',
+      message: 'Codex indexing was cancelled',
+    },
+  }]);
 });
