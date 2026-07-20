@@ -88,6 +88,8 @@ export interface CodexUsageView {
   allTime: CodexUsageScopeView;
   projects: Array<{ projectKey: string; scope: CodexUsageScopeView }>;
   daily: CodexDailyUsageView[];
+  last7DaysDaily: CodexDailyUsageView[];
+  last30DaysDaily: CodexDailyUsageView[];
   monthly: CodexPeriodUsageView[];
   recentThreads: CodexThreadUsageView[];
   totalThreadCount: number;
@@ -100,6 +102,7 @@ export interface CodexUsageView {
 const MAX_DAILY_ROWS = 90;
 const MAX_RECENT_THREAD_ROWS = 100;
 const HIGH_EFFORTS = new Set(['high', 'xhigh', 'max', 'ultra']);
+const DAY_MS = 24 * 60 * 60_000;
 
 function zeroTokens(): ProviderTokenCounts {
   return {
@@ -349,6 +352,18 @@ function monthlyRows(files: CodexFileAggregate[]): CodexPeriodUsageView[] {
     }));
 }
 
+function rollingDailyRows(
+  rows: CodexDailyUsageView[],
+  now: number,
+  days: number,
+): CodexDailyUsageView[] {
+  const end = new Date(now).toISOString().slice(0, 10);
+  const start = new Date(now - Math.max(0, days - 1) * DAY_MS)
+    .toISOString()
+    .slice(0, 10);
+  return rows.filter((row) => row.day >= start && row.day <= end);
+}
+
 function behaviorView(scopeView: CodexUsageScopeView): CodexBehaviorView {
   const highEffortFresh = scopeView.efforts
     .filter((row) => HIGH_EFFORTS.has(row.key.toLowerCase()))
@@ -454,6 +469,7 @@ export function buildCodexUsageView(
     projects.set(key, group);
   }
   const allTime = scope(snapshot.files);
+  const daily = dailyRows(snapshot.files);
 
   return {
     lastTask: recent.length > 0 ? scope(recent) : null,
@@ -467,7 +483,9 @@ export function buildCodexUsageView(
           right.scope.total.fresh - left.scope.total.fresh ||
           left.projectKey.localeCompare(right.projectKey),
       ),
-    daily: dailyRows(snapshot.files),
+    daily,
+    last7DaysDaily: rollingDailyRows(daily, now, 7),
+    last30DaysDaily: rollingDailyRows(daily, now, 30),
     monthly: monthlyRows(snapshot.files),
     recentThreads: recentThreadRows(snapshot.files),
     totalThreadCount: snapshot.files.length,

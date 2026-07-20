@@ -86,6 +86,11 @@ test('all-time, monthly, and behavior views stay provider-native', () => {
   assert.equal(view.monthly[0].period, '2026-07');
   assert.equal(view.monthly[0].total.processed, 1_440);
   assert.equal(view.monthly[0].threads, 3);
+  assert.deepEqual(view.last7DaysDaily.map((row) => row.day), ['2026-07-20']);
+  assert.deepEqual(view.last30DaysDaily.map((row) => row.day), [
+    '2026-07-20',
+    '2026-07-10',
+  ]);
   assert.equal(view.behavior.childThreadsPerRootTask, 0.5);
   assert.equal(view.behavior.childFreshShare, 0.3125);
   assert.equal(view.behavior.approvalReviewerFreshShare, 0.21875);
@@ -136,6 +141,8 @@ test('an empty snapshot has no recent task and safe zero scopes', () => {
   assert.equal(view.last7Days.total.processed, 0);
   assert.deepEqual(view.projects, []);
   assert.deepEqual(view.daily, []);
+  assert.deepEqual(view.last7DaysDaily, []);
+  assert.deepEqual(view.last30DaysDaily, []);
   assert.deepEqual(view.monthly, []);
   assert.deepEqual(view.recentThreads, []);
   assert.equal(view.totalThreadCount, 0);
