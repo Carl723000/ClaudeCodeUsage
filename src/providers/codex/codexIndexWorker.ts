@@ -1,6 +1,8 @@
 import { parentPort } from 'node:worker_threads';
 
 import {
+  CODEX_REFRESH_MAX_BYTES,
+  CODEX_REFRESH_MAX_FILE_PASSES,
   CodexIndexCancelledError,
   loadCodexIndex,
   saveCodexIndexAtomic,
@@ -58,14 +60,21 @@ async function runRefresh(
   try {
     const metadataStarted = Date.now();
     const [previous, manifest] = await Promise.all([
-      loadCodexIndex(request.indexPath),
+      loadCodexIndex(request.indexPath, request.timeZone),
       scanCodexManifest(request.codexHome, request.salt),
     ]);
     const metadataMs = Date.now() - metadataStarted;
     const parseStarted = Date.now();
     const updated = await updateCodexIndex(previous, manifest, {
       salt: request.salt,
+      timeZone: request.timeZone,
+      budget: {
+        maxFilePasses: CODEX_REFRESH_MAX_FILE_PASSES,
+        maxBytes: CODEX_REFRESH_MAX_BYTES,
+      },
       shouldCancel: () => cancelled.has(request.requestId),
+      onCheckpoint: (index) =>
+        saveCodexIndexAtomic(request.indexPath, index),
       onProgress: (progress) =>
         post({
           type: 'progress',

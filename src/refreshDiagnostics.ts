@@ -39,6 +39,9 @@ export interface CodexIndexDiagnostic {
   totalFiles: number;
   indexedBytes: number;
   totalBytes: number;
+  periodMigratedBytes: number;
+  periodTotalBytes: number;
+  migrationPending: boolean;
   bodyReads: number;
   failedFiles: number;
   metadataMs: number;
@@ -66,6 +69,8 @@ export function formatCodexIndexDiagnostic(value: CodexIndexDiagnostic): string 
     `codex-index outcome=${value.outcome} ` +
     `files=${value.indexedFiles}/${value.totalFiles} ` +
     `bytes=${value.indexedBytes}/${value.totalBytes} ` +
+    `periodBytes=${value.periodMigratedBytes}/${value.periodTotalBytes} ` +
+    `migrationPending=${value.migrationPending} ` +
     `bodyReads=${value.bodyReads} failed=${value.failedFiles} ` +
     `metadataMs=${ms(value.metadataMs)} parseMs=${ms(value.parseMs)} ` +
     `flags=${safeFlagCounts(value.qualityFlags)}`

@@ -11,6 +11,7 @@ import { ClaudeDataLoader } from './dataLoader';
 import { StatusBarManager } from './statusBar';
 import { UsageWebviewProvider } from './webview';
 import { I18n } from './i18n';
+import { resolveTimeZone } from './dateKeys';
 import { fetchLatestPricing } from './pricing';
 import { ClaudeApiClient } from './claudeApiClient';
 import {
@@ -806,6 +807,7 @@ export class ClaudeCodeUsageExtension {
         'codex-index-v1.json',
       ),
       salt: this.codexSalt,
+      timeZone: resolveTimeZone(config.timezone),
     });
   }
 
@@ -851,6 +853,9 @@ export class ClaudeCodeUsageExtension {
           totalFiles: 0,
           indexedBytes: 0,
           totalBytes: 0,
+          periodMigratedBytes: 0,
+          periodTotalBytes: 0,
+          migrationPending: false,
           bodyReads: 0,
           failedFiles: 1,
           metadataMs: 0,
@@ -894,6 +899,10 @@ export class ClaudeCodeUsageExtension {
         totalFiles: result.snapshot.coverage.totalFiles,
         indexedBytes: result.snapshot.coverage.indexedBytes,
         totalBytes: result.snapshot.coverage.totalBytes,
+        periodMigratedBytes:
+          result.snapshot.coverage.period.allTime.migratedBytes,
+        periodTotalBytes: result.snapshot.coverage.period.allTime.totalBytes,
+        migrationPending: diagnostic?.migrationPending ?? false,
         bodyReads: diagnostic?.bodyReads ?? 0,
         failedFiles: diagnostic?.failedFiles ?? 0,
         metadataMs: diagnostic?.metadataMs ?? 0,

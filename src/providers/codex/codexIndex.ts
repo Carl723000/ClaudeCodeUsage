@@ -156,6 +156,7 @@ export interface CodexIndexProgress {
   totalFiles: number;
   indexedBytes: number;
   totalBytes: number;
+  period: CodexPeriodCoverage;
 }
 
 export interface CodexIndexUpdateOptions {
@@ -889,28 +890,14 @@ function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgr
     totalFiles: index.coverage.totalFiles,
     indexedBytes: index.coverage.indexedBytes,
     totalBytes: index.coverage.totalBytes,
+    period: index.coverage.period,
   };
 }
 
-type LegacyCodexIndexUpdateOptions = Omit<CodexIndexUpdateOptions, 'timeZone'> & {
-  timeZone?: string;
-};
-
-export function updateCodexIndex(
-  previous: CodexIndexV2,
-  manifest: CodexManifest,
-  options: CodexIndexUpdateOptions,
-): Promise<CodexIndexUpdateResult>;
-/** @deprecated Task-7 worker compatibility until refresh requests carry a timezone. */
-export function updateCodexIndex(
-  previous: CodexIndexV2,
-  manifest: CodexManifest,
-  options: LegacyCodexIndexUpdateOptions,
-): Promise<CodexIndexUpdateResult>;
 export async function updateCodexIndex(
   previous: CodexIndexV2,
   manifest: CodexManifest,
-  options: LegacyCodexIndexUpdateOptions,
+  options: CodexIndexUpdateOptions,
 ): Promise<CodexIndexUpdateResult> {
   const requestedMaxBytes = options.budget?.maxBytes;
   if (
@@ -922,7 +909,7 @@ export async function updateCodexIndex(
   }
   const index = cloneIndex(previous);
   const io = options.io ?? defaultIo();
-  const timeZone = resolveTimeZone(options.timeZone ?? 'UTC');
+  const timeZone = resolveTimeZone(options.timeZone);
   const normalizedOptions: CodexIndexUpdateOptions = { ...options, timeZone };
   const budget: CodexIndexWorkBudget = {
     maxFilePasses: Math.max(

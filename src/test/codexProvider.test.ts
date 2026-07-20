@@ -138,10 +138,22 @@ function partialIndex(): CodexIndexV1 {
 class FakeClient implements CodexIndexClientLike {
   disposed = 0;
   calls = 0;
+  readonly inputs: Array<{
+    codexHome: string;
+    indexPath: string;
+    salt: string;
+    timeZone: string;
+  }> = [];
   constructor(private readonly responses: Array<CodexWorkerResult | Error>) {}
 
-  async refresh(): Promise<CodexWorkerResult> {
+  async refresh(input: {
+    codexHome: string;
+    indexPath: string;
+    salt: string;
+    timeZone: string;
+  }): Promise<CodexWorkerResult> {
     this.calls += 1;
+    this.inputs.push(input);
     const next = this.responses.shift();
     if (next instanceof Error) {
       throw next;
@@ -164,6 +176,11 @@ function workerResult(index = partialIndex()): CodexWorkerResult {
     failedFiles: 1,
     metadataMs: 2,
     parseMs: 3,
+    migration: {
+      filePasses: 1,
+      bytesRead: 100,
+      pending: !index.coverage.period.allTime.complete,
+    },
   };
 }
 
@@ -176,11 +193,23 @@ test('disabled or unavailable providers do not create a worker client', async ()
       return new FakeClient([]);
     };
     const disabled = new CodexProvider(
-      { enabled: false, codexHome: root, indexPath: 'unused', salt: 'salt' },
+      {
+        enabled: false,
+        codexHome: root,
+        indexPath: 'unused',
+        salt: 'salt',
+        timeZone: 'Asia/Hong_Kong',
+      },
       factory,
     );
     const unavailable = new CodexProvider(
-      { enabled: true, codexHome: root, indexPath: 'unused', salt: 'salt' },
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'unused',
+        salt: 'salt',
+        timeZone: 'Asia/Hong_Kong',
+      },
       factory,
     );
 
@@ -210,7 +239,13 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
     );
     const client = new FakeClient([result]);
     const provider = new CodexProvider(
-      { enabled: true, codexHome: root, indexPath: 'index', salt: 'salt' },
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'Asia/Hong_Kong',
+      },
       () => client,
     );
 
@@ -227,6 +262,7 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
     assert.equal(refreshed.snapshot.limit?.windows[0].usedPercent, 42);
     assert.equal(refreshed.snapshot.limits.length, 1);
     assert.deepEqual(provider.snapshot(), refreshed.snapshot);
+    assert.equal(client.inputs[0].timeZone, 'Asia/Hong_Kong');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -241,7 +277,13 @@ test('a worker failure retains the last verified provider snapshot', async () =>
       new Error('/private/path must not be returned'),
     ]);
     const provider = new CodexProvider(
-      { enabled: true, codexHome: root, indexPath: 'index', salt: 'salt' },
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'Asia/Hong_Kong',
+      },
       () => client,
     );
     const verified = await provider.refresh();
@@ -264,7 +306,13 @@ test('an exact archive copy is absent from a successful provider snapshot', asyn
       { ...workerResult(duplicateIndex(false)), failedFiles: 0 },
     ]);
     const provider = new CodexProvider(
-      { enabled: true, codexHome: root, indexPath: 'index', salt: 'salt' },
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'Asia/Hong_Kong',
+      },
       () => client,
     );
 
@@ -286,7 +334,13 @@ test('an ambiguous active/archive group remains visible and makes outcome partia
       { ...workerResult(duplicateIndex(true)), failedFiles: 0 },
     ]);
     const provider = new CodexProvider(
-      { enabled: true, codexHome: root, indexPath: 'index', salt: 'salt' },
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'Asia/Hong_Kong',
+      },
       () => client,
     );
 
@@ -299,6 +353,59 @@ test('an ambiguous active/archive group remains visible and makes outcome partia
       'active-only': 1,
       'archive-only': 1,
     });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('incomplete base, identity, or required period coverage is partial', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-coverage-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const cases = [
+      {
+        name: 'base',
+        mutate(index: CodexIndexV1): void {
+          index.coverage.complete = false;
+        },
+      },
+      {
+        name: 'identity',
+        mutate(index: CodexIndexV1): void {
+          index.coverage.identity.complete = false;
+        },
+      },
+      ...(['last7Days', 'last30Days', 'allTime'] as const).map((range) => ({
+        name: range,
+        mutate(index: CodexIndexV1): void {
+          index.coverage.period[range].complete = false;
+        },
+      })),
+    ];
+
+    for (const coverageCase of cases) {
+      const index = duplicateIndex(false);
+      coverageCase.mutate(index);
+      const provider = new CodexProvider(
+        {
+          enabled: true,
+          codexHome: root,
+          indexPath: 'index',
+          salt: 'salt',
+          timeZone: 'Asia/Hong_Kong',
+        },
+        () => new FakeClient([
+          { ...workerResult(index), failedFiles: 0 },
+        ]),
+      );
+
+      assert.equal(
+        (await provider.refresh()).outcome,
+        'partial',
+        coverageCase.name,
+      );
+      provider.dispose();
+    }
   } finally {
     await rm(root, { recursive: true, force: true });
   }

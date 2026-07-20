@@ -52,13 +52,14 @@ export interface CodexProviderResult {
     failedFiles: number;
     metadataMs: number;
     parseMs: number;
+    migrationPending: boolean;
   };
 }
 
 export type CodexIndexClientFactory = () => CodexIndexClientLike;
 
-function emptySnapshot(): CodexProviderSnapshot {
-  return snapshotFromIndex(createEmptyCodexIndex());
+function emptySnapshot(timeZone: string): CodexProviderSnapshot {
+  return snapshotFromIndex(createEmptyCodexIndex(timeZone));
 }
 
 function latestLimits(
@@ -196,7 +197,7 @@ export class CodexProvider {
     if (!(await this.isAvailable())) {
       return {
         outcome: 'unavailable',
-        snapshot: this.currentSnapshot ?? emptySnapshot(),
+        snapshot: this.currentSnapshot ?? emptySnapshot(this.options.timeZone),
       };
     }
     this.client ??= this.clientFactory();
@@ -207,6 +208,7 @@ export class CodexProvider {
           codexHome: this.options.codexHome,
           indexPath: this.options.indexPath,
           salt: this.options.salt,
+          timeZone: this.options.timeZone,
         },
         (progress) => {
           this.lastProgress = progress;
@@ -220,7 +222,10 @@ export class CodexProvider {
       const outcome: ProviderSourceOutcome =
         result.failedFiles > 0 ||
           !result.index.coverage.complete ||
-          !result.index.coverage.identity.complete
+          !result.index.coverage.identity.complete ||
+          !result.index.coverage.period.last7Days.complete ||
+          !result.index.coverage.period.last30Days.complete ||
+          !result.index.coverage.period.allTime.complete
           ? 'partial'
           : 'success';
       return {
@@ -232,12 +237,13 @@ export class CodexProvider {
           failedFiles: result.failedFiles,
           metadataMs: result.metadataMs,
           parseMs: result.parseMs,
+          migrationPending: result.migration.pending,
         },
       };
     } catch {
       return {
         outcome: 'error',
-        snapshot: this.currentSnapshot ?? emptySnapshot(),
+        snapshot: this.currentSnapshot ?? emptySnapshot(this.options.timeZone),
         progress: this.lastProgress,
       };
     }
