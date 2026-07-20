@@ -268,6 +268,55 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
   }
 });
 
+test('provider snapshots promote exact period slices for scoped consumers', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-period-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const index = duplicateIndex(false);
+    const file = index.files['active-key'];
+    file.aggregate.period = {
+      timeZone: 'UTC',
+      indexedThrough: file.offset,
+      days: {
+        '2026-07-20': {
+          total: { inputTotal: 8, cachedInput: 5, outputTotal: 2, reasoningOutput: 1 },
+          byModel: {
+            'gpt-5.6-sol': { inputTotal: 8, cachedInput: 5, outputTotal: 2, reasoningOutput: 1 },
+          },
+          byEffort: {
+            high: { inputTotal: 8, cachedInput: 5, outputTotal: 2, reasoningOutput: 1 },
+          },
+          structural: {
+            patchCalls: 1,
+            toolCalls: 2,
+            postPatchToolCalls: 1,
+            compactCount: 0,
+            taskCompleteCount: 1,
+          },
+          firstObservedAt: Date.parse('2026-07-20T00:00:00.000Z'),
+          lastObservedAt: Date.parse('2026-07-20T00:05:00.000Z'),
+        },
+      },
+    };
+    const provider = new CodexProvider(
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'UTC',
+      },
+      () => new FakeClient([{ ...workerResult(index), failedFiles: 0 }]),
+    );
+
+    const refreshed = await provider.refresh();
+
+    assert.deepEqual(refreshed.snapshot.files[0].period, file.aggregate.period);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a worker failure retains the last verified provider snapshot', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-stale-'));
   try {

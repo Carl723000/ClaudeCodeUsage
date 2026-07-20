@@ -2,8 +2,11 @@ import { CodexProviderSnapshot } from './codexProvider';
 import {
   CodexFileAggregate,
   CodexIndexCoverage,
+  CodexPeriodCoverage,
+  CodexRangeCoverage,
   CodexStructuralSummary,
 } from './codexIndex';
+import { rollingDayKeys } from '../../dateKeys';
 import {
   freshInputPlusOutput,
   processedTokens,
@@ -35,6 +38,7 @@ export interface CodexUsageScopeView {
   structural: CodexStructuralSummary;
   models: Array<{ key: string; totals: CodexMetricTotals }>;
   efforts: Array<{ key: string; totals: CodexMetricTotals }>;
+  periodCoverage?: CodexRangeCoverage;
 }
 
 export interface CodexDailyUsageView {
@@ -128,6 +132,7 @@ export interface CodexUsageView {
   behaviorScopes: CodexBehaviorScopesView;
   /** Backward-compatible all-time behavior aggregate. */
   behavior: CodexBehaviorView;
+  periodCoverage: CodexPeriodCoverage;
   coverage: CodexIndexCoverage;
   qualityFlags: Array<{ flag: string; count: number }>;
   limits: ProviderLimitSnapshot[];
@@ -137,7 +142,6 @@ export interface CodexUsageView {
 const MAX_DAILY_ROWS = 90;
 const MAX_RECENT_THREAD_ROWS = 1_000;
 const HIGH_EFFORTS = new Set(['high', 'xhigh', 'max', 'ultra']);
-const DAY_MS = 24 * 60 * 60_000;
 
 function zeroTokens(): ProviderTokenCounts {
   return {
@@ -296,6 +300,98 @@ function scope(files: CodexFileAggregate[]): CodexUsageScopeView {
   };
 }
 
+function scopeFromPeriodDays(
+  files: CodexFileAggregate[],
+  keys: string[],
+  coverage: CodexRangeCoverage,
+  timeZone: string,
+): CodexUsageScopeView {
+  const selectedKeys = new Set(keys);
+  const totalTokens = zeroTokens();
+  const childTokens = zeroTokens();
+  const approvalTokens = zeroTokens();
+  const structural = zeroStructural();
+  const models = new Map<string, ProviderTokenCounts>();
+  const efforts = new Map<string, ProviderTokenCounts>();
+  const countedSessions = new Set<string>();
+  const sessionRanges = new Map<string, { first: number; last: number }>();
+  let rootTasks = 0;
+  let childThreads = 0;
+  let approvalReviewerThreads = 0;
+
+  for (const file of files) {
+    if (file.period?.timeZone !== timeZone) {
+      continue;
+    }
+    const slices = Object.entries(file.period.days)
+      .filter(([day]) => selectedKeys.has(day))
+      .map(([, slice]) => slice);
+    if (slices.length === 0) {
+      continue;
+    }
+
+    const sessionKey = file.session.sessionKey;
+    if (!countedSessions.has(sessionKey)) {
+      countedSessions.add(sessionKey);
+      if (file.session.role === 'root') {
+        rootTasks += 1;
+      } else if (file.session.role === 'subagent') {
+        childThreads += 1;
+      } else if (file.session.role === 'approval-reviewer') {
+        approvalReviewerThreads += 1;
+      }
+    }
+
+    for (const slice of slices) {
+      addTokens(totalTokens, slice.total);
+      addStructural(structural, slice.structural);
+      addBuckets(models, slice.byModel, slice.total);
+      addBuckets(efforts, slice.byEffort, slice.total);
+      if (file.session.role === 'subagent') {
+        addTokens(childTokens, slice.total);
+      } else if (file.session.role === 'approval-reviewer') {
+        addTokens(approvalTokens, slice.total);
+      }
+
+      const first = slice.firstObservedAt;
+      const last = slice.lastObservedAt;
+      if (first !== undefined || last !== undefined) {
+        const observedFirst = first ?? last!;
+        const observedLast = last ?? first!;
+        const current = sessionRanges.get(sessionKey);
+        sessionRanges.set(sessionKey, {
+          first: Math.min(current?.first ?? observedFirst, observedFirst),
+          last: Math.max(current?.last ?? observedLast, observedLast),
+        });
+      }
+    }
+  }
+
+  const total = metrics(totalTokens);
+  const child = metrics(childTokens);
+  const approval = metrics(approvalTokens);
+  const durationMs = [...sessionRanges.values()].reduce(
+    (sum, range) => sum + Math.max(0, range.last - range.first),
+    0,
+  );
+  return {
+    total,
+    rootTasks,
+    threads: countedSessions.size,
+    childThreads,
+    childProcessedShare: ratio(child.processed, total.processed),
+    childFreshShare: ratio(child.fresh, total.fresh),
+    approvalReviewerThreads,
+    approvalReviewerFreshShare: ratio(approval.fresh, total.fresh),
+    cacheShare: Math.min(1, ratio(total.cachedInput, total.input)),
+    durationMs,
+    structural,
+    models: bucketRows(models),
+    efforts: bucketRows(efforts),
+    periodCoverage: coverage,
+  };
+}
+
 function observedAt(file: CodexFileAggregate): number {
   return file.session.endedAt ?? file.session.startedAt ?? 0;
 }
@@ -316,30 +412,36 @@ function sortedBucketKeys(
     .map(([key]) => key || 'unknown');
 }
 
-function dailyRows(files: CodexFileAggregate[]): CodexDailyUsageView[] {
+function dailyRows(
+  files: CodexFileAggregate[],
+  timeZone: string,
+): CodexDailyUsageView[] {
   const days = new Map<
     string,
     {
       tokens: ProviderTokenCounts;
-      threads: number;
-      childThreads: number;
-      approvalReviewerThreads: number;
+      threads: Set<string>;
+      childThreads: Set<string>;
+      approvalReviewerThreads: Set<string>;
     }
   >();
   for (const file of files) {
-    for (const [day, tokens] of Object.entries(file.byDay)) {
+    if (file.period?.timeZone !== timeZone) {
+      continue;
+    }
+    for (const [day, slice] of Object.entries(file.period.days)) {
       const row = days.get(day) ?? {
         tokens: zeroTokens(),
-        threads: 0,
-        childThreads: 0,
-        approvalReviewerThreads: 0,
+        threads: new Set<string>(),
+        childThreads: new Set<string>(),
+        approvalReviewerThreads: new Set<string>(),
       };
-      addTokens(row.tokens, tokens);
-      row.threads += 1;
+      addTokens(row.tokens, slice.total);
+      row.threads.add(file.session.sessionKey);
       if (file.session.role === 'subagent') {
-        row.childThreads += 1;
+        row.childThreads.add(file.session.sessionKey);
       } else if (file.session.role === 'approval-reviewer') {
-        row.approvalReviewerThreads += 1;
+        row.approvalReviewerThreads.add(file.session.sessionKey);
       }
       days.set(day, row);
     }
@@ -350,29 +452,35 @@ function dailyRows(files: CodexFileAggregate[]): CodexDailyUsageView[] {
     .map(([day, row]) => ({
       day,
       total: metrics(row.tokens),
-      threads: row.threads,
-      childThreads: row.childThreads,
-      approvalReviewerThreads: row.approvalReviewerThreads,
+      threads: row.threads.size,
+      childThreads: row.childThreads.size,
+      approvalReviewerThreads: row.approvalReviewerThreads.size,
     }));
 }
 
-function monthlyRows(files: CodexFileAggregate[]): CodexPeriodUsageView[] {
+function monthlyRows(
+  files: CodexFileAggregate[],
+  timeZone: string,
+): CodexPeriodUsageView[] {
   const months = new Map<
     string,
-    { tokens: ProviderTokenCounts; files: Set<CodexFileAggregate> }
+    { tokens: ProviderTokenCounts; sessions: Set<string> }
   >();
   for (const file of files) {
-    for (const [day, tokens] of Object.entries(file.byDay)) {
+    if (file.period?.timeZone !== timeZone) {
+      continue;
+    }
+    for (const [day, slice] of Object.entries(file.period.days)) {
       const period = day.slice(0, 7);
       if (!/^\d{4}-\d{2}$/.test(period)) {
         continue;
       }
       const row = months.get(period) ?? {
         tokens: zeroTokens(),
-        files: new Set<CodexFileAggregate>(),
+        sessions: new Set<string>(),
       };
-      addTokens(row.tokens, tokens);
-      row.files.add(file);
+      addTokens(row.tokens, slice.total);
+      row.sessions.add(file.session.sessionKey);
       months.set(period, row);
     }
   }
@@ -381,20 +489,22 @@ function monthlyRows(files: CodexFileAggregate[]): CodexPeriodUsageView[] {
     .map(([period, row]) => ({
       period,
       total: metrics(row.tokens),
-      threads: row.files.size,
+      threads: row.sessions.size,
     }));
 }
 
 function rollingDailyRows(
   rows: CodexDailyUsageView[],
-  now: number,
-  days: number,
+  keys: string[],
 ): CodexDailyUsageView[] {
-  const end = new Date(now).toISOString().slice(0, 10);
-  const start = new Date(now - Math.max(0, days - 1) * DAY_MS)
-    .toISOString()
-    .slice(0, 10);
-  return rows.filter((row) => row.day >= start && row.day <= end);
+  const rowsByDay = new Map(rows.map((row) => [row.day, row]));
+  return keys.map((day) => rowsByDay.get(day) ?? {
+    day,
+    total: metrics(zeroTokens()),
+    threads: 0,
+    childThreads: 0,
+    approvalReviewerThreads: 0,
+  });
 }
 
 function behaviorView(scopeView: CodexUsageScopeView): CodexBehaviorView {
@@ -555,12 +665,9 @@ export function buildCodexUsageView(
   now: number = Date.now(),
 ): CodexUsageView {
   const recent = recentTaskFiles(snapshot.files);
-  const last7Days = snapshot.files.filter(
-    (file) => observedAt(file) >= now - 7 * 24 * 60 * 60_000,
-  );
-  const last30Days = snapshot.files.filter(
-    (file) => observedAt(file) >= now - 30 * 24 * 60 * 60_000,
-  );
+  const periodCoverage = snapshot.coverage.period;
+  const last7DayKeys = rollingDayKeys(now, periodCoverage.timeZone, 7);
+  const last30DayKeys = rollingDayKeys(now, periodCoverage.timeZone, 30);
   const projects = new Map<string, CodexFileAggregate[]>();
   for (const file of snapshot.files) {
     const key = file.session.projectKey ?? 'project:unknown';
@@ -569,10 +676,20 @@ export function buildCodexUsageView(
     projects.set(key, group);
   }
   const recentScope = recent.length > 0 ? scope(recent) : null;
-  const last7DaysScope = scope(last7Days);
-  const last30DaysScope = scope(last30Days);
+  const last7DaysScope = scopeFromPeriodDays(
+    snapshot.files,
+    last7DayKeys,
+    periodCoverage.last7Days,
+    periodCoverage.timeZone,
+  );
+  const last30DaysScope = scopeFromPeriodDays(
+    snapshot.files,
+    last30DayKeys,
+    periodCoverage.last30Days,
+    periodCoverage.timeZone,
+  );
   const allTime = scope(snapshot.files);
-  const daily = dailyRows(snapshot.files);
+  const daily = dailyRows(snapshot.files, periodCoverage.timeZone);
   const taskRoot = taskRootFile(recent);
   const sourceLimits = snapshot.limits.length > 0
     ? snapshot.limits
@@ -614,9 +731,9 @@ export function buildCodexUsageView(
           left.projectKey.localeCompare(right.projectKey),
       ),
     daily,
-    last7DaysDaily: rollingDailyRows(daily, now, 7),
-    last30DaysDaily: rollingDailyRows(daily, now, 30),
-    monthly: monthlyRows(snapshot.files),
+    last7DaysDaily: rollingDailyRows(daily, last7DayKeys),
+    last30DaysDaily: rollingDailyRows(daily, last30DayKeys),
+    monthly: monthlyRows(snapshot.files, periodCoverage.timeZone),
     recentThreads: recentThreadRows(snapshot.files),
     totalThreadCount: snapshot.files.length,
     behaviorScopes: {
@@ -626,6 +743,7 @@ export function buildCodexUsageView(
       allTime: behaviorView(allTime),
     },
     behavior: behaviorView(allTime),
+    periodCoverage,
     coverage: snapshot.coverage,
     qualityFlags: Object.entries(snapshot.qualityFlags)
       .map(([flag, count]) => ({ flag, count }))

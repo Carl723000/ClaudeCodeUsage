@@ -119,3 +119,37 @@ test('paste-ready constraints are fixed local text derived only from insight kin
   assert.match(text, /Stop when the acceptance criteria pass/i);
   assert.match(text, /production-grade hardening/i);
 });
+
+test('partial rolling coverage blocks deterministic advice without gating complete or aggregate scopes', () => {
+  const partial7Days = Object.assign(scope(), {
+    periodCoverage: {
+      migratedFiles: 1,
+      totalFiles: 2,
+      migratedBytes: 100,
+      totalBytes: 200,
+      complete: false,
+    },
+  });
+  const complete30Days = Object.assign(scope(), {
+    periodCoverage: {
+      migratedFiles: 2,
+      totalFiles: 2,
+      migratedBytes: 200,
+      totalBytes: 200,
+      complete: true,
+    },
+  });
+
+  const partialInsights = buildCodexInsights(partial7Days);
+  assert.deepEqual(partialInsights, []);
+  assert.equal(pasteReadyConstraint(partialInsights), '');
+  assert.equal(
+    buildCodexInsights(complete30Days).some((item) => item.kind === 'effort-comparison'),
+    true,
+  );
+  assert.equal(
+    buildCodexInsights(scope()).some((item) => item.kind === 'effort-comparison'),
+    true,
+    'recent and aggregate-based all-time scopes have no natural-day coverage gate',
+  );
+});
