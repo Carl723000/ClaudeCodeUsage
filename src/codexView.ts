@@ -353,6 +353,7 @@ function periodChart(
   }
   const ordered = [...rows].reverse();
   const maxFresh = Math.max(0, ...ordered.map((row) => row.total.fresh));
+  const chartHeight = 100;
   const metrics: Array<[string, string]> = [
     ['processed', copy.processed],
     ['fresh', copy.fresh],
@@ -360,6 +361,14 @@ function periodChart(
     ['reasoning', copy.reasoning],
     ['threads', copy.threads],
   ];
+  const metricValue = (row: CodexChartRow, key: string): number =>
+    key === 'threads'
+      ? row.threads
+      : row.total[key as keyof CodexMetricTotals];
+  const axisAttributes = metrics.map(([key]) => {
+    const maximum = Math.max(0, ...ordered.map((row) => metricValue(row, key)));
+    return `data-axis-top-${key}="${formatted(format, maximum)}" data-axis-mid-${key}="${formatted(format, maximum / 2)}"`;
+  }).join(' ');
   const buttons = metrics
     .map(
       ([key, label]) => `<button class="chart-tab ${key === 'fresh' ? 'active' : ''}" data-codex-chart-button="${escapeHtml(chartId)}:${key}" onclick="showCodexChartMetric('${escapeHtml(chartId)}','${key}')">${escapeHtml(label)}</button>`,
@@ -381,12 +390,15 @@ function periodChart(
         )
         .join(' ');
       const height = maxFresh > 0
-        ? Math.max(2, Math.round((row.total.fresh / maxFresh) * 140))
+        ? Math.max(2, Math.round((row.total.fresh / maxFresh) * chartHeight))
         : 2;
-      return `<div class="chart-bar-container"><div class="codex-chart-value" data-codex-chart-value>${formatted(format, row.total.fresh)}</div><div class="chart-bar input-bar codex-chart-bar" style="height:${height}px" data-codex-chart="${escapeHtml(chartId)}" data-row-label="${escapeHtml(row.label)}" data-processed="${Math.max(0, row.total.processed)}" data-fresh="${Math.max(0, row.total.fresh)}" data-output="${Math.max(0, row.total.output)}" data-reasoning="${Math.max(0, row.total.reasoning)}" data-threads="${Math.max(0, row.threads)}" ${labelAttributes} title="${escapeHtml(row.label)} · ${escapeHtml(copy.fresh)}: ${formatted(format, row.total.fresh)}"></div><div class="chart-label">${escapeHtml(row.label)}</div></div>`;
+      return `<div class="hc-col"><div class="hc-barval codex-chart-value" data-codex-chart-value>${formatted(format, row.total.fresh)}</div><div class="chart-bar input-bar codex-chart-bar" style="height:${height}px" data-codex-chart="${escapeHtml(chartId)}" data-row-label="${escapeHtml(row.label)}" data-processed="${Math.max(0, row.total.processed)}" data-fresh="${Math.max(0, row.total.fresh)}" data-output="${Math.max(0, row.total.output)}" data-reasoning="${Math.max(0, row.total.reasoning)}" data-threads="${Math.max(0, row.threads)}" ${labelAttributes} title="${escapeHtml(row.label)} · ${escapeHtml(copy.fresh)}: ${formatted(format, row.total.fresh)}"></div></div>`;
     })
     .join('');
-  return `<section class="daily-breakdown codex-period-chart" data-codex-chart-root="${escapeHtml(chartId)}"><div class="chart-tabs">${buttons}</div><div class="chart-container"><div class="chart-content"><div class="chart-bars">${bars}</div></div></div></section>`;
+  const labels = ordered
+    .map((row) => `<div class="hc-xlabel">${escapeHtml(row.label)}</div>`)
+    .join('');
+  return `<section class="daily-breakdown codex-period-chart" data-codex-chart-root="${escapeHtml(chartId)}" ${axisAttributes}><div class="chart-tabs">${buttons}</div><div class="hc-wrap"><div class="hc-yaxis"><span class="hc-yval">${formatted(format, maxFresh)}</span><span class="hc-yval">${formatted(format, maxFresh / 2)}</span><span class="hc-yval">${formatted(format, 0)}</span></div><div class="hc-main"><div class="hc-scroll"><div class="hc-plot"><div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div><div class="hc-bars chart-bars">${bars}</div></div><div class="hc-xlabels">${labels}</div></div></div></div></section>`;
 }
 
 function roleLabel(role: CodexThreadUsageView['role'], copy: CodexViewCopy): string {

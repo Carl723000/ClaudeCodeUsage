@@ -55,7 +55,9 @@ test('Codex renderer reuses Claude visuals for eight truthful modules', () => {
   }
   assert.match(html, /class="summary-grid"/);
   assert.match(html, /class="chart-tabs"/);
-  assert.match(html, /class="chart-bars"/);
+  assert.match(html, /class="hc-bars chart-bars"/);
+  assert.match(html, /class="hc-yaxis"/);
+  assert.match(html, /class="hc-grid hc-grid-top"/);
   assert.match(html, /class="cost-composition codex-token-composition"/);
   assert.match(html, /class="daily-table"/);
   assert.match(html, /2026-07-20/);
