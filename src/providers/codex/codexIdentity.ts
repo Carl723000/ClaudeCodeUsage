@@ -33,6 +33,18 @@ function cleanLabel(value: string, maxLength: number): string | undefined {
   return clean || undefined;
 }
 
+function redactAbsolutePaths(value: string): string {
+  return value
+    .replace(/file:\/\/\/[^\s"'`<>]+/gi, '[path]')
+    .replace(/[a-z]:[\\/][^\s"'`<>]+/gi, '[path]')
+    .replace(
+      /(^|[^:/])\/(?:[^\s/"'`<>]+\/)+[^\s"'`<>]+/g,
+      '$1[path]',
+    )
+    .replace(/(^|[\s("'`])\/[^\s"'`<>]+/g, '$1[path]')
+    .replace(/(^|[\s("'`])\\\\[^\s"'`<>]+/g, '$1[path]');
+}
+
 function basename(value: string): string | undefined {
   const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
   if (!normalized) {
@@ -88,7 +100,10 @@ function sessionTitleRecord(
       return undefined;
     }
     const id = record.id.trim();
-    const title = cleanLabel(record.thread_name, MAX_TITLE_LENGTH);
+    const title = cleanLabel(
+      redactAbsolutePaths(record.thread_name),
+      MAX_TITLE_LENGTH,
+    );
     return id && title ? { id, title } : undefined;
   } catch {
     return undefined;
