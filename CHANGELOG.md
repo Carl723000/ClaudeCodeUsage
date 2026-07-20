@@ -31,6 +31,14 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   All Time, Threads, Projects, Behavior, and Settings tabs add daily/monthly
   bars, token and thread-role composition, model/effort tables, and local
   behavior signals without reading content or estimating Codex dollar cost.
+- **Truthful Codex identities** — root sessions use the latest local Codex
+  thread title, subagents retain their reported nickname and parent title, and
+  projects use the Git repository name (or a non-Git folder basename). Raw
+  session IDs, repository URLs, and full paths remain excluded.
+- **Codex exploration and limits** — session search, role/project/model/effort
+  filters, sortable tables, parent-child collapsing, project drill-downs, and
+  all unexpired named primary/secondary limit windows make high usage traceable
+  without inventing Branches, Workflows, or real-time subscription state.
 - **Local Codex optimization guidance** — structural signals explain unusually
   high subagent, effort, approval-reviewer, command, and cache overhead without
   inspecting or retaining prompt, response, command, or tool-argument content.
@@ -66,6 +74,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - Codex indexing follows observed rollout semantics: child counters start from
   their own zero, repeated metadata preserves lineage, `guardian` sessions are
   approval reviewers, and known non-usage envelopes are not quality failures.
+- Codex Settings now shows only shared and Codex-effective controls; its reset
+  action is scoped to those visible settings. Behavior metrics can be compared
+  across the recent task, 7 days, 30 days, and all time, while recommendations
+  remain explicitly based on the recent task.
+- Codex period charts now reuse the existing dashboard's Y axis, grid, theme
+  colors, horizontal scrolling, and metric-switching behavior.
 
 ### Privacy
 - Codex discovery is restricted to `sessions/**/*.jsonl` and
