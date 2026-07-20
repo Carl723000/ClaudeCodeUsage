@@ -16,16 +16,20 @@ import {
 import { CodexWorkerResult } from '../providers/codex/codexWorkerProtocol';
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 
-function contribution(): CodexFileContribution {
+function contribution(
+  fileKey = 'anonymous-file-key',
+  sourceArea?: 'sessions' | 'archive',
+): CodexFileContribution {
   return {
-    fileKey: 'anonymous-file-key',
+    fileKey,
+    ...(sourceArea ? { sourceArea } : {}),
     size: 100,
     mtimeMs: 1,
     offset: 100,
     discardingOversizedLine: false,
     parserState: {
       schemaVersion: 1,
-      fileKey: 'anonymous-file-key',
+      fileKey,
       sessionKey: 'anonymous-session-key',
       role: 'root',
       qualityFlags: ['unknown-event'],
@@ -66,6 +70,44 @@ function contribution(): CodexFileContribution {
   };
 }
 
+function duplicateIndex(ambiguous: boolean): CodexIndexV1 {
+  const index = createEmptyCodexIndex();
+  const active = contribution('active-key', 'sessions');
+  const archive = contribution('archive-key', 'archive');
+  active.qualityFlags = ['active-only'];
+  archive.qualityFlags = ['archive-only'];
+  if (ambiguous) {
+    archive.aggregate.total.outputTotal = 21;
+  }
+  index.files = {
+    [active.fileKey]: active,
+    [archive.fileKey]: archive,
+  };
+  index.aggregate = {
+    total: {
+      inputTotal: 160,
+      cachedInput: 100,
+      outputTotal: ambiguous ? 41 : 40,
+    },
+    byDay: {},
+    byModel: {},
+    byEffort: {},
+  };
+  index.coverage = {
+    indexedFiles: 2,
+    totalFiles: 2,
+    indexedBytes: 200,
+    totalBytes: 200,
+    complete: true,
+    identity: {
+      exactDuplicateFiles: ambiguous ? 0 : 1,
+      ambiguousSessionGroups: ambiguous ? 1 : 0,
+      complete: !ambiguous,
+    },
+  };
+  return index;
+}
+
 function partialIndex(): CodexIndexV1 {
   const index = createEmptyCodexIndex();
   const file = contribution();
@@ -82,6 +124,11 @@ function partialIndex(): CodexIndexV1 {
     indexedBytes: 100,
     totalBytes: 150,
     complete: false,
+    identity: {
+      exactDuplicateFiles: 0,
+      ambiguousSessionGroups: 0,
+      complete: true,
+    },
   };
   return index;
 }
@@ -202,6 +249,54 @@ test('a worker failure retains the last verified provider snapshot', async () =>
     assert.equal(failed.outcome, 'error');
     assert.equal(failed.snapshot.total.inputTotal, 80);
     assert.doesNotMatch(JSON.stringify(failed), /private\/path/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an exact archive copy is absent from a successful provider snapshot', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-dedup-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const client = new FakeClient([
+      { ...workerResult(duplicateIndex(false)), failedFiles: 0 },
+    ]);
+    const provider = new CodexProvider(
+      { enabled: true, codexHome: root, indexPath: 'index', salt: 'salt' },
+      () => client,
+    );
+
+    const refreshed = await provider.refresh();
+
+    assert.equal(refreshed.outcome, 'success');
+    assert.equal(refreshed.snapshot.files.length, 1);
+    assert.deepEqual(refreshed.snapshot.qualityFlags, { 'active-only': 1 });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an ambiguous active/archive group remains visible and makes outcome partial', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-ambiguous-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const client = new FakeClient([
+      { ...workerResult(duplicateIndex(true)), failedFiles: 0 },
+    ]);
+    const provider = new CodexProvider(
+      { enabled: true, codexHome: root, indexPath: 'index', salt: 'salt' },
+      () => client,
+    );
+
+    const refreshed = await provider.refresh();
+
+    assert.equal(refreshed.outcome, 'partial');
+    assert.equal(refreshed.snapshot.files.length, 2);
+    assert.equal(refreshed.snapshot.total.outputTotal, 41);
+    assert.deepEqual(refreshed.snapshot.qualityFlags, {
+      'active-only': 1,
+      'archive-only': 1,
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

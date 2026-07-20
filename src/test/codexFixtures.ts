@@ -161,6 +161,11 @@ export function snapshotFixture(): CodexProviderSnapshot {
       indexedBytes: 1_300,
       totalBytes: 1_500,
       complete: false,
+      identity: {
+        exactDuplicateFiles: 0,
+        ambiguousSessionGroups: 0,
+        complete: true,
+      },
     },
     qualityFlags: { 'unknown-event': 1 },
     limits: [],

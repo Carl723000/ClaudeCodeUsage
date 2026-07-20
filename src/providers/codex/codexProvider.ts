@@ -19,6 +19,7 @@ import {
   CodexWorkerResult,
 } from './codexWorkerProtocol';
 import { loadCodexSessionTitles } from './codexIdentity';
+import { classifyCodexSessionDuplicates } from './codexDedup';
 
 export interface CodexProviderOptions extends CodexWorkerRefreshInput {
   enabled: boolean;
@@ -60,9 +61,11 @@ function emptySnapshot(): CodexProviderSnapshot {
   return snapshotFromIndex(createEmptyCodexIndex());
 }
 
-function latestLimits(index: CodexIndexV1): ProviderLimitSnapshot[] {
+function latestLimits(
+  files: CodexIndexV1['files'][string][],
+): ProviderLimitSnapshot[] {
   const latest = new Map<string, ProviderLimitSnapshot>();
-  for (const file of Object.values(index.files)) {
+  for (const file of files) {
     const snapshots = [
       ...Object.values(file.limits ?? {}),
       ...(file.limit ? [file.limit] : []),
@@ -84,9 +87,11 @@ function latestLimits(index: CodexIndexV1): ProviderLimitSnapshot[] {
   );
 }
 
-function qualityCounts(index: CodexIndexV1): Record<string, number> {
+function qualityCounts(
+  files: CodexIndexV1['files'][string][],
+): Record<string, number> {
   const counts: Record<string, number> = {};
-  for (const file of Object.values(index.files)) {
+  for (const file of files) {
     for (const flag of new Set(file.qualityFlags)) {
       counts[flag] = (counts[flag] ?? 0) + 1;
     }
@@ -94,11 +99,43 @@ function qualityCounts(index: CodexIndexV1): Record<string, number> {
   return counts;
 }
 
+function aggregateTotal(
+  files: CodexIndexV1['files'][string][],
+): ProviderTokenCounts {
+  const total: ProviderTokenCounts = {
+    inputTotal: 0,
+    cachedInput: 0,
+    cacheWriteInput: 0,
+    outputTotal: 0,
+    reasoningOutput: 0,
+    sourceTotal: 0,
+  };
+  for (const file of files) {
+    total.inputTotal += Math.max(0, file.aggregate.total.inputTotal);
+    total.cachedInput = (total.cachedInput ?? 0) +
+      Math.max(0, file.aggregate.total.cachedInput ?? 0);
+    total.cacheWriteInput = (total.cacheWriteInput ?? 0) +
+      Math.max(0, file.aggregate.total.cacheWriteInput ?? 0);
+    total.outputTotal += Math.max(0, file.aggregate.total.outputTotal);
+    total.reasoningOutput = (total.reasoningOutput ?? 0) +
+      Math.max(0, file.aggregate.total.reasoningOutput ?? 0);
+    total.sourceTotal = (total.sourceTotal ?? 0) +
+      Math.max(0, file.aggregate.total.sourceTotal ?? 0);
+  }
+  return total;
+}
+
 function snapshotFromIndex(
   index: CodexIndexV1,
   sessionTitles: Map<string, string> = new Map(),
 ): CodexProviderSnapshot {
-  const files = Object.values(index.files)
+  const canonicalFileKeys = classifyCodexSessionDuplicates(
+    index.files,
+  ).canonicalFileKeys;
+  const contributions = [...canonicalFileKeys]
+    .map((fileKey) => index.files[fileKey])
+    .filter((file): file is CodexIndexV1['files'][string] => file !== undefined);
+  const files = contributions
     .map((file) => ({
       ...file.aggregate,
       session: {
@@ -110,13 +147,13 @@ function snapshotFromIndex(
       (left, right) =>
         (right.session.startedAt ?? 0) - (left.session.startedAt ?? 0),
     );
-  const limits = latestLimits(index);
+  const limits = latestLimits(contributions);
   return {
     provider: 'codex',
-    total: index.aggregate.total,
+    total: aggregateTotal(contributions),
     files,
     coverage: index.coverage,
-    qualityFlags: qualityCounts(index),
+    qualityFlags: qualityCounts(contributions),
     limits,
     limit: limits[0] ?? null,
   };
@@ -181,7 +218,9 @@ export class CodexProvider {
       );
       this.currentSnapshot = snapshotFromIndex(result.index, sessionTitles);
       const outcome: ProviderSourceOutcome =
-        result.failedFiles > 0 || !result.index.coverage.complete
+        result.failedFiles > 0 ||
+          !result.index.coverage.complete ||
+          !result.index.coverage.identity.complete
           ? 'partial'
           : 'success';
       return {
