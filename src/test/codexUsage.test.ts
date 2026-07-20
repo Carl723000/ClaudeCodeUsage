@@ -5,7 +5,11 @@ import {
   buildCodexUsageView,
   tokenComposition,
 } from '../providers/codex/codexUsage';
-import { identityLineageFixture, snapshotFixture } from './codexFixtures';
+import {
+  identityLineageFixture,
+  parentlessNonRootTitleFixture,
+  snapshotFixture,
+} from './codexFixtures';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
 
@@ -264,4 +268,16 @@ test('lineage traversal groups a parent cycle once without borrowing a child tit
     view.lastTaskIdentity?.observedAt,
     Date.parse('2026-07-20T11:55:00.000Z'),
   );
+});
+
+test('a parentless non-root cannot supply the task title', () => {
+  const view = buildCodexUsageView(parentlessNonRootTitleFixture(), NOW);
+
+  assert.equal(view.lastTask?.threads, 1);
+  assert.equal(view.recentThreads[0].role, 'approval-reviewer');
+  assert.equal(
+    view.recentThreads[0].title,
+    'parentless reviewer title must not become a task title',
+  );
+  assert.equal(view.lastTaskIdentity?.title, undefined);
 });

@@ -187,13 +187,36 @@ test('repository canonicalization strips secrets and URL-only decorations', () =
   );
 });
 
-test('repository display name remains a sanitized basename after decoding', () => {
-  const identity = normalizeRepositoryIdentity(
-    'https://example.com/Owner/%2FUsers%2Falice%2FSecretRepo.git',
+test('ordinary percent encoding canonicalizes exactly like plain text', () => {
+  assert.deepEqual(
+    normalizeRepositoryIdentity('https://github.com/owner/%72epo.git'),
+    normalizeRepositoryIdentity('https://github.com/owner/repo.git'),
   );
+});
 
-  assert.equal(identity?.name, 'SecretRepo');
-  assert.doesNotMatch(JSON.stringify(identity?.name), /Users|alice|[\\/]/);
+test('percent-encoded path separators are rejected in any hex case', () => {
+  for (const separator of ['%2F', '%2f', '%5C', '%5c']) {
+    assert.equal(
+      normalizeRepositoryIdentity(
+        `https://example.com/Owner/${separator}Users${separator}alice${separator}Repo.git`,
+      ),
+      undefined,
+    );
+  }
+});
+
+test('malformed and unsafe decoded repository segments are rejected', () => {
+  for (const repositoryUrl of [
+    'git@example.com:Owner/%ZZRepo.git',
+    'git@example.com:Owner/%00Repo.git',
+    'git@example.com:Owner/%2E.git',
+    'git@example.com:Owner/%2E%2E.git',
+    'git@example.com:Owner/%20.git',
+    'https://example.com/Owner/%2E/Repo.git',
+    'https://example.com/Owner/%2e%2E/Repo.git',
+  ]) {
+    assert.equal(normalizeRepositoryIdentity(repositoryUrl), undefined);
+  }
 });
 
 test('host and hosted-service path case rules are stable', () => {

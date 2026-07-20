@@ -58,14 +58,21 @@ function basename(value: string): string | undefined {
   return cleanLabel(normalized.split('/').pop() ?? '', MAX_PROJECT_LABEL_LENGTH);
 }
 
-function decodedRepositoryName(candidate: string): string | undefined {
-  let decoded = candidate;
+function safeDecodedRepositorySegment(value: string): boolean {
+  return Boolean(value.trim()) &&
+    value !== '.' &&
+    value !== '..' &&
+    !/[\\/\u0000-\u001f\u007f]/.test(value);
+}
+
+function decodeRepositorySegment(value: string): string | undefined {
+  let decoded: string;
   try {
-    decoded = decodeURIComponent(candidate);
+    decoded = decodeURIComponent(value);
   } catch {
-    // A malformed escape is still safe as a plain label after sanitization.
+    return undefined;
   }
-  return basename(decoded);
+  return safeDecodedRepositorySegment(decoded) ? decoded : undefined;
 }
 
 const LOWERCASE_REPOSITORY_PATH_HOSTS = new Set([
@@ -90,13 +97,25 @@ function repositoryPathIdentity(
   const trimmedPath = pathValue
     .replace(/\\/g, '/')
     .replace(/[?#].*$/, '')
-    .replace(/^\/+|\/+$/g, '')
-    .replace(/\.git$/i, '');
-  const segments = trimmedPath.split('/').filter(Boolean);
-  if (!host || segments.length === 0) {
+    .replace(/^\/+|\/+$/g, '');
+  const rawSegments = trimmedPath.split('/').filter(Boolean);
+  if (!host || rawSegments.length === 0) {
     return undefined;
   }
-  const name = decodedRepositoryName(segments[segments.length - 1]);
+  const segments: string[] = [];
+  for (const rawSegment of rawSegments) {
+    const decoded = decodeRepositorySegment(rawSegment);
+    if (decoded === undefined) {
+      return undefined;
+    }
+    segments.push(decoded);
+  }
+  const lastIndex = segments.length - 1;
+  segments[lastIndex] = segments[lastIndex].replace(/\.git$/i, '');
+  if (!safeDecodedRepositorySegment(segments[lastIndex])) {
+    return undefined;
+  }
+  const name = cleanLabel(segments[lastIndex], MAX_PROJECT_LABEL_LENGTH);
   if (!name) {
     return undefined;
   }
@@ -128,10 +147,15 @@ export function normalizeRepositoryIdentity(
   if (!(parsed.protocol in DEFAULT_REPOSITORY_PORTS)) {
     return undefined;
   }
+  const rawUrl = /^[a-z][a-z0-9+.-]*:\/\/[^/?#\\]*((?:[\\/])[^?#]*)?/i
+    .exec(value);
+  if (!rawUrl) {
+    return undefined;
+  }
   const port = parsed.port === DEFAULT_REPOSITORY_PORTS[parsed.protocol]
     ? ''
     : parsed.port;
-  return repositoryPathIdentity(parsed.hostname, port, parsed.pathname);
+  return repositoryPathIdentity(parsed.hostname, port, rawUrl[1] ?? '');
 }
 
 export function safeProjectIdentity(

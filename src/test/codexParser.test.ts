@@ -328,6 +328,36 @@ test('session metadata is pseudonymized and auto-review stays distinct', () => {
   );
 });
 
+test('encoded local-path repository text never reaches the pseudonymizer', () => {
+  const pseudonymizedSources: string[] = [];
+  const state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: 'safe-session',
+        cwd: '/safe/project',
+        git: {
+          repository_url:
+            'https://example.com/Owner/%2FUsers%2Falice%2FSecretRepo.git',
+        },
+      },
+    }),
+    createCodexParserState('safe-file'),
+    (raw: string): string => {
+      pseudonymizedSources.push(raw);
+      return `anonymous:${pseudonymizedSources.length}`;
+    },
+  ).state;
+
+  assert.equal(state.projectName, 'project');
+  assert.deepEqual(pseudonymizedSources, ['safe-session', '/safe/project']);
+  assert.doesNotMatch(
+    JSON.stringify(pseudonymizedSources),
+    /%2f|%5c|Users|alice|SecretRepo/i,
+  );
+});
+
 test('repeated metadata cannot erase an established child role', () => {
   const pseudonymize = (raw: string): string => `safe:${raw}`;
   let state = parseCodexLine(
