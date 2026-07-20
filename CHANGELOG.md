@@ -27,6 +27,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   index coverage, quality flags, and last-observed limit snapshots.
 - **Provider-aware dashboard** — Claude, Codex Beta, and side-by-side Compare
   modes preserve provider-specific semantics; Compare does not sum cost or quota.
+- **Codex diagnostic dashboard** — Claude-style Recent, 7 Days, 30 Days,
+  All Time, Threads, Projects, Behavior, and Settings tabs add daily/monthly
+  bars, token and thread-role composition, model/effort tables, and local
+  behavior signals without reading content or estimating Codex dollar cost.
 - **Local Codex optimization guidance** — structural signals explain unusually
   high subagent, effort, approval-reviewer, command, and cache overhead without
   inspecting or retaining prompt, response, command, or tool-argument content.

@@ -5340,20 +5340,15 @@ export class UsageWebviewProvider {
       .codex-tab-content.active {
         display: block;
       }
-      .codex-scope-control {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        margin-bottom: 16px;
-        color: var(--vscode-descriptionForeground);
-        font-size: 12px;
+      .codex-period-chart .chart-container {
+        margin-bottom: 12px;
       }
-      .codex-scope-select {
-        background: var(--vscode-dropdown-background);
-        color: var(--vscode-dropdown-foreground);
-        border: 1px solid var(--vscode-dropdown-border, var(--vscode-input-border));
-        border-radius: 4px;
-        padding: 5px 8px;
+      .codex-chart-value {
+        color: var(--vscode-descriptionForeground);
+        font-size: 9px;
+        line-height: 12px;
+        margin-bottom: 3px;
+        white-space: nowrap;
       }
       .codex-evidence span { font-size: 12px; }
       .codex-coverage, .codex-limit { margin: 12px 0; line-height: 1.6; }

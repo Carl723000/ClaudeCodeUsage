@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 
 import { defaultDashboardProvider } from '../codexView';
+import { CODEX_COPY_EN } from '../codexView';
 import { I18n } from '../i18n';
 import { SupportedLanguage } from '../types';
 
@@ -53,6 +54,8 @@ test('Codex settings and charts stay inside the provider view', () => {
   );
   assert.match(webview, /showCodexTab\('settings'\)/);
   assert.match(webview, /function showCodexChartMetric/);
+  assert.match(webview, /\.codex-chart-value\s*\{/);
+  assert.match(webview, /\.codex-period-chart \.chart-container/);
   assert.match(extension, /codexOptimizationEnabled:/);
 });
 
@@ -81,6 +84,36 @@ test('provider and Codex view copy is complete in every UI locale', () => {
         } else {
           assert.equal(Object.keys(value).length, 5);
         }
+      }
+      if (language !== 'en') {
+        for (const key of [
+          'allTime',
+          'behavior',
+          'settings',
+          'monthly',
+          'tokenComposition',
+          'freshInput',
+          'reasoningSubset',
+          'threadRoleComposition',
+          'childThreadsPerRootTask',
+          'childFreshShare',
+          'approvalFreshShare',
+          'highEffortFreshShare',
+          'processedToFreshRatio',
+          'reasoningOutputShare',
+          'postChangeCommandsPerFile',
+          'patchRounds',
+          'compactions',
+        ] as const) {
+          assert.notEqual(
+            providers.codex[key],
+            CODEX_COPY_EN[key],
+            `${language} still falls back to English for ${key}`,
+          );
+        }
+        const setting = I18n.settingText('codex.optimization.enabled');
+        assert.ok(setting.label?.trim(), `${language} has no optimization setting label`);
+        assert.ok(setting.help?.trim(), `${language} has no optimization setting help`);
       }
     }
   } finally {
