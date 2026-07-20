@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -14,6 +14,7 @@ import {
   createEmptyCodexIndex,
 } from '../providers/codex/codexIndex';
 import { CodexWorkerResult } from '../providers/codex/codexWorkerProtocol';
+import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 
 function contribution(): CodexFileContribution {
   return {
@@ -149,7 +150,17 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-on-'));
   try {
     await mkdir(path.join(root, 'sessions'), { recursive: true });
-    const client = new FakeClient([workerResult()]);
+    const result = workerResult();
+    const sessionKey = pseudonymousIdentityKey('salt', 'raw-session-title');
+    const file = Object.values(result.index.files)[0];
+    file.parserState.sessionKey = sessionKey;
+    file.aggregate.session.sessionKey = sessionKey;
+    await writeFile(
+      path.join(root, 'session_index.jsonl'),
+      `${JSON.stringify({ id: 'raw-session-title', thread_name: '真实 Session 标题' })}\n`,
+      'utf8',
+    );
+    const client = new FakeClient([result]);
     const provider = new CodexProvider(
       { enabled: true, codexHome: root, indexPath: 'index', salt: 'salt' },
       () => client,
@@ -161,6 +172,10 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
     assert.equal(refreshed.snapshot.total.inputTotal, 80);
     assert.deepEqual(refreshed.snapshot.qualityFlags, { 'unknown-event': 1 });
     assert.equal(refreshed.snapshot.files.length, 1);
+    assert.equal(
+      refreshed.snapshot.files[0].session.sessionTitle,
+      '真实 Session 标题',
+    );
     assert.equal(refreshed.snapshot.limit?.windows[0].usedPercent, 42);
     assert.deepEqual(provider.snapshot(), refreshed.snapshot);
   } finally {

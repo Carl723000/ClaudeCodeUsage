@@ -26,6 +26,10 @@ interface FixtureRow {
   output: number;
   reasoning: number;
   projectKey: string;
+  sessionTitle?: string;
+  agentNickname?: string;
+  projectName: string;
+  projectDirectoryName: string;
 }
 
 const ROWS: FixtureRow[] = [
@@ -40,6 +44,9 @@ const ROWS: FixtureRow[] = [
     output: 100,
     reasoning: 60,
     projectKey: 'project:a',
+    sessionTitle: '完成 Codex v2.3.0 仪表板',
+    projectName: 'ClaudeCodeUsage',
+    projectDirectoryName: 'ClaudeCodeUsage-MyFix',
   },
   {
     sessionKey: 'session:child-a',
@@ -53,6 +60,9 @@ const ROWS: FixtureRow[] = [
     output: 100,
     reasoning: 60,
     projectKey: 'project:a',
+    agentNickname: 'Locke',
+    projectName: 'ClaudeCodeUsage',
+    projectDirectoryName: 'claude-code-usage-v221',
   },
   {
     sessionKey: 'session:review-old',
@@ -65,6 +75,9 @@ const ROWS: FixtureRow[] = [
     output: 40,
     reasoning: 10,
     projectKey: 'project:a',
+    sessionTitle: '审批发布工作流',
+    projectName: 'ClaudeCodeUsage',
+    projectDirectoryName: 'ClaudeCodeUsage-MyFix',
   },
   {
     sessionKey: 'session:terra-old',
@@ -77,6 +90,9 @@ const ROWS: FixtureRow[] = [
     output: 20,
     reasoning: 0,
     projectKey: 'project:b',
+    sessionTitle: '分析天工项目',
+    projectName: 'TianGong',
+    projectDirectoryName: 'TianGong',
   },
 ];
 
@@ -102,6 +118,10 @@ function aggregate(row: FixtureRow): CodexFileAggregate {
       sessionKey: row.sessionKey,
       parentSessionKey: row.parentSessionKey,
       projectKey: row.projectKey,
+      sessionTitle: row.sessionTitle,
+      agentNickname: row.agentNickname,
+      projectName: row.projectName,
+      projectDirectoryName: row.projectDirectoryName,
       role: row.role,
       startedAt: endedAt - 10 * 60_000,
       endedAt,

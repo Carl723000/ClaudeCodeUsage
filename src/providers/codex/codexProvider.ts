@@ -18,6 +18,7 @@ import {
   CodexWorkerRefreshInput,
   CodexWorkerResult,
 } from './codexWorkerProtocol';
+import { loadCodexSessionTitles } from './codexIdentity';
 
 export interface CodexProviderOptions extends CodexWorkerRefreshInput {
   enabled: boolean;
@@ -78,9 +79,18 @@ function qualityCounts(index: CodexIndexV1): Record<string, number> {
   return counts;
 }
 
-function snapshotFromIndex(index: CodexIndexV1): CodexProviderSnapshot {
+function snapshotFromIndex(
+  index: CodexIndexV1,
+  sessionTitles: Map<string, string> = new Map(),
+): CodexProviderSnapshot {
   const files = Object.values(index.files)
-    .map((file) => file.aggregate)
+    .map((file) => ({
+      ...file.aggregate,
+      session: {
+        ...file.aggregate.session,
+        sessionTitle: sessionTitles.get(file.aggregate.session.sessionKey),
+      },
+    }))
     .sort(
       (left, right) =>
         (right.session.startedAt ?? 0) - (left.session.startedAt ?? 0),
@@ -148,7 +158,11 @@ export class CodexProvider {
           this.lastProgress = progress;
         },
       );
-      this.currentSnapshot = snapshotFromIndex(result.index);
+      const sessionTitles = await loadCodexSessionTitles(
+        this.options.codexHome,
+        this.options.salt,
+      );
+      this.currentSnapshot = snapshotFromIndex(result.index, sessionTitles);
       const outcome: ProviderSourceOutcome =
         result.failedFiles > 0 || !result.index.coverage.complete
           ? 'partial'

@@ -46,13 +46,37 @@ export interface CodexDailyUsageView {
 }
 
 export interface CodexThreadUsageView {
+  sessionKey: string;
+  parentSessionKey?: string;
+  title?: string;
+  parentTitle?: string;
+  agentNickname?: string;
   observedAt: number;
   role: ProviderThreadRole;
   projectKey: string;
+  projectName?: string;
+  projectDirectoryName?: string;
   models: string[];
   efforts: string[];
   total: CodexMetricTotals;
   durationMs: number;
+  structural: CodexStructuralSummary;
+}
+
+export interface CodexProjectUsageView {
+  projectKey: string;
+  name?: string;
+  directoryName?: string;
+  lastActiveAt: number;
+  threadCount: number;
+  scope: CodexUsageScopeView;
+}
+
+export interface CodexTaskIdentityView {
+  title?: string;
+  projectName?: string;
+  projectDirectoryName?: string;
+  observedAt: number;
 }
 
 export interface CodexPeriodUsageView {
@@ -83,10 +107,11 @@ export interface CodexBehaviorView {
 
 export interface CodexUsageView {
   lastTask: CodexUsageScopeView | null;
+  lastTaskIdentity: CodexTaskIdentityView | null;
   last7Days: CodexUsageScopeView;
   last30Days: CodexUsageScopeView;
   allTime: CodexUsageScopeView;
-  projects: Array<{ projectKey: string; scope: CodexUsageScopeView }>;
+  projects: CodexProjectUsageView[];
   daily: CodexDailyUsageView[];
   last7DaysDaily: CodexDailyUsageView[];
   last30DaysDaily: CodexDailyUsageView[];
@@ -100,7 +125,7 @@ export interface CodexUsageView {
 }
 
 const MAX_DAILY_ROWS = 90;
-const MAX_RECENT_THREAD_ROWS = 100;
+const MAX_RECENT_THREAD_ROWS = 1_000;
 const HIGH_EFFORTS = new Set(['high', 'xhigh', 'max', 'ultra']);
 const DAY_MS = 24 * 60 * 60_000;
 
@@ -397,17 +422,32 @@ function behaviorView(scopeView: CodexUsageScopeView): CodexBehaviorView {
 function recentThreadRows(
   files: CodexFileAggregate[],
 ): CodexThreadUsageView[] {
+  const titles = new Map(
+    files
+      .filter((file) => file.session.sessionTitle)
+      .map((file) => [file.session.sessionKey, file.session.sessionTitle!]),
+  );
   return [...files]
     .sort((left, right) => observedAt(right) - observedAt(left))
     .slice(0, MAX_RECENT_THREAD_ROWS)
     .map((file) => ({
+      sessionKey: file.session.sessionKey,
+      parentSessionKey: file.session.parentSessionKey,
+      title: file.session.sessionTitle,
+      parentTitle: file.session.parentSessionKey
+        ? titles.get(file.session.parentSessionKey)
+        : undefined,
+      agentNickname: file.session.agentNickname,
       observedAt: observedAt(file),
       role: file.session.role,
       projectKey: file.session.projectKey ?? 'project:unknown',
+      projectName: file.session.projectName,
+      projectDirectoryName: file.session.projectDirectoryName,
       models: sortedBucketKeys(file.byModel),
       efforts: sortedBucketKeys(file.byEffort),
       total: metrics(file.total),
       durationMs: sessionDuration(file),
+      structural: { ...file.structural },
     }));
 }
 
@@ -470,14 +510,42 @@ export function buildCodexUsageView(
   }
   const allTime = scope(snapshot.files);
   const daily = dailyRows(snapshot.files);
+  const taskRoot = recent.find(
+    (file) =>
+      file.session.role === 'root' || !file.session.parentSessionKey,
+  ) ?? recent[0];
 
   return {
     lastTask: recent.length > 0 ? scope(recent) : null,
+    lastTaskIdentity: taskRoot
+      ? {
+          title: taskRoot.session.sessionTitle,
+          projectName: taskRoot.session.projectName,
+          projectDirectoryName: taskRoot.session.projectDirectoryName,
+          observedAt: observedAt(taskRoot),
+        }
+      : null,
     last7Days: scope(last7Days),
     last30Days: scope(last30Days),
     allTime,
     projects: [...projects.entries()]
-      .map(([projectKey, files]) => ({ projectKey, scope: scope(files) }))
+      .map(([projectKey, files]) => {
+        const representative = [...files]
+          .sort((left, right) => {
+            const roleDifference =
+              (left.session.role === 'root' ? 0 : 1) -
+              (right.session.role === 'root' ? 0 : 1);
+            return roleDifference || observedAt(right) - observedAt(left);
+          })[0];
+        return {
+          projectKey,
+          name: representative?.session.projectName,
+          directoryName: representative?.session.projectDirectoryName,
+          lastActiveAt: Math.max(0, ...files.map(observedAt)),
+          threadCount: files.length,
+          scope: scope(files),
+        };
+      })
       .sort(
         (left, right) =>
           right.scope.total.fresh - left.scope.total.fresh ||
