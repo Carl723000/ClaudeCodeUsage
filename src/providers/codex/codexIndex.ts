@@ -8,7 +8,11 @@ import {
 } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import { dayKeyInZone, resolveTimeZone, rollingDayKeys } from '../../dateKeys';
+import {
+  dayKeyInZone,
+  resolveTimeZone,
+  rollingDayKeysFromDayKey,
+} from '../../dateKeys';
 import {
   NormalizedUsageEvent,
   ProviderLimitSnapshot,
@@ -111,6 +115,7 @@ export interface CodexRangeCoverage {
 
 export interface CodexPeriodCoverage {
   timeZone: string;
+  asOfDay: string;
   last7Days: CodexRangeCoverage;
   last30Days: CodexRangeCoverage;
   allTime: CodexRangeCoverage;
@@ -241,6 +246,7 @@ function emptyFileAggregate(
 
 export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV2 {
   const resolvedTimeZone = resolveTimeZone(timeZone);
+  const asOfDay = dayKeyInZone(new Date(Date.now()), resolvedTimeZone);
   const emptyRange = (): CodexRangeCoverage => ({
     migratedFiles: 0,
     totalFiles: 0,
@@ -265,6 +271,7 @@ export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV2 {
       },
       period: {
         timeZone: resolvedTimeZone,
+        asOfDay,
         last7Days: emptyRange(),
         last30Days: emptyRange(),
         allTime: emptyRange(),
@@ -765,6 +772,7 @@ function coverageFor(
   files: Record<string, CodexFileContribution>,
   manifest: CodexManifest,
   timeZone: string,
+  asOfDay: string,
   deduplication = classifyCodexSessionDuplicates(files),
 ): CodexIndexCoverage {
   let indexedFiles = 0;
@@ -852,8 +860,8 @@ function coverageFor(
       complete: migratedFiles === rangeTotalFiles,
     };
   };
-  const last7Start = rollingDayKeys(Date.now(), timeZone, 7)[0];
-  const last30Start = rollingDayKeys(Date.now(), timeZone, 30)[0];
+  const last7Start = rollingDayKeysFromDayKey(asOfDay, 7)[0];
+  const last30Start = rollingDayKeysFromDayKey(asOfDay, 30)[0];
   return {
     indexedFiles,
     totalFiles,
@@ -867,6 +875,7 @@ function coverageFor(
     },
     period: {
       timeZone,
+      asOfDay,
       last7Days: rangeCoverage(last7Start),
       last30Days: rangeCoverage(last30Start),
       allTime: rangeCoverage(),
@@ -878,10 +887,17 @@ function recomputeDerivedIndex(
   index: CodexIndexV2,
   manifest: CodexManifest,
   timeZone: string,
+  asOfDay: string,
 ): void {
   const deduplication = classifyCodexSessionDuplicates(index.files);
   index.aggregate = recomputeAggregate(index.files, deduplication);
-  index.coverage = coverageFor(index.files, manifest, timeZone, deduplication);
+  index.coverage = coverageFor(
+    index.files,
+    manifest,
+    timeZone,
+    asOfDay,
+    deduplication,
+  );
 }
 
 function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgress {
@@ -910,6 +926,8 @@ export async function updateCodexIndex(
   const index = cloneIndex(previous);
   const io = options.io ?? defaultIo();
   const timeZone = resolveTimeZone(options.timeZone);
+  const refreshInstant = Date.now();
+  const asOfDay = dayKeyInZone(new Date(refreshInstant), timeZone);
   const normalizedOptions: CodexIndexUpdateOptions = { ...options, timeZone };
   const budget: CodexIndexWorkBudget = {
     maxFilePasses: Math.max(
@@ -1001,7 +1019,7 @@ export async function updateCodexIndex(
     .sort(recentFirst);
 
   const checkpoint = async (): Promise<void> => {
-    recomputeDerivedIndex(index, manifest, timeZone);
+    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
     await options.onCheckpoint?.(cloneIndex(index));
   };
   const cancelBeforePass = async (): Promise<void> => {
@@ -1020,7 +1038,7 @@ export async function updateCodexIndex(
   ): ContributionChunkHandler => async (contribution, passBytesRead) => {
     bytesRead = passStartingBytes + passBytesRead;
     index.files[entry.fileKey] = contribution;
-    recomputeDerivedIndex(index, manifest, timeZone);
+    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
     options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
     if (options.shouldCancel?.()) {
       if (!cancellationCheckpointed) {
@@ -1083,13 +1101,13 @@ export async function updateCodexIndex(
         };
       }
     }
-    recomputeDerivedIndex(index, manifest, timeZone);
+    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
     options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
     await options.onCheckpoint?.(cloneIndex(index));
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  recomputeDerivedIndex(index, manifest, timeZone);
+  recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
   const canonical = classifyCodexSessionDuplicates(index.files).canonicalFileKeys;
   const periodWork = manifest.files
     .filter((entry) => {
@@ -1151,7 +1169,7 @@ export async function updateCodexIndex(
       failedFiles += 1;
       index.files[entry.fileKey] = prior;
     }
-    recomputeDerivedIndex(index, manifest, timeZone);
+    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
     options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
     await options.onCheckpoint?.(cloneIndex(index));
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1196,11 +1214,11 @@ export async function updateCodexIndex(
       }
       failedFiles += 1;
     }
-    recomputeDerivedIndex(index, manifest, timeZone);
+    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
     await options.onCheckpoint?.(cloneIndex(index));
   }
 
-  recomputeDerivedIndex(index, manifest, timeZone);
+  recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
   if (filePasses === 0) {
     options.onProgress?.(progressFor(index, manifest.files.length));
   }
@@ -1588,6 +1606,23 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
       complete: range.complete === true || migratedFiles === totalFiles,
     };
   };
+  const timeZone = resolveTimeZone(
+    typeof period.timeZone === 'string' ? period.timeZone : 'UTC',
+  );
+  const candidateAsOfDay = typeof period.asOfDay === 'string'
+    ? period.asOfDay
+    : '';
+  const hasValidAsOfDay =
+    rollingDayKeysFromDayKey(candidateAsOfDay, 1)[0] === candidateAsOfDay;
+  const asOfDay = hasValidAsOfDay
+    ? candidateAsOfDay
+    : dayKeyInZone(new Date(Date.now()), timeZone);
+  const last7Days = sanitizeRange(period.last7Days);
+  const last30Days = sanitizeRange(period.last30Days);
+  if (!hasValidAsOfDay) {
+    last7Days.complete = false;
+    last30Days.complete = false;
+  }
   return {
     indexedFiles: finiteNumber(coverage.indexedFiles),
     totalFiles: finiteNumber(coverage.totalFiles),
@@ -1606,11 +1641,10 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
       complete: identity.complete !== false,
     },
     period: {
-      timeZone: resolveTimeZone(
-        typeof period.timeZone === 'string' ? period.timeZone : 'UTC',
-      ),
-      last7Days: sanitizeRange(period.last7Days),
-      last30Days: sanitizeRange(period.last30Days),
+      timeZone,
+      asOfDay,
+      last7Days,
+      last30Days,
       allTime: sanitizeRange(period.allTime),
     },
   };

@@ -5,6 +5,7 @@ import {
   buildCodexUsageView,
   tokenComposition,
 } from '../providers/codex/codexUsage';
+import { buildCodexInsights } from '../providers/codex/codexInsights';
 import {
   identityLineageFixture,
   parentlessNonRootTitleFixture,
@@ -97,6 +98,87 @@ test('rolling scopes use only selected promoted day slices from active sessions'
   assert.equal(view.last7Days.periodCoverage, view.periodCoverage.last7Days);
   assert.equal(view.last30Days.periodCoverage, view.periodCoverage.last30Days);
   assert.equal(view.periodCoverage, snapshot.coverage.period);
+});
+
+test('rolling scopes stay anchored to snapshot coverage across Hong Kong midnight', () => {
+  const snapshot = snapshotFixture();
+  const coverage = snapshot.coverage.period;
+  coverage.timeZone = 'Asia/Hong_Kong';
+  coverage.asOfDay = '2026-07-20';
+  coverage.last7Days.complete = false;
+  coverage.last30Days.complete = true;
+  const file = snapshot.files[0];
+  file.total = { inputTotal: 800, cachedInput: 700, outputTotal: 200, reasoningOutput: 20 };
+  file.byModel = { 'gpt-5.6-sol': { ...file.total } };
+  file.byEffort = { high: { ...file.total } };
+  file.period = {
+    timeZone: 'Asia/Hong_Kong',
+    indexedThrough: 1,
+    days: {
+      '2026-07-14': {
+        total: { inputTotal: 30, cachedInput: 20, outputTotal: 10, reasoningOutput: 2 },
+        byModel: { 'gpt-5.6-sol': { inputTotal: 30, cachedInput: 20, outputTotal: 10, reasoningOutput: 2 } },
+        byEffort: { high: { inputTotal: 30, cachedInput: 20, outputTotal: 10, reasoningOutput: 2 } },
+        structural: {
+          patchCalls: 1,
+          toolCalls: 2,
+          postPatchToolCalls: 1,
+          compactCount: 0,
+          taskCompleteCount: 0,
+        },
+        firstObservedAt: Date.parse('2026-07-13T16:05:00.000Z'),
+        lastObservedAt: Date.parse('2026-07-13T16:10:00.000Z'),
+      },
+      '2026-07-20': {
+        total: { inputTotal: 50, cachedInput: 40, outputTotal: 10, reasoningOutput: 3 },
+        byModel: { 'gpt-5.6-sol': { inputTotal: 50, cachedInput: 40, outputTotal: 10, reasoningOutput: 3 } },
+        byEffort: { high: { inputTotal: 50, cachedInput: 40, outputTotal: 10, reasoningOutput: 3 } },
+        structural: {
+          patchCalls: 0,
+          toolCalls: 0,
+          postPatchToolCalls: 0,
+          compactCount: 0,
+          taskCompleteCount: 1,
+        },
+        firstObservedAt: Date.parse('2026-07-20T15:50:00.000Z'),
+        lastObservedAt: Date.parse('2026-07-20T15:55:00.000Z'),
+      },
+      '2026-07-21': {
+        total: { inputTotal: 720, cachedInput: 640, outputTotal: 180, reasoningOutput: 15 },
+        byModel: { future: { inputTotal: 720, cachedInput: 640, outputTotal: 180, reasoningOutput: 15 } },
+        byEffort: { ultra: { inputTotal: 720, cachedInput: 640, outputTotal: 180, reasoningOutput: 15 } },
+        structural: {
+          patchCalls: 8,
+          toolCalls: 16,
+          postPatchToolCalls: 8,
+          compactCount: 2,
+          taskCompleteCount: 1,
+        },
+        firstObservedAt: Date.parse('2026-07-20T16:01:00.000Z'),
+        lastObservedAt: Date.parse('2026-07-20T16:04:00.000Z'),
+      },
+    },
+  };
+  snapshot.files = [file];
+  snapshot.total = { ...file.total };
+
+  const view = buildCodexUsageView(
+    snapshot,
+    Date.parse('2026-07-20T16:05:00.000Z'),
+  );
+
+  assert.equal(view.last7Days.total.processed, 100);
+  assert.equal(view.last30Days.total.processed, 100);
+  assert.equal(view.last7Days.threads, 1);
+  assert.equal(view.last7Days.rootTasks, 1);
+  assert.equal(view.last7DaysDaily[0].day, '2026-07-14');
+  assert.equal(view.last7DaysDaily[6].day, '2026-07-20');
+  assert.equal(view.last7DaysDaily.some((row) => row.day === '2026-07-21'), false);
+  assert.deepEqual(buildCodexInsights(view.last7Days), []);
+  assert.equal(
+    buildCodexInsights(view.last30Days).some((insight) => insight.kind === 'effort-comparison'),
+    true,
+  );
 });
 
 test('view builds recent task, 7d, 30d, and projects without double counting subsets', () => {
@@ -262,6 +344,7 @@ test('expired limits are omitted while coverage and quality remain explicit', ()
     },
     period: {
       timeZone: 'UTC',
+      asOfDay: '2026-07-20',
       last7Days: {
         migratedFiles: 0,
         totalFiles: 0,

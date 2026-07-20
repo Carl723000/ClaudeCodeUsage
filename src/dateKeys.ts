@@ -47,11 +47,26 @@ export function monthKeyInZone(date: Date, timeZone: string): string {
  */
 export function rollingDayKeys(now: number, timeZone: string, count: number): string[] {
   const endKey = dayKeyInZone(new Date(now), resolveTimeZone(timeZone));
-  if (!endKey || count <= 0) {
+  return rollingDayKeysFromDayKey(endKey, count);
+}
+
+/**
+ * Civil-date keys ending at an already-resolved `YYYY-MM-DD` snapshot day.
+ * Invalid or non-canonical calendar dates return an empty range.
+ */
+export function rollingDayKeysFromDayKey(
+  endDayKey: string,
+  count: number,
+): string[] {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(endDayKey) || count <= 0) {
     return [];
   }
 
-  const [year, month, day] = endKey.split('-').map(Number);
+  const [year, month, day] = endDayKey.split('-').map(Number);
+  const end = new Date(Date.UTC(year, month - 1, day));
+  if (end.toISOString().slice(0, 10) !== endDayKey) {
+    return [];
+  }
   const keys: string[] = [];
   for (let offset = count - 1; offset >= 0; offset--) {
     keys.push(new Date(Date.UTC(year, month - 1, day - offset)).toISOString().slice(0, 10));

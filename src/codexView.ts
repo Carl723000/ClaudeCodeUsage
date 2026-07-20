@@ -576,6 +576,9 @@ function localizedConstraint(
   insights: CodexInsight[],
   copy: CodexViewCopy,
 ): string {
+  if (insights.length === 0) {
+    return '';
+  }
   const kinds = new Set(insights.map((insight) => insight.kind));
   const sentences: string[] = [];
   if (kinds.has('multi-agent-tax') || kinds.has('approval-reviewer')) {
@@ -665,11 +668,15 @@ function behaviorPanel(
       : `<section class="codex-behavior-scope${key === defaultKey ? ' active' : ''}" data-codex-behavior-panel="${key}"><p>${escapeHtml(copy.noRecentTask)}</p></section>`,
   ).join('');
   const insightHtml = insights.map((insight) => insightCard(insight, copy)).join('');
+  const constraint = localizedConstraint(insights, copy);
+  const constraintHtml = constraint
+    ? `<details class="model-item"><summary>${escapeHtml(copy.pasteConstraint)}</summary><pre>${escapeHtml(constraint)}</pre></details>`
+    : '';
   return `<section class="codex-behavior">
     <div class="chart-tabs codex-behavior-tabs">${buttons}</div>
     ${panels}
     <details class="model-item codex-coverage"><summary>${escapeHtml(copy.coverage)} · ${escapeHtml(copy.quality)}</summary><p><strong>${escapeHtml(copy.coverage)}</strong>: ${formatted(format, view.coverage.indexedFiles)}/${formatted(format, view.coverage.totalFiles)} files · ${formatted(format, view.coverage.indexedBytes)}/${formatted(format, view.coverage.totalBytes)} bytes · ${escapeHtml(view.coverage.complete ? copy.complete : copy.partial)}<br><strong>${escapeHtml(copy.quality)}</strong>: ${quality}</p></details>
-    <section class="codex-insights"><h3>${escapeHtml(copy.optimization)} · ${escapeHtml(copy.lastTask)}</h3>${insightHtml}<details class="model-item"><summary>${escapeHtml(copy.pasteConstraint)}</summary><pre>${escapeHtml(localizedConstraint(insights, copy))}</pre></details></section>
+    <section class="codex-insights"><h3>${escapeHtml(copy.optimization)} · ${escapeHtml(copy.lastTask)}</h3>${insightHtml}${constraintHtml}</section>
   </section>`;
 }
 

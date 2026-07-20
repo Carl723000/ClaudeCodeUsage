@@ -6,7 +6,7 @@ import {
   CodexRangeCoverage,
   CodexStructuralSummary,
 } from './codexIndex';
-import { rollingDayKeys } from '../../dateKeys';
+import { rollingDayKeysFromDayKey } from '../../dateKeys';
 import {
   freshInputPlusOutput,
   processedTokens,
@@ -666,8 +666,8 @@ export function buildCodexUsageView(
 ): CodexUsageView {
   const recent = recentTaskFiles(snapshot.files);
   const periodCoverage = snapshot.coverage.period;
-  const last7DayKeys = rollingDayKeys(now, periodCoverage.timeZone, 7);
-  const last30DayKeys = rollingDayKeys(now, periodCoverage.timeZone, 30);
+  const last7DayKeys = rollingDayKeysFromDayKey(periodCoverage.asOfDay, 7);
+  const last30DayKeys = rollingDayKeysFromDayKey(periodCoverage.asOfDay, 30);
   const projects = new Map<string, CodexFileAggregate[]>();
   for (const file of snapshot.files) {
     const key = file.session.projectKey ?? 'project:unknown';

@@ -1421,6 +1421,58 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
   }
 });
 
+test('legacy period coverage without an as-of day cannot remain complete', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-as-of-'));
+  const indexPath = path.join(root, 'index.json');
+  try {
+    const completeRange = {
+      migratedFiles: 1,
+      totalFiles: 1,
+      migratedBytes: 100,
+      totalBytes: 100,
+      complete: true,
+    };
+    await writeFile(indexPath, JSON.stringify({
+      schemaVersion: 2,
+      files: {},
+      aggregate: { total: {}, byDay: {}, byModel: {}, byEffort: {} },
+      coverage: {
+        indexedFiles: 1,
+        totalFiles: 1,
+        indexedBytes: 100,
+        totalBytes: 100,
+        complete: true,
+        identity: {
+          exactDuplicateFiles: 0,
+          ambiguousSessionGroups: 0,
+          complete: true,
+        },
+        period: {
+          timeZone: 'Asia/Hong_Kong',
+          last7Days: completeRange,
+          last30Days: completeRange,
+          allTime: completeRange,
+        },
+      },
+    }), 'utf8');
+
+    const loaded = await loadCodexIndex(indexPath, 'Asia/Hong_Kong');
+    const period = loaded.coverage.period;
+    assert.match(period.asOfDay, /^\d{4}-\d{2}-\d{2}$/);
+    assert.equal(period.last7Days.complete, false);
+    assert.equal(period.last30Days.complete, false);
+    assert.equal(period.allTime.complete, true);
+
+    await saveCodexIndexAtomic(indexPath, loaded);
+    const persisted = JSON.parse(await readFile(indexPath, 'utf8')) as {
+      coverage: { period: { asOfDay?: string } };
+    };
+    assert.equal(persisted.coverage.period.asOfDay, period.asOfDay);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('schema v2 legacy contributions do not invent a missing sourceArea', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-source-area-'));
   try {
