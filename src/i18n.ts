@@ -242,7 +242,8 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
   'de-DE': providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Vergleichen' },
     {
-      title: 'Codex-Nutzung', beta: 'Beta', lastTask: 'Letzte Aufgabe', last7Days: 'Letzte 7 Tage', last30Days: 'Letzte 30 Tage', projects: 'Projekte', projectLabel: 'Projekt',
+      title: 'Codex-Nutzung', beta: 'Beta', overview: 'Übersicht', daily: 'Täglich', date: 'Datum', role: 'Rolle', scope: 'Bereich', threadLabel: 'Thread', rootRole: 'Hauptaufgabe', childRole: 'Subagent', approvalReviewerRole: 'Freigabe-Prüfer', unknownRole: 'Unbekannt', noDailyData: 'Noch keine tägliche Codex-Nutzung indexiert.', noThreadData: 'Noch keine Codex-Threads indexiert.', lastTask: 'Letzte Aufgabe', last7Days: 'Letzte 7 Tage', last30Days: 'Letzte 30 Tage', projects: 'Projekte', projectLabel: 'Projekt',
+      allTime: 'Gesamter Zeitraum', behavior: 'Verhalten', settings: 'Einstellungen', monthly: 'Monatlich', tokenComposition: 'Token-Zusammensetzung', freshInput: 'Frische Eingabe', reasoningSubset: 'Reasoning ist in der Ausgabe enthalten', threadRoleComposition: 'Thread-Rollenverteilung', childThreadsPerRootTask: 'Unter-Threads / Hauptaufgabe', childFreshShare: 'Frischer Anteil der Unter-Threads', approvalFreshShare: 'Frischer Anteil der Freigabeprüfung', highEffortFreshShare: 'Frischer Anteil bei hohem Aufwand', processedToFreshRatio: 'Verarbeitet / frisch', reasoningOutputShare: 'Reasoning-Anteil der Ausgabe', postChangeCommandsPerFile: 'Befehle nach Änderung / Datei', patchRounds: 'Patch-Runden', compactions: 'Kontextkomprimierungen',
       processed: 'Verarbeitete Token', fresh: 'Frische Eingabe + Ausgabe', input: 'Eingabe-Token', cachedInput: 'Gecachte Eingabe', output: 'Ausgabe-Token', reasoning: 'Reasoning-Ausgabe',
       models: 'Modelle', efforts: 'Aufwand', threads: 'Threads', rootTasks: 'Hauptaufgaben', childThreads: 'Unter-Threads', approvalReviewers: 'Freigabe-Prüfer', duration: 'Gemeldete Aufgabendauer', cacheShare: 'Eingabe-Cache-Anteil',
       coverage: 'Abdeckung', quality: 'Qualität', complete: 'Vollständig', partial: 'Teilweise', lastObserved: 'Zuletzt beobachtet', unavailable: 'Nicht verfügbar', optimization: 'Lokale Optimierungssignale', structuralProxy: 'Struktureller Proxy; Befehlsinhalte werden nicht gelesen.', pasteConstraint: 'Kopierbare Einschränkung', constraintNoAgents: 'Keine unnötigen Unteragenten oder unabhängigen Prüfungen starten.', constraintLowerEffort: 'Für diese kleine Änderung eine niedrigere Aufwandsstufe an einer repräsentativen Aufgabe vergleichen.', constraintTests: 'Einen fokussierten Test und danach einen vollständigen Testlauf ausführen.', constraintStop: 'Bei erfüllten Kriterien stoppen; nicht zu produktionsreifer Härtung ausweiten.', compareTitle: 'Anbietervergleich', noRecentTask: 'Noch keine aktuelle Codex-Aufgabe indexiert.',
@@ -252,7 +253,8 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
   'zh-TW': providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '比較' },
     {
-      title: 'Codex 用量', beta: 'Beta', lastTask: '最近任務', last7Days: '最近 7 天', last30Days: '最近 30 天', projects: '專案', projectLabel: '專案',
+      title: 'Codex 用量', beta: 'Beta', overview: '總覽', daily: '按日', date: '日期', role: '角色', scope: '範圍', threadLabel: '執行緒', rootRole: '根任務', childRole: 'Subagent', approvalReviewerRole: '權限審批', unknownRole: '未知', noDailyData: '尚未索引到 Codex 每日用量。', noThreadData: '尚未索引到 Codex 執行緒。', lastTask: '最近任務', last7Days: '最近 7 天', last30Days: '最近 30 天', projects: '專案', projectLabel: '專案',
+      allTime: '全部時間', behavior: '行為', settings: '設定', monthly: '按月', tokenComposition: 'Token 構成', freshInput: '新鮮輸入', reasoningSubset: '推理已包含在輸出中', threadRoleComposition: '執行緒角色構成', childThreadsPerRootTask: '每個根任務的子執行緒數', childFreshShare: '子執行緒新鮮用量占比', approvalFreshShare: '審批新鮮用量占比', highEffortFreshShare: '高推理強度新鮮用量占比', processedToFreshRatio: '已處理 / 新鮮用量', reasoningOutputShare: '推理占輸出比例', postChangeCommandsPerFile: '每個檔案的修改後命令數', patchRounds: '修補輪次', compactions: '上下文壓縮次數',
       processed: '已處理 Token', fresh: '新鮮輸入 + 輸出', input: '輸入 Token', cachedInput: '快取輸入', output: '輸出 Token', reasoning: '推理輸出',
       models: '模型', efforts: '推理強度', threads: '執行緒', rootTasks: '根任務', childThreads: '子執行緒', approvalReviewers: '權限審批執行緒', duration: '任務回報時長', cacheShare: '輸入快取占比',
       coverage: '索引覆蓋率', quality: '資料品質', complete: '完整', partial: '部分', lastObserved: '最後觀測', unavailable: '無資料', optimization: '本機最佳化訊號', structuralProxy: '結構性代理指標；不讀取命令內容。', pasteConstraint: '可複製約束', constraintNoAgents: '不要啟動不必要的 subagent 或獨立審閱。', constraintLowerEffort: '對這個小改動，用代表性任務比較低一級推理強度。', constraintTests: '只執行一次聚焦測試，再執行一次完整測試。', constraintStop: '達到驗收條件後停止，不要擴展為生產級加固。', compareTitle: '供應商比較', noRecentTask: '尚未索引到最近的 Codex 任務。',
@@ -262,7 +264,8 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
   'zh-CN': providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '对比' },
     {
-      title: 'Codex 用量', beta: 'Beta', lastTask: '最近任务', last7Days: '最近 7 天', last30Days: '最近 30 天', projects: '项目', projectLabel: '项目',
+      title: 'Codex 用量', beta: 'Beta', overview: '总览', daily: '按日', date: '日期', role: '角色', scope: '范围', threadLabel: '线程', rootRole: '根任务', childRole: 'Subagent', approvalReviewerRole: '权限审批', unknownRole: '未知', noDailyData: '尚未索引到 Codex 每日用量。', noThreadData: '尚未索引到 Codex 线程。', lastTask: '最近任务', last7Days: '最近 7 天', last30Days: '最近 30 天', projects: '项目', projectLabel: '项目',
+      allTime: '全部时间', behavior: '行为', settings: '设置', monthly: '按月', tokenComposition: 'Token 构成', freshInput: '新鲜输入', reasoningSubset: '推理已包含在输出中', threadRoleComposition: '线程角色构成', childThreadsPerRootTask: '每个根任务的子线程数', childFreshShare: '子线程新鲜用量占比', approvalFreshShare: '审批新鲜用量占比', highEffortFreshShare: '高推理强度新鲜用量占比', processedToFreshRatio: '已处理 / 新鲜用量', reasoningOutputShare: '推理占输出比例', postChangeCommandsPerFile: '每个文件的修改后命令数', patchRounds: '补丁轮次', compactions: '上下文压缩次数',
       processed: '已处理 Token', fresh: '新鲜输入 + 输出', input: '输入 Token', cachedInput: '缓存输入', output: '输出 Token', reasoning: '推理输出',
       models: '模型', efforts: '推理强度', threads: '线程', rootTasks: '根任务', childThreads: '子线程', approvalReviewers: '权限审批线程', duration: '任务报告时长', cacheShare: '输入缓存占比',
       coverage: '索引覆盖率', quality: '数据质量', complete: '完整', partial: '部分', lastObserved: '最后观测', unavailable: '无数据', optimization: '本地优化信号', structuralProxy: '结构性代理指标；不读取命令内容。', pasteConstraint: '可复制约束', constraintNoAgents: '不要启动不必要的 subagent 或独立审阅。', constraintLowerEffort: '对这个小改动，用代表性任务对比低一级推理强度。', constraintTests: '只运行一次聚焦测试，再运行一次完整测试。', constraintStop: '达到验收条件后停止，不要扩展为生产级加固。', compareTitle: '供应商对比', noRecentTask: '尚未索引到最近的 Codex 任务。',
@@ -272,7 +275,8 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
   ja: providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '比較' },
     {
-      title: 'Codex 使用量', beta: 'ベータ', lastTask: '最近のタスク', last7Days: '過去 7 日', last30Days: '過去 30 日', projects: 'プロジェクト', projectLabel: 'プロジェクト',
+      title: 'Codex 使用量', beta: 'ベータ', overview: '概要', daily: '日別', date: '日付', role: '役割', scope: '範囲', threadLabel: 'スレッド', rootRole: 'ルート', childRole: 'サブエージェント', approvalReviewerRole: '承認レビュアー', unknownRole: '不明', noDailyData: '日別の Codex 使用量はまだ索引化されていません。', noThreadData: 'Codex スレッドはまだ索引化されていません。', lastTask: '最近のタスク', last7Days: '過去 7 日', last30Days: '過去 30 日', projects: 'プロジェクト', projectLabel: 'プロジェクト',
+      allTime: '全期間', behavior: '行動', settings: '設定', monthly: '月別', tokenComposition: 'トークン構成', freshInput: '新規入力', reasoningSubset: '推論は出力に含まれます', threadRoleComposition: 'スレッド役割構成', childThreadsPerRootTask: 'ルートタスクあたりの子スレッド', childFreshShare: '子スレッドの新規使用量比率', approvalFreshShare: '承認の新規使用量比率', highEffortFreshShare: '高推論強度の新規使用量比率', processedToFreshRatio: '処理済み / 新規', reasoningOutputShare: '出力に占める推論', postChangeCommandsPerFile: 'ファイルあたり変更後コマンド', patchRounds: 'パッチ回数', compactions: 'コンテキスト圧縮',
       processed: '処理済みトークン', fresh: '新規入力 + 出力', input: '入力トークン', cachedInput: 'キャッシュ入力', output: '出力トークン', reasoning: '推論出力',
       models: 'モデル', efforts: '推論強度', threads: 'スレッド', rootTasks: 'ルートタスク', childThreads: '子スレッド', approvalReviewers: '承認レビュアー', duration: 'タスク報告時間', cacheShare: '入力キャッシュ比率',
       coverage: 'カバレッジ', quality: '品質', complete: '完了', partial: '一部', lastObserved: '最終観測', unavailable: '利用不可', optimization: 'ローカル最適化シグナル', structuralProxy: '構造的プロキシです。コマンド本文は読みません。', pasteConstraint: '貼り付け用制約', constraintNoAgents: '不要なサブエージェントや独立レビューを開始しないでください。', constraintLowerEffort: 'この小さな変更では代表タスクで 1 段低い推論強度を比較してください。', constraintTests: '変更に直結するテストを 1 回、その後に全テストを 1 回実行してください。', constraintStop: '受け入れ条件を満たしたら停止し、本番級の堅牢化へ拡張しないでください。', compareTitle: 'プロバイダー比較', noRecentTask: '最近の Codex タスクはまだ索引化されていません。',
@@ -282,7 +286,8 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
   ko: providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '비교' },
     {
-      title: 'Codex 사용량', beta: '베타', lastTask: '최근 작업', last7Days: '최근 7일', last30Days: '최근 30일', projects: '프로젝트', projectLabel: '프로젝트',
+      title: 'Codex 사용량', beta: '베타', overview: '개요', daily: '일별', date: '날짜', role: '역할', scope: '범위', threadLabel: '스레드', rootRole: '루트', childRole: '하위 에이전트', approvalReviewerRole: '승인 검토자', unknownRole: '알 수 없음', noDailyData: '아직 일별 Codex 사용량이 인덱싱되지 않았습니다.', noThreadData: '아직 Codex 스레드가 인덱싱되지 않았습니다.', lastTask: '최근 작업', last7Days: '최근 7일', last30Days: '최근 30일', projects: '프로젝트', projectLabel: '프로젝트',
+      allTime: '전체 기간', behavior: '행동', settings: '설정', monthly: '월별', tokenComposition: '토큰 구성', freshInput: '새 입력', reasoningSubset: '추론은 출력에 포함됨', threadRoleComposition: '스레드 역할 구성', childThreadsPerRootTask: '루트 작업당 하위 스레드', childFreshShare: '하위 스레드 새 사용량 비율', approvalFreshShare: '승인 새 사용량 비율', highEffortFreshShare: '고강도 새 사용량 비율', processedToFreshRatio: '처리됨 / 새 사용량', reasoningOutputShare: '출력 중 추론 비율', postChangeCommandsPerFile: '파일당 변경 후 명령', patchRounds: '패치 라운드', compactions: '컨텍스트 압축',
       processed: '처리된 토큰', fresh: '새 입력 + 출력', input: '입력 토큰', cachedInput: '캐시 입력', output: '출력 토큰', reasoning: '추론 출력',
       models: '모델', efforts: '추론 강도', threads: '스레드', rootTasks: '루트 작업', childThreads: '하위 스레드', approvalReviewers: '승인 검토자', duration: '작업 보고 시간', cacheShare: '입력 캐시 비율',
       coverage: '커버리지', quality: '품질', complete: '완료', partial: '부분', lastObserved: '마지막 관측', unavailable: '사용 불가', optimization: '로컬 최적화 신호', structuralProxy: '구조적 프록시이며 명령 본문은 읽지 않습니다.', pasteConstraint: '붙여넣기용 제약', constraintNoAgents: '불필요한 하위 에이전트나 독립 검토를 시작하지 마세요.', constraintLowerEffort: '이 작은 변경은 대표 작업에서 한 단계 낮은 추론 강도를 비교하세요.', constraintTests: '변경에 맞춘 테스트 한 번과 전체 테스트 한 번만 실행하세요.', constraintStop: '수용 기준을 통과하면 중단하고 운영급 강화로 확장하지 마세요.', compareTitle: '공급자 비교', noRecentTask: '최근 Codex 작업이 아직 인덱싱되지 않았습니다.',
@@ -292,7 +297,8 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
   'pt-BR': providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Comparar' },
     {
-      title: 'Uso do Codex', beta: 'Beta', lastTask: 'Tarefa recente', last7Days: 'Últimos 7 dias', last30Days: 'Últimos 30 dias', projects: 'Projetos', projectLabel: 'Projeto',
+      title: 'Uso do Codex', beta: 'Beta', overview: 'Visão geral', daily: 'Diário', date: 'Data', role: 'Função', scope: 'Escopo', threadLabel: 'Thread', rootRole: 'Raiz', childRole: 'Subagente', approvalReviewerRole: 'Revisor de aprovação', unknownRole: 'Desconhecido', noDailyData: 'Nenhum uso diário do Codex foi indexado.', noThreadData: 'Nenhuma thread do Codex foi indexada.', lastTask: 'Tarefa recente', last7Days: 'Últimos 7 dias', last30Days: 'Últimos 30 dias', projects: 'Projetos', projectLabel: 'Projeto',
+      allTime: 'Todo o período', behavior: 'Comportamento', settings: 'Configurações', monthly: 'Mensal', tokenComposition: 'Composição de tokens', freshInput: 'Entrada nova', reasoningSubset: 'O raciocínio está incluído na saída', threadRoleComposition: 'Composição por função da thread', childThreadsPerRootTask: 'Threads filhas / tarefa raiz', childFreshShare: 'Participação nova das threads filhas', approvalFreshShare: 'Participação nova de aprovação', highEffortFreshShare: 'Participação nova de alto esforço', processedToFreshRatio: 'Processado / novo', reasoningOutputShare: 'Participação do raciocínio na saída', postChangeCommandsPerFile: 'Comandos após mudança / arquivo', patchRounds: 'Rodadas de patch', compactions: 'Compactações',
       processed: 'Tokens processados', fresh: 'Entrada nova + saída', input: 'Tokens de entrada', cachedInput: 'Entrada em cache', output: 'Tokens de saída', reasoning: 'Saída de raciocínio',
       models: 'Modelos', efforts: 'Esforço', threads: 'Threads', rootTasks: 'Tarefas raiz', childThreads: 'Threads filhas', approvalReviewers: 'Revisores de aprovação', duration: 'Duração relatada', cacheShare: 'Proporção de cache de entrada',
       coverage: 'Cobertura', quality: 'Qualidade', complete: 'Completa', partial: 'Parcial', lastObserved: 'Última observação', unavailable: 'Indisponível', optimization: 'Sinais locais de otimização', structuralProxy: 'Proxy estrutural; os corpos dos comandos não são lidos.', pasteConstraint: 'Restrição pronta para colar', constraintNoAgents: 'Não inicie subagentes ou revisões independentes desnecessárias.', constraintLowerEffort: 'Nesta mudança pequena, compare um nível de esforço menor em uma tarefa representativa.', constraintTests: 'Execute um teste focado e depois uma única execução completa.', constraintStop: 'Pare ao cumprir os critérios; não expanda para endurecimento de produção.', compareTitle: 'Comparação de provedores', noRecentTask: 'Nenhuma tarefa recente do Codex foi indexada.',
@@ -302,7 +308,8 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
   id: providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Bandingkan' },
     {
-      title: 'Penggunaan Codex', beta: 'Beta', lastTask: 'Tugas terbaru', last7Days: '7 hari terakhir', last30Days: '30 hari terakhir', projects: 'Proyek', projectLabel: 'Proyek',
+      title: 'Penggunaan Codex', beta: 'Beta', overview: 'Ringkasan', daily: 'Harian', date: 'Tanggal', role: 'Peran', scope: 'Cakupan', threadLabel: 'Thread', rootRole: 'Utama', childRole: 'Subagen', approvalReviewerRole: 'Peninjau persetujuan', unknownRole: 'Tidak diketahui', noDailyData: 'Belum ada penggunaan harian Codex yang diindeks.', noThreadData: 'Belum ada thread Codex yang diindeks.', lastTask: 'Tugas terbaru', last7Days: '7 hari terakhir', last30Days: '30 hari terakhir', projects: 'Proyek', projectLabel: 'Proyek',
+      allTime: 'Sepanjang waktu', behavior: 'Perilaku', settings: 'Pengaturan', monthly: 'Bulanan', tokenComposition: 'Komposisi token', freshInput: 'Input baru', reasoningSubset: 'Penalaran sudah termasuk dalam output', threadRoleComposition: 'Komposisi peran thread', childThreadsPerRootTask: 'Thread anak / tugas utama', childFreshShare: 'Porsi penggunaan baru thread anak', approvalFreshShare: 'Porsi penggunaan baru persetujuan', highEffortFreshShare: 'Porsi penggunaan baru effort tinggi', processedToFreshRatio: 'Diproses / baru', reasoningOutputShare: 'Porsi penalaran dalam output', postChangeCommandsPerFile: 'Perintah setelah perubahan / file', patchRounds: 'Putaran patch', compactions: 'Pemadatan konteks',
       processed: 'Token diproses', fresh: 'Input baru + output', input: 'Token input', cachedInput: 'Input cache', output: 'Token output', reasoning: 'Output penalaran',
       models: 'Model', efforts: 'Upaya', threads: 'Thread', rootTasks: 'Tugas utama', childThreads: 'Thread anak', approvalReviewers: 'Peninjau persetujuan', duration: 'Durasi yang dilaporkan', cacheShare: 'Porsi cache input',
       coverage: 'Cakupan', quality: 'Kualitas', complete: 'Lengkap', partial: 'Sebagian', lastObserved: 'Terakhir diamati', unavailable: 'Tidak tersedia', optimization: 'Sinyal optimasi lokal', structuralProxy: 'Proksi struktural; isi perintah tidak dibaca.', pasteConstraint: 'Batasan siap tempel', constraintNoAgents: 'Jangan mulai subagen atau tinjauan independen yang tidak perlu.', constraintLowerEffort: 'Untuk perubahan kecil ini, bandingkan satu tingkat upaya lebih rendah pada tugas perwakilan.', constraintTests: 'Jalankan satu tes terfokus lalu satu kali tes lengkap.', constraintStop: 'Berhenti saat kriteria terpenuhi; jangan perluas menjadi pengerasan tingkat produksi.', compareTitle: 'Perbandingan penyedia', noRecentTask: 'Belum ada tugas Codex terbaru yang diindeks.',
@@ -2175,6 +2182,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.enabled': { label: 'Codex Beta aktivieren', help: 'Datenschutzfreundliche Nutzungsaggregate aus lokalen Codex-Sitzungslogs lesen.' },
     'codex.dataDirectory': { label: 'Benutzerdefiniertes Codex-Datenverzeichnis', help: 'Leer = CODEX_HOME, dann ~/.codex. Authentifizierungsdateien werden nie gelesen.' },
     'codex.fileWatchSeconds': { label: 'Codex-Live-Aktualisierungsverzögerung', help: 'Ruhe-Debounce nach lokalen Codex-JSONL-Änderungen. Aus deaktiviert die Überwachung.' },
+    'codex.optimization.enabled': { label: 'Codex-Verhaltensoptimierung anzeigen', help: 'Lokale, deterministische Codex-Verhaltensmetriken und Empfehlungen anzeigen.' },
     'statusBarProvider': { label: 'Statusleisten-Anbieter', help: 'Auto bevorzugt Claude, wenn beide Anbieter Daten haben.' },
     'codex.statusMetric': { label: 'Codex-Statusmetrik', help: 'Frische Eingabe + Ausgabe, verarbeitete Token oder Ausgabe-Token.' },
     'timezone': { label: 'Zeitzone für Daten', help: 'Gängige Zone oder UTC-Offset (jeder Offset abgedeckt) oder Systemstandard. Labels zeigen den aktuellen UTC-Offset.' },
@@ -2219,6 +2227,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.enabled': { label: '啟用 Codex Beta', help: '從本機 Codex 工作階段日誌讀取隱私安全的用量彙總。' },
     'codex.dataDirectory': { label: '自訂 Codex 資料目錄', help: '留空時使用 CODEX_HOME，再使用 ~/.codex；不會讀取認證檔案。' },
     'codex.fileWatchSeconds': { label: 'Codex 即時重新整理延遲', help: '本機 Codex JSONL 變更後的靜默防抖；關閉即停用監看。' },
+    'codex.optimization.enabled': { label: '顯示 Codex 行為最佳化', help: '顯示本機、確定性的 Codex 行為指標與建議。' },
     'statusBarProvider': { label: '狀態列供應商', help: '兩個供應商都有資料時，自動模式優先顯示 Claude。' },
     'codex.statusMetric': { label: 'Codex 狀態列指標', help: '新鮮輸入加輸出、已處理 Token 或輸出 Token。' },
     'timezone': { label: '日期時區', help: '常用時區或 UTC 偏移（涵蓋所有偏移），或系統預設。標籤顯示目前的 UTC 偏移。' },
@@ -2263,6 +2272,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.enabled': { label: '启用 Codex Beta', help: '从本地 Codex 会话日志读取隐私安全的用量汇总。' },
     'codex.dataDirectory': { label: '自定义 Codex 数据目录', help: '留空时使用 CODEX_HOME，再使用 ~/.codex；不会读取认证文件。' },
     'codex.fileWatchSeconds': { label: 'Codex 实时刷新延迟', help: '本地 Codex JSONL 变更后的静默防抖；关闭即停用监视。' },
+    'codex.optimization.enabled': { label: '显示 Codex 行为优化', help: '显示本地、确定性的 Codex 行为指标与建议。' },
     'statusBarProvider': { label: '状态栏供应商', help: '两个供应商都有数据时，自动模式优先显示 Claude。' },
     'codex.statusMetric': { label: 'Codex 状态栏指标', help: '新鲜输入加输出、已处理 Token 或输出 Token。' },
     'timezone': { label: '日期时区', help: '常用时区或 UTC 偏移（涵盖所有偏移），或系统默认。标签显示当前的 UTC 偏移。' },
@@ -2307,6 +2317,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.enabled': { label: 'Codex Beta を有効化', help: 'ローカルの Codex セッションログからプライバシー安全な使用量集計を読み取ります。' },
     'codex.dataDirectory': { label: 'カスタム Codex データディレクトリ', help: '空欄の場合は CODEX_HOME、次に ~/.codex。認証ファイルは読みません。' },
     'codex.fileWatchSeconds': { label: 'Codex ライブ更新遅延', help: 'ローカル Codex JSONL 変更後の静かなデバウンス。オフで監視を無効化します。' },
+    'codex.optimization.enabled': { label: 'Codex の行動最適化を表示', help: 'ローカルで決定論的な Codex の行動指標と提案を表示します。' },
     'statusBarProvider': { label: 'ステータスバーのプロバイダー', help: '両方にデータがある場合、自動は Claude を優先します。' },
     'codex.statusMetric': { label: 'Codex ステータスメトリック', help: '新規入力＋出力、処理済みトークン、または出力トークン。' },
     'timezone': { label: '日付のタイムゾーン', help: '一般的なゾーンまたは UTC オフセット（全オフセット対応）、あるいはシステム既定。ラベルは現在の UTC オフセットを表示。' },
@@ -2351,6 +2362,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.enabled': { label: 'Codex Beta 사용', help: '로컬 Codex 세션 로그에서 개인정보 보호형 사용량 집계를 읽습니다.' },
     'codex.dataDirectory': { label: '사용자 지정 Codex 데이터 디렉터리', help: '비우면 CODEX_HOME, 그다음 ~/.codex를 사용하며 인증 파일은 읽지 않습니다.' },
     'codex.fileWatchSeconds': { label: 'Codex 실시간 새로고침 지연', help: '로컬 Codex JSONL 변경 후 조용한 디바운스입니다. 끄면 감시를 중지합니다.' },
+    'codex.optimization.enabled': { label: 'Codex 행동 최적화 표시', help: '로컬의 결정론적 Codex 행동 지표와 권장 사항을 표시합니다.' },
     'statusBarProvider': { label: '상태 표시줄 공급자', help: '두 공급자 모두 데이터가 있으면 자동은 Claude를 우선합니다.' },
     'codex.statusMetric': { label: 'Codex 상태 지표', help: '새 입력+출력, 처리된 토큰 또는 출력 토큰.' },
     'timezone': { label: '날짜 시간대', help: '일반 지역 또는 UTC 오프셋(모든 오프셋 지원), 또는 시스템 기본값. 라벨에 현재 UTC 오프셋 표시.' },
@@ -2394,6 +2406,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.enabled': { label: 'Ativar Codex Beta', help: 'Lê agregados de uso com privacidade a partir dos logs locais de sessão do Codex.' },
     'codex.dataDirectory': { label: 'Diretório de dados Codex personalizado', help: 'Vazio = CODEX_HOME, depois ~/.codex. Arquivos de autenticação nunca são lidos.' },
     'codex.fileWatchSeconds': { label: 'Atraso da atualização ao vivo do Codex', help: 'Debounce silencioso após mudanças locais em JSONL do Codex. Desligado desativa a observação.' },
+    'codex.optimization.enabled': { label: 'Mostrar otimização de comportamento do Codex', help: 'Mostra métricas e recomendações locais e determinísticas de comportamento do Codex.' },
     'statusBarProvider': { label: 'Provedor da barra de status', help: 'Auto prioriza Claude quando ambos têm dados.' },
     'codex.statusMetric': { label: 'Métrica de status do Codex', help: 'Entrada nova + saída, tokens processados ou tokens de saída.' },
     'timezone': { label: 'Fuso horário das datas', help: 'Zona comum ou deslocamento UTC (todos cobertos), ou padrão do sistema. Os rótulos mostram o deslocamento UTC atual.' },
@@ -2436,6 +2449,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.enabled': { label: 'Aktifkan Codex Beta', help: 'Baca agregat penggunaan yang aman untuk privasi dari log sesi Codex lokal.' },
     'codex.dataDirectory': { label: 'Direktori data Codex kustom', help: 'Kosong = CODEX_HOME, lalu ~/.codex. Berkas autentikasi tidak pernah dibaca.' },
     'codex.fileWatchSeconds': { label: 'Jeda penyegaran langsung Codex', help: 'Debounce tenang setelah perubahan JSONL Codex lokal. Mati menonaktifkan pemantauan.' },
+    'codex.optimization.enabled': { label: 'Tampilkan optimasi perilaku Codex', help: 'Tampilkan metrik dan rekomendasi perilaku Codex yang lokal dan deterministik.' },
     'statusBarProvider': { label: 'Penyedia status bar', help: 'Otomatis memprioritaskan Claude saat keduanya memiliki data.' },
     'codex.statusMetric': { label: 'Metrik status Codex', help: 'Input baru + output, token diproses, atau token output.' },
     'timezone': { label: 'Zona waktu untuk tanggal', help: 'Pilih zona umum atau offset UTC (semua offset tersedia), atau default sistem. Label menampilkan offset UTC saat ini.' },

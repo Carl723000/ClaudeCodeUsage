@@ -8,6 +8,7 @@ import {
 } from '../codexView';
 import { buildCodexInsights } from '../providers/codex/codexInsights';
 import { buildCodexUsageView } from '../providers/codex/codexUsage';
+import { I18n } from '../i18n';
 import { snapshotFixture } from './codexFixtures';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
@@ -80,6 +81,28 @@ test('Compare is side-by-side and contains no summed total, cost, or quota', () 
   assert.match(html, /Codex/);
   assert.match(html, /provider-compare-grid/);
   assert.doesNotMatch(html, /combined|quota|\$/i);
+});
+
+test('Simplified Chinese Codex dashboard localizes the new Claude-style modules', () => {
+  const previous = I18n.getCurrentLanguage();
+  try {
+    I18n.setLanguage('zh-CN');
+    const view = buildCodexUsageView(snapshotFixture(), NOW);
+    const html = renderCodexView(
+      view,
+      buildCodexInsights(view.lastTask!),
+      I18n.t.providers.codex,
+      { settingsHtml: '<section>设置内容</section>' },
+    );
+
+    for (const label of ['最近任务', '最近 7 天', '最近 30 天', '全部时间', '线程', '项目', '行为', '设置']) {
+      assert.match(html, new RegExp(label));
+    }
+    assert.match(html, /Token 构成/);
+    assert.match(html, /推理已包含在输出中/);
+  } finally {
+    I18n.setLanguage(previous);
+  }
 });
 
 test('all dynamic renderer values are escaped', () => {
