@@ -173,9 +173,11 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
     }
     const receiver = call.expression.expression.getText(file);
     const member = call.expression.name.text;
-    return (receiver === 'Math') ||
+    return receiver === 'Math' ||
+      (receiver === 'Number' && member === 'isFinite') ||
+      (receiver === 'Date' && member === 'now') ||
       (receiver === 'Object' && member === 'fromEntries') ||
-      (member === 'sort' || member === 'filter' || member === 'map' || member === 'flatMap');
+      (ts.isRegularExpressionLiteral(call.expression.expression) && member === 'test');
   };
   const inspectFunction = (name: string): void => {
     if (visited.has(name)) {
@@ -187,45 +189,272 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
       fail(`missing persisted helper ${name}`);
       return;
     }
-    const inspectExpression = (expression: ts.Expression, inSpread = false): void => {
+    const localInitializers = new Map<string, ts.Expression>();
+    const safeCollectionParameters = new Set<string>();
+    const callbackParameters = new Set<string>();
+    const parameters = new Set(
+      declaration.parameters.map((parameter) =>
+        ts.isIdentifier(parameter.name) ? parameter.name.text : '',
+      ).filter(Boolean),
+    );
+    const bindingNames = (binding: ts.BindingName): string[] => {
+      if (ts.isIdentifier(binding)) {
+        return [binding.text];
+      }
+      return binding.elements.flatMap((element) =>
+        ts.isBindingElement(element) ? bindingNames(element.name) : [],
+      );
+    };
+    const collectLocals = (node: ts.Node): void => {
+      if (node !== declaration && ts.isFunctionLike(node)) {
+        return;
+      }
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+        localInitializers.set(node.name.text, node.initializer);
+      }
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+        (node.expression.text === 'isRecord' || node.expression.text === 'Array.isArray') &&
+        ts.isIdentifier(node.arguments[0])) {
+        safeCollectionParameters.add(node.arguments[0].text);
+      }
+      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+        node.expression.expression.getText(file) === 'Array' &&
+        node.expression.name.text === 'isArray' && ts.isIdentifier(node.arguments[0])) {
+        safeCollectionParameters.add(node.arguments[0].text);
+      }
+      ts.forEachChild(node, collectLocals);
+    };
+    collectLocals(declaration.body);
+    const resolvingLocals = new Set<string>();
+    const unwrap = (expression: ts.Expression): ts.Expression =>
+      ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) ||
+      ts.isTypeAssertionExpression(expression)
+        ? unwrap(expression.expression)
+        : expression;
+    const inspectCallback = (callback: ts.Expression): void => {
+      if (!ts.isArrowFunction(callback) && !ts.isFunctionExpression(callback)) {
+        fail(`${name} uses a non-local collection callback`);
+        return;
+      }
+      const scopedParameters = callback.parameters.flatMap((parameter) => bindingNames(parameter.name));
+      scopedParameters.forEach((parameter) => callbackParameters.add(parameter));
+      const previousInitializers = new Map<string, ts.Expression | undefined>();
+      const collectCallbackLocals = (node: ts.Node): void => {
+        if (node !== callback && ts.isFunctionLike(node)) {
+          return;
+        }
+        if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+          if (!previousInitializers.has(node.name.text)) {
+            previousInitializers.set(node.name.text, localInitializers.get(node.name.text));
+          }
+          localInitializers.set(node.name.text, node.initializer);
+        }
+        ts.forEachChild(node, collectCallbackLocals);
+      };
+      if (ts.isBlock(callback.body)) {
+        collectCallbackLocals(callback.body);
+      }
+      if (ts.isBlock(callback.body)) {
+        const inspectCallbackReturns = (node: ts.Node): void => {
+          if (node !== callback && ts.isFunctionLike(node)) {
+            return;
+          }
+          if (ts.isReturnStatement(node) && node.expression) {
+            inspectExpression(node.expression, false, true);
+          }
+          ts.forEachChild(node, inspectCallbackReturns);
+        };
+        inspectCallbackReturns(callback.body);
+      } else {
+        inspectExpression(callback.body, false, true);
+      }
+      scopedParameters.forEach((parameter) => callbackParameters.delete(parameter));
+      previousInitializers.forEach((initializer, local) => {
+        if (initializer) {
+          localInitializers.set(local, initializer);
+        } else {
+          localInitializers.delete(local);
+        }
+      });
+    };
+    const inspectSafeSource = (expression: ts.Expression, viaProperty = false): void => {
+      const value = unwrap(expression);
+      if (ts.isPropertyAccessExpression(value)) {
+        if (BANNED_PERSISTED_PROPERTIES.test(value.name.text)) {
+          fail(`${name} reads banned persisted property ${value.name.text}`);
+          return;
+        }
+        inspectSafeSource(value.expression, true);
+      } else if (ts.isElementAccessExpression(value) && ts.isStringLiteral(value.argumentExpression)) {
+        if (BANNED_PERSISTED_PROPERTIES.test(value.argumentExpression.text)) {
+          fail(`${name} reads banned persisted property ${value.argumentExpression.text}`);
+          return;
+        }
+        inspectSafeSource(value.expression, true);
+      } else if (ts.isIdentifier(value)) {
+        if (localInitializers.has(value.text) && !resolvingLocals.has(value.text)) {
+          resolvingLocals.add(value.text);
+          inspectCollection(localInitializers.get(value.text)!);
+          resolvingLocals.delete(value.text);
+        } else if (!parameters.has(value.text) || (!viaProperty && !safeCollectionParameters.has(value.text))) {
+          fail(`${name} uses an opaque constructed source ${value.text}`);
+        }
+      } else {
+        fail(`${name} uses an opaque constructed source`);
+      }
+    };
+    const inspectCollection = (expression: ts.Expression): void => {
+      const value = unwrap(expression);
+      if (ts.isArrayLiteralExpression(value)) {
+        value.elements.forEach((element) => {
+          if (ts.isExpression(element)) {
+            inspectExpression(element, false, true);
+          }
+        });
+      } else if (ts.isObjectLiteralExpression(value)) {
+        inspectExpression(value);
+      } else if (ts.isConditionalExpression(value)) {
+        inspectCollection(value.whenTrue);
+        inspectCollection(value.whenFalse);
+      } else if (ts.isBinaryExpression(value) && (
+        value.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        value.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        value.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      )) {
+        inspectCollection(value.left);
+        inspectCollection(value.right);
+      } else if (ts.isCallExpression(value) && ts.isPropertyAccessExpression(value.expression)) {
+        const receiver = value.expression.expression;
+        const member = value.expression.name.text;
+        if (receiver.getText(file) === 'Object' && (member === 'entries' || member === 'values')) {
+          if (value.arguments[0]) {
+            inspectSafeSource(value.arguments[0]);
+          } else {
+            fail(`${name} uses an opaque constructed source`);
+          }
+        } else if (member === 'map' || member === 'flatMap' || member === 'filter') {
+          inspectCollection(receiver);
+          for (const argument of value.arguments) {
+            inspectCallback(argument);
+          }
+        } else {
+          fail(`${name} uses an opaque collection receiver`);
+        }
+      } else if (ts.isIdentifier(value) || ts.isPropertyAccessExpression(value) ||
+        ts.isElementAccessExpression(value)) {
+        inspectSafeSource(value);
+      } else {
+        fail(`${name} uses an opaque constructed source`);
+      }
+    };
+    const inspectExpression = (
+      expression: ts.Expression,
+      inSpread = false,
+      entryTuple = false,
+      asSanitizerArgument = false,
+    ): void => {
       if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) ||
         ts.isTypeAssertionExpression(expression)) {
-        inspectExpression(expression.expression, inSpread);
+        inspectExpression(expression.expression, inSpread, entryTuple, asSanitizerArgument);
       } else if (ts.isConditionalExpression(expression)) {
-        inspectExpression(expression.whenTrue, inSpread);
-        inspectExpression(expression.whenFalse, inSpread);
+        inspectExpression(expression.whenTrue, inSpread, entryTuple, asSanitizerArgument);
+        inspectExpression(expression.whenFalse, inSpread, entryTuple, asSanitizerArgument);
       } else if (ts.isBinaryExpression(expression) && (
         expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
         expression.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
         expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
       )) {
-        inspectExpression(expression.left, inSpread);
-        inspectExpression(expression.right, inSpread);
+        inspectExpression(expression.left, inSpread, entryTuple, asSanitizerArgument);
+        inspectExpression(expression.right, inSpread, entryTuple, asSanitizerArgument);
+      } else if (ts.isArrayLiteralExpression(expression)) {
+        expression.elements.forEach((element, index) => {
+          if (ts.isSpreadElement(element)) {
+            inspectExpression(element.expression, true, entryTuple, asSanitizerArgument);
+          } else if (ts.isExpression(element)) {
+            if (entryTuple && index === 0 && ts.isIdentifier(element) &&
+              callbackParameters.has(element.text)) {
+              return;
+            }
+            inspectExpression(element, false, entryTuple || index === 0, asSanitizerArgument);
+          }
+        });
       } else if (ts.isObjectLiteralExpression(expression)) {
         for (const property of expression.properties) {
           if (ts.isSpreadAssignment(property)) {
-            inspectExpression(property.expression, true);
+            inspectExpression(property.expression, true, entryTuple, asSanitizerArgument);
           } else if (ts.isPropertyAssignment(property)) {
             const propertyKey = propertyName(property.name);
             if (propertyKey && BANNED_PERSISTED_PROPERTIES.test(propertyKey)) {
               fail(`${name} persists banned property ${propertyKey}`);
             }
-            inspectExpression(property.initializer);
+            inspectExpression(property.initializer, false, entryTuple, asSanitizerArgument);
           } else if (ts.isShorthandPropertyAssignment(property)) {
             const propertyKey = property.name.text;
             if (BANNED_PERSISTED_PROPERTIES.test(propertyKey)) {
               fail(`${name} persists banned property ${propertyKey}`);
             }
+            inspectExpression(property.name, false, entryTuple, asSanitizerArgument);
           }
         }
       } else if (ts.isCallExpression(expression)) {
         const localName = expressionName(expression.expression);
         if (localName && declarations.has(localName)) {
           inspectFunction(localName);
+          expression.arguments.forEach((argument) => inspectExpression(argument, false, false, true));
+        } else if (ts.isPropertyAccessExpression(expression.expression) &&
+          ['map', 'flatMap', 'filter'].includes(expression.expression.name.text)) {
+          inspectCollection(expression);
+        } else if (ts.isPropertyAccessExpression(expression.expression) &&
+          expression.expression.expression.getText(file) === 'Object' &&
+          expression.expression.name.text === 'fromEntries') {
+          if (expression.arguments[0]) {
+            inspectCollection(expression.arguments[0]);
+          } else {
+            fail(`${name} uses an opaque constructed source`);
+          }
+        } else if (ts.isPropertyAccessExpression(expression.expression) &&
+          expression.expression.name.text === 'sort') {
+          inspectCollection(expression.expression.expression);
+          expression.arguments.forEach((argument) => inspectExpression(argument, false, false, true));
         } else if (!isExplicitSafeExternal(expression)) {
           fail(inSpread
             ? `${name} spreads opaque external output`
             : `${name} persists opaque external output`);
+        } else {
+          if (ts.isPropertyAccessExpression(expression.expression) &&
+            !['Math', 'Number', 'Date', 'Object'].includes(
+              expression.expression.expression.getText(file),
+            )) {
+            inspectExpression(expression.expression.expression, false, false, true);
+          }
+          expression.arguments.forEach((argument) => inspectExpression(argument, false, false, true));
+        }
+      } else if (ts.isNewExpression(expression)) {
+        if (ts.isIdentifier(expression.expression) && expression.expression.text === 'Set') {
+          if (expression.arguments?.[0]) {
+            inspectCollection(expression.arguments[0]);
+          }
+          expression.arguments?.slice(1).forEach((argument) => inspectExpression(argument, false, false, true));
+        } else if (ts.isIdentifier(expression.expression) && expression.expression.text === 'Date') {
+          expression.arguments?.forEach((argument) => inspectExpression(argument, false, false, true));
+        } else {
+          fail(`${name} persists opaque constructed output`);
+        }
+      } else if (ts.isIdentifier(expression)) {
+        if (name === 'sanitizeIndexV2' && parameters.has(expression.text) &&
+          !asSanitizerArgument) {
+          fail(`${name} persists arbitrary parameter ${expression.text}`);
+        } else if (localInitializers.has(expression.text) && !resolvingLocals.has(expression.text)) {
+          resolvingLocals.add(expression.text);
+          inspectExpression(
+            localInitializers.get(expression.text)!,
+            inSpread,
+            entryTuple,
+            asSanitizerArgument,
+          );
+          resolvingLocals.delete(expression.text);
+        } else if (inSpread) {
+          fail(`${name} spreads arbitrary persisted input`);
         }
       } else if (ts.isPropertyAccessExpression(expression)) {
         if (BANNED_PERSISTED_PROPERTIES.test(expression.name.text)) {
@@ -485,6 +714,58 @@ test('semantic Codex policy validators reject nested DTO leaks, comment-only san
     'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
   ].join('\n'), ts.ScriptTarget.ES2020, true);
   assert.match(sanitizedDtoViolations(opaqueExternalOutput).join('\n'), /opaque external output/);
+
+  const constructedCarry = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(raw: any) {',
+    "  return { schemaVersion: 2, files: Object.fromEntries([['x', { carry: raw }]]), aggregate: {}, coverage: {} };",
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(sanitizedDtoViolations(constructedCarry).join('\n'), /carry/);
+
+  const constructedRaw = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(raw: any) {',
+    "  return { schemaVersion: 2, files: Object.fromEntries([['x', { safe: raw }]]), aggregate: {}, coverage: {} };",
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(sanitizedDtoViolations(constructedRaw).join('\n'), /arbitrary parameter raw/);
+
+  const opaqueMapReceiver = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: thirdParty.map(x => ({ safe: x })), aggregate: {}, coverage: {} };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(
+    sanitizedDtoViolations(opaqueMapReceiver).join('\n'),
+    /opaque (?:constructed source|receiver|external output)/,
+  );
+
+  const opaquePropertyMapReceiver = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: thirdParty.files.map(x => ({ safe: x })), aggregate: {}, coverage: {} };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(
+    sanitizedDtoViolations(opaquePropertyMapReceiver).join('\n'),
+    /opaque (?:constructed source|receiver|external output)/,
+  );
+
+  const safeConstructedPipeline = ts.createSourceFile('fixture.ts', [
+    'function sanitizeFile(value: any) { return { safe: value.safe }; }',
+    'function sanitizeIndexV2(input: any) {',
+    '  return {',
+    '    schemaVersion: 2,',
+    '    files: Object.fromEntries(Object.entries(input.files).map(([key, value]) => [key, sanitizeFile(value)])),',
+    '    aggregate: {},',
+    '    coverage: {},',
+    '  };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.deepEqual(sanitizedDtoViolations(safeConstructedPipeline), []);
 
   const badStructural = ts.createSourceFile(
     'codexUsage.ts',
