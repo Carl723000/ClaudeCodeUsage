@@ -31,13 +31,16 @@ test('refresh diagnostics contain only stage names and anonymous numeric counter
   assert.equal(/[/\\]|secret|session|prompt|credential|\.jsonl/i.test(line), false);
 });
 
-test('Codex diagnostics expose only anonymous counts, timing, and safe flags', () => {
-  const line = formatCodexIndexDiagnostic({
+test('Codex diagnostics expose only anonymous coverage, timing, and safe flags', () => {
+  const diagnostic = {
     outcome: 'partial',
     indexedFiles: 4,
     totalFiles: 5,
     indexedBytes: 1300,
     totalBytes: 1500,
+    periodMigratedBytes: 900,
+    periodTotalBytes: 1500,
+    migrationPending: true,
     bodyReads: 1,
     failedFiles: 1,
     metadataMs: 12.34,
@@ -46,15 +49,21 @@ test('Codex diagnostics expose only anonymous counts, timing, and safe flags', (
       'unknown-event': 2,
       '/Users/carl/private-session.jsonl': 1,
     },
-  });
+    indexPath: '/Users/carl/codex-index-v1.json',
+    sessionKey: 'private-session-key',
+    repositoryUrl: 'https://secret.example/private-repository',
+    rawError: 'credential failed at /Users/carl/.codex/auth.json',
+  } as const;
+  const line = formatCodexIndexDiagnostic(diagnostic);
 
   assert.equal(
     line,
-    'codex-index outcome=partial files=4/5 bytes=1300/1500 bodyReads=1 failed=1 ' +
-      'metadataMs=12.3 parseMs=45.7 flags=unknown:1,unknown-event:2',
+    'codex-index outcome=partial files=4/5 bytes=1300/1500 periodBytes=900/1500 ' +
+      'migrationPending=true bodyReads=1 failed=1 metadataMs=12.3 parseMs=45.7 ' +
+      'flags=unknown:1,unknown-event:2',
   );
   assert.equal(
-    /Users|carl|private-session|\.jsonl|prompt|command|credential/i.test(line),
+    /Users|carl|private-session|private-repository|secret\.example|\.jsonl|prompt|command|credential|auth\.json/i.test(line),
     false,
   );
 });

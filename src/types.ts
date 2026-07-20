@@ -278,9 +278,9 @@ export interface ExtensionConfig {
   compactNumbers: boolean;
   // Show one exact-version What's New notification after an upgrade.
   releaseAnnouncements: boolean;
-  // IANA timezone name (e.g. "Asia/Hong_Kong") used for date display, or ''
-  // to use the system timezone. Useful for users in devcontainers or
-  // sandboxes whose system zone doesn't match their actual zone.
+  // IANA timezone name (e.g. "Asia/Hong_Kong") used for date display and
+  // provider period boundaries, or '' to use the system timezone. Useful for
+  // users in devcontainers or sandboxes whose system zone differs from theirs.
   timezone: string;
   // Show today's cost item in the status bar.
   showCost: boolean;

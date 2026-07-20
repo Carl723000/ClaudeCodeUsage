@@ -1,5 +1,6 @@
 import {
   CodexIndexProgress,
+  CodexIndexUpdateResult,
   CodexIndexV1,
 } from './codexIndex';
 
@@ -7,6 +8,7 @@ export interface CodexWorkerRefreshInput {
   codexHome: string;
   indexPath: string;
   salt: string;
+  timeZone: string;
 }
 
 export type CodexWorkerRequest =
@@ -19,6 +21,7 @@ export interface CodexWorkerResult {
   failedFiles: number;
   metadataMs: number;
   parseMs: number;
+  migration: CodexIndexUpdateResult['migration'];
 }
 
 export type CodexWorkerMessage =

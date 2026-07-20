@@ -10,7 +10,11 @@ import {
   CodexWorkerError,
   CodexWorkerLike,
 } from '../providers/codex/codexIndexClient';
-import { createEmptyCodexIndex } from '../providers/codex/codexIndex';
+import {
+  CodexIndexProgress,
+  createEmptyCodexIndex,
+  loadCodexIndex,
+} from '../providers/codex/codexIndex';
 import {
   CodexWorkerMessage,
   CodexWorkerRequest,
@@ -39,43 +43,57 @@ class FakeWorker extends EventEmitter implements CodexWorkerLike {
 
 const request = {
   codexHome: '/private/runtime-only-codex-home',
-  indexPath: '/private/runtime-only-index.json',
+  indexPath: '/private/global-storage/codex-index-v1.json',
   salt: 'runtime-only-salt',
+  timeZone: 'Asia/Hong_Kong',
 };
 
 function result(): CodexWorkerResult {
   return {
-    index: createEmptyCodexIndex(),
+    index: createEmptyCodexIndex(request.timeZone),
     bodyReads: 0,
     failedFiles: 0,
     metadataMs: 1,
     parseMs: 2,
+    migration: {
+      filePasses: 0,
+      bytesRead: 0,
+      pending: false,
+    },
   };
 }
 
 test('concurrent refreshes share one worker run and report progress', async () => {
   const worker = new FakeWorker();
-  const seen: number[] = [];
+  const seen: CodexIndexProgress[] = [];
   const client = new CodexIndexClient(() => worker);
 
-  const first = client.refresh(request, (progress) => seen.push(progress.scannedFiles));
-  const second = client.refresh(request, (progress) => seen.push(progress.scannedFiles));
+  const first = client.refresh(request, (progress) => seen.push(progress));
+  const second = client.refresh(request, (progress) => seen.push(progress));
   const refresh = worker.requests[0];
   assert.equal(refresh.type, 'refresh');
   if (refresh.type !== 'refresh') {
     throw new Error('expected refresh');
   }
   assert.equal(worker.requests.filter((item) => item.type === 'refresh').length, 1);
+  assert.equal(refresh.timeZone, 'Asia/Hong_Kong');
+  assert.match(refresh.indexPath, /codex-index-v1\.json$/);
+
+  const expectedPeriodCoverage = createEmptyCodexIndex(
+    'Asia/Hong_Kong',
+  ).coverage.period;
+  const progress: CodexIndexProgress = {
+    scannedFiles: 1,
+    totalFiles: 2,
+    indexedBytes: 10,
+    totalBytes: 20,
+    period: expectedPeriodCoverage,
+  };
 
   worker.emitMessage({
     type: 'progress',
     requestId: refresh.requestId,
-    progress: {
-      scannedFiles: 1,
-      totalFiles: 2,
-      indexedBytes: 10,
-      totalBytes: 20,
-    },
+    progress,
   });
   worker.emitMessage({
     type: 'result',
@@ -85,7 +103,9 @@ test('concurrent refreshes share one worker run and report progress', async () =
 
   assert.deepEqual(await first, result());
   assert.deepEqual(await second, result());
-  assert.deepEqual(seen, [1, 1]);
+  assert.equal(seen.length, 2);
+  assert.strictEqual(seen[0], seen[1]);
+  assert.deepEqual(seen[0].period, expectedPeriodCoverage);
 });
 
 test('cancel sends exactly one message for the active request', async () => {
@@ -192,10 +212,12 @@ test('the compiled worker keeps a safe project basename without raw identifiers 
       codexHome: root,
       indexPath,
       salt: SALT,
+      timeZone: 'Asia/Hong_Kong',
     });
 
     assert.equal(indexed.index.aggregate.total.inputTotal, 75);
     assert.equal(indexed.index.coverage.complete, true);
+    assert.equal(indexed.index.coverage.period.timeZone, 'Asia/Hong_Kong');
     const returned = JSON.stringify(indexed);
     const persisted = await readFile(indexPath, 'utf8');
     assert.match(returned, /"projectName":"raw-project"/);
@@ -208,6 +230,90 @@ test('the compiled worker keeps a safe project basename without raw identifiers 
       persisted,
       /private-session-id|rollout-private-name|\.jsonl|\/private\/raw-project/,
     );
+  } finally {
+    client.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('worker cancellation persists a resumable atomic checkpoint', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-worker-resume-'));
+  const client = new CodexIndexClient();
+  try {
+    const sessions = path.join(root, 'sessions');
+    const indexPath = path.join(root, 'cache', 'codex-index-v1.json');
+    const sessionPath = path.join(sessions, 'large-session.jsonl');
+    await mkdir(sessions, { recursive: true });
+    const tokenLines = Array.from({ length: 12_000 }, (_, index) =>
+      JSON.stringify({
+        timestamp: '2026-07-20T00:01:00.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: index + 1,
+              cached_input_tokens: 0,
+              output_tokens: index + 1,
+              reasoning_output_tokens: 0,
+              total_tokens: (index + 1) * 2,
+            },
+          },
+        },
+      }),
+    );
+    await writeFile(
+      sessionPath,
+      [
+        JSON.stringify({
+          timestamp: '2026-07-20T00:00:00.000Z',
+          type: 'session_meta',
+          payload: { id: 'raw-resume-session' },
+        }),
+        ...tokenLines,
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const input = {
+      codexHome: root,
+      indexPath,
+      salt: SALT,
+      timeZone: 'Asia/Hong_Kong',
+    };
+    await client.refresh(input);
+
+    const legacy = JSON.parse(await readFile(indexPath, 'utf8')) as {
+      files: Record<string, {
+        aggregate: { period?: unknown };
+        periodMigration?: unknown;
+      }>;
+    };
+    for (const contribution of Object.values(legacy.files)) {
+      delete contribution.aggregate.period;
+      delete contribution.periodMigration;
+    }
+    await writeFile(indexPath, JSON.stringify(legacy), 'utf8');
+
+    let cancelSent = false;
+    const cancelledRefresh = client.refresh(input, (progress) => {
+      if (!cancelSent && progress.period.allTime.migratedBytes > 0) {
+        cancelSent = true;
+        client.cancel();
+      }
+    });
+    await assert.rejects(cancelledRefresh, (error: unknown) =>
+      error instanceof CodexWorkerError && error.code === 'cancelled',
+    );
+
+    const checkpoint = await loadCodexIndex(indexPath, input.timeZone);
+    const saved = Object.values(checkpoint.files)[0];
+    assert.ok((saved.periodMigration?.offset ?? 0) > 0);
+    assert.equal(saved.aggregate.period, undefined);
+
+    const resumed = await client.refresh(input);
+    assert.equal(resumed.index.coverage.period.allTime.complete, true);
+    assert.equal(resumed.migration.pending, false);
   } finally {
     client.dispose();
     await rm(root, { recursive: true, force: true });
