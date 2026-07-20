@@ -3,6 +3,7 @@ import * as assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
+import * as ts from 'typescript';
 
 const REPO_ROOT = resolve(__dirname, '..', '..');
 
@@ -19,23 +20,276 @@ function activePatterns(relativePath: string): Set<string> {
   );
 }
 
-function sourceBlock(source: string, declaration: string): string {
-  const start = source.indexOf(declaration);
-  assert.notEqual(start, -1, `missing ${declaration}`);
-  const open = source.indexOf('{', start);
-  assert.notEqual(open, -1, `missing opening brace for ${declaration}`);
-  let depth = 0;
-  for (let cursor = open; cursor < source.length; cursor += 1) {
-    if (source[cursor] === '{') {
-      depth += 1;
-    } else if (source[cursor] === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        return source.slice(start, cursor + 1);
+type AstProject = {
+  readonly files: ts.SourceFile[];
+  readonly declarations: ReadonlyMap<string, ts.InterfaceDeclaration | ts.TypeAliasDeclaration>;
+};
+
+const BANNED_PERSISTED_PROPERTIES = /(?:^|_)(?:carry|raw(?:_?line|_?input|_?fragment)|incomplete(?:_?line|_?input))(?:$|_)/i;
+const LEGACY_STRUCTURAL_PROPERTIES = new Set([
+  'filesChanged',
+  'patchRounds',
+  'commands',
+  'postChangeCommands',
+]);
+
+function projectFromSources(sources: Readonly<Record<string, string>>): AstProject {
+  const files = Object.entries(sources).map(([name, text]) =>
+    ts.createSourceFile(name, text, ts.ScriptTarget.ES2020, true),
+  );
+  const declarations = new Map<string, ts.InterfaceDeclaration | ts.TypeAliasDeclaration>();
+  for (const file of files) {
+    for (const statement of file.statements) {
+      if ((ts.isInterfaceDeclaration(statement) || ts.isTypeAliasDeclaration(statement)) && statement.name) {
+        declarations.set(statement.name.text, statement);
       }
     }
   }
-  assert.fail(`unterminated ${declaration}`);
+  return { files, declarations };
+}
+
+function propertyName(name: ts.PropertyName | ts.MemberName | undefined): string | undefined {
+  if (!name) {
+    return undefined;
+  }
+  if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+    return name.text;
+  }
+  return undefined;
+}
+
+function referencedTypeName(type: ts.TypeNode): string | undefined {
+  if (!ts.isTypeReferenceNode(type)) {
+    return undefined;
+  }
+  return ts.isIdentifier(type.typeName) ? type.typeName.text : undefined;
+}
+
+function persistedPropertyViolations(project: AstProject, rootName: string): string[] {
+  const violations: string[] = [];
+  const visited = new Set<string>();
+  const inspectType = (type: ts.TypeNode | undefined, path: string): void => {
+    if (!type) {
+      return;
+    }
+    if (ts.isTypeReferenceNode(type)) {
+      for (const argument of type.typeArguments ?? []) {
+        inspectType(argument, path);
+      }
+      const name = referencedTypeName(type);
+      if (name && project.declarations.has(name) && !visited.has(name)) {
+        inspectDeclaration(project.declarations.get(name)!, `${path}.${name}`);
+      }
+      return;
+    }
+    if (ts.isArrayTypeNode(type)) {
+      inspectType(type.elementType, path);
+    } else if (ts.isTupleTypeNode(type)) {
+      for (const element of type.elements) {
+        inspectType(ts.isNamedTupleMember(element) ? element.type : element, path);
+      }
+    } else if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) {
+      for (const item of type.types) {
+        inspectType(item, path);
+      }
+    } else if (ts.isParenthesizedTypeNode(type)) {
+      inspectType(type.type, path);
+    } else if (ts.isTypeLiteralNode(type)) {
+      inspectMembers(type.members, path);
+    }
+  };
+  const inspectMembers = (members: ts.NodeArray<ts.TypeElement>, path: string): void => {
+    for (const member of members) {
+      if (ts.isPropertySignature(member)) {
+        const name = propertyName(member.name);
+        if (name && BANNED_PERSISTED_PROPERTIES.test(name)) {
+          violations.push(`${path}.${name}`);
+        }
+        inspectType(member.type, name ? `${path}.${name}` : path);
+      } else if (ts.isIndexSignatureDeclaration(member)) {
+        inspectType(member.type, path);
+      }
+    }
+  };
+  const inspectDeclaration = (
+    declaration: ts.InterfaceDeclaration | ts.TypeAliasDeclaration,
+    path: string,
+  ): void => {
+    const name = declaration.name.text;
+    if (visited.has(name)) {
+      return;
+    }
+    visited.add(name);
+    if (ts.isInterfaceDeclaration(declaration)) {
+      inspectMembers(declaration.members, path);
+    } else {
+      inspectType(declaration.type, path);
+    }
+  };
+  const root = project.declarations.get(rootName);
+  if (!root) {
+    return [`missing root ${rootName}`];
+  }
+  inspectDeclaration(root, rootName);
+  return violations;
+}
+
+function functionDeclarations(file: ts.SourceFile): ReadonlyMap<string, ts.FunctionLikeDeclaration> {
+  const declarations = new Map<string, ts.FunctionLikeDeclaration>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      declarations.set(node.name.text, node);
+    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
+      node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) {
+      declarations.set(node.name.text, node.initializer);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(file);
+  return declarations;
+}
+
+function hasUnsafeSpread(object: ts.ObjectLiteralExpression): boolean {
+  return object.properties.some((property) => {
+    if (!ts.isSpreadAssignment(property)) {
+      return false;
+    }
+    const expression = ts.isParenthesizedExpression(property.expression)
+      ? property.expression.expression
+      : property.expression;
+    return !ts.isConditionalExpression(expression) ||
+      !ts.isObjectLiteralExpression(expression.whenTrue) ||
+      !ts.isObjectLiteralExpression(expression.whenFalse);
+  });
+}
+
+function sanitizedDtoViolations(file: ts.SourceFile): string[] {
+  const declarations = functionDeclarations(file);
+  const violations: string[] = [];
+  const visited = new Set<string>();
+  const inspectFunction = (name: string): void => {
+    if (visited.has(name)) {
+      return;
+    }
+    visited.add(name);
+    const declaration = declarations.get(name);
+    if (!declaration?.body) {
+      violations.push(`missing sanitizer ${name}`);
+      return;
+    }
+    const visit = (node: ts.Node): void => {
+      if (ts.isObjectLiteralExpression(node) && hasUnsafeSpread(node)) {
+        violations.push(`${name} spreads a non-object conditional value`);
+      }
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && /^sanitize/.test(node.expression.text)) {
+        inspectFunction(node.expression.text);
+      }
+      ts.forEachChild(node, visit);
+    };
+    ts.forEachChild(declaration.body, visit);
+  };
+  inspectFunction('sanitizeIndexV2');
+  const root = declarations.get('sanitizeIndexV2');
+  const returned = root?.body && ts.isBlock(root.body)
+    ? root.body.statements.find(ts.isReturnStatement)?.expression
+    : undefined;
+  if (!returned || !ts.isObjectLiteralExpression(returned)) {
+    violations.push('sanitizeIndexV2 must return an explicit object literal');
+  } else {
+    const branches = returned.properties.flatMap((property) =>
+      ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property)
+        ? [propertyName(property.name)]
+        : [],
+    );
+    const expected = ['schemaVersion', 'files', 'aggregate', 'coverage'];
+    if (branches.length !== expected.length || expected.some((branch) => !branches.includes(branch))) {
+      violations.push('sanitizeIndexV2 top-level branches are not exact');
+    }
+  }
+  const atomic = declarations.get('saveCodexIndexAtomic');
+  let writesSanitizedDto = false;
+  const scanAtomic = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) &&
+      node.expression.name.text === 'writeFile') {
+      const value = node.arguments[0];
+      if (value && ts.isCallExpression(value) && ts.isPropertyAccessExpression(value.expression) &&
+        value.expression.expression.getText(file) === 'JSON' && value.expression.name.text === 'stringify') {
+        const serialized = value.arguments[0];
+        writesSanitizedDto = Boolean(serialized && ts.isCallExpression(serialized) &&
+          ts.isIdentifier(serialized.expression) && serialized.expression.text === 'sanitizeIndexV2' &&
+          serialized.arguments[0]?.getText(file) === 'index');
+      }
+    }
+    ts.forEachChild(node, scanAtomic);
+  };
+  if (atomic?.body) {
+    ts.forEachChild(atomic.body, scanAtomic);
+  }
+  if (!writesSanitizedDto) {
+    violations.push('atomic save does not stringify sanitizeIndexV2(index)');
+  }
+  return violations;
+}
+
+function legacyBoundaryName(node: ts.Node): string | undefined {
+  for (let current: ts.Node | undefined = node; current; current = current.parent) {
+    if ((ts.isInterfaceDeclaration(current) || ts.isTypeAliasDeclaration(current) ||
+      ts.isFunctionDeclaration(current) || ts.isClassDeclaration(current)) && current.name) {
+      return current.name.text;
+    }
+  }
+  return undefined;
+}
+
+function legacyStructuralViolations(files: readonly ts.SourceFile[]): string[] {
+  const violations: string[] = [];
+  const inspect = (node: ts.Node): void => {
+    let name: string | undefined;
+    if (ts.isPropertySignature(node) || ts.isPropertyDeclaration(node) || ts.isPropertyAssignment(node)) {
+      name = propertyName(node.name);
+    } else if (ts.isPropertyAccessExpression(node)) {
+      name = node.name.text;
+    } else if (ts.isElementAccessExpression(node) && ts.isStringLiteral(node.argumentExpression)) {
+      name = node.argumentExpression.text;
+    }
+    if (name && LEGACY_STRUCTURAL_PROPERTIES.has(name)) {
+      const boundary = legacyBoundaryName(node);
+      if (!boundary || !(/^(Legacy|migrateLegacy)/.test(boundary))) {
+        violations.push(`${node.getSourceFile().fileName}:${name}`);
+      }
+    }
+    ts.forEachChild(node, inspect);
+  };
+  for (const file of files) {
+    inspect(file);
+  }
+  return violations;
+}
+
+function misleadingCopyViolations(files: readonly ts.SourceFile[]): string[] {
+  const violations: string[] = [];
+  const misleading = /(?:files? changed|patch rounds|post[- ]?change commands?|command (?:count|overhead)|commands? (?:run|executed))/i;
+  const inspect = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node) && misleading.test(node.text)) {
+      violations.push(`${node.getSourceFile().fileName}:${node.text}`);
+    }
+    if (ts.isPropertyAssignment(node) && LEGACY_STRUCTURAL_PROPERTIES.has(propertyName(node.name) ?? '')) {
+      violations.push(`${node.getSourceFile().fileName}:${propertyName(node.name)}`);
+    }
+    ts.forEachChild(node, inspect);
+  };
+  for (const file of files) {
+    inspect(file);
+  }
+  return violations;
+}
+
+function projectSourceFiles(prefix: string): Record<string, string> {
+  const paths = execFileSync('git', ['ls-files', prefix], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  }).trim().split('\n').filter((path) => path.endsWith('.ts'));
+  return Object.fromEntries(paths.map((path) => [path, repoFile(path)]));
 }
 
 test('AGENTS is the canonical Codex repository policy', () => {
@@ -97,37 +351,76 @@ test('line endings and tracked file modes are repository-safe', () => {
   assert.deepEqual(badModes, []);
 });
 
-test('Codex schema 2 persistence keeps raw incomplete input behind an explicit legacy boundary', () => {
-  const index = repoFile('src/providers/codex/codexIndex.ts');
-  const contribution = sourceBlock(index, 'export interface CodexFileContribution');
-  const persistedAllowlist = sourceBlock(index, 'function sanitizeFileContribution');
-  const save = sourceBlock(index, 'export async function saveCodexIndexAtomic');
-  const legacyContribution = sourceBlock(index, 'interface LegacyCodexFileContribution');
-  const v2PublicSurface = index.slice(0, index.indexOf('interface LegacyCodexIndexV1'));
+test('semantic Codex policy validators reject nested DTO leaks, comment-only sanitizers, and misleading legacy fixtures', () => {
+  const nestedLeak = projectFromSources({
+    'fixture.ts': [
+      'interface CodexIndexV2 { files: Record<string, CodexFileContribution>; }',
+      'interface CodexFileContribution { migration: CodexPeriodMigrationState; }',
+      'interface CodexPeriodMigrationState { days: Record<string, CodexDailySlice>; }',
+      'interface CodexDailySlice { rawLine: string; carry: string; }',
+    ].join('\n'),
+  });
+  assert.deepEqual(
+    persistedPropertyViolations(nestedLeak, 'CodexIndexV2'),
+    [
+      'CodexIndexV2.files.CodexFileContribution.migration.CodexPeriodMigrationState.days.CodexDailySlice.rawLine',
+      'CodexIndexV2.files.CodexFileContribution.migration.CodexPeriodMigrationState.days.CodexDailySlice.carry',
+    ],
+  );
 
-  assert.doesNotMatch(contribution, /\b(?:carry|rawLine|incompleteLine)\b/);
-  assert.doesNotMatch(persistedAllowlist, /\b(?:carry|rawLine|incompleteLine)\b/);
-  assert.match(save, /JSON\.stringify\(sanitizeIndexV2\(index\)\)/);
-  assert.match(legacyContribution, /readonly carry\?: unknown/);
-  assert.doesNotMatch(v2PublicSurface, /\b(?:filesChanged|patchRounds|commands|postChangeCommands)\b/);
+  const commentOnly = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(index: unknown) { return { schemaVersion: 2, files: {}, aggregate: {}, coverage: {} }; }',
+    'async function saveCodexIndexAtomic(index: unknown) {',
+    '  // JSON.stringify(sanitizeIndexV2(index))',
+    '  await handle.writeFile(JSON.stringify(index));',
+    '}',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.deepEqual(
+    sanitizedDtoViolations(commentOnly),
+    ['atomic save does not stringify sanitizeIndexV2(index)'],
+  );
 
-  const legacyStructural = sourceBlock(index, 'interface LegacyCodexStructuralSummary');
-  const legacyAdapter = sourceBlock(index, 'function sanitizeStructural');
-  for (const field of ['filesChanged', 'patchRounds', 'commands', 'postChangeCommands']) {
-    assert.match(legacyStructural, new RegExp(`\\b${field}\\?: number`));
-    const outsideLegacyBoundary = index
-      .replace(legacyStructural, '')
-      .replace(legacyAdapter, '');
-    assert.doesNotMatch(
-      outsideLegacyBoundary,
-      new RegExp(`\\b${field}\\b`),
-      `${field} must stay in the explicit Legacy migration boundary`,
-    );
-  }
-  for (const field of ['patchRounds', 'commands', 'postChangeCommands']) {
-    assert.match(legacyAdapter, new RegExp(`legacy\\.${field}\\)`));
-  }
-  assert.match(legacyAdapter, /LegacyCodexStructuralSummary/);
+  const badStructural = ts.createSourceFile(
+    'codexUsage.ts',
+    'function summarize(value: { patchRounds: number }) { return value.patchRounds; }',
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  const badCopy = ts.createSourceFile(
+    'codexView.ts',
+    "const copy = { structuralProxy: 'Post-change commands run' };",
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  assert.deepEqual(legacyStructuralViolations([badStructural]), [
+    'codexUsage.ts:patchRounds',
+    'codexUsage.ts:patchRounds',
+  ]);
+  assert.deepEqual(misleadingCopyViolations([badCopy]), [
+    'codexView.ts:Post-change commands run',
+  ]);
+});
+
+test('Codex schema 2 persistence uses semantic AST gates across the complete DTO graph', () => {
+  const sources = projectSourceFiles('src');
+  const project = projectFromSources(sources);
+  const index = project.files.find((file) => file.fileName === 'src/providers/codex/codexIndex.ts');
+  assert.ok(index, 'missing codexIndex source');
+
+  assert.deepEqual(persistedPropertyViolations(project, 'CodexIndexV2'), []);
+  assert.deepEqual(sanitizedDtoViolations(index), []);
+
+  const codexFiles = project.files.filter((file) =>
+    file.fileName.startsWith('src/providers/codex/'),
+  );
+  assert.deepEqual(legacyStructuralViolations(codexFiles), []);
+  assert.deepEqual(
+    misleadingCopyViolations([
+      project.files.find((file) => file.fileName === 'src/codexView.ts')!,
+      project.files.find((file) => file.fileName === 'src/i18n.ts')!,
+    ]),
+    [],
+  );
 });
 
 test('Codex schema 2 production files are regular files and the architecture records its persisted contract', () => {
@@ -172,6 +465,8 @@ test('Codex schema 2 production files are regular files and the architecture rec
       /SSH[\s\S]*HTTPS[\s\S]*canonical/i,
       /strictly exact[\s\S]*active\/archive[\s\S]*ambiguous/i,
       /five structural call proxies[\s\S]*not file, command, or review counts/i,
+      /never[\s\S]*stores a raw incomplete line or a carry buffer/i,
+      /cancellation checkpoints[\s\S]*resumes/i,
     ]],
     [chinese, [
       /内部 schema 2[\s\S]*codex-index-v1\.json/,
@@ -181,6 +476,8 @@ test('Codex schema 2 production files are regular files and the architecture rec
       /SSH[\s\S]*HTTPS[\s\S]*规范化/,
       /active\/archive[\s\S]*严格精确[\s\S]*歧义/,
       /五个结构调用代理量[\s\S]*不是文件、命令或审阅次数/,
+      /v2 不保存未完成原始行，也不保存 carry buffer/,
+      /cancel checkpoint[\s\S]*resume/,
     ]],
   ] as Array<[string, RegExp[]]>) {
     for (const pattern of patterns) {

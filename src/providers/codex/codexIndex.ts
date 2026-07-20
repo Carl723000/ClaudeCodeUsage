@@ -1403,6 +1403,19 @@ function legacyCount(value: unknown): number {
     : 0;
 }
 
+function migrateLegacyStructural(
+  structural: Record<string, unknown>,
+): CodexStructuralSummary {
+  const legacy = structural as LegacyCodexStructuralSummary;
+  return {
+    patchCalls: legacyCount(legacy.patchRounds),
+    toolCalls: legacyCount(legacy.commands),
+    postPatchToolCalls: legacyCount(legacy.postChangeCommands),
+    compactCount: legacyCount(legacy.compactCount),
+    taskCompleteCount: legacyCount(legacy.taskCompleteCount),
+  };
+}
+
 function sanitizeStructural(value: unknown): CodexStructuralSummary {
   const structural = isRecord(value) ? value : {};
   if ('patchCalls' in structural) {
@@ -1414,14 +1427,7 @@ function sanitizeStructural(value: unknown): CodexStructuralSummary {
       taskCompleteCount: legacyCount(structural.taskCompleteCount),
     };
   }
-  const legacy = structural as LegacyCodexStructuralSummary;
-  return {
-    patchCalls: legacyCount(legacy.patchRounds),
-    toolCalls: legacyCount(legacy.commands),
-    postPatchToolCalls: legacyCount(legacy.postChangeCommands),
-    compactCount: legacyCount(legacy.compactCount),
-    taskCompleteCount: legacyCount(legacy.taskCompleteCount),
-  };
+  return migrateLegacyStructural(structural);
 }
 
 function sanitizePeriod(value: unknown): CodexFilePeriodIndex | undefined {
