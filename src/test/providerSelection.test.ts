@@ -117,6 +117,18 @@ test('provider and Codex view copy is complete in every UI locale', () => {
           'postChangeCommandsPerFile',
           'patchRounds',
           'compactions',
+          'unnamedSession',
+          'unidentifiedProject',
+          'parentThread',
+          'searchThreads',
+          'all',
+          'localDirectory',
+          'lastActive',
+          'expand',
+          'usageLimits',
+          'resets',
+          'credits',
+          'unlimited',
         ] as const) {
           assert.notEqual(
             providers.codex[key],
