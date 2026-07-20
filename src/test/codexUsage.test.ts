@@ -5,7 +5,7 @@ import {
   buildCodexUsageView,
   tokenComposition,
 } from '../providers/codex/codexUsage';
-import { snapshotFixture } from './codexFixtures';
+import { identityLineageFixture, snapshotFixture } from './codexFixtures';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
 
@@ -20,7 +20,7 @@ test('view builds recent task, 7d, 30d, and projects without double counting sub
   assert.equal(view.last30Days.approvalReviewerThreads, 1);
   assert.equal(view.projects[0].projectKey.startsWith('project:'), true);
   assert.equal(view.projects[0].name, 'ClaudeCodeUsage');
-  assert.equal(view.projects[0].directoryName, 'ClaudeCodeUsage-MyFix');
+  assert.equal(view.projects[0].directoryName, 'claude-code-usage-v221');
   assert.equal(view.lastTaskIdentity?.title, '完成 Codex v2.3.0 仪表板');
 });
 
@@ -231,4 +231,37 @@ test('incomplete session timestamps never invent a multi-year duration', () => {
   assert.equal(view.recentThreads[1].role, 'root');
   assert.equal(view.recentThreads[1].durationMs, 0);
   assert.equal(view.last7Days.durationMs, 600_000);
+});
+
+test('project and task identities use named representatives and the whole lineage', () => {
+  const childEndedAt = Date.parse('2026-07-20T11:50:00.000Z');
+  const view = buildCodexUsageView(identityLineageFixture(), NOW);
+
+  assert.equal(view.projects[0].name, 'RealChildProject');
+  assert.equal(view.projects[0].directoryName, 'LatestDirectory');
+  assert.equal(view.lastTaskIdentity?.projectName, 'RealChildProject');
+  assert.equal(view.lastTaskIdentity?.projectDirectoryName, 'LatestDirectory');
+  assert.equal(view.lastTaskIdentity?.title, undefined);
+  assert.equal(view.lastTaskIdentity?.observedAt, childEndedAt);
+  assert.equal(view.lastTask?.threads, 3);
+});
+
+test('lineage traversal groups a parent cycle once without borrowing a child title', () => {
+  const snapshot = snapshotFixture();
+  snapshot.files = snapshot.files.slice(0, 2);
+  snapshot.files[0].session.role = 'subagent';
+  snapshot.files[0].session.parentSessionKey = snapshot.files[1].session.sessionKey;
+  snapshot.files[0].session.sessionTitle = 'cycle title a';
+  snapshot.files[1].session.parentSessionKey = snapshot.files[0].session.sessionKey;
+  snapshot.files[1].session.sessionTitle = 'cycle title b';
+  snapshot.files[1].session.endedAt = Date.parse('2026-07-20T11:55:00.000Z');
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.lastTask?.threads, 2);
+  assert.equal(view.lastTaskIdentity?.title, undefined);
+  assert.equal(
+    view.lastTaskIdentity?.observedAt,
+    Date.parse('2026-07-20T11:55:00.000Z'),
+  );
 });

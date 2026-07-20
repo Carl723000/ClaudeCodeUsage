@@ -13,6 +13,11 @@ export interface CodexProjectIdentity {
   directoryName?: string;
 }
 
+export interface NormalizedRepositoryIdentity {
+  keySource: string;
+  name: string;
+}
+
 export function pseudonymousIdentityKey(
   salt: string,
   raw: string,
@@ -53,19 +58,80 @@ function basename(value: string): string | undefined {
   return cleanLabel(normalized.split('/').pop() ?? '', MAX_PROJECT_LABEL_LENGTH);
 }
 
-function repositoryName(value: string): string | undefined {
-  const normalized = value.trim().replace(/\\/g, '/').replace(/\/+$/, '');
-  if (!normalized) {
-    return undefined;
-  }
-  const candidate = normalized.split(/[/:]/).pop()?.replace(/\.git$/i, '') ?? '';
+function decodedRepositoryName(candidate: string): string | undefined {
   let decoded = candidate;
   try {
     decoded = decodeURIComponent(candidate);
   } catch {
     // A malformed escape is still safe as a plain label after sanitization.
   }
-  return cleanLabel(decoded, MAX_PROJECT_LABEL_LENGTH);
+  return basename(decoded);
+}
+
+const LOWERCASE_REPOSITORY_PATH_HOSTS = new Set([
+  'github.com',
+  'gitlab.com',
+  'bitbucket.org',
+]);
+
+const DEFAULT_REPOSITORY_PORTS: Readonly<Record<string, string>> = {
+  'http:': '80',
+  'https:': '443',
+  'ssh:': '22',
+  'git:': '9418',
+};
+
+function repositoryPathIdentity(
+  hostValue: string,
+  port: string,
+  pathValue: string,
+): NormalizedRepositoryIdentity | undefined {
+  const host = hostValue.trim().toLowerCase();
+  const trimmedPath = pathValue
+    .replace(/\\/g, '/')
+    .replace(/[?#].*$/, '')
+    .replace(/^\/+|\/+$/g, '')
+    .replace(/\.git$/i, '');
+  const segments = trimmedPath.split('/').filter(Boolean);
+  if (!host || segments.length === 0) {
+    return undefined;
+  }
+  const name = decodedRepositoryName(segments[segments.length - 1]);
+  if (!name) {
+    return undefined;
+  }
+  const canonicalPath = LOWERCASE_REPOSITORY_PATH_HOSTS.has(host)
+    ? segments.join('/').toLowerCase()
+    : segments.join('/');
+  const authority = port ? `${host}:${port}` : host;
+  return {
+    keySource: `repo:${authority}/${canonicalPath}`,
+    name,
+  };
+}
+
+export function normalizeRepositoryIdentity(
+  repositoryUrl: string,
+): NormalizedRepositoryIdentity | undefined {
+  const value = repositoryUrl.trim();
+  const scp = /^[^@\s/:]+@([^:\s/]+):(.+)$/.exec(value);
+  if (scp) {
+    return repositoryPathIdentity(scp[1], '', scp[2]);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return undefined;
+  }
+  if (!(parsed.protocol in DEFAULT_REPOSITORY_PORTS)) {
+    return undefined;
+  }
+  const port = parsed.port === DEFAULT_REPOSITORY_PORTS[parsed.protocol]
+    ? ''
+    : parsed.port;
+  return repositoryPathIdentity(parsed.hostname, port, parsed.pathname);
 }
 
 export function safeProjectIdentity(
@@ -74,12 +140,12 @@ export function safeProjectIdentity(
 ): CodexProjectIdentity {
   const directoryName = cwd ? basename(cwd) : undefined;
   const repository = repositoryUrl
-    ? repositoryName(repositoryUrl)
+    ? normalizeRepositoryIdentity(repositoryUrl)
     : undefined;
-  const keySource = repository && repositoryUrl
-    ? repositoryUrl.trim()
+  const keySource = repository
+    ? repository.keySource
     : cwd?.trim() || undefined;
-  const name = repository ?? directoryName;
+  const name = repository?.name ?? directoryName;
   return {
     ...(keySource ? { keySource } : {}),
     ...(name ? { name } : {}),
@@ -89,7 +155,7 @@ export function safeProjectIdentity(
 
 function sessionTitleRecord(
   line: string,
-): { id: string; title: string } | undefined {
+): { id: string; title: string; updatedAt?: number } | undefined {
   try {
     const parsed: unknown = JSON.parse(line);
     if (typeof parsed !== 'object' || parsed === null) {
@@ -104,7 +170,15 @@ function sessionTitleRecord(
       redactAbsolutePaths(record.thread_name),
       MAX_TITLE_LENGTH,
     );
-    return id && title ? { id, title } : undefined;
+    const parsedUpdatedAt = typeof record.updated_at === 'string'
+      ? Date.parse(record.updated_at)
+      : Number.NaN;
+    const updatedAt = Number.isFinite(parsedUpdatedAt)
+      ? parsedUpdatedAt
+      : undefined;
+    return id && title
+      ? { id, title, ...(updatedAt === undefined ? {} : { updatedAt }) }
+      : undefined;
   } catch {
     return undefined;
   }
@@ -124,22 +198,41 @@ export async function loadCodexSessionTitles(
     return new Map();
   }
 
-  const titles = new Map<string, string>();
+  const titleRecords = new Map<
+    string,
+    { title: string; updatedAt?: number; ordinal: number }
+  >();
   const lines = createInterface({
     input: createReadStream(indexPath, { encoding: 'utf8' }),
     crlfDelay: Infinity,
   });
   try {
+    let ordinal = 0;
     for await (const line of lines) {
       const record = sessionTitleRecord(line);
       if (record) {
-        titles.set(
-          pseudonymousIdentityKey(salt, record.id),
-          record.title,
-        );
+        const key = pseudonymousIdentityKey(salt, record.id);
+        const candidate = { ...record, ordinal };
+        const current = titleRecords.get(key);
+        const candidateHasTime = candidate.updatedAt !== undefined;
+        const currentHasTime = current?.updatedAt !== undefined;
+        if (
+          !current ||
+          (candidateHasTime && !currentHasTime) ||
+          (candidateHasTime && currentHasTime &&
+            candidate.updatedAt! > current.updatedAt!) ||
+          (candidateHasTime === currentHasTime &&
+            candidate.updatedAt === current.updatedAt &&
+            candidate.ordinal > current.ordinal)
+        ) {
+          titleRecords.set(key, candidate);
+        }
       }
+      ordinal += 1;
     }
-    return titles;
+    return new Map(
+      [...titleRecords.entries()].map(([key, record]) => [key, record.title]),
+    );
   } catch {
     return new Map();
   } finally {

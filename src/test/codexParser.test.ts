@@ -265,9 +265,13 @@ test('session metadata is pseudonymized and auto-review stays distinct', () => {
     'raw-session': 'session:001',
     'raw-parent': 'session:000',
     '/private/project': 'project:001',
-    'https://github.com/example/AccurateProject.git': 'project:git',
+    'repo:github.com/example/accurateproject': 'project:git',
   };
-  const pseudonymize = (raw: string): string => pseudonyms[raw] ?? 'unknown:key';
+  const pseudonymizedSources: string[] = [];
+  const pseudonymize = (raw: string): string => {
+    pseudonymizedSources.push(raw);
+    return pseudonyms[raw] ?? 'unknown:key';
+  };
   const line = JSON.stringify({
     timestamp: '2026-07-20T00:00:00.000Z',
     type: 'session_meta',
@@ -308,6 +312,16 @@ test('session metadata is pseudonymized and auto-review stays distinct', () => {
   assert.equal(sessionsState.projectDirectoryName, 'project');
   assert.equal(sessionsState.agentNickname, 'Locke');
   assert.equal(sessionsState.role, 'approval-reviewer');
+  assert.equal(
+    pseudonymizedSources.includes('repo:github.com/example/accurateproject'),
+    true,
+  );
+  assert.equal(
+    pseudonymizedSources.includes(
+      'https://github.com/example/AccurateProject.git',
+    ),
+    false,
+  );
   assert.doesNotMatch(
     JSON.stringify(sessionsState),
     /raw-session|raw-parent|private\/project|github\.com/,

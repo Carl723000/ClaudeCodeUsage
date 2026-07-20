@@ -464,25 +464,66 @@ function recentTaskFiles(files: CodexFileAggregate[]): CodexFileAggregate[] {
   if (!latest) {
     return [];
   }
-  const bySession = new Map(files.map((file) => [file.session.sessionKey, file]));
-  const rootOf = (file: CodexFileAggregate): string => {
-    let current = file;
-    const visited = new Set<string>();
-    while (
-      current.session.parentSessionKey &&
-      !visited.has(current.session.parentSessionKey)
-    ) {
-      visited.add(current.session.sessionKey);
-      const parent = bySession.get(current.session.parentSessionKey);
-      if (!parent) {
-        return current.session.parentSessionKey;
-      }
-      current = parent;
+  const connections = new Map<string, Set<string>>();
+  for (const file of files) {
+    const key = file.session.sessionKey;
+    const peers = connections.get(key) ?? new Set<string>();
+    connections.set(key, peers);
+    const parent = file.session.parentSessionKey;
+    if (parent) {
+      peers.add(parent);
+      const parentPeers = connections.get(parent) ?? new Set<string>();
+      parentPeers.add(key);
+      connections.set(parent, parentPeers);
     }
-    return current.session.sessionKey;
-  };
-  const rootKey = rootOf(latest);
-  return files.filter((file) => rootOf(file) === rootKey);
+  }
+  const visited = new Set<string>();
+  const pending = [latest.session.sessionKey];
+  while (pending.length > 0) {
+    const key = pending.pop()!;
+    if (visited.has(key)) {
+      continue;
+    }
+    visited.add(key);
+    for (const peer of connections.get(key) ?? []) {
+      if (!visited.has(peer)) {
+        pending.push(peer);
+      }
+    }
+  }
+  return files.filter((file) => visited.has(file.session.sessionKey));
+}
+
+function identityValue(
+  files: CodexFileAggregate[],
+  field: 'projectName' | 'projectDirectoryName',
+): string | undefined {
+  return [...files]
+    .filter((file) => Boolean(file.session[field]?.trim()))
+    .sort(
+      (left, right) =>
+        observedAt(right) - observedAt(left) ||
+        Number(right.session.role === 'root') -
+          Number(left.session.role === 'root') ||
+        left.session.sessionKey.localeCompare(right.session.sessionKey),
+    )[0]?.session[field];
+}
+
+function taskRootFile(
+  files: CodexFileAggregate[],
+): CodexFileAggregate | undefined {
+  return [...files]
+    .filter(
+      (file) =>
+        file.session.role === 'root' || !file.session.parentSessionKey,
+    )
+    .sort(
+      (left, right) =>
+        Number(right.session.role === 'root') -
+          Number(left.session.role === 'root') ||
+        observedAt(right) - observedAt(left) ||
+        left.session.sessionKey.localeCompare(right.session.sessionKey),
+    )[0];
 }
 
 function validLimit(
@@ -537,10 +578,7 @@ export function buildCodexUsageView(
   const last30DaysScope = scope(last30Days);
   const allTime = scope(snapshot.files);
   const daily = dailyRows(snapshot.files);
-  const taskRoot = recent.find(
-    (file) =>
-      file.session.role === 'root' || !file.session.parentSessionKey,
-  ) ?? recent[0];
+  const taskRoot = taskRootFile(recent);
   const sourceLimits = snapshot.limits.length > 0
     ? snapshot.limits
     : snapshot.limit
@@ -550,12 +588,15 @@ export function buildCodexUsageView(
 
   return {
     lastTask: recentScope,
-    lastTaskIdentity: taskRoot
+    lastTaskIdentity: recent.length > 0
       ? {
-          title: taskRoot.session.sessionTitle,
-          projectName: taskRoot.session.projectName,
-          projectDirectoryName: taskRoot.session.projectDirectoryName,
-          observedAt: observedAt(taskRoot),
+          title: taskRoot?.session.sessionTitle,
+          projectName: identityValue(recent, 'projectName'),
+          projectDirectoryName: identityValue(
+            recent,
+            'projectDirectoryName',
+          ),
+          observedAt: Math.max(...recent.map(observedAt)),
         }
       : null,
     last7Days: last7DaysScope,
@@ -563,17 +604,10 @@ export function buildCodexUsageView(
     allTime,
     projects: [...projects.entries()]
       .map(([projectKey, files]) => {
-        const representative = [...files]
-          .sort((left, right) => {
-            const roleDifference =
-              (left.session.role === 'root' ? 0 : 1) -
-              (right.session.role === 'root' ? 0 : 1);
-            return roleDifference || observedAt(right) - observedAt(left);
-          })[0];
         return {
           projectKey,
-          name: representative?.session.projectName,
-          directoryName: representative?.session.projectDirectoryName,
+          name: identityValue(files, 'projectName'),
+          directoryName: identityValue(files, 'projectDirectoryName'),
           lastActiveAt: Math.max(0, ...files.map(observedAt)),
           threadCount: files.length,
           scope: scope(files),
