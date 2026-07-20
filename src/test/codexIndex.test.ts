@@ -407,6 +407,219 @@ test('the persisted v1 loader migrates legacy structural proxy keys', async () =
   }
 });
 
+test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-v2-dto-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    await writeFile(
+      indexPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        rawIndexValue: 'v2-secret-index',
+        files: {
+          a: {
+            fileKey: 'anonymous-file-key',
+            sourceArea: 'sessions',
+            size: 120,
+            mtimeMs: 7,
+            dev: 8,
+            ino: 9,
+            offset: 100,
+            discardingOversizedLine: false,
+            carry: 'v2-secret-carry',
+            absolutePath: '/v2-secret-path/session.jsonl',
+            repositoryUrl: 'https://v2-secret-url.invalid/repository',
+            rawSessionId: 'v2-secret-contribution-session',
+            parserState: {
+              schemaVersion: 1,
+              fileKey: 'anonymous-file-key',
+              sessionKey: 'anonymous-session-key',
+              parentSessionKey: 'anonymous-parent-key',
+              projectKey: 'anonymous-project-key',
+              projectName: 'SafeProject',
+              projectDirectoryName: 'safe-directory',
+              agentNickname: 'SafeAgent',
+              model: 'gpt-5.6-sol',
+              effort: 'high',
+              role: 'subagent',
+              highWater: {
+                inputTokens: 123,
+                cachedInputTokens: 23,
+                outputTokens: 45,
+                reasoningOutputTokens: 5,
+                totalTokens: 168,
+                responseBody: 'v2-secret-high-water',
+              },
+              qualityFlags: ['legacy-quality'],
+              currentTurnId: 'v2-secret-turn-id',
+              toolArguments: 'v2-secret-parser-tool-arguments',
+            },
+            aggregate: {
+              total: {
+                inputTotal: 123,
+                cachedInput: 23,
+                outputTotal: 45,
+                reasoningOutput: 5,
+                sourceTotal: 168,
+                promptBody: 'v2-secret-file-total',
+              },
+              byDay: {
+                '2026-07-20': {
+                  inputTotal: 123,
+                  outputTotal: 45,
+                  commandBody: 'v2-secret-day-bucket',
+                },
+              },
+              byModel: {
+                'gpt-5.6-sol': { inputTotal: 123, outputTotal: 45 },
+              },
+              byEffort: {
+                high: { inputTotal: 123, outputTotal: 45 },
+              },
+              session: {
+                sessionKey: 'anonymous-session-key',
+                parentSessionKey: 'anonymous-parent-key',
+                projectKey: 'anonymous-project-key',
+                projectName: 'SafeProject',
+                projectDirectoryName: 'safe-directory',
+                agentNickname: 'SafeAgent',
+                role: 'subagent',
+                startedAt: 10,
+                endedAt: 20,
+                sessionTitle: 'v2-secret-session-title',
+                rawSessionId: 'v2-secret-session-id',
+                cwd: '/v2-secret-session-path',
+              },
+              structural: {
+                patchCalls: 1,
+                toolCalls: 2,
+                postPatchToolCalls: 2,
+                compactCount: 3,
+                taskCompleteCount: 4,
+                responseBody: 'v2-secret-structural',
+              },
+              rawResponse: 'v2-secret-file-aggregate',
+            },
+            limit: {
+              provider: 'codex',
+              limitId: 'safe-limit-id',
+              limitName: 'Safe Limit',
+              observedAt: 30,
+              source: 'local-log',
+              confidence: 'last-observed',
+              windows: [{
+                label: 'primary',
+                usedPercent: 25,
+                windowMinutes: 300,
+                resetsAt: 40,
+                commandBody: 'v2-secret-limit-window',
+              }],
+              credits: {
+                hasCredits: true,
+                unlimited: false,
+                balance: '42',
+                toolArguments: 'v2-secret-limit-credits',
+              },
+              rawUrl: 'https://v2-secret-limit.invalid',
+            },
+            limits: {
+              primary: {
+                provider: 'codex',
+                observedAt: 31,
+                source: 'local-log',
+                confidence: 'last-observed',
+                windows: [{ usedPercent: 26 }],
+                promptBody: 'v2-secret-named-limit',
+              },
+            },
+            qualityFlags: ['legacy-quality'],
+            qualityDetails: { promptBody: 'v2-secret-quality-details' },
+            identityChecked: true,
+          },
+        },
+        aggregate: {
+          total: {
+            inputTotal: 123,
+            cachedInput: 23,
+            outputTotal: 45,
+            reasoningOutput: 5,
+            sourceTotal: 168,
+            rawResponse: 'v2-secret-provider-total',
+          },
+          byDay: {
+            '2026-07-20': { inputTotal: 123, outputTotal: 45 },
+          },
+          byModel: {
+            'gpt-5.6-sol': { inputTotal: 123, outputTotal: 45 },
+          },
+          byEffort: {
+            high: { inputTotal: 123, outputTotal: 45 },
+          },
+          rawPrompt: 'v2-secret-provider-aggregate',
+        },
+        coverage: {
+          indexedFiles: 1,
+          totalFiles: 1,
+          indexedBytes: 100,
+          totalBytes: 120,
+          complete: false,
+          absolutePath: '/v2-secret-coverage-path',
+        },
+      }),
+      'utf8',
+    );
+
+    const loaded = await loadCodexIndex(indexPath, 'Asia/Hong_Kong');
+    const loadedJson = JSON.stringify(loaded);
+    assert.doesNotMatch(loadedJson, /v2-secret/);
+    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.files.a.offset, 100);
+    assert.equal(loaded.files.a.aggregate.total.inputTotal, 123);
+    assert.equal(loaded.files.a.parserState.highWater?.inputTokens, 123);
+    assert.equal(loaded.files.a.parserState.sessionKey, 'anonymous-session-key');
+    assert.equal(loaded.files.a.aggregate.session.startedAt, 10);
+    assert.equal(loaded.files.a.aggregate.session.endedAt, 20);
+    assert.equal(loaded.files.a.aggregate.structural.patchCalls, 1);
+    assert.equal(loaded.files.a.limit?.observedAt, 30);
+    assert.equal(loaded.files.a.limit?.windows[0].usedPercent, 25);
+    assert.equal(loaded.files.a.limit?.credits?.balance, '42');
+    assert.equal(loaded.files.a.limits?.primary.observedAt, 31);
+    assert.deepEqual(loaded.files.a.qualityFlags, ['legacy-quality']);
+    assert.equal(loaded.aggregate.total.inputTotal, 123);
+    assert.equal(loaded.coverage.indexedBytes, 100);
+
+    const caller = structuredClone(loaded) as typeof loaded & {
+      carry?: string;
+      rawPath?: string;
+    };
+    caller.carry = 'v2-secret-caller-carry';
+    caller.rawPath = '/v2-secret-caller-path';
+    Object.assign(caller.files.a.parserState, {
+      toolArguments: 'v2-secret-caller-parser',
+    });
+    Object.assign(caller.files.a.aggregate.session, {
+      cwd: '/v2-secret-caller-session-path',
+    });
+    Object.assign(caller.files.a.limit!.windows[0], {
+      commandBody: 'v2-secret-caller-limit-window',
+    });
+    await saveCodexIndexAtomic(indexPath, caller);
+
+    const persisted = await readFile(indexPath, 'utf8');
+    assert.doesNotMatch(persisted, /v2-secret/);
+    assert.equal(caller.carry, 'v2-secret-caller-carry');
+    assert.equal(caller.rawPath, '/v2-secret-caller-path');
+    assert.match(JSON.stringify(caller), /v2-secret-caller-parser/);
+    const saved = JSON.parse(persisted) as typeof loaded;
+    assert.equal(saved.files.a.aggregate.total.inputTotal, 123);
+    assert.equal(saved.files.a.parserState.sessionKey, 'anonymous-session-key');
+    assert.equal(saved.files.a.limit?.windows[0].usedPercent, 25);
+    assert.equal(saved.aggregate.total.inputTotal, 123);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('unchanged multi-gigabyte metadata performs zero body reads', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-large-'));
   try {
