@@ -1,3 +1,6 @@
+// Shared dashboard time range used by Codex usage and insight views.
+export type CodexScope = 'recent' | '7d' | '30d' | 'all';
+
 export interface ClaudeUsageRecord {
   timestamp: string;
   version?: string;
