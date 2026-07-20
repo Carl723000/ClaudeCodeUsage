@@ -53,8 +53,8 @@ export interface CodexViewCopy {
   highEffortFreshShare: string;
   processedToFreshRatio: string;
   reasoningOutputShare: string;
-  postChangeCommandsPerFile: string;
-  patchRounds: string;
+  postPatchToolCallsPerPatchCall: string;
+  patchCalls: string;
   compactions: string;
   projects: string;
   projectLabel: string;
@@ -134,8 +134,8 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   highEffortFreshShare: 'High-effort fresh share',
   processedToFreshRatio: 'Processed / fresh',
   reasoningOutputShare: 'Reasoning share of output',
-  postChangeCommandsPerFile: 'Post-change commands / file',
-  patchRounds: 'Patch rounds',
+  postPatchToolCallsPerPatchCall: 'Post-patch tool-call proxy / patch call',
+  patchCalls: 'Patch calls',
   compactions: 'Compactions',
   projects: 'Projects',
   projectLabel: 'Project',
@@ -164,7 +164,7 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   unlimited: 'Unlimited',
   unavailable: 'Unavailable',
   optimization: 'Local optimization signals',
-  structuralProxy: 'Structural proxy; command bodies are not read.',
+  structuralProxy: 'Structural proxy; tool-call details are not read.',
   pasteConstraint: 'Paste-ready constraint',
   constraintNoAgents: 'Do not start unnecessary subagents or independent review passes.',
   constraintLowerEffort: 'For this small change, compare one lower effort level on a representative task.',
@@ -175,7 +175,7 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   insightTitles: {
     'multi-agent-tax': 'Child-thread fresh usage',
     'effort-comparison': 'Compare one lower effort level',
-    'post-patch-tool-call-intensity': 'Post-change command intensity',
+    'post-patch-tool-call-intensity': 'Post-patch tool-call proxy',
     'cache-context': 'Cache and long-context context',
     'approval-reviewer': 'Approval-reviewer overhead',
   },
@@ -620,8 +620,8 @@ function behaviorScopePanel(
       ${summaryCard(copy.processedToFreshRatio, `${behavior.processedToFreshRatio.toFixed(1)}×`)}
       ${summaryCard(copy.cacheShare, percent(behavior.cacheShare))}
       ${summaryCard(copy.reasoningOutputShare, percent(behavior.reasoningOutputShare))}
-      ${summaryCard(copy.postChangeCommandsPerFile, behavior.postPatchToolCallsPerPatchCall.toFixed(1))}
-      ${metricCard(copy.patchRounds, behavior.patchCalls, format)}
+      ${summaryCard(copy.postPatchToolCallsPerPatchCall, behavior.postPatchToolCallsPerPatchCall.toFixed(1))}
+      ${metricCard(copy.patchCalls, behavior.patchCalls, format)}
       ${metricCard(copy.compactions, behavior.compactCount, format)}
     </div></section>
     <section class="cost-composition codex-role-composition">
