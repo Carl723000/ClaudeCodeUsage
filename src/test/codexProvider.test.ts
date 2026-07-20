@@ -104,6 +104,7 @@ function duplicateIndex(ambiguous: boolean): CodexIndexV1 {
       ambiguousSessionGroups: ambiguous ? 1 : 0,
       complete: !ambiguous,
     },
+    period: createEmptyCodexIndex('UTC').coverage.period,
   };
   return index;
 }
@@ -129,6 +130,7 @@ function partialIndex(): CodexIndexV1 {
       ambiguousSessionGroups: 0,
       complete: true,
     },
+    period: createEmptyCodexIndex('UTC').coverage.period,
   };
   return index;
 }
