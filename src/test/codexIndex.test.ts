@@ -14,9 +14,11 @@ import * as path from 'node:path';
 
 import {
   CodexIndexCancelledError,
+  CodexIndexBudgetError,
   CodexFileContribution,
   CodexIndexIo,
   CodexIndexUpdateOptions,
+  CODEX_REFRESH_MIN_BYTES,
   createEmptyCodexIndex,
   loadCodexIndex,
   saveCodexIndexAtomic,
@@ -196,7 +198,7 @@ test('period migration respects a byte budget and resumes from its numeric check
     await mkdir(sessions, { recursive: true });
     const filePath = path.join(sessions, 'large.jsonl');
     const body = `${sessionLine('large')}\n${contextLine()}\n${Array.from(
-      { length: 100 },
+      { length: 11_000 },
       (_, index) => tokenLine(index + 1, 1, `2026-07-20T00:${String(index % 60).padStart(2, '0')}:00.000Z`),
     ).join('\n')}\n`;
     await writeFile(filePath, body, 'utf8');
@@ -208,12 +210,14 @@ test('period migration respects a byte budget and resumes from its numeric check
     const key = manifest.files[0].fileKey;
     const legacy = structuredClone(cold.index);
     delete legacy.files[key].aggregate.period;
-    const budget = { maxFilePasses: 16, maxBytes: 1024 };
+    const budget = { maxFilePasses: 16, maxBytes: CODEX_REFRESH_MIN_BYTES };
+    let progressCalls = 0;
 
     const first = await updateCodexIndex(legacy, manifest, {
       salt: SALT,
       timeZone: 'UTC',
       budget,
+      onProgress: () => { progressCalls += 1; },
     });
     const firstOffset = first.index.files[key].periodMigration!.offset;
     const second = await updateCodexIndex(first.index, manifest, {
@@ -223,12 +227,27 @@ test('period migration respects a byte budget and resumes from its numeric check
     });
 
     assert.ok(first.migration.bytesRead <= budget.maxBytes);
+    assert.ok(progressCalls > 0);
     assert.ok(second.migration.bytesRead <= budget.maxBytes);
     assert.ok(second.index.files[key].periodMigration!.offset > firstOffset);
     assert.equal(second.index.aggregate.total.inputTotal, cold.index.aggregate.total.inputTotal);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('a positive byte budget smaller than one allowed JSONL line is rejected', async () => {
+  await assert.rejects(
+    updateCodexIndex(createEmptyCodexIndex('UTC'), persistableManifest([]), {
+      salt: SALT,
+      timeZone: 'UTC',
+      budget: { maxFilePasses: 1, maxBytes: CODEX_REFRESH_MIN_BYTES - 1 },
+    }),
+    (error: unknown) =>
+      error instanceof CodexIndexBudgetError &&
+      error.code === 'invalid-work-budget' &&
+      error.message === 'Codex index byte budget is below the safe minimum',
+  );
 });
 
 test('changed main contributions run before newer period backfill work', async () => {
@@ -352,6 +371,42 @@ test('unknown endedAt remains in every period coverage denominator', async () =>
   }
 });
 
+test('stale old endedAt cannot exclude an incomplete main contribution from recent coverage', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-stale-ended-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(path.join(sessions, 'old.jsonl'), completeSession('old', 40, 4), 'utf8');
+    const initialManifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), initialManifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    const key = initialManifest.files[0].fileKey;
+    cold.index.files[key].aggregate.session.endedAt = Date.parse('2000-01-01T00:00:00.000Z');
+    const incompleteEntry = {
+      ...initialManifest.files[0],
+      size: initialManifest.files[0].size + 100,
+    };
+
+    const result = await updateCodexIndex(
+      cold.index,
+      persistableManifest([incompleteEntry]),
+      {
+        salt: SALT,
+        timeZone: 'UTC',
+        budget: { maxFilePasses: 0, maxBytes: 0 },
+      },
+    );
+
+    assert.equal(result.index.coverage.period.last7Days.totalFiles, 1);
+    assert.equal(result.index.coverage.period.last30Days.totalFiles, 1);
+    assert.equal(result.index.coverage.period.last7Days.complete, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('cancellation checkpoints a resumable period cursor without clearing all-time', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-cancel-'));
   try {
@@ -397,6 +452,54 @@ test('cancellation checkpoints a resumable period cursor without clearing all-ti
       timeZone: 'UTC',
     });
     assert.equal(resumed.index.files[key].aggregate.period?.indexedThrough, legacy.files[key].offset);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a final-chunk cancellation promotes its caught-up saved draft without another read', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-final-cancel-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const checkpointPath = path.join(root, 'cache', 'checkpoint.json');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(path.join(sessions, 'final.jsonl'), completeSession('final', 80, 8), 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+    });
+    const key = manifest.files[0].fileKey;
+    delete cold.index.files[key].aggregate.period;
+    let progressed = false;
+
+    await assert.rejects(
+      updateCodexIndex(cold.index, manifest, {
+        salt: SALT,
+        timeZone: 'UTC',
+        onProgress: () => { progressed = true; },
+        shouldCancel: () => progressed,
+        onCheckpoint: (index) => saveCodexIndexAtomic(checkpointPath, index),
+      }),
+      CodexIndexCancelledError,
+    );
+    const saved = await loadCodexIndex(checkpointPath, 'UTC');
+    assert.equal(saved.files[key].periodMigration?.offset, saved.files[key].offset);
+    const noReadIo: CodexIndexIo = {
+      async *read() { throw new Error('caught-up resume must not read'); },
+    };
+
+    const resumed = await updateCodexIndex(saved, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      io: noReadIo,
+      budget: { maxFilePasses: 0, maxBytes: 0 },
+    });
+
+    assert.equal(resumed.bodyReads, 0);
+    assert.equal(resumed.index.files[key].periodMigration, undefined);
+    assert.equal(resumed.index.files[key].aggregate.period?.indexedThrough, saved.files[key].offset);
+    assert.equal(resumed.index.coverage.period.allTime.complete, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -721,7 +824,7 @@ test('cold scan and append build target-timezone slices in the same body read', 
   }
 });
 
-test('append invalidates a wrong-timezone period for later migration while all-time advances', async () => {
+test('timezone-changing append uses a remaining pass for period migration', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-mismatch-'));
   try {
     const sessions = path.join(root, 'sessions');
@@ -748,18 +851,27 @@ test('append invalidates a wrong-timezone period for later migration while all-t
     const changedZone = await updateCodexIndex(
       cold.index,
       await scanCodexManifest(root, SALT),
-      { salt: SALT, timeZone: 'Asia/Hong_Kong' },
+      {
+        salt: SALT,
+        timeZone: 'Asia/Hong_Kong',
+        budget: { maxFilePasses: 2, maxBytes: CODEX_REFRESH_MIN_BYTES },
+      },
     );
 
     assert.equal(changedZone.index.files[key].aggregate.total.inputTotal, 150);
-    assert.equal(changedZone.index.files[key].aggregate.period, undefined);
+    assert.equal(changedZone.bodyReads, 2);
+    assert.equal(changedZone.migration.filePasses, 2);
+    assert.equal(changedZone.index.files[key].aggregate.period?.timeZone, 'Asia/Hong_Kong');
+    assert.equal(
+      changedZone.index.files[key].aggregate.period?.indexedThrough,
+      changedZone.index.files[key].offset,
+    );
     assert.equal(changedZone.index.aggregate.total.inputTotal, 150);
     assert.equal(changedZone.index.coverage.period.timeZone, 'Asia/Hong_Kong');
-    assert.equal(changedZone.index.coverage.period.allTime.complete, false);
+    assert.equal(changedZone.index.coverage.period.allTime.complete, true);
 
     const staleCursor = structuredClone(cold.index);
     staleCursor.files[key].aggregate.period!.indexedThrough -= 1;
-    const stalePeriod = structuredClone(staleCursor.files[key].aggregate.period!);
     const cursorMismatch = await updateCodexIndex(
       staleCursor,
       await scanCodexManifest(root, SALT),
@@ -767,7 +879,14 @@ test('append invalidates a wrong-timezone period for later migration while all-t
     );
 
     assert.equal(cursorMismatch.index.files[key].aggregate.total.inputTotal, 150);
-    assert.deepEqual(cursorMismatch.index.files[key].aggregate.period, stalePeriod);
+    assert.equal(
+      cursorMismatch.index.files[key].aggregate.period?.indexedThrough,
+      cursorMismatch.index.files[key].offset,
+    );
+    assert.equal(
+      cursorMismatch.index.files[key].aggregate.period?.days['2026-07-20'].total.inputTotal,
+      150,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
