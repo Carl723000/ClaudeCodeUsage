@@ -19,6 +19,9 @@ test('view builds recent task, 7d, 30d, and projects without double counting sub
   assert.equal(view.last7Days.rootTasks, 1);
   assert.equal(view.last30Days.approvalReviewerThreads, 1);
   assert.equal(view.projects[0].projectKey.startsWith('project:'), true);
+  assert.equal(view.projects[0].name, 'ClaudeCodeUsage');
+  assert.equal(view.projects[0].directoryName, 'ClaudeCodeUsage-MyFix');
+  assert.equal(view.lastTaskIdentity?.title, '完成 Codex v2.3.0 仪表板');
 });
 
 test('model and effort buckets preserve provider-specific dimensions', () => {
@@ -60,9 +63,16 @@ test('daily and recent-thread details explain where Codex usage came from', () =
   assert.equal(view.daily[1].day, '2026-07-10');
   assert.equal(view.recentThreads.length, 4);
   assert.deepEqual(view.recentThreads[0], {
+    sessionKey: 'session:child-a',
+    parentSessionKey: 'session:root-a',
+    title: undefined,
+    parentTitle: '完成 Codex v2.3.0 仪表板',
+    agentNickname: 'Locke',
     observedAt: Date.parse('2026-07-20T11:30:00.000Z'),
     role: 'subagent',
     projectKey: 'project:a',
+    projectName: 'ClaudeCodeUsage',
+    projectDirectoryName: 'claude-code-usage-v221',
     models: ['gpt-5.6-sol'],
     efforts: ['high'],
     total: {
@@ -74,6 +84,7 @@ test('daily and recent-thread details explain where Codex usage came from', () =
       reasoning: 60,
     },
     durationMs: 600_000,
+    structural: { ...snapshotFixture().files[1].structural },
   });
   assert.equal(view.totalThreadCount, 4);
 });
