@@ -61,6 +61,10 @@ test('Codex settings and charts stay inside the provider view', () => {
     webview,
     /formatNumber:\s*\(value\)[\s\S]*?I18n\.formatNumber\(value\)/,
   );
+  assert.match(
+    webview,
+    /createCodexLocalizedFormatters\(\s*I18n\.getLocale\(\),\s*I18n\.getTimezone\(\)/,
+  );
   assert.match(webview, /showCodexTab\('settings'\)/);
   assert.match(webview, /function showCodexChartMetric/);
   assert.match(webview, /function filterCodexThreads/);
@@ -129,6 +133,7 @@ test('provider and Codex view copy is complete in every UI locale', () => {
           'resets',
           'credits',
           'unlimited',
+          'accountSnapshotLastObserved',
         ] as const) {
           assert.notEqual(
             providers.codex[key],

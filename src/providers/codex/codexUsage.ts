@@ -14,6 +14,7 @@ import {
   ProviderThreadRole,
   ProviderTokenCounts,
 } from '../providerTypes';
+import { buildCodexLimitViews, CodexLimitView } from './codexLimits';
 
 export interface CodexMetricTotals {
   processed: number;
@@ -77,9 +78,13 @@ export interface CodexProjectUsageView {
 }
 
 export interface CodexTaskIdentityView {
+  taskKey: string;
+  projectKey: string;
   title?: string;
   projectName?: string;
   projectDirectoryName?: string;
+  lastActiveAt: number;
+  /** @deprecated Use lastActiveAt. Kept while existing view consumers migrate. */
   observedAt: number;
 }
 
@@ -135,7 +140,8 @@ export interface CodexUsageView {
   periodCoverage: CodexPeriodCoverage;
   coverage: CodexIndexCoverage;
   qualityFlags: Array<{ flag: string; count: number }>;
-  limits: ProviderLimitSnapshot[];
+  limits: CodexLimitView[];
+  /** Status-bar compatibility; Overview uses the classified limits field. */
   limit: ProviderLimitSnapshot | null;
 }
 
@@ -631,33 +637,26 @@ function taskRootFile(
     )[0];
 }
 
-function validLimit(
+function syntheticViewKey(prefix: string, value: string): string {
+  let hash = 2_166_136_261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return `${prefix}-${(hash >>> 0).toString(36)}`;
+}
+
+function currentLimit(
   limit: ProviderLimitSnapshot | null,
   now: number,
 ): ProviderLimitSnapshot | null {
   if (!limit) {
     return null;
   }
-  const windows = limit.windows.filter(
-    (window) => window.resetsAt === undefined || window.resetsAt > now,
+  const windows = limit.windows.filter((window) =>
+    window.resetsAt !== undefined && window.resetsAt > now,
   );
   return windows.length > 0 ? { ...limit, windows } : null;
-}
-
-function validLimits(
-  limits: ProviderLimitSnapshot[],
-  now: number,
-): ProviderLimitSnapshot[] {
-  return limits
-    .map((limit) => validLimit(limit, now))
-    .filter((limit): limit is ProviderLimitSnapshot => limit !== null)
-    .sort(
-      (left, right) =>
-        right.observedAt - left.observedAt ||
-        (left.limitName ?? left.limitId ?? '').localeCompare(
-          right.limitName ?? right.limitId ?? '',
-        ),
-    );
 }
 
 export function buildCodexUsageView(
@@ -696,19 +695,29 @@ export function buildCodexUsageView(
     : snapshot.limit
       ? [snapshot.limit]
       : [];
-  const limits = validLimits(sourceLimits, now);
+  const limits = buildCodexLimitViews(sourceLimits, now);
+  const lastActiveAt = recent.length > 0 ? Math.max(...recent.map(observedAt)) : 0;
+  const projectIdentityKey = recent
+    .map((file) => file.session.projectKey ?? 'project:unknown')
+    .sort()[0] ?? 'project:unknown';
+  const taskIdentityKey = taskRoot?.session.sessionKey ?? recent
+    .map((file) => file.session.sessionKey)
+    .sort()[0] ?? 'task:unknown';
 
   return {
     lastTask: recentScope,
     lastTaskIdentity: recent.length > 0
       ? {
+          taskKey: syntheticViewKey('task', taskIdentityKey),
+          projectKey: syntheticViewKey('project', projectIdentityKey),
           title: taskRoot?.session.sessionTitle,
           projectName: identityValue(recent, 'projectName'),
           projectDirectoryName: identityValue(
             recent,
             'projectDirectoryName',
           ),
-          observedAt: Math.max(...recent.map(observedAt)),
+          lastActiveAt,
+          observedAt: lastActiveAt,
         }
       : null,
     last7Days: last7DaysScope,
@@ -749,6 +758,6 @@ export function buildCodexUsageView(
       .map(([flag, count]) => ({ flag, count }))
       .sort((left, right) => left.flag.localeCompare(right.flag)),
     limits,
-    limit: validLimit(snapshot.limit, now) ?? limits[0] ?? null,
+    limit: currentLimit(snapshot.limit, now),
   };
 }

@@ -326,11 +326,15 @@ test('token composition partitions processed tokens without counting reasoning t
   );
 });
 
-test('expired limits are omitted while coverage and quality remain explicit', () => {
+test('usage view exposes classified limits and a safe recent task identity', () => {
   const view = buildCodexUsageView(snapshotFixture(), NOW);
 
-  assert.equal(view.limit, null);
-  assert.deepEqual(view.limits, []);
+  assert.equal(view.limits[0]?.state, 'expired');
+  assert.equal(view.lastTaskIdentity?.taskKey.startsWith('task-'), true);
+  assert.equal(view.lastTaskIdentity?.projectKey.startsWith('project-'), true);
+  assert.equal(view.lastTaskIdentity?.lastActiveAt, view.lastTaskIdentity?.observedAt);
+  assert.equal(view.lastTaskIdentity?.taskKey.includes('session:'), false);
+  assert.equal(view.lastTaskIdentity?.projectKey.includes('project:'), false);
   assert.deepEqual(view.coverage, {
     indexedFiles: 4,
     totalFiles: 5,
@@ -431,6 +435,28 @@ test('project and task identities use named representatives and the whole lineag
   assert.equal(view.lastTask?.threads, 3);
 });
 
+test('rooted recent task key is anchored to the canonical root when a child is appended', () => {
+  const snapshot = snapshotFixture();
+  snapshot.files = snapshot.files.slice(0, 2);
+  const before = buildCodexUsageView(snapshot, NOW);
+  const appendedChild = {
+    ...snapshot.files[1],
+    session: {
+      ...snapshot.files[1].session,
+      sessionKey: 'session:raw-appended-child',
+      parentSessionKey: snapshot.files[0].session.sessionKey,
+      endedAt: Date.parse('2026-07-20T11:55:00.000Z'),
+    },
+  };
+  snapshot.files.push(appendedChild);
+
+  const after = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(after.lastTaskIdentity?.taskKey, before.lastTaskIdentity?.taskKey);
+  assert.equal(after.lastTaskIdentity?.projectKey, before.lastTaskIdentity?.projectKey);
+  assert.doesNotMatch(JSON.stringify(after.lastTaskIdentity), /session:|project:|raw-appended-child/);
+});
+
 test('lineage traversal groups a parent cycle once without borrowing a child title', () => {
   const snapshot = snapshotFixture();
   snapshot.files = snapshot.files.slice(0, 2);
@@ -442,9 +468,13 @@ test('lineage traversal groups a parent cycle once without borrowing a child tit
   snapshot.files[1].session.endedAt = Date.parse('2026-07-20T11:55:00.000Z');
 
   const view = buildCodexUsageView(snapshot, NOW);
+  const reordered = { ...snapshot, files: [...snapshot.files].reverse() };
+  const reorderedView = buildCodexUsageView(reordered, NOW);
 
   assert.equal(view.lastTask?.threads, 2);
   assert.equal(view.lastTaskIdentity?.title, undefined);
+  assert.equal(view.lastTaskIdentity?.taskKey, reorderedView.lastTaskIdentity?.taskKey);
+  assert.doesNotMatch(JSON.stringify(view.lastTaskIdentity), /session:|project:/);
   assert.equal(
     view.lastTaskIdentity?.observedAt,
     Date.parse('2026-07-20T11:55:00.000Z'),
@@ -461,4 +491,6 @@ test('a parentless non-root cannot supply the task title', () => {
     'parentless reviewer title must not become a task title',
   );
   assert.equal(view.lastTaskIdentity?.title, undefined);
+  assert.match(view.lastTaskIdentity?.taskKey ?? '', /^task-[a-z0-9]+$/);
+  assert.doesNotMatch(JSON.stringify(view.lastTaskIdentity), /session:|project:/);
 });

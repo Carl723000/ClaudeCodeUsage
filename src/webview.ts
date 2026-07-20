@@ -23,6 +23,7 @@ import {
 } from './codexView';
 import { CodexInsight } from './providers/codex/codexInsights';
 import { CodexUsageView } from './providers/codex/codexUsage';
+import { createCodexLocalizedFormatters } from './codexFormat';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -755,6 +756,10 @@ export class UsageWebviewProvider {
               I18n.t.providers.codex,
               {
                 formatNumber: (value) => I18n.formatNumber(value),
+                ...createCodexLocalizedFormatters(
+                  I18n.getLocale(),
+                  I18n.getTimezone(),
+                ),
                 settingsHtml: this.renderSettingsPanel('codex'),
                 optimizationEnabled: this.setting<boolean>(
                   'codex.optimization.enabled',
