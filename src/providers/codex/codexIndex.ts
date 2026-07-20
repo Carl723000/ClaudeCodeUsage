@@ -39,6 +39,7 @@ import {
 import {
   CodexJsonlReader,
   CodexJsonlCursor,
+  CODEX_MAX_JSONL_LINE_BYTES,
   defaultCodexJsonlReader,
   scanCodexJsonlLines,
 } from './codexJsonlScanner';
@@ -93,6 +94,7 @@ export interface CodexFileContribution {
 
 export const CODEX_REFRESH_MAX_FILE_PASSES = 16;
 export const CODEX_REFRESH_MAX_BYTES = 32 * 1024 * 1024;
+export const CODEX_REFRESH_MIN_BYTES = CODEX_MAX_JSONL_LINE_BYTES + 1;
 
 export interface CodexIndexWorkBudget {
   maxFilePasses: number;
@@ -183,6 +185,15 @@ export class CodexIndexCancelledError extends Error {
   constructor() {
     super('Codex indexing was cancelled');
     this.name = 'CodexIndexCancelledError';
+  }
+}
+
+export class CodexIndexBudgetError extends Error {
+  readonly code = 'invalid-work-budget';
+
+  constructor() {
+    super('Codex index byte budget is below the safe minimum');
+    this.name = 'CodexIndexBudgetError';
   }
 }
 
@@ -363,6 +374,30 @@ function syncSession(
 
 function uniqueFlags(...groups: string[][]): string[] {
   return [...new Set(groups.flat())].sort();
+}
+
+function promoteCaughtUpPeriod(
+  contribution: CodexFileContribution,
+  timeZone: string,
+): void {
+  const migration = contribution.periodMigration;
+  if (
+    migration?.timeZone !== timeZone ||
+    migration.offset < contribution.offset ||
+    migration.discardingOversizedLine
+  ) {
+    return;
+  }
+  contribution.aggregate.period = {
+    timeZone,
+    indexedThrough: contribution.offset,
+    days: migration.days,
+  };
+  contribution.qualityFlags = uniqueFlags(
+    contribution.qualityFlags,
+    migration.qualityFlags,
+  );
+  delete contribution.periodMigration;
 }
 
 function pseudonymizer(salt: string): (raw: string) => string {
@@ -764,8 +799,21 @@ function coverageFor(
         continue;
       }
       const contribution = files[entry.fileKey];
+      const flags = new Set(contribution?.qualityFlags ?? []);
+      const mainVerified = Boolean(
+        contribution &&
+        contribution.offset === entry.size &&
+        !contribution.discardingOversizedLine &&
+        !flags.has('stale-file') &&
+        !flags.has('stale-reset-required'),
+      );
       const endedAt = contribution?.aggregate.session.endedAt;
-      if (oldestDay && endedAt !== undefined && Number.isFinite(endedAt)) {
+      if (
+        oldestDay &&
+        mainVerified &&
+        endedAt !== undefined &&
+        Number.isFinite(endedAt)
+      ) {
         const endedDay = dayKeyInZone(new Date(endedAt), timeZone);
         if (endedDay && endedDay < oldestDay) {
           continue;
@@ -864,6 +912,14 @@ export async function updateCodexIndex(
   manifest: CodexManifest,
   options: LegacyCodexIndexUpdateOptions,
 ): Promise<CodexIndexUpdateResult> {
+  const requestedMaxBytes = options.budget?.maxBytes;
+  if (
+    requestedMaxBytes !== undefined &&
+    requestedMaxBytes > 0 &&
+    requestedMaxBytes < CODEX_REFRESH_MIN_BYTES
+  ) {
+    throw new CodexIndexBudgetError();
+  }
   const index = cloneIndex(previous);
   const io = options.io ?? defaultIo();
   const timeZone = resolveTimeZone(options.timeZone ?? 'UTC');
@@ -921,6 +977,7 @@ export async function updateCodexIndex(
     if (contribution.periodMigration?.timeZone !== timeZone) {
       delete contribution.periodMigration;
     }
+    promoteCaughtUpPeriod(contribution, timeZone);
   }
 
   const resetFlags = new Map<string, string>();
@@ -1049,7 +1106,7 @@ export async function updateCodexIndex(
   const canonical = classifyCodexSessionDuplicates(index.files).canonicalFileKeys;
   const periodWork = manifest.files
     .filter((entry) => {
-      if (!canonical.has(entry.fileKey) || changedKeys.has(entry.fileKey)) {
+      if (!canonical.has(entry.fileKey)) {
         return false;
       }
       const contribution = index.files[entry.fileKey];
