@@ -1465,9 +1465,24 @@ test('legacy period coverage without an as-of day cannot remain complete', async
 
     await saveCodexIndexAtomic(indexPath, loaded);
     const persisted = JSON.parse(await readFile(indexPath, 'utf8')) as {
-      coverage: { period: { asOfDay?: string } };
+      coverage: {
+        period: {
+          asOfDay?: string;
+          last7Days: { complete: boolean };
+          last30Days: { complete: boolean };
+          allTime: { complete: boolean };
+        };
+      };
     };
     assert.equal(persisted.coverage.period.asOfDay, period.asOfDay);
+    assert.equal(persisted.coverage.period.last7Days.complete, false);
+    assert.equal(persisted.coverage.period.last30Days.complete, false);
+    assert.equal(persisted.coverage.period.allTime.complete, true);
+
+    const reloaded = await loadCodexIndex(indexPath, 'Asia/Hong_Kong');
+    assert.equal(reloaded.coverage.period.last7Days.complete, false);
+    assert.equal(reloaded.coverage.period.last30Days.complete, false);
+    assert.equal(reloaded.coverage.period.allTime.complete, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
