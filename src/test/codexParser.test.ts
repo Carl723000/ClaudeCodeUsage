@@ -358,6 +358,40 @@ test('encoded local-path repository text never reaches the pseudonymizer', () =>
   );
 });
 
+test('double-encoded paths and Unicode controls never reach identity output', () => {
+  for (const repositoryUrl of [
+    'https://example.com/Owner/%252FUsers%252Falice%252FSecretRepo.git',
+    'https://example.com/Owner/%255cUsers%255CCarl%255cSecretRepo.git',
+    'https://example.com/Owner/%C2%85SecretRepo.git',
+    'https://example.com/Owner/%E2%80%8DSecretRepo.git',
+  ]) {
+    const pseudonymizedSources: string[] = [];
+    const state = parseCodexLine(
+      JSON.stringify({
+        timestamp: '2026-07-20T00:00:00.000Z',
+        type: 'session_meta',
+        payload: {
+          id: 'safe-session',
+          cwd: '/safe/project',
+          git: { repository_url: repositoryUrl },
+        },
+      }),
+      createCodexParserState('safe-file'),
+      (raw: string): string => {
+        pseudonymizedSources.push(raw);
+        return `anonymous:${pseudonymizedSources.length}`;
+      },
+    ).state;
+
+    assert.equal(state.projectName, 'project');
+    assert.deepEqual(pseudonymizedSources, ['safe-session', '/safe/project']);
+    assert.doesNotMatch(
+      JSON.stringify({ state, pseudonymizedSources }),
+      /%25|%C2%85|%E2%80%8D|Users|alice|Carl|SecretRepo/i,
+    );
+  }
+});
+
 test('repeated metadata cannot erase an established child role', () => {
   const pseudonymize = (raw: string): string => `safe:${raw}`;
   let state = parseCodexLine(

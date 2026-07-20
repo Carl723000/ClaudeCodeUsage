@@ -62,7 +62,9 @@ function safeDecodedRepositorySegment(value: string): boolean {
   return Boolean(value.trim()) &&
     value !== '.' &&
     value !== '..' &&
-    !/[\\/\u0000-\u001f\u007f]/.test(value);
+    !/%[0-9a-f]{2}/i.test(value) &&
+    !/[\\/]/.test(value) &&
+    !/[\p{Cc}\p{Cf}]/u.test(value);
 }
 
 function decodeRepositorySegment(value: string): string | undefined {
