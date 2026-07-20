@@ -3,6 +3,7 @@ import * as assert from 'node:assert/strict';
 
 import {
   CODEX_COPY_EN,
+  CodexScopedInsights,
   renderCodexView,
   renderProviderCompare,
 } from '../codexView';
@@ -12,6 +13,43 @@ import { I18n } from '../i18n';
 import { snapshotFixture } from './codexFixtures';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
+
+type CodexFixtureView = ReturnType<typeof buildCodexUsageView>;
+
+function scopedInsights(
+  view: CodexFixtureView,
+): CodexScopedInsights {
+  return {
+    recent: view.lastTask ? buildCodexInsights(view.lastTask) : [],
+    last7Days: buildCodexInsights(view.last7Days),
+    last30Days: buildCodexInsights(view.last30Days),
+    allTime: buildCodexInsights(view.allTime),
+  };
+}
+
+function renderFixture(): string {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  return renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+    formatNumber: (value) => `N:${value}`,
+    settingsHtml: '<section data-test-settings>settings</section>',
+  });
+}
+
+function productionCodexSettingsHtml(): string {
+  return `<div class="settings-panel">
+    <div class="settings-toolbar"><button class="btn-secondary btn-small" onclick="resetAllSettings([&quot;language&quot;,&quot;compactNumbers&quot;])">Reset all</button></div>
+    <div class="set-row"><label class="set-switch"><input type="checkbox" id="set_compactNumbers" checked onchange="setSetting('compactNumbers', this.checked, 'boolean')"><span class="set-slider"></span></label></div>
+    <div class="set-row"><select id="set_language" onchange="setSetting('language', this.value, 'string')"><option value="en">English</option></select></div>
+    <div class="set-row"><input type="number" id="set_tokenDecimalPlaces" value="1" onchange="setSetting('tokenDecimalPlaces', this.value, 'number')"></div>
+  </div>`;
+}
+
+function decodeHtmlAttribute(value: string): string {
+  return value
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, '&');
+}
 
 test('Codex renderer labels provider semantics and never renders subscription cost', () => {
   const view = buildCodexUsageView(snapshotFixture(), NOW);
@@ -51,31 +89,32 @@ test('empty or partial insights render no paste-ready constraint fallback', () =
   assert.match(evidenced, /Stop when the acceptance criteria pass/);
 });
 
-test('Codex renderer reuses Claude visuals for eight truthful modules', () => {
-  const view = buildCodexUsageView(snapshotFixture(), NOW);
-  const html = renderCodexView(
-    view,
-    buildCodexInsights(view.lastTask!),
-    CODEX_COPY_EN,
-    {
-      formatNumber: (value) => `N:${value}`,
-      settingsHtml: '<section data-test-settings>settings</section>',
-    },
-  );
+test('Codex renderer exposes three product destinations and auxiliary settings', () => {
+  const html = renderFixture();
 
-  assert.match(html, /class="tabs codex-tabs"/);
-  for (const tab of [
-    'recent',
-    '7d',
-    '30d',
-    'all',
-    'threads',
-    'projects',
-    'behavior',
-    'settings',
-  ]) {
-    assert.match(html, new RegExp(`data-codex-tab-button="${tab}"`));
+  assert.match(html, /<section[^>]*data-codex-root(?:="")?[^>]*>/);
+  assert.equal(html.match(/<nav\b[^>]*role="tablist"[^>]*>/g)?.length, 1);
+  assert.equal(html.match(/\brole="tab"/g)?.length, 3);
+  assert.equal(html.match(/\brole="tabpanel"/g)?.length, 4);
+  for (const page of ['overview', 'explore', 'recommendations']) {
+    assert.match(html, new RegExp(`data-codex-page-button="${page}"`));
+    assert.match(html, new RegExp(`data-codex-page="${page}"`));
+    assert.match(html, new RegExp(`id="codex-page-tab-${page}"`));
+    assert.match(html, new RegExp(`aria-controls="codex-page-panel-${page}"`));
+    assert.match(html, new RegExp(`id="codex-page-panel-${page}"`));
+    assert.match(html, new RegExp(`aria-labelledby="codex-page-tab-${page}"`));
   }
+  assert.match(html, /data-codex-page-button="overview"[^>]*aria-selected="true"[^>]*tabindex="0"/);
+  assert.match(html, /data-codex-page-button="explore"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
+  assert.match(html, /data-codex-page-button="recommendations"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
+  assert.match(html, /data-codex-action="open-settings"/);
+  assert.match(html, /data-codex-page="settings"/);
+  assert.match(html, /id="codex-page-panel-settings"/);
+  assert.match(html, /aria-labelledby="codex-open-settings"/);
+  assert.match(html, /data-codex-action="close-settings"/);
+  assert.doesNotMatch(html, /data-codex-tab-button="(?:recent|7d|30d|all|threads|projects|behavior|settings)"/);
+
+  // Existing truthful modules remain available inside the reorganized pages.
   assert.match(html, /class="summary-grid"/);
   assert.match(html, /class="chart-tabs"/);
   assert.match(html, /class="hc-bars chart-bars"/);
@@ -102,9 +141,152 @@ test('Codex renderer reuses Claude visuals for eight truthful modules', () => {
   assert.match(html, /N:1200/);
   assert.match(html, /data-label-processed="N:/);
   assert.match(html, /data-label-threads="N:/);
+  assert.match(html, /data-codex-action="select-chart-metric"[^>]*data-codex-chart-id="codex-7d"[^>]*data-codex-chart-metric="processed"/);
+  assert.match(html, /data-codex-action="toggle-thread-children"[^>]*data-codex-thread-key="t1"/);
+  assert.match(html, /data-codex-action="toggle-project"[^>]*data-codex-project-key="p0"/);
+  assert.match(html, /data-codex-action="select-behavior-scope"[^>]*data-codex-behavior-scope="recent"/);
+  assert.doesNotMatch(html, /\sonclick=/);
   assert.doesNotMatch(html, /codex-metric-card|project:a|session:|Thread 1|Project 1/);
   assert.doesNotMatch(html, /class="codex-header"/);
-  assert.doesNotMatch(html, /\$/);
+  assert.doesNotMatch(html, /\$|raw-session|\/Users\/|https?:\/\//);
+});
+
+test('Codex renderer scopes period coverage and keeps verified all-time aggregates available', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.complete = false;
+  snapshot.coverage.period.last7Days = {
+    migratedFiles: 7,
+    totalFiles: 7,
+    migratedBytes: 700,
+    totalBytes: 700,
+    complete: true,
+  };
+  snapshot.coverage.period.last30Days = {
+    migratedFiles: 20,
+    totalFiles: 30,
+    migratedBytes: 2_000,
+    totalBytes: 3_000,
+    complete: false,
+  };
+  snapshot.coverage.period.allTime = {
+    migratedFiles: 40,
+    totalFiles: 50,
+    migratedBytes: 4_000,
+    totalBytes: 5_000,
+    complete: false,
+  };
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+
+  assert.match(html, /data-codex-coverage-range="7d"[^>]*data-codex-coverage-status="complete"[^>]*data-codex-migrated-files="7"[^>]*data-codex-total-files="7"/);
+  assert.match(html, /data-codex-coverage-range="30d"[^>]*data-codex-coverage-status="partial"[^>]*data-codex-migrated-files="20"[^>]*data-codex-total-files="30"/);
+  assert.match(html, /data-codex-scope-summary="all"/);
+  assert.match(html, /data-codex-chart-root="codex-all"[^>]*data-codex-coverage-range="all"[^>]*data-codex-coverage-status="partial"/);
+  assert.doesNotMatch(html, /data-codex-scope-summary="all"[^>]*data-codex-coverage-status="partial"/);
+  assert.match(html, /data-codex-page="recommendations"/);
+  assert.match(html, /data-codex-behavior-panel="all"/);
+});
+
+test('Codex renderer adapts production-shaped settings to declarative actions', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+    settingsHtml: productionCodexSettingsHtml(),
+  });
+  const root = html.match(/<section[^>]*data-codex-root[\s\S]*<\/section>/)?.[0] ?? '';
+
+  assert.match(root, /class="settings-panel"/);
+  const resetPayload = root.match(
+    /data-codex-action="reset-settings"[^>]*data-codex-setting-keys="([^"]+)"/,
+  );
+  assert.ok(resetPayload);
+  assert.deepEqual(
+    JSON.parse(decodeHtmlAttribute(resetPayload[1])),
+    ['language', 'compactNumbers'],
+  );
+  assert.match(root, /data-codex-action="set-setting"[^>]*data-codex-setting-key="compactNumbers"[^>]*data-codex-setting-value-source="checked"[^>]*data-codex-setting-type="boolean"/);
+  assert.match(root, /data-codex-action="set-setting"[^>]*data-codex-setting-key="language"[^>]*data-codex-setting-value-source="value"[^>]*data-codex-setting-type="string"/);
+  assert.match(root, /data-codex-action="set-setting"[^>]*data-codex-setting-key="tokenDecimalPlaces"[^>]*data-codex-setting-value-source="value"[^>]*data-codex-setting-type="number"/);
+  assert.doesNotMatch(root, /\sonclick\s*=/i);
+  assert.doesNotMatch(root, /\sonchange\s*=/i);
+  assert.doesNotMatch(root, /\soninput\s*=/i);
+});
+
+test('Codex settings adapter rejects invalid reset payloads without evaluating them', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  for (const handler of [
+    'resetAllSettings(window.settings)',
+    'resetAllSettings([&quot;language&quot;,42])',
+    'resetAllSettings([&quot;language&quot;,&quot;&lt;img&gt;&quot;])',
+  ]) {
+    const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+      settingsHtml: `<button onclick="${handler}">Reset</button>`,
+    });
+    assert.doesNotMatch(html, /data-codex-action="reset-settings"/);
+    assert.doesNotMatch(html, /\sonclick\s*=/i);
+  }
+});
+
+test('all-time partial coverage stays visible when trend rows are empty', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.allTime = {
+    migratedFiles: 3,
+    totalFiles: 5,
+    migratedBytes: 300,
+    totalBytes: 500,
+    complete: false,
+  };
+  const view = buildCodexUsageView(snapshot, NOW);
+  view.monthly = [];
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+
+  assert.match(html, /data-codex-trend="all"[^>]*data-codex-coverage-status="partial"/);
+  assert.match(html, /data-codex-coverage-range="all"[^>]*>Coverage: 3\/5 files · 300\/500 bytes · Partial<\/p>/);
+  assert.match(html, /data-codex-chart-root="codex-all"/);
+  assert.match(html, /data-codex-scope-summary="all"/);
+  assert.match(html, /<h3>Monthly<\/h3>/);
+  assert.match(html, /No monthly Codex usage is indexed yet\./);
+  assert.doesNotMatch(html, /No daily Codex usage is indexed yet\./);
+});
+
+test('Codex renderer consumes every injected temporal and byte formatter', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.indexedBytes = 1_301;
+  snapshot.coverage.totalBytes = 1_501;
+  snapshot.coverage.period.last7Days.migratedBytes = 701;
+  snapshot.coverage.period.last7Days.totalBytes = 702;
+  snapshot.coverage.period.last30Days.migratedBytes = 3_001;
+  snapshot.coverage.period.last30Days.totalBytes = 3_002;
+  snapshot.coverage.period.allTime.migratedBytes = 5_001;
+  snapshot.coverage.period.allTime.totalBytes = 5_002;
+  const view = buildCodexUsageView(snapshot, NOW);
+  const sentinelNow = 42_424_242;
+  const observedAt = view.lastTaskIdentity!.observedAt;
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+    now: sentinelNow,
+    formatDateTime: (timestamp) => `DATE(${timestamp})`,
+    formatDuration: (milliseconds) => `DURATION(${milliseconds})`,
+    formatRelativeTime: (targetTimestamp, now) => `RELATIVE(${targetTimestamp},${now})`,
+    formatBytes: (bytes) => `BYTES(${bytes})`,
+  });
+
+  assert.match(html, new RegExp(`DATE\\(${observedAt}\\)`));
+  assert.match(html, new RegExp(`RELATIVE\\(${observedAt},${sentinelNow}\\)`));
+  assert.match(html, new RegExp(`DURATION\\(${view.lastTask!.durationMs}\\)`));
+  const formattedBytes = [...html.matchAll(/BYTES\((\d+)\)/g)]
+    .map((match) => Number(match[1]))
+    .sort((left, right) => left - right);
+  assert.deepEqual(formattedBytes, [
+    701,
+    702,
+    1_301,
+    1_301,
+    1_501,
+    1_501,
+    3_001,
+    3_002,
+    5_001,
+    5_002,
+  ]);
 });
 
 test('Compare is side-by-side and contains no summed total, cost, or quota', () => {
