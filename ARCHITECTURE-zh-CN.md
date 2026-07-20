@@ -28,7 +28,7 @@ Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做�
 | `providers/codex/codexSchema.ts` | 最小安全 JSON guard，不展开或返回 message/command/tool body。 |
 | `providers/codex/codexParser.ts` | Codex cumulative high-water 解析、伪名 lineage metadata、结构计数、quality flag 和 last-observed limit。 |
 | `providers/codex/codexManifest.ts` | Codex 允许目录发现、HMAC file key、fingerprint 和 manifest diff。 |
-| `providers/codex/codexIndex.ts` | 持久化 per-file 数字聚合、cold/tail parse、coverage 和原子存取。 |
+| `providers/codex/codexIndex.ts` | schema-2 的 per-file 数字聚合持久化、有界 cold/tail parse、独立 aggregate/period coverage 和原子存取。 |
 | `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | 后台 worker、recent-first progress、cancel、resume 和 single-flight client。 |
 | `providers/codex/codexProvider.ts` | 面向 extension 的 Codex snapshot facade 与 partial/unavailable/error outcome。 |
 | `providers/codex/codexUsage.ts` | Codex-specific 最近 task/7 天/30 天/项目 view model 聚合。 |
@@ -99,6 +99,30 @@ raw line 或 raw path。
 Machine salt 存在 VS Code `globalState`，不写入索引。Worker progress/result/error 与 diagnostics
 只含匿名计数与时间，不含 path 或 ID。
 
+### Schema 2 索引契约
+
+内部 schema 2 继续使用既有的 `globalStorage` 文件名 `codex-index-v1.json`；文件名是兼容路径，
+不是 JSON schema 版本声明。持久化 DTO 使用明确的 allowlist：只能写入数字 aggregate、enum、
+伪名 key 与清洗后的 label。v2 不保存未完成原始行，也不保存 carry buffer。旧字段只在明确命名的
+schema-1 legacy migration 边界被读取；该迁移会先丢弃 carry，之后才保存 v2 索引。
+
+这里有两个相互独立的可信度层。all-time 视图来自 canonical file contribution 的已验证的
+aggregate；按日的期间切片则独立晋升，因此 partial migration 不能覆盖、放大或替代 all-time 的
+已验证 aggregate。期间 coverage 以目标时区的 `asOfDay` 为锚点，分别报告 7 天、30 天和
+all-time 的状态。7 天与 30 天只累加自然日内发生的 event；不会因为 Session 的最后活动落在范围内，
+就把该 Session 的整段较早历史吸收进来。
+
+Identity 同样是一份 coverage 契约。Git 的 SCP 形式 SSH URL 与 HTTPS URL 在 host/path 一致时
+会规范化为同一个 repository identity。Root title 采用可信的最新 `updated_at` title；subagent
+保留其报告的 nickname 及 parent title；project 优先显示 canonical repository name，才回退到目录名；
+最近任务排序使用完整 lineage 上观察到的最大活动时间。只有 active/archive 的严格精确副本——两侧
+都已验证且安全 signature 完全一致——才去重；任何其他重复 Session 都标为歧义，并使 identity
+coverage 保持 incomplete，而不是猜测。
+
+五个结构调用代理量是 `patchCalls`、`toolCalls`、`postPatchToolCalls`、`compactCount` 与
+`taskCompleteCount`。它们只描述观察到的结构 envelope，不是文件、命令或审阅次数；不会产生美元成本，
+也绝不由 prompt、response、command body 或 tool argument 内容推导。
+
 ## 刷新与规模
 
 Claude polling 始终遵守 `refreshInterval`，file watcher 使用配置的 quiet debounce。
@@ -109,9 +133,11 @@ Codex 按 2.4-GB-class 本地历史设计：
 - 发现与解析在 Extension Host 之外的 worker 中执行；
 - recent-first 索引，支持 progress 与 cancel；
 - unchanged warm refresh 不读 JSONL body；
-- append refresh 只读新 tail，保留不完整末行；
+- 每次 refresh 最多 16 次文件遍历、32 MiB；安全下限为 1 MiB + 1 byte，读取 chunk 为 256 KiB，
+  单条 JSONL line 上限为 1 MiB；
+- append refresh 只读新 tail；未完成行只留在 scanner 的短期内存，从 safe cursor 重试，绝不写入 v2；
 - truncate/replacement 只重解析受影响文件；
-- 原子持久化与 per-file contribution 允许中断后 resume；
+- cancel checkpoint 会原子保存 per-file contribution 与 migration progress，下一轮从已验证 cursor resume；
 - 并发 refresh 共享同一 worker run。
 
 ## 发布不变量

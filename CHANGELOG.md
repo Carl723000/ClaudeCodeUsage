@@ -40,7 +40,7 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   all unexpired named primary/secondary limit windows make high usage traceable
   without inventing Branches, Workflows, or real-time subscription state.
 - **Local Codex optimization guidance** — structural signals explain unusually
-  high subagent, effort, approval-reviewer, command, and cache overhead without
+  high subagent, effort, approval-reviewer, tool-call, and cache overhead without
   inspecting or retaining prompt, response, command, or tool-argument content.
 - **Scalable Codex indexing** — a cancellable background worker and persistent
   per-file aggregate index support incremental progress, tail-only append reads,
@@ -80,6 +80,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   remain explicitly based on the recent task.
 - Codex period charts now reuse the existing dashboard's Y axis, grid, theme
   colors, horizontal scrolling, and metric-switching behavior.
+- **Schema-2 period indexing** — the compatible `codex-index-v1.json` path now
+  persists only sanitized aggregates, promotes exact local day slices in bounded
+  resumable batches, and exposes independent 7-day, 30-day, and all-time
+  coverage. All-time aggregates remain verified independently of partial period
+  slices; exact active/archive copies are deduplicated while ambiguous identities
+  remain visible as incomplete coverage.
 
 ### Privacy
 - Codex discovery is restricted to `sessions/**/*.jsonl` and

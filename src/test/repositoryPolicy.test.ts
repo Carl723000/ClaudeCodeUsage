@@ -19,6 +19,25 @@ function activePatterns(relativePath: string): Set<string> {
   );
 }
 
+function sourceBlock(source: string, declaration: string): string {
+  const start = source.indexOf(declaration);
+  assert.notEqual(start, -1, `missing ${declaration}`);
+  const open = source.indexOf('{', start);
+  assert.notEqual(open, -1, `missing opening brace for ${declaration}`);
+  let depth = 0;
+  for (let cursor = open; cursor < source.length; cursor += 1) {
+    if (source[cursor] === '{') {
+      depth += 1;
+    } else if (source[cursor] === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(start, cursor + 1);
+      }
+    }
+  }
+  assert.fail(`unterminated ${declaration}`);
+}
+
 test('AGENTS is the canonical Codex repository policy', () => {
   const agents = repoFile('AGENTS.md');
   assert.match(agents, /Codex Beta in v2\.3\.0/);
@@ -76,6 +95,98 @@ test('line endings and tracked file modes are repository-safe', () => {
     .filter(Boolean)
     .filter((line) => !line.startsWith('100644 '));
   assert.deepEqual(badModes, []);
+});
+
+test('Codex schema 2 persistence keeps raw incomplete input behind an explicit legacy boundary', () => {
+  const index = repoFile('src/providers/codex/codexIndex.ts');
+  const contribution = sourceBlock(index, 'export interface CodexFileContribution');
+  const persistedAllowlist = sourceBlock(index, 'function sanitizeFileContribution');
+  const save = sourceBlock(index, 'export async function saveCodexIndexAtomic');
+  const legacyContribution = sourceBlock(index, 'interface LegacyCodexFileContribution');
+  const v2PublicSurface = index.slice(0, index.indexOf('interface LegacyCodexIndexV1'));
+
+  assert.doesNotMatch(contribution, /\b(?:carry|rawLine|incompleteLine)\b/);
+  assert.doesNotMatch(persistedAllowlist, /\b(?:carry|rawLine|incompleteLine)\b/);
+  assert.match(save, /JSON\.stringify\(sanitizeIndexV2\(index\)\)/);
+  assert.match(legacyContribution, /readonly carry\?: unknown/);
+  assert.doesNotMatch(v2PublicSurface, /\b(?:filesChanged|patchRounds|commands|postChangeCommands)\b/);
+
+  const legacyStructural = sourceBlock(index, 'interface LegacyCodexStructuralSummary');
+  const legacyAdapter = sourceBlock(index, 'function sanitizeStructural');
+  for (const field of ['filesChanged', 'patchRounds', 'commands', 'postChangeCommands']) {
+    assert.match(legacyStructural, new RegExp(`\\b${field}\\?: number`));
+    const outsideLegacyBoundary = index
+      .replace(legacyStructural, '')
+      .replace(legacyAdapter, '');
+    assert.doesNotMatch(
+      outsideLegacyBoundary,
+      new RegExp(`\\b${field}\\b`),
+      `${field} must stay in the explicit Legacy migration boundary`,
+    );
+  }
+  for (const field of ['patchRounds', 'commands', 'postChangeCommands']) {
+    assert.match(legacyAdapter, new RegExp(`legacy\\.${field}\\)`));
+  }
+  assert.match(legacyAdapter, /LegacyCodexStructuralSummary/);
+});
+
+test('Codex schema 2 production files are regular files and the architecture records its persisted contract', () => {
+  const productionFiles = [
+    'src/providers/codex/codexDedup.ts',
+    'src/providers/codex/codexIdentity.ts',
+    'src/providers/codex/codexIndex.ts',
+    'src/providers/codex/codexIndexClient.ts',
+    'src/providers/codex/codexIndexWorker.ts',
+    'src/providers/codex/codexInsights.ts',
+    'src/providers/codex/codexJsonlScanner.ts',
+    'src/providers/codex/codexManifest.ts',
+    'src/providers/codex/codexParser.ts',
+    'src/providers/codex/codexPeriodIndex.ts',
+    'src/providers/codex/codexProvider.ts',
+    'src/providers/codex/codexSchema.ts',
+    'src/providers/codex/codexUsage.ts',
+    'src/providers/codex/codexWorkerProtocol.ts',
+  ];
+  const staged = execFileSync('git', ['ls-files', '--stage', '--', ...productionFiles], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  });
+  const modes = new Map(
+    staged.trim().split('\n').filter(Boolean).map((line) => {
+      const [mode, , , file] = line.split(/\s+/, 4);
+      return [file, mode];
+    }),
+  );
+  for (const file of productionFiles) {
+    assert.equal(modes.get(file), '100644', `${file} must be mode 100644`);
+  }
+
+  const english = repoFile('ARCHITECTURE.md');
+  const chinese = repoFile('ARCHITECTURE-zh-CN.md');
+  for (const [document, patterns] of [
+    [english, [
+      /schema 2[\s\S]*codex-index-v1\.json/i,
+      /all-time[\s\S]*verified aggregate[\s\S]*period slices/i,
+      /asOfDay[\s\S]*7[\s\S]*30[\s\S]*all-time/i,
+      /16 file passes[\s\S]*32 MiB[\s\S]*1 MiB \+ 1[\s\S]*256 KiB[\s\S]*1 MiB/i,
+      /SSH[\s\S]*HTTPS[\s\S]*canonical/i,
+      /strictly exact[\s\S]*active\/archive[\s\S]*ambiguous/i,
+      /five structural call proxies[\s\S]*not file, command, or review counts/i,
+    ]],
+    [chinese, [
+      /内部 schema 2[\s\S]*codex-index-v1\.json/,
+      /已验证的[\s\S]*aggregate[\s\S]*期间切片/,
+      /asOfDay[\s\S]*7 天[\s\S]*30 天[\s\S]*all-time/,
+      /16 次文件遍历[\s\S]*32 MiB[\s\S]*1 MiB \+ 1[\s\S]*256 KiB[\s\S]*1 MiB/,
+      /SSH[\s\S]*HTTPS[\s\S]*规范化/,
+      /active\/archive[\s\S]*严格精确[\s\S]*歧义/,
+      /五个结构调用代理量[\s\S]*不是文件、命令或审阅次数/,
+    ]],
+  ] as Array<[string, RegExp[]]>) {
+    for (const pattern of patterns) {
+      assert.match(document, pattern);
+    }
+  }
 });
 
 test('git and VSIX ignores exclude private and development-only material', () => {
