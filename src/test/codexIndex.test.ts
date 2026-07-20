@@ -29,8 +29,72 @@ import {
   CodexRuntimeManifestEntry,
   scanCodexManifest,
 } from '../providers/codex/codexManifest';
+import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 
 const SALT = 'test-machine-salt';
+
+test('index reload replaces invalid legacy session identity and drops raw parent and project keys', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-identity-sanitize-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const fileKey = pseudonymousIdentityKey(SALT, 'verified-file');
+    const empty = createEmptyCodexIndex('UTC');
+    await writeFile(indexPath, JSON.stringify({
+      ...empty,
+      files: {
+        [fileKey]: {
+          fileKey,
+          sourceArea: 'sessions',
+          size: 1,
+          mtimeMs: 1,
+          offset: 1,
+          discardingOversizedLine: false,
+          parserState: {
+            schemaVersion: 1,
+            fileKey,
+            sessionKey: 'raw-session-id',
+            parentSessionKey: '/Users/private/parent.jsonl',
+            projectKey: 'https://example.invalid/private.git',
+            role: 'subagent',
+            qualityFlags: [],
+          },
+          aggregate: {
+            total: { inputTotal: 1, outputTotal: 1 },
+            byDay: {},
+            byModel: {},
+            byEffort: {},
+            session: {
+              sessionKey: 'raw-session-id',
+              parentSessionKey: '/Users/private/parent.jsonl',
+              projectKey: 'https://example.invalid/private.git',
+              role: 'subagent',
+            },
+            structural: {
+              patchCalls: 0,
+              toolCalls: 0,
+              postPatchToolCalls: 0,
+              compactCount: 0,
+              taskCompleteCount: 0,
+            },
+          },
+          qualityFlags: [],
+        },
+      },
+    }), 'utf8');
+
+    const loaded = await loadCodexIndex(indexPath, 'UTC');
+    const contribution = loaded.files[fileKey];
+    assert.equal(contribution.parserState.sessionKey, fileKey);
+    assert.equal(contribution.aggregate.session.sessionKey, fileKey);
+    assert.equal(contribution.parserState.parentSessionKey, undefined);
+    assert.equal(contribution.aggregate.session.parentSessionKey, undefined);
+    assert.equal(contribution.parserState.projectKey, undefined);
+    assert.equal(contribution.aggregate.session.projectKey, undefined);
+    assert.doesNotMatch(JSON.stringify(loaded), /raw-session|\/Users\/private|example\.invalid/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 function updateCodexIndex(
   previous: Parameters<typeof updateCodexIndexRaw>[0],
@@ -1132,6 +1196,9 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-v2-dto-'));
   try {
     const indexPath = path.join(root, 'codex-index.json');
+    const sessionKey = pseudonymousIdentityKey(SALT, 'v2-session');
+    const parentSessionKey = pseudonymousIdentityKey(SALT, 'v2-parent');
+    const projectKey = pseudonymousIdentityKey(SALT, 'v2-project');
     await writeFile(
       indexPath,
       JSON.stringify({
@@ -1154,9 +1221,9 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
             parserState: {
               schemaVersion: 1,
               fileKey: 'anonymous-file-key',
-              sessionKey: 'anonymous-session-key',
-              parentSessionKey: 'anonymous-parent-key',
-              projectKey: 'anonymous-project-key',
+              sessionKey,
+              parentSessionKey,
+              projectKey,
               projectName: 'SafeProject',
               projectDirectoryName: 'safe-directory',
               agentNickname: 'SafeAgent',
@@ -1198,9 +1265,9 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
                 high: { inputTotal: 123, outputTotal: 45 },
               },
               session: {
-                sessionKey: 'anonymous-session-key',
-                parentSessionKey: 'anonymous-parent-key',
-                projectKey: 'anonymous-project-key',
+                sessionKey,
+                parentSessionKey,
+                projectKey,
                 projectName: 'SafeProject',
                 projectDirectoryName: 'safe-directory',
                 agentNickname: 'SafeAgent',
@@ -1338,7 +1405,7 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
     assert.equal(loaded.files.a.offset, 100);
     assert.equal(loaded.files.a.aggregate.total.inputTotal, 123);
     assert.equal(loaded.files.a.parserState.highWater?.inputTokens, 123);
-    assert.equal(loaded.files.a.parserState.sessionKey, 'anonymous-session-key');
+    assert.equal(loaded.files.a.parserState.sessionKey, sessionKey);
     assert.equal(loaded.files.a.aggregate.session.startedAt, 10);
     assert.equal(loaded.files.a.aggregate.session.endedAt, 20);
     assert.equal(loaded.files.a.aggregate.structural.patchCalls, 1);
@@ -1402,7 +1469,7 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
     assert.match(JSON.stringify(caller), /v2-secret-caller-parser/);
     const saved = JSON.parse(persisted) as typeof loaded;
     assert.equal(saved.files.a.aggregate.total.inputTotal, 123);
-    assert.equal(saved.files.a.parserState.sessionKey, 'anonymous-session-key');
+    assert.equal(saved.files.a.parserState.sessionKey, sessionKey);
     assert.equal(saved.files.a.limit?.windows[0].usedPercent, 25);
     assert.equal(saved.files.a.aggregate.period?.timeZone, 'Asia/Hong_Kong');
     assert.equal(

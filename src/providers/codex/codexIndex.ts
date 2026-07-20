@@ -1,4 +1,3 @@
-import { createHmac } from 'node:crypto';
 import {
   mkdir,
   open,
@@ -51,6 +50,11 @@ import {
   CodexDeduplication,
   classifyCodexSessionDuplicates,
 } from './codexDedup';
+import {
+  NEUTRAL_CODEX_SESSION_KEY,
+  PseudonymousIdentityKey,
+  pseudonymousIdentityKey,
+} from './codexIdentity';
 
 export {
   CodexPeriodMigrationState,
@@ -409,11 +413,7 @@ function promoteCaughtUpPeriod(
 }
 
 function pseudonymizer(salt: string): (raw: string) => string {
-  return (raw) =>
-    createHmac('sha256', salt)
-      .update('codex-identity\0')
-      .update(raw)
-      .digest('hex');
+  return (raw) => pseudonymousIdentityKey(salt, raw);
 }
 
 function defaultIo(): CodexIndexIo {
@@ -1359,8 +1359,24 @@ function sanitizeQualityFlags(value: unknown): string[] {
     : [];
 }
 
+function sanitizePseudonymousIdentityKey(
+  value: unknown,
+): PseudonymousIdentityKey | undefined {
+  return typeof value === 'string' && /^[a-f0-9]{64}$/.test(value)
+    ? value as PseudonymousIdentityKey
+    : undefined;
+}
+
 function sanitizeParserState(value: unknown, fileKey: string): CodexParserState {
   const record = isRecord(value) ? value : {};
+  const verifiedFileKey =
+    sanitizePseudonymousIdentityKey(fileKey) ?? NEUTRAL_CODEX_SESSION_KEY;
+  const sessionKey =
+    sanitizePseudonymousIdentityKey(record.sessionKey) ?? verifiedFileKey;
+  const parentSessionKey = sanitizePseudonymousIdentityKey(
+    record.parentSessionKey,
+  );
+  const projectKey = sanitizePseudonymousIdentityKey(record.projectKey);
   const highWater = isRecord(record.highWater)
     ? {
         inputTokens: finiteNumber(record.highWater.inputTokens),
@@ -1373,13 +1389,9 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
   return {
     schemaVersion: 1,
     fileKey,
-    sessionKey: optionalString(record.sessionKey) ?? fileKey,
-    ...(optionalString(record.parentSessionKey)
-      ? { parentSessionKey: optionalString(record.parentSessionKey) }
-      : {}),
-    ...(optionalString(record.projectKey)
-      ? { projectKey: optionalString(record.projectKey) }
-      : {}),
+    sessionKey,
+    ...(parentSessionKey ? { parentSessionKey } : {}),
+    ...(projectKey ? { projectKey } : {}),
     ...(optionalString(record.projectName)
       ? { projectName: optionalString(record.projectName) }
       : {}),
@@ -1552,14 +1564,20 @@ function sanitizeSession(
   parserState: CodexParserState,
 ): CodexFileAggregate['session'] {
   const session = isRecord(value) ? value : {};
+  const sessionKey =
+    sanitizePseudonymousIdentityKey(session.sessionKey) ??
+    sanitizePseudonymousIdentityKey(parserState.sessionKey) ??
+    NEUTRAL_CODEX_SESSION_KEY;
+  const parentSessionKey =
+    sanitizePseudonymousIdentityKey(session.parentSessionKey) ??
+    sanitizePseudonymousIdentityKey(parserState.parentSessionKey);
+  const projectKey =
+    sanitizePseudonymousIdentityKey(session.projectKey) ??
+    sanitizePseudonymousIdentityKey(parserState.projectKey);
   return {
-    sessionKey: optionalString(session.sessionKey) ?? parserState.sessionKey,
-    ...(optionalString(session.parentSessionKey)
-      ? { parentSessionKey: optionalString(session.parentSessionKey) }
-      : {}),
-    ...(optionalString(session.projectKey)
-      ? { projectKey: optionalString(session.projectKey) }
-      : {}),
+    sessionKey,
+    ...(parentSessionKey ? { parentSessionKey } : {}),
+    ...(projectKey ? { projectKey } : {}),
     ...(optionalString(session.projectName)
       ? { projectName: optionalString(session.projectName) }
       : {}),

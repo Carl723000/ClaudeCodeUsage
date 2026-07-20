@@ -7,8 +7,11 @@ import * as path from 'node:path';
 import {
   loadCodexSessionTitles,
   normalizeRepositoryIdentity,
+  parsePseudonymousIdentityKey,
+  PseudonymousIdentityKey,
   pseudonymousIdentityKey,
   safeProjectIdentity,
+  stableCodexViewKey,
 } from '../providers/codex/codexIdentity';
 
 const SALT = 'identity-test-salt';
@@ -171,6 +174,34 @@ test('SSH HTTPS and dot-git variants share one repository identity', () => {
     variants.map((value) => normalizeRepositoryIdentity(value)?.name),
     ['Repo', 'Repo', 'repo', 'REPO'],
   );
+});
+
+test('stable Codex view keys hash an existing pseudonymous identity without exposing it', () => {
+  const key = pseudonymousIdentityKey(SALT, 'raw-session-for-view');
+  const first = stableCodexViewKey(key);
+  const second = stableCodexViewKey(key);
+
+  assert.match(first, /^[a-f0-9]{16}$/);
+  assert.equal(first, second);
+  assert.doesNotMatch(first, /raw-session|identity-test-salt/);
+});
+
+test('Codex view keys reject raw IDs paths URLs and malformed legacy keys at runtime', () => {
+  const pseudonym = pseudonymousIdentityKey(SALT, 'safe-source');
+  assert.equal(parsePseudonymousIdentityKey(pseudonym), pseudonym);
+  assert.equal(parsePseudonymousIdentityKey(pseudonym.toUpperCase()), undefined);
+  for (const unsafe of [
+    'raw-session-id',
+    'session:short',
+    '/Users/private/session.jsonl',
+    'https://example.invalid/repository.git',
+  ]) {
+    assert.equal(parsePseudonymousIdentityKey(unsafe), undefined);
+    assert.throws(
+      () => stableCodexViewKey(unsafe as PseudonymousIdentityKey),
+      /pseudonymous identity key/i,
+    );
+  }
 });
 
 test('repository canonicalization strips secrets and URL-only decorations', () => {

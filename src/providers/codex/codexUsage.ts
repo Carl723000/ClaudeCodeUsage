@@ -15,6 +15,13 @@ import {
   ProviderTokenCounts,
 } from '../providerTypes';
 import { buildCodexLimitViews, CodexLimitView } from './codexLimits';
+import {
+  NEUTRAL_CODEX_PROJECT_KEY,
+  NEUTRAL_CODEX_SESSION_KEY,
+  parsePseudonymousIdentityKey,
+  PseudonymousIdentityKey,
+  stableCodexViewKey,
+} from './codexIdentity';
 
 export interface CodexMetricTotals {
   processed: number;
@@ -51,6 +58,12 @@ export interface CodexDailyUsageView {
 }
 
 export interface CodexThreadUsageView {
+  /** Safe, stable key for DOM, client state, and declarative actions. */
+  viewKey: string;
+  parentViewKey?: string;
+  rootTaskViewKey: string;
+  depth: number;
+  parentStatus: 'none' | 'available' | 'missing' | 'cycle';
   sessionKey: string;
   parentSessionKey?: string;
   title?: string;
@@ -58,23 +71,33 @@ export interface CodexThreadUsageView {
   agentNickname?: string;
   observedAt: number;
   role: ProviderThreadRole;
+  projectViewKey: string;
   projectKey: string;
   projectName?: string;
   projectDirectoryName?: string;
   models: string[];
   efforts: string[];
+  periodMembership: Array<'recent' | '7d' | '30d' | 'all'>;
   total: CodexMetricTotals;
   durationMs: number;
   structural: CodexStructuralSummary;
 }
 
 export interface CodexProjectUsageView {
+  /** Safe, stable key for DOM, client state, and declarative actions. */
+  viewKey: string;
   projectKey: string;
   name?: string;
   directoryName?: string;
   lastActiveAt: number;
   threadCount: number;
+  recentThreads: CodexThreadUsageView[];
   scope: CodexUsageScopeView;
+}
+
+export interface CodexExploreSessionsView {
+  defaultLayout: 'tree';
+  filteredLayout: 'flat';
 }
 
 export interface CodexTaskIdentityView {
@@ -133,6 +156,8 @@ export interface CodexUsageView {
   last30DaysDaily: CodexDailyUsageView[];
   monthly: CodexPeriodUsageView[];
   recentThreads: CodexThreadUsageView[];
+  sessionPeriodAvailability: Record<'recent' | '7d' | '30d' | 'all', boolean>;
+  exploreSessions: CodexExploreSessionsView;
   totalThreadCount: number;
   behaviorScopes: CodexBehaviorScopesView;
   /** Backward-compatible all-time behavior aggregate. */
@@ -543,36 +568,138 @@ function behaviorView(scopeView: CodexUsageScopeView): CodexBehaviorView {
   };
 }
 
+interface CodexThreadPeriodContext {
+  recentSessionKeys: Set<PseudonymousIdentityKey>;
+  last7DayKeys: Set<string>;
+  last30DayKeys: Set<string>;
+  timeZone: string;
+}
+
+function sessionIdentityKey(file: CodexFileAggregate): PseudonymousIdentityKey {
+  return parsePseudonymousIdentityKey(file.session.sessionKey) ??
+    NEUTRAL_CODEX_SESSION_KEY;
+}
+
+function projectIdentityKey(file: CodexFileAggregate): PseudonymousIdentityKey {
+  return parsePseudonymousIdentityKey(file.session.projectKey) ??
+    NEUTRAL_CODEX_PROJECT_KEY;
+}
+
+function periodMembership(
+  file: CodexFileAggregate,
+  context: CodexThreadPeriodContext,
+): CodexThreadUsageView['periodMembership'] {
+  const result: CodexThreadUsageView['periodMembership'] = [];
+  if (context.recentSessionKeys.has(sessionIdentityKey(file))) {
+    result.push('recent');
+  }
+  if (file.period?.timeZone !== context.timeZone) {
+    return result;
+  }
+  const days = Object.keys(file.period.days);
+  if (days.some((day) => context.last7DayKeys.has(day))) {
+    result.push('7d');
+  }
+  if (days.some((day) => context.last30DayKeys.has(day))) {
+    result.push('30d');
+  }
+  if (days.length > 0) {
+    result.push('all');
+  }
+  return result;
+}
+
 function recentThreadRows(
   files: CodexFileAggregate[],
+  periodContext: CodexThreadPeriodContext,
+  maxRows = MAX_RECENT_THREAD_ROWS,
 ): CodexThreadUsageView[] {
+  const sourceBySessionKey = new Map(
+    files.map((file) => [sessionIdentityKey(file), file]),
+  );
   const titles = new Map(
     files
       .filter((file) => file.session.sessionTitle)
-      .map((file) => [file.session.sessionKey, file.session.sessionTitle!]),
+      .map((file) => [sessionIdentityKey(file), file.session.sessionTitle!]),
   );
+  const lineage = (file: CodexFileAggregate): {
+    parent?: CodexFileAggregate;
+    root: CodexFileAggregate;
+    depth: number;
+    parentStatus: CodexThreadUsageView['parentStatus'];
+  } => {
+    const visited = new Set<PseudonymousIdentityKey>([
+      sessionIdentityKey(file),
+    ]);
+    const ancestors: CodexFileAggregate[] = [];
+    let current = file;
+    while (current.session.parentSessionKey) {
+      const parentKey = parsePseudonymousIdentityKey(
+        current.session.parentSessionKey,
+      );
+      if (!parentKey) {
+        return { root: file, depth: 0, parentStatus: 'missing' };
+      }
+      const parent = sourceBySessionKey.get(parentKey);
+      if (!parent) {
+        return { root: file, depth: 0, parentStatus: 'missing' };
+      }
+      if (visited.has(parentKey)) {
+        return { root: file, depth: 0, parentStatus: 'cycle' };
+      }
+      ancestors.push(parent);
+      visited.add(parentKey);
+      current = parent;
+    }
+    return {
+      ...(ancestors[0] ? { parent: ancestors[0] } : {}),
+      root: ancestors[ancestors.length - 1] ?? file,
+      depth: ancestors.length,
+      parentStatus: ancestors.length > 0 ? 'available' : 'none',
+    };
+  };
   return [...files]
-    .sort((left, right) => observedAt(right) - observedAt(left))
-    .slice(0, MAX_RECENT_THREAD_ROWS)
-    .map((file) => ({
-      sessionKey: file.session.sessionKey,
-      parentSessionKey: file.session.parentSessionKey,
-      title: file.session.sessionTitle,
-      parentTitle: file.session.parentSessionKey
-        ? titles.get(file.session.parentSessionKey)
-        : undefined,
-      agentNickname: file.session.agentNickname,
-      observedAt: observedAt(file),
-      role: file.session.role,
-      projectKey: file.session.projectKey ?? 'project:unknown',
-      projectName: file.session.projectName,
-      projectDirectoryName: file.session.projectDirectoryName,
-      models: sortedBucketKeys(file.byModel),
-      efforts: sortedBucketKeys(file.byEffort),
-      total: metrics(file.total),
-      durationMs: sessionDuration(file),
-      structural: { ...file.structural },
-    }));
+    .sort(
+      (left, right) =>
+        observedAt(right) - observedAt(left) ||
+        sessionIdentityKey(left).localeCompare(sessionIdentityKey(right)),
+    )
+    .slice(0, maxRows)
+    .map((file) => {
+      const resolved = lineage(file);
+      const sessionKey = sessionIdentityKey(file);
+      const projectKey = projectIdentityKey(file);
+      return {
+        viewKey: stableCodexViewKey(sessionKey),
+        ...(resolved.parent
+          ? { parentViewKey: stableCodexViewKey(sessionIdentityKey(resolved.parent)) }
+          : {}),
+        rootTaskViewKey: stableCodexViewKey(sessionIdentityKey(resolved.root)),
+        depth: resolved.depth,
+        parentStatus: resolved.parentStatus,
+        sessionKey,
+        ...(resolved.parent
+          ? { parentSessionKey: sessionIdentityKey(resolved.parent) }
+          : {}),
+        title: file.session.sessionTitle,
+        parentTitle: resolved.parent
+          ? titles.get(sessionIdentityKey(resolved.parent))
+          : undefined,
+        agentNickname: file.session.agentNickname,
+        observedAt: observedAt(file),
+        role: file.session.role,
+        projectViewKey: stableCodexViewKey(projectKey),
+        projectKey,
+        projectName: file.session.projectName,
+        projectDirectoryName: file.session.projectDirectoryName,
+        models: sortedBucketKeys(file.byModel),
+        efforts: sortedBucketKeys(file.byEffort),
+        periodMembership: periodMembership(file, periodContext),
+        total: metrics(file.total),
+        durationMs: sessionDuration(file),
+        structural: { ...file.structural },
+      };
+    });
 }
 
 function recentTaskFiles(files: CodexFileAggregate[]): CodexFileAggregate[] {
@@ -637,15 +764,6 @@ function taskRootFile(
     )[0];
 }
 
-function syntheticViewKey(prefix: string, value: string): string {
-  let hash = 2_166_136_261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16_777_619);
-  }
-  return `${prefix}-${(hash >>> 0).toString(36)}`;
-}
-
 function currentLimit(
   limit: ProviderLimitSnapshot | null,
   now: number,
@@ -667,9 +785,20 @@ export function buildCodexUsageView(
   const periodCoverage = snapshot.coverage.period;
   const last7DayKeys = rollingDayKeysFromDayKey(periodCoverage.asOfDay, 7);
   const last30DayKeys = rollingDayKeysFromDayKey(periodCoverage.asOfDay, 30);
-  const projects = new Map<string, CodexFileAggregate[]>();
+  const periodContext: CodexThreadPeriodContext = {
+    recentSessionKeys: new Set(recent.map(sessionIdentityKey)),
+    last7DayKeys: new Set(last7DayKeys),
+    last30DayKeys: new Set(last30DayKeys),
+    timeZone: periodCoverage.timeZone,
+  };
+  const allThreadRows = recentThreadRows(
+    snapshot.files,
+    periodContext,
+    Number.POSITIVE_INFINITY,
+  );
+  const projects = new Map<PseudonymousIdentityKey, CodexFileAggregate[]>();
   for (const file of snapshot.files) {
-    const key = file.session.projectKey ?? 'project:unknown';
+    const key = projectIdentityKey(file);
     const group = projects.get(key) ?? [];
     group.push(file);
     projects.set(key, group);
@@ -697,19 +826,19 @@ export function buildCodexUsageView(
       : [];
   const limits = buildCodexLimitViews(sourceLimits, now);
   const lastActiveAt = recent.length > 0 ? Math.max(...recent.map(observedAt)) : 0;
-  const projectIdentityKey = recent
-    .map((file) => file.session.projectKey ?? 'project:unknown')
-    .sort()[0] ?? 'project:unknown';
-  const taskIdentityKey = taskRoot?.session.sessionKey ?? recent
-    .map((file) => file.session.sessionKey)
-    .sort()[0] ?? 'task:unknown';
+  const recentProjectIdentityKey = recent
+    .map(projectIdentityKey)
+    .sort()[0] ?? NEUTRAL_CODEX_PROJECT_KEY;
+  const taskIdentityKey = taskRoot
+    ? sessionIdentityKey(taskRoot)
+    : recent.map(sessionIdentityKey).sort()[0] ?? NEUTRAL_CODEX_SESSION_KEY;
 
   return {
     lastTask: recentScope,
     lastTaskIdentity: recent.length > 0
       ? {
-          taskKey: syntheticViewKey('task', taskIdentityKey),
-          projectKey: syntheticViewKey('project', projectIdentityKey),
+          taskKey: stableCodexViewKey(taskIdentityKey),
+          projectKey: stableCodexViewKey(recentProjectIdentityKey),
           title: taskRoot?.session.sessionTitle,
           projectName: identityValue(recent, 'projectName'),
           projectDirectoryName: identityValue(
@@ -726,24 +855,38 @@ export function buildCodexUsageView(
     projects: [...projects.entries()]
       .map(([projectKey, files]) => {
         return {
+          viewKey: stableCodexViewKey(projectKey),
           projectKey,
           name: identityValue(files, 'projectName'),
           directoryName: identityValue(files, 'projectDirectoryName'),
           lastActiveAt: Math.max(0, ...files.map(observedAt)),
           threadCount: files.length,
+          recentThreads: allThreadRows
+            .filter((thread) => thread.projectKey === projectKey)
+            .slice(0, 20),
           scope: scope(files),
         };
       })
       .sort(
         (left, right) =>
-          right.scope.total.fresh - left.scope.total.fresh ||
+          right.lastActiveAt - left.lastActiveAt ||
           left.projectKey.localeCompare(right.projectKey),
       ),
     daily,
     last7DaysDaily: rollingDailyRows(daily, last7DayKeys),
     last30DaysDaily: rollingDailyRows(daily, last30DayKeys),
     monthly: monthlyRows(snapshot.files, periodCoverage.timeZone),
-    recentThreads: recentThreadRows(snapshot.files),
+    recentThreads: allThreadRows.slice(0, MAX_RECENT_THREAD_ROWS),
+    sessionPeriodAvailability: {
+      recent: recent.length > 0,
+      '7d': periodCoverage.last7Days.complete,
+      '30d': periodCoverage.last30Days.complete,
+      all: periodCoverage.allTime.complete,
+    },
+    exploreSessions: {
+      defaultLayout: 'tree',
+      filteredLayout: 'flat',
+    },
     totalThreadCount: snapshot.files.length,
     behaviorScopes: {
       recent: recentScope ? behaviorView(recentScope) : null,
