@@ -28,8 +28,8 @@ interface FixtureRow {
   projectKey: string;
   sessionTitle?: string;
   agentNickname?: string;
-  projectName: string;
-  projectDirectoryName: string;
+  projectName?: string;
+  projectDirectoryName?: string;
 }
 
 const ROWS: FixtureRow[] = [
@@ -186,4 +186,33 @@ export function snapshotFixture(): CodexProviderSnapshot {
       ],
     },
   };
+}
+
+export function identityLineageFixture(): CodexProviderSnapshot {
+  const snapshot = snapshotFixture();
+  const root = aggregate({
+    ...ROWS[0],
+    end: '2026-07-20T11:40:00.000Z',
+    sessionTitle: undefined,
+    projectName: '',
+    projectDirectoryName: 'RootDirectory',
+  });
+  const namedChild = aggregate({
+    ...ROWS[1],
+    end: '2026-07-20T11:30:00.000Z',
+    sessionTitle: 'child title must not become the task title',
+    projectName: 'RealChildProject',
+    projectDirectoryName: 'NamedChildDirectory',
+  });
+  const latestChild = aggregate({
+    ...ROWS[1],
+    sessionKey: 'session:child-latest',
+    end: '2026-07-20T11:50:00.000Z',
+    sessionTitle: 'newest child title must not become the task title',
+    projectName: '',
+    projectDirectoryName: 'LatestDirectory',
+  });
+  snapshot.files = [root, namedChild, latestChild, ...snapshot.files.slice(2)];
+  snapshot.total = sum(snapshot.files);
+  return snapshot;
 }

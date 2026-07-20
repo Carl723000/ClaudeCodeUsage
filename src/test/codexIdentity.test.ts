@@ -6,6 +6,7 @@ import * as path from 'node:path';
 
 import {
   loadCodexSessionTitles,
+  normalizeRepositoryIdentity,
   pseudonymousIdentityKey,
   safeProjectIdentity,
 } from '../providers/codex/codexIdentity';
@@ -20,16 +21,42 @@ test('session index keeps the latest clean title behind an anonymous key', async
       [
         JSON.stringify({
           id: 'raw-session-a',
-          thread_name: '  First\n title  ',
-          updated_at: '2026-07-20T01:00:00.000Z',
+          thread_name: '  newest valid\n title  ',
+          updated_at: '2026-07-20T03:00:00.000Z',
         }),
         '{not-json}',
         JSON.stringify({
           id: 'raw-session-a',
-          thread_name: '真实的最新标题',
+          thread_name: 'older title written later',
           updated_at: '2026-07-20T02:00:00.000Z',
         }),
-        JSON.stringify({ id: 'raw-session-b', thread_name: 'Second title' }),
+        JSON.stringify({ id: 'raw-session-b', thread_name: 'missing timestamp' }),
+        JSON.stringify({
+          id: 'raw-session-b',
+          thread_name: 'valid timestamp wins',
+          updated_at: '2026-07-20T01:00:00.000Z',
+        }),
+        JSON.stringify({
+          id: 'raw-session-b',
+          thread_name: 'invalid timestamp written last',
+          updated_at: 'not-a-date',
+        }),
+        JSON.stringify({
+          id: 'raw-session-e',
+          thread_name: 'same timestamp first',
+          updated_at: '2026-07-20T04:00:00.000Z',
+        }),
+        JSON.stringify({
+          id: 'raw-session-e',
+          thread_name: 'same timestamp later ordinal',
+          updated_at: '2026-07-20T04:00:00.000Z',
+        }),
+        JSON.stringify({
+          id: 'raw-session-f',
+          thread_name: 'invalid first',
+          updated_at: 'invalid',
+        }),
+        JSON.stringify({ id: 'raw-session-f', thread_name: 'missing later ordinal' }),
         JSON.stringify({
           id: 'raw-session-c',
           thread_name:
@@ -48,11 +75,19 @@ test('session index keeps the latest clean title behind an anonymous key', async
 
     assert.equal(
       titles.get(pseudonymousIdentityKey(SALT, 'raw-session-a')),
-      '真实的最新标题',
+      'newest valid title',
     );
     assert.equal(
       titles.get(pseudonymousIdentityKey(SALT, 'raw-session-b')),
-      'Second title',
+      'valid timestamp wins',
+    );
+    assert.equal(
+      titles.get(pseudonymousIdentityKey(SALT, 'raw-session-e')),
+      'same timestamp later ordinal',
+    );
+    assert.equal(
+      titles.get(pseudonymousIdentityKey(SALT, 'raw-session-f')),
+      'missing later ordinal',
     );
     const redacted = titles.get(
       pseudonymousIdentityKey(SALT, 'raw-session-c'),
@@ -99,7 +134,7 @@ test('project identity prefers a repository name and keeps only a cwd basename',
       'https://github.com/Carl723000/ClaudeCodeUsage.git',
     ),
     {
-      keySource: 'https://github.com/Carl723000/ClaudeCodeUsage.git',
+      keySource: 'repo:github.com/carl723000/claudecodeusage',
       name: 'ClaudeCodeUsage',
       directoryName: 'claude-code-usage-v221',
     },
@@ -114,4 +149,75 @@ test('project identity prefers a repository name and keeps only a cwd basename',
     name: 'PolyU_research',
     directoryName: 'PolyU_research',
   });
+});
+
+test('SSH HTTPS and dot-git variants share one repository identity', () => {
+  const variants = [
+    'git@github.com:Owner/Repo.git',
+    'ssh://git@github.com:22/Owner/Repo',
+    'https://github.com/owner/repo.git/',
+    'git://github.com/OWNER/REPO.git',
+  ];
+  assert.deepEqual(
+    variants.map((value) => normalizeRepositoryIdentity(value)?.keySource),
+    [
+      'repo:github.com/owner/repo',
+      'repo:github.com/owner/repo',
+      'repo:github.com/owner/repo',
+      'repo:github.com/owner/repo',
+    ],
+  );
+  assert.deepEqual(
+    variants.map((value) => normalizeRepositoryIdentity(value)?.name),
+    ['Repo', 'Repo', 'repo', 'REPO'],
+  );
+});
+
+test('repository canonicalization strips secrets and URL-only decorations', () => {
+  const raw = 'https://user:token@example.com:443/Owner/PrivateRepo.git?access_token=secret#fragment';
+  const identity = normalizeRepositoryIdentity(raw);
+
+  assert.deepEqual(identity, {
+    keySource: 'repo:example.com/Owner/PrivateRepo',
+    name: 'PrivateRepo',
+  });
+  assert.doesNotMatch(
+    JSON.stringify(identity),
+    /user|token|access_token|secret|fragment|https:/,
+  );
+});
+
+test('repository display name remains a sanitized basename after decoding', () => {
+  const identity = normalizeRepositoryIdentity(
+    'https://example.com/Owner/%2FUsers%2Falice%2FSecretRepo.git',
+  );
+
+  assert.equal(identity?.name, 'SecretRepo');
+  assert.doesNotMatch(JSON.stringify(identity?.name), /Users|alice|[\\/]/);
+});
+
+test('host and hosted-service path case rules are stable', () => {
+  assert.equal(
+    normalizeRepositoryIdentity('https://GITLAB.com/Group/SubGroup/Repo.git')?.keySource,
+    'repo:gitlab.com/group/subgroup/repo',
+  );
+  assert.equal(
+    normalizeRepositoryIdentity('https://BITBUCKET.org/Owner/Repo.git')?.keySource,
+    'repo:bitbucket.org/owner/repo',
+  );
+  assert.equal(
+    normalizeRepositoryIdentity('ssh://git@Code.Example.com:22/Owner/Repo.git')?.keySource,
+    'repo:code.example.com/Owner/Repo',
+  );
+  assert.equal(
+    normalizeRepositoryIdentity('https://Code.Example.com:8443/Owner/Repo.git')?.keySource,
+    'repo:code.example.com:8443/Owner/Repo',
+  );
+});
+
+test('same repository basename under different owners stays distinct', () => {
+  assert.notEqual(
+    normalizeRepositoryIdentity('https://github.com/one/repo.git')?.keySource,
+    normalizeRepositoryIdentity('https://github.com/two/repo.git')?.keySource,
+  );
 });
