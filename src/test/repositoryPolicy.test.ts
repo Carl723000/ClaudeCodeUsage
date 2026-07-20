@@ -164,6 +164,14 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
     }
     return undefined;
   };
+  const bindingNames = (binding: ts.BindingName): string[] => {
+    if (ts.isIdentifier(binding)) {
+      return [binding.text];
+    }
+    return binding.elements.flatMap((element) =>
+      ts.isBindingElement(element) ? bindingNames(element.name) : [],
+    );
+  };
   const isExplicitSafeExternal = (call: ts.CallExpression): boolean => {
     if (ts.isIdentifier(call.expression)) {
       return call.expression.text === 'resolveTimeZone' || call.expression.text === 'dayKeyInZone';
@@ -198,14 +206,6 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
         ts.isIdentifier(parameter.name) ? parameter.name.text : '',
       ).filter(Boolean),
     );
-    const bindingNames = (binding: ts.BindingName): string[] => {
-      if (ts.isIdentifier(binding)) {
-        return [binding.text];
-      }
-      return binding.elements.flatMap((element) =>
-        ts.isBindingElement(element) ? bindingNames(element.name) : [],
-      );
-    };
     const collectLocals = (node: ts.Node): void => {
       if (node !== declaration && ts.isFunctionLike(node)) {
         return;
@@ -517,7 +517,7 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
     }
   };
   const rootParameters = declarations.get('sanitizeIndexV2')?.parameters.flatMap(
-    (parameter) => ts.isIdentifier(parameter.name) ? [parameter.name.text] : [],
+    (parameter) => bindingNames(parameter.name),
   ) ?? [];
   inspectFunction('sanitizeIndexV2', new Set(rootParameters));
   const root = declarations.get('sanitizeIndexV2');
@@ -766,6 +766,22 @@ test('semantic Codex policy validators reject nested DTO leaks, comment-only san
     'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
   ].join('\n'), ts.ScriptTarget.ES2020, true);
   assert.match(sanitizedDtoViolations(constructedRaw).join('\n'), /tainted parameter raw/);
+
+  const destructuredRootRaw = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2({ raw }: any) {',
+    '  return { schemaVersion: 2, files: { safe: raw }, aggregate: {}, coverage: {} };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(sanitizedDtoViolations(destructuredRootRaw).join('\n'), /tainted parameter raw/);
+
+  const arrayDestructuredRootRaw = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2([raw]: any[]) {',
+    '  return { schemaVersion: 2, files: { safe: raw }, aggregate: {}, coverage: {} };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(sanitizedDtoViolations(arrayDestructuredRootRaw).join('\n'), /tainted parameter raw/);
 
   const localHelperRawFlow = ts.createSourceFile('fixture.ts', [
     'function build(value: any) { return { safe: value }; }',
