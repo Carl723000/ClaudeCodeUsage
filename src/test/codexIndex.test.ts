@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+  CodexFileContribution,
   CodexIndexIo,
   createEmptyCodexIndex,
   loadCodexIndex,
@@ -141,6 +142,48 @@ function persistableManifest(files: CodexRuntimeManifestEntry[]): CodexManifest 
   };
 }
 
+function dedupContribution(
+  fileKey: string,
+  sourceArea: CodexRuntimeManifestEntry['sourceArea'],
+): CodexFileContribution {
+  return {
+    fileKey,
+    sourceArea,
+    size: 100,
+    mtimeMs: 1,
+    offset: 100,
+    discardingOversizedLine: false,
+    parserState: {
+      schemaVersion: 1,
+      fileKey,
+      sessionKey: 'shared-anonymous-session',
+      role: 'root',
+      qualityFlags: [],
+    },
+    aggregate: {
+      total: { inputTotal: 100, outputTotal: 20 },
+      byDay: {},
+      byModel: {},
+      byEffort: {},
+      session: {
+        sessionKey: 'shared-anonymous-session',
+        role: 'root',
+        startedAt: 10,
+        endedAt: 20,
+      },
+      structural: {
+        patchCalls: 0,
+        toolCalls: 0,
+        postPatchToolCalls: 0,
+        compactCount: 0,
+        taskCompleteCount: 1,
+      },
+    },
+    qualityFlags: [],
+    identityChecked: true,
+  };
+}
+
 test('cold scan, appended tail, and persisted reload agree', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-'));
   try {
@@ -218,6 +261,68 @@ test('exact active and archive copies contribute usage only once', async () => {
     assert.equal(result.index.aggregate.total.inputTotal, 100);
     assert.equal(result.index.aggregate.total.outputTotal, 20);
     assert.deepEqual(result.index.coverage.identity, {
+      exactDuplicateFiles: 1,
+      ambiguousSessionGroups: 0,
+      complete: true,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('safe DTO normalization uses outer file keys for exact dedupe', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-key-normalize-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const index = createEmptyCodexIndex();
+    const active = dedupContribution('active-outer', 'sessions');
+    const archive = dedupContribution('archive-embedded', 'archive');
+    Object.assign(archive, {
+      rawSessionId: 'raw-session-must-not-survive',
+      absolutePath: '/private/path-must-not-survive/archive.jsonl',
+    });
+    index.files = {
+      'active-outer': active,
+      'archive-outer': archive,
+    };
+    index.aggregate.total = { inputTotal: 200, outputTotal: 40 };
+    await writeFile(indexPath, JSON.stringify(index), 'utf8');
+
+    const loaded = await loadCodexIndex(indexPath);
+    assert.equal(loaded.files['archive-outer'].fileKey, 'archive-outer');
+    assert.equal(loaded.files['archive-outer'].parserState.fileKey, 'archive-outer');
+    assert.doesNotMatch(
+      JSON.stringify(loaded),
+      /raw-session-must-not-survive|private\/path-must-not-survive/,
+    );
+
+    const entries: CodexRuntimeManifestEntry[] = [
+      {
+        fileKey: 'active-outer',
+        sourceArea: 'sessions',
+        size: 100,
+        mtimeMs: 1,
+        absolutePath: path.join(root, 'sessions', 'active.jsonl'),
+        nonPersisted: true,
+      },
+      {
+        fileKey: 'archive-outer',
+        sourceArea: 'archive',
+        size: 100,
+        mtimeMs: 1,
+        absolutePath: path.join(root, 'archived_sessions', 'archive.jsonl'),
+        nonPersisted: true,
+      },
+    ];
+    const updated = await updateCodexIndex(
+      loaded,
+      persistableManifest(entries),
+      { salt: SALT },
+    );
+
+    assert.equal(updated.bodyReads, 0);
+    assert.equal(updated.index.aggregate.total.inputTotal, 100);
+    assert.deepEqual(updated.index.coverage.identity, {
       exactDuplicateFiles: 1,
       ambiguousSessionGroups: 0,
       complete: true,
