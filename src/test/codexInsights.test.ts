@@ -29,10 +29,9 @@ function scope(
     cacheShare: 0.8,
     durationMs: 600_000,
     structural: {
-      filesChanged: 2,
-      patchRounds: 1,
-      commands: 2,
-      postChangeCommands: 1,
+      patchCalls: 1,
+      toolCalls: 2,
+      postPatchToolCalls: 1,
       compactCount: 0,
       taskCompleteCount: 1,
     },
@@ -75,19 +74,19 @@ test('auto-review is never labelled independent code review', () => {
   assert.match(text, /approval-reviewer/);
 });
 
-test('post-change commands are explicitly a structural proxy', () => {
+test('post-patch tool calls are explicitly a structural proxy', () => {
   const base = scope();
   const insight = buildCodexInsights({
     ...base,
     structural: {
       ...base.structural,
-      postChangeCommands: 6,
-      filesChanged: 2,
+      postPatchToolCalls: 6,
+      patchCalls: 2,
     },
-  }).find((item) => item.kind === 'post-change-command-intensity');
+  }).find((item) => item.kind === 'post-patch-tool-call-intensity');
 
   assert.equal(insight?.proxy, true);
-  assert.equal(insight?.evidence.postChangeCommands, 6);
+  assert.equal(insight?.evidence.postPatchToolCalls, 6);
 });
 
 test('small high-effort changes recommend comparison without claiming causality', () => {

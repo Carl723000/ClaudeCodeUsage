@@ -6,10 +6,9 @@ import {
 import { ProviderTokenCounts } from '../providers/providerTypes';
 
 const EMPTY_STRUCTURAL: CodexStructuralSummary = {
-  filesChanged: 0,
-  patchRounds: 0,
-  commands: 0,
-  postChangeCommands: 0,
+  patchCalls: 0,
+  toolCalls: 0,
+  postPatchToolCalls: 0,
   compactCount: 0,
   taskCompleteCount: 0,
 };

@@ -85,6 +85,14 @@ function tokenLine(input: number, output: number, timestamp: string): string {
   });
 }
 
+function structuralLine(
+  timestamp: string,
+  type: 'event_msg' | 'response_item',
+  payload: Record<string, string>,
+): string {
+  return JSON.stringify({ timestamp, type, payload });
+}
+
 function completeSession(id: string, input: number, output: number): string {
   return [
     sessionLine(id),
@@ -223,6 +231,95 @@ test('child token counters start at their own zero and are not parent deltas', a
     assert.equal(result.index.aggregate.total.outputTotal, 30);
     assert.equal(child?.aggregate.total.inputTotal, 50);
     assert.equal(child?.qualityFlags.includes('counter-regression'), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('structural summaries count patch and tool calls without reading bodies', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-structural-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'rollout-structural.jsonl'),
+      [
+        structuralLine('2026-07-20T00:00:00.000Z', 'event_msg', {
+          type: 'context_compacted',
+        }),
+        structuralLine('2026-07-20T00:01:00.000Z', 'response_item', {
+          type: 'function_call',
+          name: 'apply_patch',
+        }),
+        structuralLine('2026-07-20T00:02:00.000Z', 'response_item', {
+          type: 'function_call',
+          name: 'exec_command',
+        }),
+        structuralLine('2026-07-20T00:03:00.000Z', 'response_item', {
+          type: 'function_call',
+          name: 'write_stdin',
+        }),
+        structuralLine('2026-07-20T00:04:00.000Z', 'event_msg', {
+          type: 'task_complete',
+        }),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+
+    const result = await updateCodexIndex(
+      createEmptyCodexIndex(),
+      await scanCodexManifest(root, SALT),
+      { salt: SALT },
+    );
+
+    assert.deepEqual(Object.values(result.index.files)[0].aggregate.structural, {
+      patchCalls: 1,
+      toolCalls: 2,
+      postPatchToolCalls: 2,
+      compactCount: 1,
+      taskCompleteCount: 1,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('the persisted v1 loader migrates legacy structural proxy keys', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-legacy-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    await writeFile(
+      indexPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        files: {
+          legacy: {
+            aggregate: {
+              structural: {
+                filesChanged: 1,
+                patchRounds: 1,
+                commands: 2,
+                postChangeCommands: 2,
+                compactCount: 1,
+                taskCompleteCount: 1,
+              },
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    const loaded = await loadCodexIndex(indexPath);
+
+    assert.deepEqual(loaded.files.legacy.aggregate.structural, {
+      patchCalls: 1,
+      toolCalls: 2,
+      postPatchToolCalls: 2,
+      compactCount: 1,
+      taskCompleteCount: 1,
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -30,10 +30,9 @@ import {
 } from './codexManifest';
 
 export interface CodexStructuralSummary {
-  filesChanged: number;
-  patchRounds: number;
-  commands: number;
-  postChangeCommands: number;
+  patchCalls: number;
+  toolCalls: number;
+  postPatchToolCalls: number;
   compactCount: number;
   taskCompleteCount: number;
 }
@@ -152,10 +151,9 @@ function emptyAggregate(): CodexProviderAggregate {
 
 function emptyStructural(): CodexStructuralSummary {
   return {
-    filesChanged: 0,
-    patchRounds: 0,
-    commands: 0,
-    postChangeCommands: 0,
+    patchCalls: 0,
+    toolCalls: 0,
+    postPatchToolCalls: 0,
     compactCount: 0,
     taskCompleteCount: 0,
   };
@@ -260,14 +258,11 @@ function reduceStructural(
 ): void {
   const structural = aggregate.structural;
   if (event.kind === 'patch') {
-    structural.patchRounds += event.count ?? 1;
-    // Patch arguments are intentionally never read. This is a privacy-safe
-    // lower bound, not a claimed exact count of paths in the patch body.
-    structural.filesChanged += event.count ?? 1;
+    structural.patchCalls += event.count ?? 1;
   } else if (event.kind === 'tool') {
-    structural.commands += event.count ?? 1;
-    if (structural.patchRounds > 0) {
-      structural.postChangeCommands += event.count ?? 1;
+    structural.toolCalls += event.count ?? 1;
+    if (structural.patchCalls > 0) {
+      structural.postPatchToolCalls += event.count ?? 1;
     }
   } else if (event.kind === 'compaction') {
     structural.compactCount += event.count ?? 1;
@@ -675,13 +670,49 @@ function isIndexV1(value: unknown): value is CodexIndexV1 {
   );
 }
 
+interface LegacyCodexStructuralSummary {
+  filesChanged?: number;
+  patchRounds?: number;
+  commands?: number;
+  postChangeCommands?: number;
+  compactCount?: number;
+  taskCompleteCount?: number;
+}
+
+function legacyCount(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
+function migrateLegacyStructural(index: CodexIndexV1): CodexIndexV1 {
+  for (const contribution of Object.values(index.files)) {
+    const structural = contribution.aggregate?.structural as unknown as
+      | CodexStructuralSummary
+      | LegacyCodexStructuralSummary
+      | undefined;
+    if (!structural || 'patchCalls' in structural) {
+      continue;
+    }
+    const legacy = structural as LegacyCodexStructuralSummary;
+    contribution.aggregate.structural = {
+      patchCalls: legacyCount(legacy.patchRounds),
+      toolCalls: legacyCount(legacy.commands),
+      postPatchToolCalls: legacyCount(legacy.postChangeCommands),
+      compactCount: legacyCount(legacy.compactCount),
+      taskCompleteCount: legacyCount(legacy.taskCompleteCount),
+    };
+  }
+  return index;
+}
+
 export async function loadCodexIndex(indexPath: string): Promise<CodexIndexV1> {
   try {
     const parsed: unknown = JSON.parse(await readFile(indexPath, 'utf8'));
     if (!isIndexV1(parsed)) {
       throw new Error('Unsupported Codex index schema');
     }
-    return parsed;
+    return migrateLegacyStructural(parsed);
   } catch (error) {
     if (
       typeof error === 'object' &&

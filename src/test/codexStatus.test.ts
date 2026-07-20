@@ -25,10 +25,9 @@ const scope: CodexUsageScopeView = {
   cacheShare: 0.8,
   durationMs: 600_000,
   structural: {
-    filesChanged: 2,
-    patchRounds: 1,
-    commands: 2,
-    postChangeCommands: 1,
+    patchCalls: 1,
+    toolCalls: 2,
+    postPatchToolCalls: 1,
     compactCount: 0,
     taskCompleteCount: 1,
   },

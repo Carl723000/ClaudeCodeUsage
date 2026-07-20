@@ -3,7 +3,7 @@ import { CodexUsageScopeView } from './codexUsage';
 export type CodexInsightKind =
   | 'multi-agent-tax'
   | 'effort-comparison'
-  | 'post-change-command-intensity'
+  | 'post-patch-tool-call-intensity'
   | 'cache-context'
   | 'approval-reviewer';
 
@@ -24,10 +24,8 @@ function highEffort(scope: CodexUsageScopeView): string | undefined {
 
 function isSmallChange(scope: CodexUsageScopeView): boolean {
   return (
-    scope.structural.filesChanged >= 1 &&
-    scope.structural.filesChanged <= 3 &&
-    scope.structural.patchRounds >= 1 &&
-    scope.structural.patchRounds <= 2
+    scope.structural.patchCalls >= 1 &&
+    scope.structural.patchCalls <= 2
   );
 }
 
@@ -58,32 +56,31 @@ export function buildCodexInsights(
       severity: 'normal',
       evidence: {
         effort,
-        filesChanged: scope.structural.filesChanged,
-        patchRounds: scope.structural.patchRounds,
+        patchCalls: scope.structural.patchCalls,
         compareOneLevelLower: 1,
       },
     });
   }
 
-  const commandsPerFile =
-    scope.structural.filesChanged > 0
-      ? scope.structural.commands / scope.structural.filesChanged
+  const toolCallsPerPatchCall =
+    scope.structural.patchCalls > 0
+      ? scope.structural.toolCalls / scope.structural.patchCalls
       : 0;
   if (
     isSmallChange(scope) &&
-    (scope.structural.postChangeCommands >= 5 || commandsPerFile >= 3)
+    (scope.structural.postPatchToolCalls >= 5 || toolCallsPerPatchCall >= 3)
   ) {
     insights.push({
-      kind: 'post-change-command-intensity',
+      kind: 'post-patch-tool-call-intensity',
       severity:
-        scope.structural.postChangeCommands >= 8 || commandsPerFile >= 5
+        scope.structural.postPatchToolCalls >= 8 || toolCallsPerPatchCall >= 5
           ? 'strong'
           : 'normal',
       evidence: {
-        filesChanged: scope.structural.filesChanged,
-        commands: scope.structural.commands,
-        postChangeCommands: scope.structural.postChangeCommands,
-        commandsPerFile,
+        patchCalls: scope.structural.patchCalls,
+        toolCalls: scope.structural.toolCalls,
+        postPatchToolCalls: scope.structural.postPatchToolCalls,
+        toolCallsPerPatchCall,
       },
       proxy: true,
     });
@@ -146,7 +143,7 @@ export function pasteReadyConstraint(insights: CodexInsight[]): string {
   if (kinds.has('effort-comparison')) {
     sentences.push('For this small change, compare one lower effort level on a representative task.');
   }
-  if (kinds.has('post-change-command-intensity')) {
+  if (kinds.has('post-patch-tool-call-intensity')) {
     sentences.push('Run only one focused test tied to the change, then one full test pass.');
   } else {
     sentences.push('Run one focused test tied to the change, then one full test pass.');

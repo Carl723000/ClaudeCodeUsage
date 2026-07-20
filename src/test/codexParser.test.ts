@@ -366,7 +366,7 @@ test('guardian subagent metadata maps to an approval reviewer', () => {
   assert.equal(state.role, 'approval-reviewer');
 });
 
-test('compaction and patch calls emit structural facts without bodies', () => {
+test('compaction, patch, and tool calls emit structural facts without bodies', () => {
   let state = createCodexParserState('file-key');
   const compacted = parseCodexLine(
     JSON.stringify({
@@ -389,6 +389,14 @@ test('compaction and patch calls emit structural facts without bodies', () => {
     }),
     state,
   );
+  const tooled = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T01:02:00.000Z',
+      type: 'response_item',
+      payload: { type: 'function_call', name: 'exec_command' },
+    }),
+    patched.state,
+  );
 
   assert.deepEqual(compacted.structural, {
     kind: 'compaction',
@@ -398,6 +406,11 @@ test('compaction and patch calls emit structural facts without bodies', () => {
     kind: 'patch',
     name: 'apply_patch',
     timestamp: Date.parse('2026-07-20T01:01:00.000Z'),
+  });
+  assert.deepEqual(tooled.structural, {
+    kind: 'tool',
+    name: 'exec_command',
+    timestamp: Date.parse('2026-07-20T01:02:00.000Z'),
   });
   assert.doesNotMatch(JSON.stringify(patched), /private|body/);
 });

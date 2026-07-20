@@ -175,7 +175,7 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   insightTitles: {
     'multi-agent-tax': 'Child-thread fresh usage',
     'effort-comparison': 'Compare one lower effort level',
-    'post-change-command-intensity': 'Post-change command intensity',
+    'post-patch-tool-call-intensity': 'Post-change command intensity',
     'cache-context': 'Cache and long-context context',
     'approval-reviewer': 'Approval-reviewer overhead',
   },
@@ -620,8 +620,8 @@ function behaviorScopePanel(
       ${summaryCard(copy.processedToFreshRatio, `${behavior.processedToFreshRatio.toFixed(1)}×`)}
       ${summaryCard(copy.cacheShare, percent(behavior.cacheShare))}
       ${summaryCard(copy.reasoningOutputShare, percent(behavior.reasoningOutputShare))}
-      ${summaryCard(copy.postChangeCommandsPerFile, behavior.postChangeCommandsPerFile.toFixed(1))}
-      ${metricCard(copy.patchRounds, behavior.patchRounds, format)}
+      ${summaryCard(copy.postChangeCommandsPerFile, behavior.postPatchToolCallsPerPatchCall.toFixed(1))}
+      ${metricCard(copy.patchRounds, behavior.patchCalls, format)}
       ${metricCard(copy.compactions, behavior.compactCount, format)}
     </div></section>
     <section class="cost-composition codex-role-composition">

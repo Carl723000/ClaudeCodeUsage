@@ -100,8 +100,8 @@ export interface CodexBehaviorView {
   processedToFreshRatio: number;
   cacheShare: number;
   reasoningOutputShare: number;
-  postChangeCommandsPerFile: number;
-  patchRounds: number;
+  postPatchToolCallsPerPatchCall: number;
+  patchCalls: number;
   compactCount: number;
 }
 
@@ -184,10 +184,9 @@ export function tokenComposition(
 
 function zeroStructural(): CodexStructuralSummary {
   return {
-    filesChanged: 0,
-    patchRounds: 0,
-    commands: 0,
-    postChangeCommands: 0,
+    patchCalls: 0,
+    toolCalls: 0,
+    postPatchToolCalls: 0,
     compactCount: 0,
     taskCompleteCount: 0,
   };
@@ -197,10 +196,9 @@ function addStructural(
   target: CodexStructuralSummary,
   source: CodexStructuralSummary,
 ): void {
-  target.filesChanged += source.filesChanged;
-  target.patchRounds += source.patchRounds;
-  target.commands += source.commands;
-  target.postChangeCommands += source.postChangeCommands;
+  target.patchCalls += source.patchCalls;
+  target.toolCalls += source.toolCalls;
+  target.postPatchToolCalls += source.postPatchToolCalls;
   target.compactCount += source.compactCount;
   target.taskCompleteCount += source.taskCompleteCount;
 }
@@ -420,11 +418,11 @@ function behaviorView(scopeView: CodexUsageScopeView): CodexBehaviorView {
       scopeView.total.reasoning,
       scopeView.total.output,
     ),
-    postChangeCommandsPerFile: ratio(
-      scopeView.structural.postChangeCommands,
-      scopeView.structural.filesChanged,
+    postPatchToolCallsPerPatchCall: ratio(
+      scopeView.structural.postPatchToolCalls,
+      scopeView.structural.patchCalls,
     ),
-    patchRounds: scopeView.structural.patchRounds,
+    patchCalls: scopeView.structural.patchCalls,
     compactCount: scopeView.structural.compactCount,
   };
 }

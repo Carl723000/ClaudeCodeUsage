@@ -113,6 +113,22 @@ test('all-time, monthly, and behavior views stay provider-native', () => {
   assert.equal(view.behaviorScopes.allTime.childFreshShare, view.behavior.childFreshShare);
 });
 
+test('behavior exposes patch and tool call proxies without file or command claims', () => {
+  const snapshot = snapshotFixture();
+  snapshot.files[0].structural = {
+    patchCalls: 2,
+    toolCalls: 6,
+    postPatchToolCalls: 4,
+    compactCount: 1,
+    taskCompleteCount: 1,
+  };
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.behavior.patchCalls, 2);
+  assert.equal(view.behavior.postPatchToolCallsPerPatchCall, 2);
+});
+
 test('token composition partitions processed tokens without counting reasoning twice', () => {
   assert.deepEqual(
     tokenComposition({

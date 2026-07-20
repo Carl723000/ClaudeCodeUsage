@@ -248,7 +248,7 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: 'Verarbeitete Token', fresh: 'Frische Eingabe + Ausgabe', input: 'Eingabe-Token', cachedInput: 'Gecachte Eingabe', output: 'Ausgabe-Token', reasoning: 'Reasoning-Ausgabe',
       models: 'Modelle', efforts: 'Aufwand', threads: 'Threads', rootTasks: 'Hauptaufgaben', childThreads: 'Unter-Threads', approvalReviewers: 'Freigabe-Prüfer', duration: 'Gemeldete Aufgabendauer', cacheShare: 'Eingabe-Cache-Anteil',
       coverage: 'Abdeckung', quality: 'Qualität', complete: 'Vollständig', partial: 'Teilweise', lastObserved: 'Zuletzt beobachtet', unavailable: 'Nicht verfügbar', optimization: 'Lokale Optimierungssignale', structuralProxy: 'Struktureller Proxy; Befehlsinhalte werden nicht gelesen.', pasteConstraint: 'Kopierbare Einschränkung', constraintNoAgents: 'Keine unnötigen Unteragenten oder unabhängigen Prüfungen starten.', constraintLowerEffort: 'Für diese kleine Änderung eine niedrigere Aufwandsstufe an einer repräsentativen Aufgabe vergleichen.', constraintTests: 'Einen fokussierten Test und danach einen vollständigen Testlauf ausführen.', constraintStop: 'Bei erfüllten Kriterien stoppen; nicht zu produktionsreifer Härtung ausweiten.', compareTitle: 'Anbietervergleich', noRecentTask: 'Noch keine aktuelle Codex-Aufgabe indexiert.',
-      insightTitles: { 'multi-agent-tax': 'Frische Nutzung durch Unter-Threads', 'effort-comparison': 'Eine niedrigere Aufwandsstufe vergleichen', 'post-change-command-intensity': 'Befehlsintensität nach Änderungen', 'cache-context': 'Cache- und Langkontext', 'approval-reviewer': 'Freigabe-Prüfer-Aufwand' },
+      insightTitles: { 'multi-agent-tax': 'Frische Nutzung durch Unter-Threads', 'effort-comparison': 'Eine niedrigere Aufwandsstufe vergleichen', 'post-patch-tool-call-intensity': 'Befehlsintensität nach Änderungen', 'cache-context': 'Cache- und Langkontext', 'approval-reviewer': 'Freigabe-Prüfer-Aufwand' },
     },
   ),
   'zh-TW': providerTranslations(
@@ -260,7 +260,7 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: '已處理 Token', fresh: '新鮮輸入 + 輸出', input: '輸入 Token', cachedInput: '快取輸入', output: '輸出 Token', reasoning: '推理輸出',
       models: '模型', efforts: '推理強度', threads: '執行緒', rootTasks: '根任務', childThreads: '子執行緒', approvalReviewers: '權限審批執行緒', duration: '任務回報時長', cacheShare: '輸入快取占比',
       coverage: '索引覆蓋率', quality: '資料品質', complete: '完整', partial: '部分', lastObserved: '最後觀測', unavailable: '無資料', optimization: '本機最佳化訊號', structuralProxy: '結構性代理指標；不讀取命令內容。', pasteConstraint: '可複製約束', constraintNoAgents: '不要啟動不必要的 subagent 或獨立審閱。', constraintLowerEffort: '對這個小改動，用代表性任務比較低一級推理強度。', constraintTests: '只執行一次聚焦測試，再執行一次完整測試。', constraintStop: '達到驗收條件後停止，不要擴展為生產級加固。', compareTitle: '供應商比較', noRecentTask: '尚未索引到最近的 Codex 任務。',
-      insightTitles: { 'multi-agent-tax': '子執行緒的新鮮用量', 'effort-comparison': '比較低一級推理強度', 'post-change-command-intensity': '修改後命令密度', 'cache-context': '快取與長上下文解讀', 'approval-reviewer': '權限審批開銷' },
+      insightTitles: { 'multi-agent-tax': '子執行緒的新鮮用量', 'effort-comparison': '比較低一級推理強度', 'post-patch-tool-call-intensity': '修改後命令密度', 'cache-context': '快取與長上下文解讀', 'approval-reviewer': '權限審批開銷' },
     },
   ),
   'zh-CN': providerTranslations(
@@ -272,7 +272,7 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: '已处理 Token', fresh: '新鲜输入 + 输出', input: '输入 Token', cachedInput: '缓存输入', output: '输出 Token', reasoning: '推理输出',
       models: '模型', efforts: '推理强度', threads: '线程', rootTasks: '根任务', childThreads: '子线程', approvalReviewers: '权限审批线程', duration: '任务报告时长', cacheShare: '输入缓存占比',
       coverage: '索引覆盖率', quality: '数据质量', complete: '完整', partial: '部分', lastObserved: '最后观测', unavailable: '无数据', optimization: '本地优化信号', structuralProxy: '结构性代理指标；不读取命令内容。', pasteConstraint: '可复制约束', constraintNoAgents: '不要启动不必要的 subagent 或独立审阅。', constraintLowerEffort: '对这个小改动，用代表性任务对比低一级推理强度。', constraintTests: '只运行一次聚焦测试，再运行一次完整测试。', constraintStop: '达到验收条件后停止，不要扩展为生产级加固。', compareTitle: '供应商对比', noRecentTask: '尚未索引到最近的 Codex 任务。',
-      insightTitles: { 'multi-agent-tax': '子线程的新鲜用量', 'effort-comparison': '对比低一级推理强度', 'post-change-command-intensity': '修改后命令密度', 'cache-context': '缓存与长上下文解读', 'approval-reviewer': '权限审批开销' },
+      insightTitles: { 'multi-agent-tax': '子线程的新鲜用量', 'effort-comparison': '对比低一级推理强度', 'post-patch-tool-call-intensity': '修改后命令密度', 'cache-context': '缓存与长上下文解读', 'approval-reviewer': '权限审批开销' },
     },
   ),
   ja: providerTranslations(
@@ -284,7 +284,7 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: '処理済みトークン', fresh: '新規入力 + 出力', input: '入力トークン', cachedInput: 'キャッシュ入力', output: '出力トークン', reasoning: '推論出力',
       models: 'モデル', efforts: '推論強度', threads: 'スレッド', rootTasks: 'ルートタスク', childThreads: '子スレッド', approvalReviewers: '承認レビュアー', duration: 'タスク報告時間', cacheShare: '入力キャッシュ比率',
       coverage: 'カバレッジ', quality: '品質', complete: '完了', partial: '一部', lastObserved: '最終観測', unavailable: '利用不可', optimization: 'ローカル最適化シグナル', structuralProxy: '構造的プロキシです。コマンド本文は読みません。', pasteConstraint: '貼り付け用制約', constraintNoAgents: '不要なサブエージェントや独立レビューを開始しないでください。', constraintLowerEffort: 'この小さな変更では代表タスクで 1 段低い推論強度を比較してください。', constraintTests: '変更に直結するテストを 1 回、その後に全テストを 1 回実行してください。', constraintStop: '受け入れ条件を満たしたら停止し、本番級の堅牢化へ拡張しないでください。', compareTitle: 'プロバイダー比較', noRecentTask: '最近の Codex タスクはまだ索引化されていません。',
-      insightTitles: { 'multi-agent-tax': '子スレッドの新規使用量', 'effort-comparison': '1 段低い推論強度との比較', 'post-change-command-intensity': '変更後のコマンド密度', 'cache-context': 'キャッシュと長いコンテキスト', 'approval-reviewer': '承認レビュアーの負荷' },
+      insightTitles: { 'multi-agent-tax': '子スレッドの新規使用量', 'effort-comparison': '1 段低い推論強度との比較', 'post-patch-tool-call-intensity': '変更後のコマンド密度', 'cache-context': 'キャッシュと長いコンテキスト', 'approval-reviewer': '承認レビュアーの負荷' },
     },
   ),
   ko: providerTranslations(
@@ -296,7 +296,7 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: '처리된 토큰', fresh: '새 입력 + 출력', input: '입력 토큰', cachedInput: '캐시 입력', output: '출력 토큰', reasoning: '추론 출력',
       models: '모델', efforts: '추론 강도', threads: '스레드', rootTasks: '루트 작업', childThreads: '하위 스레드', approvalReviewers: '승인 검토자', duration: '작업 보고 시간', cacheShare: '입력 캐시 비율',
       coverage: '커버리지', quality: '품질', complete: '완료', partial: '부분', lastObserved: '마지막 관측', unavailable: '사용 불가', optimization: '로컬 최적화 신호', structuralProxy: '구조적 프록시이며 명령 본문은 읽지 않습니다.', pasteConstraint: '붙여넣기용 제약', constraintNoAgents: '불필요한 하위 에이전트나 독립 검토를 시작하지 마세요.', constraintLowerEffort: '이 작은 변경은 대표 작업에서 한 단계 낮은 추론 강도를 비교하세요.', constraintTests: '변경에 맞춘 테스트 한 번과 전체 테스트 한 번만 실행하세요.', constraintStop: '수용 기준을 통과하면 중단하고 운영급 강화로 확장하지 마세요.', compareTitle: '공급자 비교', noRecentTask: '최근 Codex 작업이 아직 인덱싱되지 않았습니다.',
-      insightTitles: { 'multi-agent-tax': '하위 스레드의 새 사용량', 'effort-comparison': '한 단계 낮은 추론 강도 비교', 'post-change-command-intensity': '변경 후 명령 밀도', 'cache-context': '캐시 및 긴 컨텍스트', 'approval-reviewer': '승인 검토자 오버헤드' },
+      insightTitles: { 'multi-agent-tax': '하위 스레드의 새 사용량', 'effort-comparison': '한 단계 낮은 추론 강도 비교', 'post-patch-tool-call-intensity': '변경 후 명령 밀도', 'cache-context': '캐시 및 긴 컨텍스트', 'approval-reviewer': '승인 검토자 오버헤드' },
     },
   ),
   'pt-BR': providerTranslations(
@@ -308,7 +308,7 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: 'Tokens processados', fresh: 'Entrada nova + saída', input: 'Tokens de entrada', cachedInput: 'Entrada em cache', output: 'Tokens de saída', reasoning: 'Saída de raciocínio',
       models: 'Modelos', efforts: 'Esforço', threads: 'Threads', rootTasks: 'Tarefas raiz', childThreads: 'Threads filhas', approvalReviewers: 'Revisores de aprovação', duration: 'Duração relatada', cacheShare: 'Proporção de cache de entrada',
       coverage: 'Cobertura', quality: 'Qualidade', complete: 'Completa', partial: 'Parcial', lastObserved: 'Última observação', unavailable: 'Indisponível', optimization: 'Sinais locais de otimização', structuralProxy: 'Proxy estrutural; os corpos dos comandos não são lidos.', pasteConstraint: 'Restrição pronta para colar', constraintNoAgents: 'Não inicie subagentes ou revisões independentes desnecessárias.', constraintLowerEffort: 'Nesta mudança pequena, compare um nível de esforço menor em uma tarefa representativa.', constraintTests: 'Execute um teste focado e depois uma única execução completa.', constraintStop: 'Pare ao cumprir os critérios; não expanda para endurecimento de produção.', compareTitle: 'Comparação de provedores', noRecentTask: 'Nenhuma tarefa recente do Codex foi indexada.',
-      insightTitles: { 'multi-agent-tax': 'Uso novo das threads filhas', 'effort-comparison': 'Compare um nível de esforço menor', 'post-change-command-intensity': 'Intensidade de comandos após mudanças', 'cache-context': 'Cache e contexto longo', 'approval-reviewer': 'Sobrecarga do revisor de aprovação' },
+      insightTitles: { 'multi-agent-tax': 'Uso novo das threads filhas', 'effort-comparison': 'Compare um nível de esforço menor', 'post-patch-tool-call-intensity': 'Intensidade de comandos após mudanças', 'cache-context': 'Cache e contexto longo', 'approval-reviewer': 'Sobrecarga do revisor de aprovação' },
     },
   ),
   id: providerTranslations(
@@ -320,7 +320,7 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: 'Token diproses', fresh: 'Input baru + output', input: 'Token input', cachedInput: 'Input cache', output: 'Token output', reasoning: 'Output penalaran',
       models: 'Model', efforts: 'Upaya', threads: 'Thread', rootTasks: 'Tugas utama', childThreads: 'Thread anak', approvalReviewers: 'Peninjau persetujuan', duration: 'Durasi yang dilaporkan', cacheShare: 'Porsi cache input',
       coverage: 'Cakupan', quality: 'Kualitas', complete: 'Lengkap', partial: 'Sebagian', lastObserved: 'Terakhir diamati', unavailable: 'Tidak tersedia', optimization: 'Sinyal optimasi lokal', structuralProxy: 'Proksi struktural; isi perintah tidak dibaca.', pasteConstraint: 'Batasan siap tempel', constraintNoAgents: 'Jangan mulai subagen atau tinjauan independen yang tidak perlu.', constraintLowerEffort: 'Untuk perubahan kecil ini, bandingkan satu tingkat upaya lebih rendah pada tugas perwakilan.', constraintTests: 'Jalankan satu tes terfokus lalu satu kali tes lengkap.', constraintStop: 'Berhenti saat kriteria terpenuhi; jangan perluas menjadi pengerasan tingkat produksi.', compareTitle: 'Perbandingan penyedia', noRecentTask: 'Belum ada tugas Codex terbaru yang diindeks.',
-      insightTitles: { 'multi-agent-tax': 'Penggunaan baru thread anak', 'effort-comparison': 'Bandingkan satu tingkat upaya lebih rendah', 'post-change-command-intensity': 'Intensitas perintah setelah perubahan', 'cache-context': 'Cache dan konteks panjang', 'approval-reviewer': 'Beban peninjau persetujuan' },
+      insightTitles: { 'multi-agent-tax': 'Penggunaan baru thread anak', 'effort-comparison': 'Bandingkan satu tingkat upaya lebih rendah', 'post-patch-tool-call-intensity': 'Intensitas perintah setelah perubahan', 'cache-context': 'Cache dan konteks panjang', 'approval-reviewer': 'Beban peninjau persetujuan' },
     },
   ),
 };
