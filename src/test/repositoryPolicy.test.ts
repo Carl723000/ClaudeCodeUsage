@@ -149,24 +149,34 @@ function functionDeclarations(file: ts.SourceFile): ReadonlyMap<string, ts.Funct
   return declarations;
 }
 
-function hasUnsafeSpread(object: ts.ObjectLiteralExpression): boolean {
-  return object.properties.some((property) => {
-    if (!ts.isSpreadAssignment(property)) {
-      return false;
-    }
-    const expression = ts.isParenthesizedExpression(property.expression)
-      ? property.expression.expression
-      : property.expression;
-    return !ts.isConditionalExpression(expression) ||
-      !ts.isObjectLiteralExpression(expression.whenTrue) ||
-      !ts.isObjectLiteralExpression(expression.whenFalse);
-  });
-}
-
 function sanitizedDtoViolations(file: ts.SourceFile): string[] {
   const declarations = functionDeclarations(file);
   const violations: string[] = [];
   const visited = new Set<string>();
+  const fail = (message: string): void => {
+    if (!violations.includes(message)) {
+      violations.push(message);
+    }
+  };
+  const expressionName = (expression: ts.Expression): string | undefined => {
+    if (ts.isIdentifier(expression)) {
+      return expression.text;
+    }
+    return undefined;
+  };
+  const isExplicitSafeExternal = (call: ts.CallExpression): boolean => {
+    if (ts.isIdentifier(call.expression)) {
+      return call.expression.text === 'resolveTimeZone' || call.expression.text === 'dayKeyInZone';
+    }
+    if (!ts.isPropertyAccessExpression(call.expression)) {
+      return false;
+    }
+    const receiver = call.expression.expression.getText(file);
+    const member = call.expression.name.text;
+    return (receiver === 'Math') ||
+      (receiver === 'Object' && member === 'fromEntries') ||
+      (member === 'sort' || member === 'filter' || member === 'map' || member === 'flatMap');
+  };
   const inspectFunction = (name: string): void => {
     if (visited.has(name)) {
       return;
@@ -174,19 +184,75 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
     visited.add(name);
     const declaration = declarations.get(name);
     if (!declaration?.body) {
-      violations.push(`missing sanitizer ${name}`);
+      fail(`missing persisted helper ${name}`);
       return;
     }
-    const visit = (node: ts.Node): void => {
-      if (ts.isObjectLiteralExpression(node) && hasUnsafeSpread(node)) {
-        violations.push(`${name} spreads a non-object conditional value`);
+    const inspectExpression = (expression: ts.Expression, inSpread = false): void => {
+      if (ts.isParenthesizedExpression(expression) || ts.isAsExpression(expression) ||
+        ts.isTypeAssertionExpression(expression)) {
+        inspectExpression(expression.expression, inSpread);
+      } else if (ts.isConditionalExpression(expression)) {
+        inspectExpression(expression.whenTrue, inSpread);
+        inspectExpression(expression.whenFalse, inSpread);
+      } else if (ts.isBinaryExpression(expression) && (
+        expression.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        expression.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
+        expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      )) {
+        inspectExpression(expression.left, inSpread);
+        inspectExpression(expression.right, inSpread);
+      } else if (ts.isObjectLiteralExpression(expression)) {
+        for (const property of expression.properties) {
+          if (ts.isSpreadAssignment(property)) {
+            inspectExpression(property.expression, true);
+          } else if (ts.isPropertyAssignment(property)) {
+            const propertyKey = propertyName(property.name);
+            if (propertyKey && BANNED_PERSISTED_PROPERTIES.test(propertyKey)) {
+              fail(`${name} persists banned property ${propertyKey}`);
+            }
+            inspectExpression(property.initializer);
+          } else if (ts.isShorthandPropertyAssignment(property)) {
+            const propertyKey = property.name.text;
+            if (BANNED_PERSISTED_PROPERTIES.test(propertyKey)) {
+              fail(`${name} persists banned property ${propertyKey}`);
+            }
+          }
+        }
+      } else if (ts.isCallExpression(expression)) {
+        const localName = expressionName(expression.expression);
+        if (localName && declarations.has(localName)) {
+          inspectFunction(localName);
+        } else if (!isExplicitSafeExternal(expression)) {
+          fail(inSpread
+            ? `${name} spreads opaque external output`
+            : `${name} persists opaque external output`);
+        }
+      } else if (ts.isPropertyAccessExpression(expression)) {
+        if (BANNED_PERSISTED_PROPERTIES.test(expression.name.text)) {
+          fail(`${name} reads banned persisted property ${expression.name.text}`);
+        }
+      } else if (ts.isElementAccessExpression(expression) && ts.isStringLiteral(expression.argumentExpression)) {
+        if (BANNED_PERSISTED_PROPERTIES.test(expression.argumentExpression.text)) {
+          fail(`${name} reads banned persisted property ${expression.argumentExpression.text}`);
+        }
+      } else if (inSpread) {
+        fail(`${name} spreads arbitrary persisted input`);
       }
-      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && /^sanitize/.test(node.expression.text)) {
-        inspectFunction(node.expression.text);
-      }
-      ts.forEachChild(node, visit);
     };
-    ts.forEachChild(declaration.body, visit);
+    const inspectReturns = (node: ts.Node): void => {
+      if (node !== declaration && (ts.isFunctionLike(node) || ts.isClassLike(node))) {
+        return;
+      }
+      if (ts.isReturnStatement(node) && node.expression) {
+        inspectExpression(node.expression);
+      }
+      ts.forEachChild(node, inspectReturns);
+    };
+    if (ts.isBlock(declaration.body)) {
+      inspectReturns(declaration.body);
+    } else {
+      inspectExpression(declaration.body);
+    }
   };
   inspectFunction('sanitizeIndexV2');
   const root = declarations.get('sanitizeIndexV2');
@@ -379,6 +445,46 @@ test('semantic Codex policy validators reject nested DTO leaks, comment-only san
     sanitizedDtoViolations(commentOnly),
     ['atomic save does not stringify sanitizeIndexV2(index)'],
   );
+
+  const conditionalRawLeak = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: {},',
+    '    ...(input.ok ? ({ rawLine: input.rawLine }) : (input.other && { carry: input.carry })),',
+    '  };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(
+    sanitizedDtoViolations(conditionalRawLeak).join('\n'),
+    /rawLine[\s\S]*carry|carry[\s\S]*rawLine/,
+  );
+
+  const unprefixedHelperLeak = ts.createSourceFile('fixture.ts', [
+    'function buildPersistedPart(source: any) { return { carry: source.carry }; }',
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: {}, ...buildPersistedPart(input) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(sanitizedDtoViolations(unprefixedHelperLeak).join('\n'), /carry/);
+
+  const safeConditionalSpread = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: {},',
+    '    ...(input.ok ? { qualityFlags: input.qualityFlags } : {}),',
+    '  };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.deepEqual(sanitizedDtoViolations(safeConditionalSpread), []);
+
+  const opaqueExternalOutput = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: thirdPartyClone(input) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.match(sanitizedDtoViolations(opaqueExternalOutput).join('\n'), /opaque external output/);
 
   const badStructural = ts.createSourceFile(
     'codexUsage.ts',
