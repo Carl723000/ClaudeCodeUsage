@@ -117,7 +117,7 @@ function trackingIo(): TrackingIo {
       bodyReads.set(entry.fileKey, (bodyReads.get(entry.fileKey) ?? 0) + 1);
       readOffsets.push(start);
       const body = await readFile(entry.absolutePath);
-      yield body.subarray(start, endExclusive).toString('utf8');
+      yield body.subarray(start, endExclusive);
     },
   };
 }
@@ -289,13 +289,57 @@ test('the persisted v1 loader migrates legacy structural proxy keys', async () =
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-legacy-'));
   try {
     const indexPath = path.join(root, 'codex-index.json');
+    const carry = 'private unfinished x';
+    assert.equal(Buffer.byteLength(carry, 'utf8'), 20);
     await writeFile(
       indexPath,
       JSON.stringify({
         schemaVersion: 1,
         files: {
-          legacy: {
+          a: {
+            fileKey: 'a',
+            size: 120,
+            mtimeMs: 1,
+            offset: 120,
+            carry,
+            rawSessionId: 'raw-session-id-never-persist',
+            absolutePath: '/private/raw/path-never-persist.jsonl',
+            repositoryUrl: 'https://example.invalid/private-repository',
+            parserState: {
+              schemaVersion: 1,
+              fileKey: 'a',
+              sessionKey: 'pseudonymous-session-key',
+              role: 'root',
+              highWater: {
+                inputTokens: 123,
+                cachedInputTokens: 23,
+                outputTokens: 45,
+                reasoningOutputTokens: 5,
+                totalTokens: 168,
+              },
+              qualityFlags: ['legacy-quality'],
+            },
             aggregate: {
+              total: {
+                inputTotal: 123,
+                cachedInput: 23,
+                outputTotal: 45,
+                reasoningOutput: 5,
+                sourceTotal: 168,
+              },
+              byDay: {
+                '2026-07-20': { inputTotal: 123, outputTotal: 45 },
+              },
+              byModel: {
+                'gpt-5.6-sol': { inputTotal: 123, outputTotal: 45 },
+              },
+              byEffort: {
+                high: { inputTotal: 123, outputTotal: 45 },
+              },
+              session: {
+                sessionKey: 'pseudonymous-session-key',
+                role: 'root',
+              },
               structural: {
                 filesChanged: 1,
                 patchRounds: 1,
@@ -305,21 +349,59 @@ test('the persisted v1 loader migrates legacy structural proxy keys', async () =
                 taskCompleteCount: 1,
               },
             },
+            limits: {},
+            qualityFlags: ['legacy-quality'],
           },
+        },
+        aggregate: {
+          total: {
+            inputTotal: 123,
+            cachedInput: 23,
+            outputTotal: 45,
+            reasoningOutput: 5,
+            sourceTotal: 168,
+          },
+          byDay: {
+            '2026-07-20': { inputTotal: 123, outputTotal: 45 },
+          },
+          byModel: {
+            'gpt-5.6-sol': { inputTotal: 123, outputTotal: 45 },
+          },
+          byEffort: {
+            high: { inputTotal: 123, outputTotal: 45 },
+          },
+        },
+        coverage: {
+          indexedFiles: 0,
+          totalFiles: 1,
+          indexedBytes: 100,
+          totalBytes: 120,
+          complete: false,
         },
       }),
       'utf8',
     );
 
-    const loaded = await loadCodexIndex(indexPath);
+    const loaded = await loadCodexIndex(indexPath, 'Asia/Hong_Kong');
 
-    assert.deepEqual(loaded.files.legacy.aggregate.structural, {
+    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.files.a.offset, 100);
+    assert.equal(loaded.files.a.discardingOversizedLine, false);
+    assert.equal(loaded.aggregate.total.inputTotal, 123);
+    assert.equal(loaded.files.a.aggregate.period, undefined);
+    assert.deepEqual(loaded.files.a.aggregate.structural, {
       patchCalls: 1,
       toolCalls: 2,
       postPatchToolCalls: 2,
       compactCount: 1,
       taskCompleteCount: 1,
     });
+    await saveCodexIndexAtomic(indexPath, loaded);
+    const persisted = await readFile(indexPath, 'utf8');
+    assert.doesNotMatch(persisted, /private unfinished/);
+    assert.doesNotMatch(persisted, /raw-session-id-never-persist/);
+    assert.doesNotMatch(persisted, /private\/raw\/path-never-persist/);
+    assert.doesNotMatch(persisted, /example\.invalid/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -406,7 +488,7 @@ test('an old unchanged index receives one bounded identity metadata pass', async
   }
 });
 
-test('an incomplete tail is carried until newline without invalid JSON', async () => {
+test('an incomplete tail is re-read from its verified offset after newline', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-carry-'));
   try {
     const sessions = path.join(root, 'sessions');
@@ -426,7 +508,8 @@ test('an incomplete tail is carried until newline without invalid JSON', async (
     const key = firstManifest.files[0].fileKey;
 
     assert.equal(cold.index.aggregate.total.inputTotal, 0);
-    assert.notEqual(cold.index.files[key].carry, '');
+    assert.equal(cold.index.files[key].offset, 0);
+    assert.equal(cold.index.files[key].discardingOversizedLine, false);
     assert.equal(cold.index.files[key].qualityFlags.includes('invalid-json'), false);
 
     await appendFile(activePath, '\n', 'utf8');
@@ -437,7 +520,11 @@ test('an incomplete tail is carried until newline without invalid JSON', async (
     );
 
     assert.equal(warm.index.aggregate.total.inputTotal, 80);
-    assert.equal(warm.index.files[key].carry, '');
+    assert.equal(warm.index.files[key].offset, Buffer.byteLength(
+      `${tokenLine(80, 10, '2026-07-20T00:01:00.000Z')}\n`,
+      'utf8',
+    ));
+    assert.equal(warm.index.files[key].discardingOversizedLine, false);
     assert.equal(warm.index.files[key].qualityFlags.includes('invalid-json'), false);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -542,7 +629,7 @@ test('a failed tail read preserves the last verified contribution', async () => 
     const failingIo: CodexIndexIo = {
       async *read(entry, start, endExclusive) {
         const body = await readFile(entry.absolutePath);
-        yield body.subarray(start, endExclusive).toString('utf8');
+        yield body.subarray(start, endExclusive);
         throw new Error('synthetic read failure');
       },
     };

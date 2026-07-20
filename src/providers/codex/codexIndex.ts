@@ -1,5 +1,4 @@
 import { createHmac } from 'node:crypto';
-import { createReadStream } from 'node:fs';
 import {
   mkdir,
   open,
@@ -26,8 +25,14 @@ import {
   CodexManifest,
   CodexPersistedManifest,
   CodexRuntimeManifestEntry,
+  CodexSourceArea,
   diffCodexManifest,
 } from './codexManifest';
+import {
+  CodexJsonlReader,
+  defaultCodexJsonlReader,
+  scanCodexJsonlLines,
+} from './codexJsonlScanner';
 
 export interface CodexStructuralSummary {
   patchCalls: number;
@@ -55,16 +60,18 @@ export interface CodexFileAggregate {
     endedAt?: number;
   };
   structural: CodexStructuralSummary;
+  period?: undefined;
 }
 
 export interface CodexFileContribution {
   fileKey: string;
+  sourceArea?: CodexSourceArea;
   size: number;
   mtimeMs: number;
   dev?: number;
   ino?: number;
   offset: number;
-  carry: string;
+  discardingOversizedLine: boolean;
   parserState: CodexParserState;
   aggregate: CodexFileAggregate;
   limit?: ProviderLimitSnapshot;
@@ -88,20 +95,17 @@ export interface CodexProviderAggregate {
   byEffort: Record<string, ProviderTokenCounts>;
 }
 
-export interface CodexIndexV1 {
-  schemaVersion: 1;
+export interface CodexIndexV2 {
+  schemaVersion: 2;
   files: Record<string, CodexFileContribution>;
   aggregate: CodexProviderAggregate;
   coverage: CodexIndexCoverage;
 }
 
-export interface CodexIndexIo {
-  read(
-    entry: CodexRuntimeManifestEntry,
-    start: number,
-    endExclusive: number,
-  ): AsyncIterable<string>;
-}
+/** @deprecated Compatibility name until the remaining v2 consumers are rewired. */
+export type CodexIndexV1 = CodexIndexV2;
+
+export interface CodexIndexIo extends CodexJsonlReader {}
 
 export interface CodexIndexProgress {
   scannedFiles: number;
@@ -118,7 +122,7 @@ export interface CodexIndexUpdateOptions {
 }
 
 export interface CodexIndexUpdateResult {
-  index: CodexIndexV1;
+  index: CodexIndexV2;
   bodyReads: number;
   failedFiles: number;
 }
@@ -173,9 +177,9 @@ function emptyFileAggregate(
   };
 }
 
-export function createEmptyCodexIndex(): CodexIndexV1 {
+export function createEmptyCodexIndex(_timeZone = 'UTC'): CodexIndexV2 {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     files: {},
     aggregate: emptyAggregate(),
     coverage: {
@@ -188,8 +192,8 @@ export function createEmptyCodexIndex(): CodexIndexV1 {
   };
 }
 
-function cloneIndex(index: CodexIndexV1): CodexIndexV1 {
-  return JSON.parse(JSON.stringify(index)) as CodexIndexV1;
+function cloneIndex(index: CodexIndexV2): CodexIndexV2 {
+  return JSON.parse(JSON.stringify(index)) as CodexIndexV2;
 }
 
 function cloneContribution(
@@ -301,30 +305,16 @@ function pseudonymizer(salt: string): (raw: string) => string {
 }
 
 function defaultIo(): CodexIndexIo {
-  return {
-    async *read(entry, start, endExclusive) {
-      if (endExclusive <= start) {
-        return;
-      }
-      const stream = createReadStream(entry.absolutePath, {
-        start,
-        end: endExclusive - 1,
-        encoding: 'utf8',
-      });
-      for await (const chunk of stream) {
-        yield chunk as string;
-      }
-    },
-  };
+  return defaultCodexJsonlReader;
 }
 
-function previousManifest(index: CodexIndexV1): CodexPersistedManifest {
+function previousManifest(index: CodexIndexV2): CodexPersistedManifest {
   return Object.fromEntries(
     Object.values(index.files).map((file) => [
       file.fileKey,
       {
         fileKey: file.fileKey,
-        sourceArea: 'sessions' as const,
+        sourceArea: file.sourceArea ?? 'sessions',
         size: file.size,
         mtimeMs: file.mtimeMs,
         dev: file.dev,
@@ -341,12 +331,13 @@ function contributionFor(
   const parserState = createCodexParserState(entry.fileKey);
   return {
     fileKey: entry.fileKey,
+    sourceArea: entry.sourceArea,
     size: 0,
     mtimeMs: 0,
     dev: entry.dev,
     ino: entry.ino,
     offset: 0,
-    carry: '',
+    discardingOversizedLine: false,
     parserState,
     aggregate: emptyFileAggregate(entry.fileKey, parserState.role),
     qualityFlags: [...flags],
@@ -365,22 +356,22 @@ async function updateContribution(
   options: CodexIndexUpdateOptions,
   io: CodexIndexIo,
 ): Promise<CodexFileContribution> {
-  let pending = contribution.carry;
-  let bytesRead = 0;
   let parserState = contribution.parserState;
   const aggregate = contribution.aggregate;
   const pseudonymize = pseudonymizer(options.salt);
   let limit = contribution.limit;
   const limits = { ...(contribution.limits ?? {}) };
 
-  for await (const chunk of io.read(entry, contribution.offset, entry.size)) {
-    assertNotCancelled(options);
-    bytesRead += Buffer.byteLength(chunk, 'utf8');
-    pending += chunk;
-    let newline = pending.indexOf('\n');
-    while (newline >= 0) {
-      const line = pending.slice(0, newline).replace(/\r$/, '');
-      pending = pending.slice(newline + 1);
+  const scan = await scanCodexJsonlLines(
+    entry,
+    io,
+    {
+      offset: contribution.offset,
+      discardingOversizedLine: contribution.discardingOversizedLine,
+    },
+    entry.size,
+    (line) => {
+      assertNotCancelled(options);
       if (line.trim() !== '') {
         const parsed = parseCodexLine(line, parserState, pseudonymize);
         parserState = parsed.state;
@@ -405,11 +396,10 @@ async function updateContribution(
           }
         }
       }
-      newline = pending.indexOf('\n');
-    }
-  }
+    },
+  );
 
-  if (contribution.offset + bytesRead !== entry.size) {
+  if (!scan.reachedEnd || contribution.offset + scan.bytesRead !== entry.size) {
     throw new Error('Codex log changed during indexing');
   }
 
@@ -417,17 +407,22 @@ async function updateContribution(
   return {
     ...contribution,
     fileKey: entry.fileKey,
+    sourceArea: entry.sourceArea,
     size: entry.size,
     mtimeMs: entry.mtimeMs,
     dev: entry.dev,
     ino: entry.ino,
-    offset: contribution.offset + bytesRead,
-    carry: pending,
+    offset: scan.cursor.offset,
+    discardingOversizedLine: scan.cursor.discardingOversizedLine,
     parserState,
     aggregate,
     limit,
     limits,
-    qualityFlags: uniqueFlags(contribution.qualityFlags, parserState.qualityFlags),
+    qualityFlags: uniqueFlags(
+      contribution.qualityFlags,
+      parserState.qualityFlags,
+      scan.oversizedLines > 0 ? ['oversized-jsonl-line'] : [],
+    ),
     identityChecked: true,
   };
 }
@@ -441,19 +436,23 @@ async function backfillIdentity(
   if (contribution.identityChecked === true) {
     return contribution;
   }
-  let pending = '';
   const end = Math.min(entry.size, MAX_IDENTITY_BYTES);
   const pseudonymize = pseudonymizer(options.salt);
   let parserState = contribution.parserState;
-  for await (const chunk of io.read(entry, 0, end)) {
-    assertNotCancelled(options);
-    pending += chunk;
-    let newline = pending.indexOf('\n');
-    while (newline >= 0) {
-      const line = pending.slice(0, newline).replace(/\r$/, '');
-      pending = pending.slice(newline + 1);
+  let result: CodexFileContribution | undefined;
+  await scanCodexJsonlLines(
+    entry,
+    io,
+    { offset: 0, discardingOversizedLine: false },
+    end,
+    (line) => {
+      assertNotCancelled(options);
       const entryObject = parseJsonObject(line);
-      if (entryObject && stringField(entryObject, 'type') === 'session_meta') {
+      if (
+        result === undefined &&
+        entryObject &&
+        stringField(entryObject, 'type') === 'session_meta'
+      ) {
         parserState = parseCodexLine(
           line,
           parserState,
@@ -461,17 +460,16 @@ async function backfillIdentity(
         ).state;
         const aggregate = cloneContribution(contribution).aggregate;
         syncSession(aggregate, parserState);
-        return {
+        result = {
           ...contribution,
           parserState,
           aggregate,
           identityChecked: true,
         };
       }
-      newline = pending.indexOf('\n');
-    }
-  }
-  return { ...contribution, identityChecked: true };
+    },
+  );
+  return result ?? { ...contribution, identityChecked: true };
 }
 
 function recomputeAggregate(
@@ -509,16 +507,12 @@ function coverageFor(
     const resetIsStale = flags.has('stale-reset-required');
     const parsedBytes = resetIsStale
       ? 0
-      : Math.max(
-          0,
-          Math.min(contribution.offset, entry.size) -
-            Buffer.byteLength(contribution.carry, 'utf8'),
-        );
+      : Math.max(0, Math.min(contribution.offset, entry.size));
     indexedBytes += parsedBytes;
     if (
       !flags.has('stale-file') &&
       contribution.offset >= entry.size &&
-      contribution.carry === ''
+      !contribution.discardingOversizedLine
     ) {
       indexedFiles += 1;
     }
@@ -533,7 +527,7 @@ function coverageFor(
   };
 }
 
-function progressFor(index: CodexIndexV1, scannedFiles: number): CodexIndexProgress {
+function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgress {
   return {
     scannedFiles,
     totalFiles: index.coverage.totalFiles,
@@ -543,7 +537,7 @@ function progressFor(index: CodexIndexV1, scannedFiles: number): CodexIndexProgr
 }
 
 export async function updateCodexIndex(
-  previous: CodexIndexV1,
+  previous: CodexIndexV2,
   manifest: CodexManifest,
   options: CodexIndexUpdateOptions,
 ): Promise<CodexIndexUpdateResult> {
@@ -563,6 +557,7 @@ export async function updateCodexIndex(
     }
     delete index.files[move.fromKey];
     contribution.fileKey = move.toKey;
+    contribution.sourceArea = entry.sourceArea;
     contribution.size = entry.size;
     contribution.mtimeMs = entry.mtimeMs;
     contribution.dev = entry.dev;
@@ -660,13 +655,49 @@ export async function updateCodexIndex(
   return { index, bodyReads, failedFiles };
 }
 
-function isIndexV1(value: unknown): value is CodexIndexV1 {
+interface LegacyCodexIndexV1 {
+  readonly schemaVersion: 1;
+  readonly files: Readonly<Record<string, LegacyCodexFileContribution>>;
+  readonly aggregate?: unknown;
+  readonly coverage?: unknown;
+}
+
+interface LegacyCodexFileContribution {
+  readonly fileKey?: unknown;
+  readonly sourceArea?: unknown;
+  readonly size?: unknown;
+  readonly mtimeMs?: unknown;
+  readonly dev?: unknown;
+  readonly ino?: unknown;
+  readonly offset?: unknown;
+  readonly carry?: unknown;
+  readonly parserState?: unknown;
+  readonly aggregate?: unknown;
+  readonly limit?: unknown;
+  readonly limits?: unknown;
+  readonly qualityFlags?: unknown;
+  readonly identityChecked?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isIndexV1(value: unknown): value is LegacyCodexIndexV1 {
   return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as { schemaVersion?: unknown }).schemaVersion === 1 &&
-    typeof (value as { files?: unknown }).files === 'object' &&
-    (value as { files?: unknown }).files !== null
+    isRecord(value) &&
+    value.schemaVersion === 1 &&
+    isRecord(value.files)
+  );
+}
+
+function isIndexV2(value: unknown): value is CodexIndexV2 {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === 2 &&
+    isRecord(value.files) &&
+    isRecord(value.aggregate) &&
+    isRecord(value.coverage)
   );
 }
 
@@ -679,40 +710,312 @@ interface LegacyCodexStructuralSummary {
   taskCompleteCount?: number;
 }
 
+function finiteNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function optionalNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+function optionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+function sanitizeTokens(value: unknown): ProviderTokenCounts {
+  const record = isRecord(value) ? value : {};
+  return {
+    inputTotal: finiteNumber(record.inputTotal),
+    ...(optionalNumber(record.cachedInput) !== undefined
+      ? { cachedInput: optionalNumber(record.cachedInput) }
+      : {}),
+    ...(optionalNumber(record.cacheWriteInput) !== undefined
+      ? { cacheWriteInput: optionalNumber(record.cacheWriteInput) }
+      : {}),
+    outputTotal: finiteNumber(record.outputTotal),
+    ...(optionalNumber(record.reasoningOutput) !== undefined
+      ? { reasoningOutput: optionalNumber(record.reasoningOutput) }
+      : {}),
+    ...(optionalNumber(record.sourceTotal) !== undefined
+      ? { sourceTotal: optionalNumber(record.sourceTotal) }
+      : {}),
+  };
+}
+
+function sanitizeBuckets(value: unknown): Record<string, ProviderTokenCounts> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).map(([key, tokens]) => [key, sanitizeTokens(tokens)]),
+  );
+}
+
+function sanitizeProviderAggregate(value: unknown): CodexProviderAggregate {
+  const record = isRecord(value) ? value : {};
+  return {
+    total: sanitizeTokens(record.total),
+    byDay: sanitizeBuckets(record.byDay),
+    byModel: sanitizeBuckets(record.byModel),
+    byEffort: sanitizeBuckets(record.byEffort),
+  };
+}
+
+function sanitizeRole(value: unknown): ProviderThreadRole {
+  return value === 'root' ||
+    value === 'subagent' ||
+    value === 'approval-reviewer' ||
+    value === 'unknown'
+    ? value
+    : 'unknown';
+}
+
+function sanitizeQualityFlags(value: unknown): string[] {
+  return Array.isArray(value)
+    ? [...new Set(value.filter(
+        (flag): flag is string =>
+          typeof flag === 'string' && /^[a-z0-9-]{1,80}$/.test(flag),
+      ))].sort()
+    : [];
+}
+
+function sanitizeParserState(value: unknown, fileKey: string): CodexParserState {
+  const record = isRecord(value) ? value : {};
+  const highWater = isRecord(record.highWater)
+    ? {
+        inputTokens: finiteNumber(record.highWater.inputTokens),
+        cachedInputTokens: finiteNumber(record.highWater.cachedInputTokens),
+        outputTokens: finiteNumber(record.highWater.outputTokens),
+        reasoningOutputTokens: finiteNumber(record.highWater.reasoningOutputTokens),
+        totalTokens: finiteNumber(record.highWater.totalTokens),
+      }
+    : undefined;
+  return {
+    schemaVersion: 1,
+    fileKey,
+    sessionKey: optionalString(record.sessionKey) ?? fileKey,
+    ...(optionalString(record.parentSessionKey)
+      ? { parentSessionKey: optionalString(record.parentSessionKey) }
+      : {}),
+    ...(optionalString(record.projectKey)
+      ? { projectKey: optionalString(record.projectKey) }
+      : {}),
+    ...(optionalString(record.projectName)
+      ? { projectName: optionalString(record.projectName) }
+      : {}),
+    ...(optionalString(record.projectDirectoryName)
+      ? { projectDirectoryName: optionalString(record.projectDirectoryName) }
+      : {}),
+    ...(optionalString(record.agentNickname)
+      ? { agentNickname: optionalString(record.agentNickname) }
+      : {}),
+    ...(optionalString(record.model) ? { model: optionalString(record.model) } : {}),
+    ...(optionalString(record.effort) ? { effort: optionalString(record.effort) } : {}),
+    role: sanitizeRole(record.role),
+    ...(highWater ? { highWater } : {}),
+    qualityFlags: sanitizeQualityFlags(record.qualityFlags),
+  };
+}
+
 function legacyCount(value: unknown): number {
   return typeof value === 'number' && Number.isFinite(value)
     ? Math.max(0, value)
     : 0;
 }
 
-function migrateLegacyStructural(index: CodexIndexV1): CodexIndexV1 {
-  for (const contribution of Object.values(index.files)) {
-    const structural = contribution.aggregate?.structural as unknown as
-      | CodexStructuralSummary
-      | LegacyCodexStructuralSummary
-      | undefined;
-    if (!structural || 'patchCalls' in structural) {
-      continue;
-    }
-    const legacy = structural as LegacyCodexStructuralSummary;
-    contribution.aggregate.structural = {
-      patchCalls: legacyCount(legacy.patchRounds),
-      toolCalls: legacyCount(legacy.commands),
-      postPatchToolCalls: legacyCount(legacy.postChangeCommands),
-      compactCount: legacyCount(legacy.compactCount),
-      taskCompleteCount: legacyCount(legacy.taskCompleteCount),
+function sanitizeStructural(value: unknown): CodexStructuralSummary {
+  const structural = isRecord(value) ? value : {};
+  if ('patchCalls' in structural) {
+    return {
+      patchCalls: legacyCount(structural.patchCalls),
+      toolCalls: legacyCount(structural.toolCalls),
+      postPatchToolCalls: legacyCount(structural.postPatchToolCalls),
+      compactCount: legacyCount(structural.compactCount),
+      taskCompleteCount: legacyCount(structural.taskCompleteCount),
     };
   }
-  return index;
+  const legacy = structural as LegacyCodexStructuralSummary;
+  return {
+    patchCalls: legacyCount(legacy.patchRounds),
+    toolCalls: legacyCount(legacy.commands),
+    postPatchToolCalls: legacyCount(legacy.postChangeCommands),
+    compactCount: legacyCount(legacy.compactCount),
+    taskCompleteCount: legacyCount(legacy.taskCompleteCount),
+  };
 }
 
-export async function loadCodexIndex(indexPath: string): Promise<CodexIndexV1> {
+function sanitizeLimit(value: unknown): ProviderLimitSnapshot | undefined {
+  if (!isRecord(value) || !Array.isArray(value.windows)) {
+    return undefined;
+  }
+  const windows = value.windows.flatMap((window) => {
+    if (!isRecord(window) || optionalNumber(window.usedPercent) === undefined) {
+      return [];
+    }
+    return [{
+      ...(optionalString(window.label) ? { label: optionalString(window.label) } : {}),
+      usedPercent: finiteNumber(window.usedPercent),
+      ...(optionalNumber(window.windowMinutes) !== undefined
+        ? { windowMinutes: optionalNumber(window.windowMinutes) }
+        : {}),
+      ...(optionalNumber(window.resetsAt) !== undefined
+        ? { resetsAt: optionalNumber(window.resetsAt) }
+        : {}),
+    }];
+  });
+  const credits = isRecord(value.credits) ? value.credits : undefined;
+  return {
+    provider: value.provider === 'claude' ? 'claude' : 'codex',
+    ...(optionalString(value.limitId) ? { limitId: optionalString(value.limitId) } : {}),
+    ...(optionalString(value.limitName)
+      ? { limitName: optionalString(value.limitName) }
+      : {}),
+    observedAt: finiteNumber(value.observedAt),
+    source: value.source === 'oauth' ? 'oauth' : 'local-log',
+    windows,
+    confidence: value.confidence === 'exact' || value.confidence === 'unknown'
+      ? value.confidence
+      : 'last-observed',
+    ...(credits
+      ? {
+          credits: {
+            ...(typeof credits.hasCredits === 'boolean'
+              ? { hasCredits: credits.hasCredits }
+              : {}),
+            ...(typeof credits.unlimited === 'boolean'
+              ? { unlimited: credits.unlimited }
+              : {}),
+            ...(optionalString(credits.balance)
+              ? { balance: optionalString(credits.balance) }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
+function sanitizeLimits(value: unknown): Record<string, ProviderLimitSnapshot> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const limits = Object.entries(value).flatMap(([key, raw]) => {
+    const limit = sanitizeLimit(raw);
+    return limit ? [[key, limit] as const] : [];
+  });
+  return limits.length > 0 ? Object.fromEntries(limits) : undefined;
+}
+
+function sanitizeSession(
+  value: unknown,
+  parserState: CodexParserState,
+): CodexFileAggregate['session'] {
+  const session = isRecord(value) ? value : {};
+  return {
+    sessionKey: optionalString(session.sessionKey) ?? parserState.sessionKey,
+    ...(optionalString(session.parentSessionKey)
+      ? { parentSessionKey: optionalString(session.parentSessionKey) }
+      : {}),
+    ...(optionalString(session.projectKey)
+      ? { projectKey: optionalString(session.projectKey) }
+      : {}),
+    ...(optionalString(session.projectName)
+      ? { projectName: optionalString(session.projectName) }
+      : {}),
+    ...(optionalString(session.projectDirectoryName)
+      ? { projectDirectoryName: optionalString(session.projectDirectoryName) }
+      : {}),
+    ...(optionalString(session.agentNickname)
+      ? { agentNickname: optionalString(session.agentNickname) }
+      : {}),
+    role: sanitizeRole(session.role),
+    ...(optionalNumber(session.startedAt) !== undefined
+      ? { startedAt: optionalNumber(session.startedAt) }
+      : {}),
+    ...(optionalNumber(session.endedAt) !== undefined
+      ? { endedAt: optionalNumber(session.endedAt) }
+      : {}),
+  };
+}
+
+function sanitizeFileAggregate(
+  value: unknown,
+  parserState: CodexParserState,
+): CodexFileAggregate {
+  const aggregate = isRecord(value) ? value : {};
+  return {
+    total: sanitizeTokens(aggregate.total),
+    byDay: sanitizeBuckets(aggregate.byDay),
+    byModel: sanitizeBuckets(aggregate.byModel),
+    byEffort: sanitizeBuckets(aggregate.byEffort),
+    session: sanitizeSession(aggregate.session, parserState),
+    structural: sanitizeStructural(aggregate.structural),
+  };
+}
+
+function sanitizeCoverage(value: unknown): CodexIndexCoverage {
+  const coverage = isRecord(value) ? value : {};
+  return {
+    indexedFiles: finiteNumber(coverage.indexedFiles),
+    totalFiles: finiteNumber(coverage.totalFiles),
+    indexedBytes: finiteNumber(coverage.indexedBytes),
+    totalBytes: finiteNumber(coverage.totalBytes),
+    complete: coverage.complete === true,
+  };
+}
+
+function migrateIndexV1(index: LegacyCodexIndexV1): CodexIndexV2 {
+  const files: Record<string, CodexFileContribution> = {};
+  for (const [key, old] of Object.entries(index.files)) {
+    const fileKey = optionalString(old.fileKey) ?? key;
+    const parserState = sanitizeParserState(old.parserState, fileKey);
+    const offset = Math.max(0, finiteNumber(old.offset));
+    const carryBytes = typeof old.carry === 'string'
+      ? Buffer.byteLength(old.carry, 'utf8')
+      : 0;
+    const limit = sanitizeLimit(old.limit);
+    const limits = sanitizeLimits(old.limits);
+    files[key] = {
+      fileKey,
+      ...(old.sourceArea === 'sessions' || old.sourceArea === 'archive'
+        ? { sourceArea: old.sourceArea }
+        : {}),
+      size: finiteNumber(old.size),
+      mtimeMs: finiteNumber(old.mtimeMs),
+      ...(optionalNumber(old.dev) !== undefined ? { dev: optionalNumber(old.dev) } : {}),
+      ...(optionalNumber(old.ino) !== undefined ? { ino: optionalNumber(old.ino) } : {}),
+      offset: Math.max(0, offset - carryBytes),
+      discardingOversizedLine: false,
+      parserState,
+      aggregate: sanitizeFileAggregate(old.aggregate, parserState),
+      ...(limit ? { limit } : {}),
+      ...(limits ? { limits } : {}),
+      qualityFlags: sanitizeQualityFlags(old.qualityFlags),
+      ...(typeof old.identityChecked === 'boolean'
+        ? { identityChecked: old.identityChecked }
+        : {}),
+    };
+  }
+  return {
+    schemaVersion: 2,
+    files,
+    aggregate: sanitizeProviderAggregate(index.aggregate),
+    coverage: sanitizeCoverage(index.coverage),
+  };
+}
+
+export async function loadCodexIndex(
+  indexPath: string,
+  timeZone = 'UTC',
+): Promise<CodexIndexV2> {
   try {
     const parsed: unknown = JSON.parse(await readFile(indexPath, 'utf8'));
-    if (!isIndexV1(parsed)) {
-      throw new Error('Unsupported Codex index schema');
+    if (isIndexV1(parsed)) {
+      return migrateIndexV1(parsed);
     }
-    return migrateLegacyStructural(parsed);
+    if (isIndexV2(parsed)) {
+      return parsed;
+    }
+    throw new Error('Unsupported Codex index schema');
   } catch (error) {
     if (
       typeof error === 'object' &&
@@ -720,7 +1023,7 @@ export async function loadCodexIndex(indexPath: string): Promise<CodexIndexV1> {
       'code' in error &&
       (error as NodeJS.ErrnoException).code === 'ENOENT'
     ) {
-      return createEmptyCodexIndex();
+      return createEmptyCodexIndex(timeZone);
     }
     throw error;
   }
@@ -728,7 +1031,7 @@ export async function loadCodexIndex(indexPath: string): Promise<CodexIndexV1> {
 
 export async function saveCodexIndexAtomic(
   indexPath: string,
-  index: CodexIndexV1,
+  index: CodexIndexV2,
 ): Promise<void> {
   await mkdir(path.dirname(indexPath), { recursive: true });
   const temporaryPath = `${indexPath}.tmp`;

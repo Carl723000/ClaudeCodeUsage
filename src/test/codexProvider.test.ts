@@ -22,7 +22,7 @@ function contribution(): CodexFileContribution {
     size: 100,
     mtimeMs: 1,
     offset: 100,
-    carry: '',
+    discardingOversizedLine: false,
     parserState: {
       schemaVersion: 1,
       fileKey: 'anonymous-file-key',
