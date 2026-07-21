@@ -1252,3 +1252,57 @@ test('Codex beta settings use safe provider-aware defaults', () => {
   assert.match(packageJson, /claudeCodeUsage\.codex\.dataDirectory/);
   assert.doesNotMatch(settings, /codex\.(?:auth|telemetry)/i);
 });
+
+test('package lock and Codex UI tooling stay exact and release-safe', () => {
+  const pkg = JSON.parse(repoFile('package.json')) as {
+    version: string;
+    scripts: Record<string, string>;
+    dependencies?: Record<string, string>;
+    devDependencies: Record<string, string>;
+  };
+  const lock = JSON.parse(repoFile('package-lock.json')) as {
+    packages: Record<string, {
+      version?: string;
+      dependencies?: Record<string, string>;
+      devDependencies?: Record<string, string>;
+    }>;
+  };
+  const root = lock.packages[''];
+
+  assert.equal(pkg.devDependencies['@playwright/test'], '1.61.1');
+  assert.equal(pkg.devDependencies['@axe-core/playwright'], '4.12.1');
+  assert.equal(root.version, pkg.version);
+  assert.deepEqual(root.devDependencies, pkg.devDependencies);
+  assert.equal(pkg.dependencies, undefined);
+  assert.equal(root.dependencies, undefined);
+  assert.equal(pkg.scripts.test, 'npm run test:node');
+  assert.equal(
+    pkg.scripts['test:node'],
+    'npm run compile && node --test out/test/*.test.js .github/scripts/*.test.mjs',
+  );
+  assert.equal(pkg.scripts['test:ui'], 'npm run compile && playwright test');
+  assert.equal(
+    pkg.scripts['test:ui:update'],
+    'npm run compile && playwright test --update-snapshots',
+  );
+  assert.equal(pkg.scripts['test:release'], 'npm run test:node && npm run test:ui');
+});
+
+test('Playwright sources stay tracked but never enter the VSIX', () => {
+  const gitIgnore = activePatterns('.gitignore');
+  const vscodeIgnore = activePatterns('.vscodeignore');
+
+  for (const pattern of ['test-results/', 'playwright-report/']) {
+    assert.ok(gitIgnore.has(pattern), `.gitignore missing ${pattern}`);
+  }
+  for (const pattern of [
+    'tests/**',
+    'playwright.config.mjs',
+    'test-results/**',
+    'playwright-report/**',
+  ]) {
+    assert.ok(vscodeIgnore.has(pattern), `.vscodeignore missing ${pattern}`);
+  }
+  assert.equal(gitIgnore.has('tests/'), false);
+  assert.equal(gitIgnore.has('tests/**'), false);
+});

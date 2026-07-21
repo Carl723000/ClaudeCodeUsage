@@ -7,6 +7,10 @@
 .github/**
 src/**
 out/test/**
+tests/**
+playwright.config.mjs
+test-results/**
+playwright-report/**
 AGENTS.md
 AGENTS.zh-CN.md
 CLAUDE.md
