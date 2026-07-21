@@ -27,6 +27,7 @@ import {
 } from './providers/codex/codexInsights';
 import { CodexUsageView } from './providers/codex/codexUsage';
 import { createCodexLocalizedFormatters } from './codexFormat';
+import { getCodexClientScript } from './codexViewClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -771,10 +772,10 @@ export class UsageWebviewProvider {
               },
             )
           : `<p>${this.escapeHtml(I18n.t.providers.codex.noRecentTask)}</p>`;
-    const settingsAction =
+    const settingsButton =
       this.currentProvider === 'codex' && this.codexView
-        ? "showCodexTab('settings')"
-        : "showProvider('claude', 'settings')";
+        ? ''
+        : `<button onclick="showProvider('claude', 'settings')" class="btn-secondary">⚙ ${this.escapeHtml(I18n.t.popup.settings)}</button>`;
     return `
       <!DOCTYPE html>
       <html>
@@ -788,12 +789,12 @@ export class UsageWebviewProvider {
         <div class="container">
           <header><h1>${this.escapeHtml(I18n.t.popup.title)}</h1><div class="actions">
             <button onclick="refresh()" class="btn-secondary">↻ ${this.escapeHtml(I18n.t.popup.refresh)}</button>
-            <button onclick="${settingsAction}" class="btn-secondary">⚙ ${this.escapeHtml(I18n.t.popup.settings)}</button>
+            ${settingsButton}
           </div></header>
           ${this.renderProviderTabs()}
           ${content}
         </div>
-        <script>${this.getScript()}</script>
+        <script>${this.getScript()}\n${getCodexClientScript()}</script>
       </body>
       </html>`;
   }
@@ -5470,158 +5471,7 @@ function restoreActiveTab() {
     }
   } catch (e) {}
 }
-function restoreCodexScope() {
-  var selector = document.querySelector('[data-codex-scope]');
-  if (!selector) { return; }
-  var activate = function(value) {
-    document.querySelectorAll('[data-codex-scope-panel]').forEach(function(panel) {
-      panel.hidden = panel.getAttribute('data-codex-scope-panel') !== value;
-    });
-  };
-  selector.addEventListener('change', function() { activate(selector.value); });
-  activate(selector.value);
-}
-function filterCodexThreads() {
-  var search = document.querySelector('[data-codex-thread-search]');
-  var query = search ? String(search.value || '').trim().toLowerCase() : '';
-  var filters = {};
-  document.querySelectorAll('[data-codex-thread-filter]').forEach(function(select) {
-    filters[select.getAttribute('data-codex-thread-filter')] = select.value || 'all';
-  });
-  var visible = 0;
-  document.querySelectorAll('[data-codex-thread-row]').forEach(function(row) {
-    var matchesSearch = !query || (row.getAttribute('data-search') || '').indexOf(query) !== -1;
-    var matchesRole = !filters.role || filters.role === 'all' || row.getAttribute('data-role') === filters.role;
-    var matchesProject = !filters.project || filters.project === 'all' || row.getAttribute('data-project') === filters.project;
-    var matchesModel = !filters.model || filters.model === 'all' || (row.getAttribute('data-models') || '').split('|').indexOf(filters.model) !== -1;
-    var matchesEffort = !filters.effort || filters.effort === 'all' || (row.getAttribute('data-efforts') || '').split('|').indexOf(filters.effort) !== -1;
-    var lineageVisible = row.getAttribute('data-lineage-hidden') !== 'true';
-    var show = matchesSearch && matchesRole && matchesProject && matchesModel && matchesEffort && lineageVisible;
-    row.hidden = !show;
-    if (show) { visible += 1; }
-  });
-  var count = document.querySelector('[data-codex-thread-visible]');
-  if (count) { count.textContent = String(visible); }
-}
-function toggleCodexThreadChildren(threadId) {
-  var rows = document.querySelectorAll('[data-parent-thread="' + threadId + '"]');
-  var collapse = false;
-  rows.forEach(function(row) {
-    if (row.getAttribute('data-lineage-hidden') !== 'true') { collapse = true; }
-  });
-  rows.forEach(function(row) {
-    if (collapse) { row.setAttribute('data-lineage-hidden', 'true'); }
-    else { row.removeAttribute('data-lineage-hidden'); }
-  });
-  var lead = document.querySelector('[data-thread-id="' + threadId + '"]');
-  var button = lead ? lead.querySelector('.group-toggle') : null;
-  if (button) {
-    button.textContent = collapse ? '▶' : '▼';
-    button.setAttribute('aria-expanded', collapse ? 'false' : 'true');
-  }
-  filterCodexThreads();
-}
-function toggleCodexProject(projectId) {
-  var detail = document.querySelector('[data-codex-project-detail="' + projectId + '"]');
-  if (!detail) { return; }
-  detail.hidden = !detail.hidden;
-  var button = document.querySelector('[data-codex-project-toggle="' + projectId + '"]');
-  if (button) {
-    button.textContent = detail.hidden ? '▶' : '▼';
-    button.setAttribute('aria-expanded', detail.hidden ? 'false' : 'true');
-  }
-}
-function showCodexTab(tabName) {
-  var selectedButton = null;
-  var selectedContent = null;
-  document.querySelectorAll('[data-codex-tab-button]').forEach(function(button) {
-    var selected = button.getAttribute('data-codex-tab-button') === tabName;
-    button.classList.toggle('active', selected);
-    if (selected) { selectedButton = button; }
-  });
-  document.querySelectorAll('[data-codex-tab-content]').forEach(function(content) {
-    var selected = content.getAttribute('data-codex-tab-content') === tabName;
-    content.classList.toggle('active', selected);
-    if (selected) { selectedContent = content; }
-  });
-  if (selectedButton && selectedContent) {
-    try { localStorage.setItem('ccu.codexTab', tabName); } catch (e) {}
-  }
-}
-function showCodexBehaviorScope(scopeName) {
-  var found = false;
-  document.querySelectorAll('[data-codex-behavior-button]').forEach(function(button) {
-    var selected = button.getAttribute('data-codex-behavior-button') === scopeName;
-    button.classList.toggle('active', selected);
-    if (selected) { found = true; }
-  });
-  if (!found) { return; }
-  document.querySelectorAll('[data-codex-behavior-panel]').forEach(function(panel) {
-    panel.classList.toggle('active', panel.getAttribute('data-codex-behavior-panel') === scopeName);
-  });
-  try { localStorage.setItem('ccu.codexBehaviorScope', scopeName); } catch (e) {}
-}
-function showCodexChartMetric(chartId, metric) {
-  var root = null;
-  document.querySelectorAll('[data-codex-chart-root]').forEach(function(candidate) {
-    if (candidate.getAttribute('data-codex-chart-root') === chartId) { root = candidate; }
-  });
-  if (!root) { return; }
-  var bars = root.querySelectorAll('[data-codex-chart]');
-  var maxValue = 0;
-  bars.forEach(function(bar) {
-    var value = Number(bar.getAttribute('data-' + metric) || '0');
-    if (value > maxValue) { maxValue = value; }
-  });
-  var classByMetric = {
-    processed: 'cache-creation-bar',
-    fresh: 'input-bar',
-    output: 'output-bar',
-    reasoning: 'cache-read-bar',
-    threads: 'messages-bar'
-  };
-  bars.forEach(function(bar) {
-    var value = Number(bar.getAttribute('data-' + metric) || '0');
-    var height = maxValue > 0 ? Math.max(2, Math.round((value / maxValue) * 100)) : 2;
-    bar.style.height = height + 'px';
-    bar.classList.remove('cache-creation-bar', 'input-bar', 'output-bar', 'cache-read-bar', 'messages-bar');
-    bar.classList.add(classByMetric[metric] || 'input-bar');
-    var formattedValue = bar.getAttribute('data-label-' + metric) || String(value);
-    var metricName = bar.getAttribute('data-name-' + metric) || metric;
-    var rowLabel = bar.getAttribute('data-row-label') || '';
-    bar.title = rowLabel + ' · ' + metricName + ': ' + formattedValue;
-    var container = bar.closest('.hc-col') || bar.closest('.chart-bar-container');
-    var valueLabel = container ? container.querySelector('[data-codex-chart-value]') : null;
-    if (valueLabel) { valueLabel.textContent = formattedValue; }
-  });
-  root.querySelectorAll('[data-codex-chart-button]').forEach(function(button) {
-    button.classList.toggle(
-      'active',
-      button.getAttribute('data-codex-chart-button') === chartId + ':' + metric
-    );
-  });
-  var yValues = root.querySelectorAll('.hc-yaxis .hc-yval');
-  if (yValues.length === 3) {
-    yValues[0].textContent = root.getAttribute('data-axis-top-' + metric) || String(maxValue);
-    yValues[1].textContent = root.getAttribute('data-axis-mid-' + metric) || String(Math.round(maxValue / 2));
-    yValues[2].textContent = '0';
-  }
-}
-function restoreCodexTab() {
-  if (!document.querySelector('[data-codex-tab-button]')) { return; }
-  var tabName = 'recent';
-  try { tabName = localStorage.getItem('ccu.codexTab') || tabName; } catch (e) {}
-  var found = false;
-  document.querySelectorAll('[data-codex-tab-button]').forEach(function(button) {
-    if (button.getAttribute('data-codex-tab-button') === tabName) { found = true; }
-  });
-  showCodexTab(found ? tabName : 'recent');
-  var activeBehavior = document.querySelector('[data-codex-behavior-button].active');
-  var behaviorScope = activeBehavior ? activeBehavior.getAttribute('data-codex-behavior-button') : 'recent';
-  try { behaviorScope = localStorage.getItem('ccu.codexBehaviorScope') || behaviorScope; } catch (e) {}
-  showCodexBehaviorScope(behaviorScope);
-}
-function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); restoreCodexTab(); filterCodexThreads(); }
+function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); }
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreUi);
 } else {
@@ -6300,9 +6150,6 @@ window.openSettings = openSettings;
 window.refreshPricing = refreshPricing;
 window.getAdvice = getAdvice;
 window.toggleProjectGroup = toggleProjectGroup;
-window.filterCodexThreads = filterCodexThreads;
-window.toggleCodexThreadChildren = toggleCodexThreadChildren;
-window.toggleCodexProject = toggleCodexProject;
 window.sortTable = sortTable;
 window.dismissQuotaWarn = dismissQuotaWarn;
 window.attrSetScope = attrSetScope;
@@ -6367,6 +6214,7 @@ formatOptSettings();
 
 // Global event delegation for chart tabs and chart bars
 document.addEventListener('click', function(event) {
+  if (event.target.closest && event.target.closest('[data-codex-root]')) { return; }
   // Handle sortable table header clicks
   var sortableTh = event.target.closest ? event.target.closest('th.sortable') : null;
   if (sortableTh) {
@@ -6379,15 +6227,16 @@ document.addEventListener('click', function(event) {
   }
 
   // Handle chart tab clicks
-  if (event.target.classList.contains('chart-tab')) {
-    console.log("[DEBUG] Chart tab clicked:", event.target);
+  var chartTab = event.target.closest ? event.target.closest('.chart-tab[data-metric]') : null;
+  if (chartTab) {
+    console.log("[DEBUG] Chart tab clicked:", chartTab);
 
     event.preventDefault();
-    const metric = event.target.dataset.metric;
+    const metric = chartTab.dataset.metric;
     console.log("[DEBUG] Chart tab metric:", metric);
 
     // Find the container and determine the context
-    const container = event.target.closest('.daily-breakdown') || event.target.closest('.hourly-breakdown');
+    const container = chartTab.closest('.daily-breakdown') || chartTab.closest('.hourly-breakdown');
     console.log("[DEBUG] Chart tab container:", container);
 
     if (container) {
@@ -6396,7 +6245,7 @@ document.addEventListener('click', function(event) {
       tabs.forEach(function(tab) {
         tab.classList.remove('active');
       });
-      event.target.classList.add('active');
+      chartTab.classList.add('active');
 
       // Determine chart type and update accordingly
       if (container.classList.contains('hourly-breakdown')) {
@@ -6443,9 +6292,10 @@ document.addEventListener('click', function(event) {
 });
 
 function bindChartTabEvents(container) {
+  if (container.closest && container.closest('[data-codex-root]')) { return; }
   console.log("[DEBUG] Binding chart tab events for container:", container);
 
-  const chartTabs = container.querySelectorAll('.chart-tab');
+  const chartTabs = container.querySelectorAll('.chart-tab[data-metric]');
   console.log("[DEBUG] Found chart tabs:", chartTabs.length);
 
   chartTabs.forEach(function(tab, index) {
@@ -6460,10 +6310,12 @@ function bindChartTabEvents(container) {
 }
 
 function handleChartTabClick(event) {
+  if (event.target.closest && event.target.closest('[data-codex-root]')) { return; }
   console.log("[DEBUG] handleChartTabClick called");
   event.preventDefault();
 
   const metric = this.dataset.metric;
+  if (!metric) { return; }
   const container = this.closest('.daily-breakdown') || this.closest('.hourly-breakdown');
 
   if (container) {
@@ -6894,15 +6746,6 @@ function renderHourlyChart(hourlyData, metric) {
     getTitle: function(it, v) { return it.hour + ': ' + formatValue(v, metric); }
   });
 }
-
-// Initialize chart tab events for existing elements
-setTimeout(function() {
-  console.log("[DEBUG] Initializing chart tab events for existing elements");
-  const existingChartContainers = document.querySelectorAll('.daily-breakdown');
-  existingChartContainers.forEach(function(container) {
-    bindChartTabEvents(container);
-  });
-}, 1000);
 
 console.log("[DEBUG] All functions defined and ready");`;
   }

@@ -8,6 +8,13 @@ import { CODEX_COPY_EN } from '../codexView';
 import { I18n } from '../i18n';
 import { SupportedLanguage } from '../types';
 
+function webviewSourceFixture(): string {
+  return readFileSync(
+    path.resolve(__dirname, '..', '..', 'src', 'webview.ts'),
+    'utf8',
+  );
+}
+
 test('dashboard provider defaults preserve Claude and support Codex-only installs', () => {
   assert.equal(defaultDashboardProvider(true, false), 'claude');
   assert.equal(defaultDashboardProvider(false, true), 'codex');
@@ -30,10 +37,7 @@ test('webview provider changes are allowlisted and kept outside time tabs', () =
 });
 
 test('Codex settings and charts stay inside the provider view', () => {
-  const webview = readFileSync(
-    path.resolve(__dirname, '..', '..', 'src', 'webview.ts'),
-    'utf8',
-  );
+  const webview = webviewSourceFixture();
   const settings = readFileSync(
     path.resolve(__dirname, '..', '..', 'src', 'settings.ts'),
     'utf8',
@@ -65,12 +69,14 @@ test('Codex settings and charts stay inside the provider view', () => {
     webview,
     /createCodexLocalizedFormatters\(\s*I18n\.getLocale\(\),\s*I18n\.getTimezone\(\)/,
   );
-  assert.match(webview, /showCodexTab\('settings'\)/);
-  assert.match(webview, /function showCodexChartMetric/);
-  assert.match(webview, /function filterCodexThreads/);
-  assert.match(webview, /function toggleCodexProject/);
-  assert.match(webview, /function toggleCodexThreadChildren/);
-  assert.match(webview, /function showCodexBehaviorScope/);
+  assert.match(webview, /getCodexClientScript\(\)/);
+  assert.doesNotMatch(webview, /showCodexTab\('settings'\)/);
+  assert.doesNotMatch(webview, /function showCodexChartMetric/);
+  assert.doesNotMatch(webview, /function filterCodexThreads/);
+  assert.doesNotMatch(webview, /function toggleCodexProject/);
+  assert.doesNotMatch(webview, /function toggleCodexThreadChildren/);
+  assert.doesNotMatch(webview, /function showCodexBehaviorScope/);
+  assert.doesNotMatch(webview, /ccu\.codex/);
   assert.match(webview, /\.codex-chart-value\s*\{/);
   assert.match(webview, /\.codex-period-chart \.hc-wrap/);
   assert.match(extension, /codexOptimizationEnabled:/);
@@ -80,6 +86,13 @@ test('Codex settings and charts stay inside the provider view', () => {
   assert.match(webview, /private codexInsights: CodexScopedInsights/);
   assert.match(webview, /insights: CodexScopedInsights/);
   assert.match(webview, /this\.codexInsights = codexView \? insights : emptyCodexScopedInsights\(\);/);
+});
+
+test('Claude chart delegation rejects Codex controls and missing metrics', () => {
+  const source = webviewSourceFixture();
+  assert.match(source, /if \(event\.target\.closest && event\.target\.closest\('\[data-codex-root\]'\)\) \{? return;? \}?/);
+  assert.match(source, /closest\('\.chart-tab\[data-metric\]'\)/);
+  assert.doesNotMatch(source, /document\.querySelectorAll\('\.daily-breakdown'\)/);
 });
 
 test('provider and Codex view copy is complete in every UI locale', () => {

@@ -13,6 +13,7 @@ import { I18n } from '../i18n';
 import { createCodexLocalizedFormatters } from '../codexFormat';
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 import { snapshotFixture } from './codexFixtures';
+import { getCodexClientScript } from '../codexViewClient';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
 const VIEW_SALT = 'codex-view-render-test';
@@ -277,10 +278,12 @@ test('Explore renders Projects, Sessions, and Models & effort with private view 
 
 test('Explore filtered session contract is flat and retains a parent-task label', () => {
   const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const unfiltered = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
   const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
     exploreFilters: { query: 'locke' },
   });
 
+  assert.match(unfiltered, /data-codex-filter-parent[^>]*hidden/);
   assert.match(html, /data-codex-session-layout="flat"/);
   assert.match(html, /Parent task/);
 });
@@ -995,4 +998,95 @@ test('all dynamic renderer values are escaped', () => {
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
   assert.match(html, /&lt;script&gt;private title&lt;\/script&gt;/);
   assert.doesNotMatch(html, /https?:\/\//);
+});
+
+test('production Codex action inventory is explicit and controller-ready', () => {
+  const base = renderCodexView(
+    buildCodexUsageView(snapshotFixture(), NOW),
+    [],
+    CODEX_COPY_EN,
+    { settingsHtml: productionCodexSettingsHtml() },
+  );
+  const html = base + renderCodexView(
+    buildCodexUsageView(snapshotFixture(), NOW),
+    [],
+    CODEX_COPY_EN,
+    { exploreFilters: { query: 'Locke' } },
+  );
+  const actions = new Set(
+    [...html.matchAll(/data-codex-action="([^"]+)"/g)].map((match) => match[1]),
+  );
+  assert.deepEqual([...actions].sort(), [
+    'clear-filters', 'close-settings', 'drilldown-date', 'filter-sessions',
+    'open-settings', 'project-sessions', 'remove-filter', 'reset-settings',
+    'select-chart-metric', 'select-explore-view', 'select-page',
+    'set-chart-metric', 'set-model-effort-scope', 'set-overview-scope',
+    'set-recommendation-scope', 'set-setting',
+    'sort-projects', 'sort-sessions', 'toggle-thread-children', 'view-task',
+  ]);
+  const controller = getCodexClientScript();
+  for (const action of actions) {
+    assert.match(controller, new RegExp(`action === '${action}'`), `unhandled production action: ${action}`);
+  }
+  assert.doesNotMatch(html, /data-codex-action="settings-(?:click|change|input)"/);
+  assert.doesNotMatch(html, /\son(?:click|change|input)=/);
+});
+
+test('Overview renders four truthful scope panels and drilldown row contracts', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+  const overview = htmlBetween(
+    html,
+    'id="codex-page-panel-overview"',
+    'id="codex-page-panel-explore"',
+  );
+  for (const [scope, hidden] of [
+    ['recent', false], ['7d', true], ['30d', true], ['all', true],
+  ] as const) {
+    assert.match(overview, new RegExp(
+      `data-codex-overview-panel="${scope}"[^>]*data-codex-overview-dataset="${scope}"${hidden ? '[^>]*hidden' : ''}`,
+    ));
+  }
+  assert.equal((overview.match(/class="daily-breakdown codex-overview-trend"/g) ?? []).length, 1);
+  assert.match(overview, /data-codex-overview-panel="7d"[\s\S]*data-codex-date-row="2026-07-/);
+  assert.match(overview, /data-codex-overview-panel="all"[\s\S]*data-codex-month-row="2026-/);
+  assert.match(overview, /data-codex-action="drilldown-date"/);
+  const panelBodies = ['recent', '7d', '30d', 'all'].map((scope) =>
+    htmlBetween(
+      overview,
+      `data-codex-overview-panel="${scope}"`,
+      scope === 'all' ? undefined : `data-codex-overview-panel="${scope === 'recent' ? '7d' : scope === '7d' ? '30d' : 'all'}"`,
+    ),
+  );
+  assert.equal(new Set(panelBodies).size, 4);
+});
+
+test('Overview and Recommendation scope controls are complete restorable tabs', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+  for (const scope of ['recent', '7d', '30d', 'all']) {
+    assert.match(html, new RegExp(`id="codex-overview-tab-${scope}"[^>]*role="tab"[^>]*aria-controls="codex-overview-panel-${scope}"`));
+    assert.match(html, new RegExp(`id="codex-overview-panel-${scope}"[^>]*role="tabpanel"[^>]*aria-labelledby="codex-overview-tab-${scope}"`));
+    assert.match(html, new RegExp(`id="codex-recommendation-tab-${scope}"[^>]*role="tab"[^>]*aria-controls="codex-recommendation-panel-${scope}"`));
+    assert.match(html, new RegExp(`id="codex-recommendation-panel-${scope}"[^>]*role="tabpanel"[^>]*aria-labelledby="codex-recommendation-tab-${scope}"`));
+  }
+  assert.match(html, /class="chart-tabs codex-recommendation-tabs"[^>]*role="tablist"/);
+  assert.match(html, /data-codex-recommendation-panel="7d"[^>]*hidden/);
+});
+
+test('Sessions rows expose period and rooted lineage while chips and sorts are actions', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, {
+    exploreFilters: { query: 'Locke', role: 'subagent' },
+  });
+  const sessions = htmlBetween(
+    html,
+    'id="codex-explore-panel-sessions"',
+    'id="codex-explore-panel-models-effort"',
+  );
+  assert.match(sessions, /data-codex-periods="(?:recent\|)?7d\|30d\|all"/);
+  assert.match(sessions, /data-codex-root-task-view-key="[a-f0-9]{16}"/);
+  assert.match(sessions, /<button[^>]*data-codex-action="remove-filter"[^>]*data-codex-filter-key="query"/);
+  assert.match(sessions, /<th[^>]*data-codex-action="sort-sessions"[^>]*data-codex-sort-key="title"[^>]*aria-sort="none"/);
+  assert.match(html, /<th[^>]*data-codex-action="sort-projects"[^>]*data-codex-sort-key="name"[^>]*aria-sort="none"/);
 });
