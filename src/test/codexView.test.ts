@@ -13,7 +13,10 @@ import { buildCodexUsageView } from '../providers/codex/codexUsage';
 import { I18n } from '../i18n';
 import { createCodexLocalizedFormatters } from '../codexFormat';
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
-import { snapshotFixture } from './codexFixtures';
+import {
+  rootlessCrossProjectCycleFixture,
+  snapshotFixture,
+} from './codexFixtures';
 import { getCodexClientScript } from '../codexViewClient';
 import { getCodexViewStyles } from '../codexViewStyles';
 import { dailyTable } from '../codexViewComponents';
@@ -79,6 +82,7 @@ test('Codex styles are responsive accessible and scoped to semantic VS Code toke
   assert.match(css, /\.codex-scroll-region\s*\{[^}]*overflow-x:\s*auto/);
   assert.match(css, /\.codex-mobile-details\s*\{/);
   assert.match(css, /button\.codex-disclosure\s*\{[^}]*appearance:\s*none/);
+  assert.match(css, /\.codex-sort-button\s*\{[^}]*appearance:\s*none[^}]*font:\s*inherit/);
   assert.match(css, /:focus-visible[\s\S]*?var\(--vscode-focusBorder\)/);
   assert.match(css, /@media\s*\(max-width:\s*480px\)/);
   assert.match(css, /@media\s*\(max-width:\s*380px\)/);
@@ -260,7 +264,7 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /Locke/);
   assert.match(html, /data-codex-thread-search/);
   assert.match(html, /data-codex-thread-filter="role"/);
-  assert.match(html, /class="sortable" data-sortkey="title"/);
+  assert.match(html, /<th class="sortable"[^>]*data-codex-sort-key="title"[^>]*aria-sort="none"[^>]*><button[^>]*class="codex-sort-button"/);
   assert.match(html, /data-codex-project-detail="[a-f0-9]{16}"/);
   for (const scope of ['recent', '7d', '30d', 'all']) {
     assert.match(html, new RegExp(`data-codex-recommendation-scope="${scope}"`));
@@ -274,6 +278,7 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /data-codex-action="select-chart-metric"[^>]*data-codex-chart-id="codex-7d"[^>]*data-codex-chart-metric="processed"/);
   assert.match(html, /data-codex-action="toggle-thread-children"[^>]*data-codex-thread-key="[a-f0-9]{16}"/);
   assert.match(html, /data-codex-action="project-sessions"[^>]*data-codex-project-view-key="[a-f0-9]{16}"/);
+  assert.match(html, /data-codex-action="view-project-sessions"[^>]*data-codex-project-view-key="[a-f0-9]{16}"/);
   assert.match(html, /data-codex-action="set-recommendation-scope"[^>]*data-codex-recommendation-scope="recent"/);
   assert.doesNotMatch(html, /\sonclick=/);
   assert.doesNotMatch(html, /codex-metric-card|project:a|session:|Thread 1|Project 1/);
@@ -301,6 +306,7 @@ test('Explore renders Projects, Sessions, and Models & effort with private view 
   assert.match(html, /data-codex-explore-view-button="models-effort"/);
   assert.match(html, /20\/27 Sessions/);
   assert.match(html, /data-codex-action="project-sessions"/);
+  assert.match(html, /View all sessions: ClaudeCodeUsage/);
   assert.match(html, /aria-label="Expand .*ClaudeCodeUsage"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /data-codex-action="clear-filters"/);
@@ -362,6 +368,7 @@ test('Sessions renderer echoes controlled filters as selected escaped values and
       model: 'gpt-5.6-sol',
       effort: 'high',
       period: '7d',
+      date: '2026-07-20',
     },
   });
   const sessions = htmlBetween(
@@ -376,12 +383,32 @@ test('Sessions renderer echoes controlled filters as selected escaped values and
   assert.match(sessions, /option value="gpt-5\.6-sol" selected/);
   assert.match(sessions, /option value="high" selected/);
   assert.match(sessions, /option value="7d" selected/);
-  assert.equal((sessions.match(/data-codex-filter-chip=/g) ?? []).length, 6);
+  assert.equal((sessions.match(/data-codex-filter-chip=/g) ?? []).length, 7);
+  assert.match(sessions, /data-codex-filter-chip="date"[^>]*>Date: 2026-07-20/);
   assert.match(sessions, /Locke &lt;needle&gt;/);
   assert.match(sessions, /data-codex-action="clear-filters"(?![^>]*hidden)/);
   assert.match(sessions, /aria-live="polite"/);
   assert.equal((sessions.match(/option value="all"/g) ?? []).length, 1);
   assert.doesNotMatch(sessions, /data-codex-filter-chip="[^"]+"><\/span>/);
+});
+
+test('Sessions date filters use exact indexed period-day membership', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const sessionsFor = (date: string) => htmlBetween(
+    renderCodexView(view, scopedInsights(view), CODEX_COPY_EN, { exploreFilters: { date } }),
+    'id="codex-explore-panel-sessions"',
+    'id="codex-explore-panel-models-effort"',
+  );
+
+  const matching = sessionsFor('2026-07-20');
+  assert.match(matching, /data-codex-filter-chip="date"[^>]*>Date: 2026-07-20/);
+  assert.match(matching, /data-codex-days="2026-07-20"/);
+  assert.doesNotMatch(matching, /data-codex-days="2026-07-10"/);
+
+  const absent = sessionsFor('2099-12-31');
+  assert.match(absent, /data-codex-filter-chip="date"[^>]*>Date: 2099-12-31/);
+  assert.match(absent, /data-codex-thread-visible[^>]*>0<\/span>/);
+  assert.doesNotMatch(absent, /data-codex-thread-row(?:\s|>)/);
 });
 
 test('Sessions period filters produce different sets from verified slices', () => {
@@ -952,6 +979,37 @@ test('Overview orders limits, recent task, and one cohesive trend without intern
   assert.doesNotMatch(html, />primary<|>secondary<|300m|Task-reported duration|session:|project:/);
 });
 
+test('rootless task card targets its same-project representative cycle row', () => {
+  const view = buildCodexUsageView(rootlessCrossProjectCycleFixture(), NOW);
+  const identity = view.lastTaskIdentity!;
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+  const row = view.recentThreads.find((thread) =>
+    thread.viewKey === identity.taskKey &&
+    thread.projectViewKey === identity.projectKey
+  );
+
+  assert.ok(row);
+  assert.equal(row.parentStatus, 'cycle');
+  assert.match(
+    html,
+    new RegExp(
+      `data-codex-action="view-task" data-codex-task-key="${identity.taskKey}" data-codex-project-key="${identity.projectKey}"`,
+    ),
+  );
+  const rowHtml = htmlBetween(
+    html,
+    `data-codex-view-key="${identity.taskKey}"`,
+    '</tr>',
+  );
+  assert.match(rowHtml, new RegExp(`data-project="${identity.projectKey}"`));
+  assert.match(rowHtml, /data-parent-status="cycle"/);
+  assert.doesNotMatch(rowHtml, /data-codex-parent-view-key/);
+  assert.match(
+    html,
+    new RegExp(`<option value="${identity.projectKey}"[^>]*>Representative Project</option>`),
+  );
+});
+
 test('Simplified Chinese Codex dashboard localizes the new Claude-style modules', () => {
   const previous = I18n.getCurrentLanguage();
   try {
@@ -1192,7 +1250,7 @@ test('production Codex action inventory is explicit and controller-ready', () =>
     'select-chart-metric', 'select-explore-view', 'select-page',
     'set-chart-metric', 'set-model-effort-scope', 'set-overview-scope',
     'set-recommendation-scope', 'set-setting',
-    'sort-projects', 'sort-sessions', 'toggle-thread-children', 'view-task',
+    'sort-projects', 'sort-sessions', 'toggle-thread-children', 'view-project-sessions', 'view-task',
   ]);
   const controller = getCodexClientScript();
   for (const action of actions) {
@@ -1224,7 +1282,8 @@ test('Codex charts tables disclosures and mobile details expose the accessible U
   for (const tablist of tablists) {
     assert.match(tablist, /aria-label="[^"]+"/);
   }
-  assert.match(html, /data-codex-action="sort-sessions"[^>]*aria-sort="none"/);
+  assert.match(html, /<th[^>]*data-codex-sort-key="title"[^>]*aria-sort="none"(?![^>]*tabindex)(?![^>]*data-codex-action)/);
+  assert.match(html, /<button[^>]*class="codex-sort-button"[^>]*data-codex-action="sort-sessions"[^>]*data-codex-sort-key="title"/);
   assert.match(html, /class="[^"]*codex-disclosure[^"]*"[^>]*aria-expanded="true"/);
   assert.match(html, /data-codex-thread-visible[^>]*aria-live="polite"/);
   assert.match(html, /class="daily-table-container codex-scroll-region"/);
@@ -1232,7 +1291,7 @@ test('Codex charts tables disclosures and mobile details expose the accessible U
   assert.doesNotMatch(html, /class="(?:daily-table-container|hc-scroll)"/);
   assert.match(html, /class="codex-mobile-details"/);
   assert.match(html, /class="[^"]*codex-wide-only/);
-  assert.match(html, /class="sortable codex-wide-only"[^>]*data-codex-action="sort-projects"/);
+  assert.match(html, /class="sortable codex-wide-only"[^>]*aria-sort="none"[^>]*><button[^>]*class="codex-sort-button"[^>]*data-codex-action="sort-projects"/);
   assert.doesNotMatch(html, /codex-session-mobile/);
 
   const controller = getCodexClientScript();
@@ -1304,6 +1363,25 @@ test('all eight locales provide provider-aware Codex and Compare document identi
   }
 });
 
+test('all eight locales translate project drilldown and sortable-button copy', () => {
+  const languages = ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'] as const;
+  const previous = I18n.getCurrentLanguage();
+  try {
+    for (const language of languages) {
+      I18n.setLanguage(language);
+      const copy = I18n.t.providers.codex;
+      assert.ok(copy.viewAllSessions, `${language}.viewAllSessions is missing`);
+      assert.ok(copy.sortBy, `${language}.sortBy is missing`);
+      if (language !== 'en') {
+        assert.notEqual(copy.viewAllSessions, CODEX_COPY_EN.viewAllSessions, `${language}.viewAllSessions fell back to English`);
+        assert.notEqual(copy.sortBy, CODEX_COPY_EN.sortBy, `${language}.sortBy fell back to English`);
+      }
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
 test('Overview renders four truthful scope panels and drilldown row contracts', () => {
   const view = buildCodexUsageView(snapshotFixture(), NOW);
   const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
@@ -1357,8 +1435,9 @@ test('Sessions rows expose period and rooted lineage while chips and sorts are a
     'id="codex-explore-panel-models-effort"',
   );
   assert.match(sessions, /data-codex-periods="(?:recent\|)?7d\|30d\|all"/);
+  assert.match(sessions, /data-codex-days="2026-07-20"/);
   assert.match(sessions, /data-codex-root-task-view-key="[a-f0-9]{16}"/);
   assert.match(sessions, /<button[^>]*data-codex-action="remove-filter"[^>]*data-codex-filter-key="query"/);
-  assert.match(sessions, /<th[^>]*data-codex-action="sort-sessions"[^>]*data-codex-sort-key="title"[^>]*aria-sort="none"/);
-  assert.match(html, /<th[^>]*data-codex-action="sort-projects"[^>]*data-codex-sort-key="name"[^>]*aria-sort="none"/);
+  assert.match(sessions, /<th[^>]*data-codex-sort-key="title"[^>]*aria-sort="none"[^>]*><button[^>]*data-codex-action="sort-sessions"[^>]*data-codex-sort-key="title"/);
+  assert.match(html, /<th[^>]*data-codex-sort-key="name"[^>]*aria-sort="none"[^>]*><button[^>]*data-codex-action="sort-projects"[^>]*data-codex-sort-key="name"/);
 });

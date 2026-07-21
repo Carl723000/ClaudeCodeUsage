@@ -27,11 +27,11 @@ export { expect };
 
 export async function openCodex(
   page,
-  { locale = 'en', theme = 'light', width = 1280, height = 900 } = {},
+  { locale = 'en', theme = 'light', fixture = 'default', width = 1280, height = 900 } = {},
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `http://127.0.0.1:4173/?locale=${encodeURIComponent(locale)}&theme=${theme}`,
+    `http://127.0.0.1:4173/?locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}`,
     { waitUntil: 'load' },
   );
   await page.locator('.codex-view').waitFor();

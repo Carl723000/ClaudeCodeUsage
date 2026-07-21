@@ -14,7 +14,7 @@ export interface CodexUiState {
   exploreScope: CodexScope;
   chartMetric: CodexMetric;
   search: string;
-  filters: { role: string; project: string; model: string; effort: string; period: string };
+  filters: { role: string; project: string; model: string; effort: string; period: string; date: string };
   sort: {
     projects: { key: string; direction: 'asc' | 'desc' };
     sessions: { key: string; direction: 'asc' | 'desc' };
@@ -33,7 +33,7 @@ export const DEFAULT_CODEX_UI_STATE: CodexUiState = {
   exploreScope: 'recent',
   chartMetric: 'processed',
   search: '',
-  filters: { role: '', project: '', model: '', effort: '', period: '' },
+  filters: { role: '', project: '', model: '', effort: '', period: '', date: '' },
   sort: {
     projects: { key: 'processed', direction: 'desc' },
     sessions: { key: 'recent', direction: 'desc' },
@@ -48,7 +48,7 @@ const SCOPES = new Set<CodexScope>(['recent', '7d', '30d', 'all']);
 const EXPLORE_VIEWS = new Set<CodexExploreView>(['projects', 'sessions', 'models-effort']);
 const METRICS = new Set<CodexMetric>(['processed', 'fresh', 'output', 'reasoning', 'sessions']);
 const DIRECTIONS = new Set<'asc' | 'desc'>(['asc', 'desc']);
-const FILTER_KEYS = ['role', 'project', 'model', 'effort', 'period'] as const;
+const FILTER_KEYS = ['role', 'project', 'model', 'effort', 'period', 'date'] as const;
 const MAX_SEARCH_LENGTH = 200;
 const MAX_LIST_LENGTH = 100;
 
@@ -79,6 +79,10 @@ function allowed<T extends string>(value: unknown, choices: Set<T>, fallback: T)
 function text(value: unknown, fallback: string, maxLength?: number): string {
   if (typeof value !== 'string') return fallback;
   return maxLength === undefined ? value : value.slice(0, maxLength);
+}
+
+function isoDay(value: unknown): string {
+  return typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : '';
 }
 
 function strings(value: unknown): string[] {
@@ -119,6 +123,7 @@ export function sanitizeCodexUiState(raw: unknown): CodexUiState {
 
   const filters = { ...defaults.filters };
   for (const key of FILTER_KEYS) filters[key] = text(ownData(rawFilters, key), '');
+  filters.date = isoDay(ownData(rawFilters, 'date'));
 
   return {
     version: 1,

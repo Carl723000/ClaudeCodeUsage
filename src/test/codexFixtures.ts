@@ -220,7 +220,7 @@ export function identityLineageFixture(): CodexProviderSnapshot {
     ...ROWS[0],
     end: '2026-07-20T11:40:00.000Z',
     sessionTitle: undefined,
-    projectName: '',
+    projectName: 'RootProject',
     projectDirectoryName: 'RootDirectory',
   });
   const namedChild = aggregate({
@@ -229,6 +229,7 @@ export function identityLineageFixture(): CodexProviderSnapshot {
     sessionTitle: 'child title must not become the task title',
     projectName: 'RealChildProject',
     projectDirectoryName: 'NamedChildDirectory',
+    projectKey: 'project:child-lineage',
   });
   const latestChild = aggregate({
     ...ROWS[1],
@@ -237,8 +238,91 @@ export function identityLineageFixture(): CodexProviderSnapshot {
     sessionTitle: 'newest child title must not become the task title',
     projectName: '',
     projectDirectoryName: 'LatestDirectory',
+    projectKey: 'project:child-lineage',
   });
   snapshot.files = [root, namedChild, latestChild, ...snapshot.files.slice(2)];
+  snapshot.total = sum(snapshot.files);
+  return snapshot;
+}
+
+export function rootedTaskBeyondRecentRowCapFixture(): CodexProviderSnapshot {
+  const snapshot = snapshotFixture();
+  const root = structuredClone(snapshot.files[0]);
+  root.session.startedAt = Date.parse('2026-07-20T09:50:00.000Z');
+  root.session.endedAt = Date.parse('2026-07-20T10:00:00.000Z');
+  const children = Array.from({ length: 1_001 }, (_, index) => {
+    const child = structuredClone(snapshot.files[1]);
+    child.session = {
+      ...child.session,
+      sessionKey: codexFixtureIdentityKey(`session:capped-child-${index}`),
+      parentSessionKey: root.session.sessionKey,
+      projectKey: root.session.projectKey,
+      sessionTitle: `Recent capped child ${index}`,
+      projectName: root.session.projectName,
+      projectDirectoryName: root.session.projectDirectoryName,
+      startedAt: Date.parse('2026-07-20T11:49:00.000Z'),
+      endedAt: Date.parse('2026-07-20T11:59:00.000Z'),
+    };
+    return child;
+  });
+
+  snapshot.files = [root, ...children];
+  snapshot.total = sum(snapshot.files);
+  return snapshot;
+}
+
+export function rootlessCrossProjectCycleFixture(): CodexProviderSnapshot {
+  const snapshot = snapshotFixture();
+  const sessionLabels = [
+    'session:rootless-cycle-alpha',
+    'session:rootless-cycle-beta',
+    'session:rootless-cycle-gamma',
+  ].sort((left, right) =>
+    codexFixtureIdentityKey(left).localeCompare(codexFixtureIdentityKey(right))
+  );
+  const projectLabels = [
+    'project:rootless-cycle-alpha',
+    'project:rootless-cycle-beta',
+    'project:rootless-cycle-gamma',
+  ].sort((left, right) =>
+    codexFixtureIdentityKey(left).localeCompare(codexFixtureIdentityKey(right))
+  );
+  const [representativeSession, middleSession, latestSession] = sessionLabels;
+  const [smallestProject, middleProject, largestProject] = projectLabels;
+
+  const representative = aggregate({
+    ...ROWS[1],
+    sessionKey: representativeSession,
+    parentSessionKey: middleSession,
+    end: '2026-07-20T11:40:00.000Z',
+    projectKey: largestProject,
+    sessionTitle: 'Representative cycle thread',
+    projectName: 'Representative Project',
+    projectDirectoryName: 'Representative Directory',
+  });
+  const middle = aggregate({
+    ...ROWS[1],
+    sessionKey: middleSession,
+    parentSessionKey: latestSession,
+    end: '2026-07-20T11:50:00.000Z',
+    projectKey: smallestProject,
+    sessionTitle: 'Middle cycle thread',
+    projectName: 'Smallest-key Project',
+    projectDirectoryName: 'Middle Directory',
+  });
+  const latest = aggregate({
+    ...ROWS[2],
+    sessionKey: latestSession,
+    parentSessionKey: representativeSession,
+    role: 'approval-reviewer',
+    end: '2026-07-20T11:59:00.000Z',
+    projectKey: middleProject,
+    sessionTitle: 'Latest cycle thread',
+    projectName: 'Latest Project',
+    projectDirectoryName: 'Latest Directory',
+  });
+
+  snapshot.files = [middle, latest, representative];
   snapshot.total = sum(snapshot.files);
   return snapshot;
 }

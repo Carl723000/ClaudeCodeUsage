@@ -22,7 +22,11 @@ const server = createServer((request, response) => {
     const requestedLocale = url.searchParams.get('locale') ?? 'en';
     const locale = locales.has(requestedLocale) ? requestedLocale : 'en';
     const theme = url.searchParams.get('theme') === 'dark' ? 'dark' : 'light';
-    const html = renderHarness({ locale, theme });
+    const requestedFixture = url.searchParams.get('fixture') ?? 'default';
+    const fixture = ['default', 'rootless-cycle', 'root-over-limit'].includes(requestedFixture)
+      ? requestedFixture
+      : 'default';
+    const html = renderHarness({ locale, theme, fixture });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',

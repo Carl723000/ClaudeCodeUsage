@@ -36,6 +36,10 @@ const {
   CODEX_WEBVIEW_NOW,
   codexWebviewFixture,
 } = require('../../../out/test/codexWebviewFixtures.js');
+const {
+  rootedTaskBeyondRecentRowCapFixture,
+  rootlessCrossProjectCycleFixture,
+} = require('../../../out/test/codexFixtures.js');
 
 Module._load = originalLoad;
 
@@ -92,14 +96,19 @@ function settingsStore() {
   };
 }
 
-exports.renderHarness = function renderHarness({ locale = 'en', theme = 'light' } = {}) {
+exports.renderHarness = function renderHarness({ locale = 'en', theme = 'light', fixture = 'default' } = {}) {
   I18n.setLanguage(locale);
   I18n.setTimezone('Asia/Hong_Kong');
   vscodeHost.window.activeColorTheme.kind = theme === 'dark' ? 2 : 1;
   const originalNow = Date.now;
   try {
     Date.now = () => CODEX_WEBVIEW_NOW;
-    const view = buildCodexUsageView(codexWebviewFixture(), CODEX_WEBVIEW_NOW);
+    const snapshot = fixture === 'rootless-cycle'
+      ? rootlessCrossProjectCycleFixture()
+      : fixture === 'root-over-limit'
+        ? rootedTaskBeyondRecentRowCapFixture()
+        : codexWebviewFixture();
+    const view = buildCodexUsageView(snapshot, CODEX_WEBVIEW_NOW);
     const provider = new UsageWebviewProvider({});
     provider.settings = settingsStore();
     provider.updateProviderData(

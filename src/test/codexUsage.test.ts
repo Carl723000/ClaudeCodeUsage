@@ -14,6 +14,8 @@ import {
   codexFixtureIdentityKey,
   identityLineageFixture,
   parentlessNonRootTitleFixture,
+  rootedTaskBeyondRecentRowCapFixture,
+  rootlessCrossProjectCycleFixture,
   snapshotFixture,
 } from './codexFixtures';
 
@@ -470,6 +472,7 @@ test('daily and recent-thread details explain where Codex usage came from', () =
     models: ['gpt-5.6-sol'],
     efforts: ['high'],
     periodMembership: ['recent', '7d', '30d', 'all'],
+    dayMembership: ['2026-07-20'],
     total: {
       processed: 600,
       fresh: 200,
@@ -645,14 +648,15 @@ test('incomplete session timestamps never invent a multi-year duration', () => {
   assert.equal(view.last7Days.durationMs, 1_200_000);
 });
 
-test('project and task identities use named representatives and the whole lineage', () => {
+test('cross-project lineage keeps the recent task card anchored to its canonical root project', () => {
   const childEndedAt = Date.parse('2026-07-20T11:50:00.000Z');
   const view = buildCodexUsageView(identityLineageFixture(), NOW);
+  const rootThread = view.recentThreads.find((thread) => thread.role === 'root' && thread.projectName === 'RootProject');
 
-  assert.equal(view.projects[0].name, 'RealChildProject');
-  assert.equal(view.projects[0].directoryName, 'LatestDirectory');
-  assert.equal(view.lastTaskIdentity?.projectName, 'RealChildProject');
-  assert.equal(view.lastTaskIdentity?.projectDirectoryName, 'LatestDirectory');
+  assert.ok(rootThread);
+  assert.equal(view.lastTaskIdentity?.projectKey, rootThread.projectViewKey);
+  assert.equal(view.lastTaskIdentity?.projectName, 'RootProject');
+  assert.equal(view.lastTaskIdentity?.projectDirectoryName, 'RootDirectory');
   assert.equal(view.lastTaskIdentity?.title, undefined);
   assert.equal(view.lastTaskIdentity?.observedAt, childEndedAt);
   assert.equal(view.lastTask?.threads, 3);
@@ -680,6 +684,27 @@ test('rooted recent task key is anchored to the canonical root when a child is a
   assert.doesNotMatch(JSON.stringify(after.lastTaskIdentity), /session:|project:|raw-appended-child/);
 });
 
+test('recent row cap can omit an old canonical root while retaining its lineage', () => {
+  const view = buildCodexUsageView(rootedTaskBeyondRecentRowCapFixture(), NOW);
+  const identity = view.lastTaskIdentity!;
+  const lineageRows = view.recentThreads.filter((row) =>
+    row.rootTaskViewKey === identity.taskKey &&
+    row.projectViewKey === identity.projectKey
+  );
+
+  assert.equal(view.lastTask?.threads, 1_002);
+  assert.equal(view.recentThreads.length, 1_000);
+  assert.equal(
+    view.recentThreads.some((row) => row.viewKey === identity.taskKey),
+    false,
+  );
+  assert.equal(lineageRows.length, 1_000);
+  assert.equal(
+    lineageRows.every((row) => row.parentViewKey === identity.taskKey),
+    true,
+  );
+});
+
 test('lineage traversal groups a parent cycle once without borrowing a child title', () => {
   const snapshot = snapshotFixture();
   snapshot.files = snapshot.files.slice(0, 2);
@@ -701,6 +726,43 @@ test('lineage traversal groups a parent cycle once without borrowing a child tit
   assert.equal(
     view.lastTaskIdentity?.observedAt,
     Date.parse('2026-07-20T11:55:00.000Z'),
+  );
+});
+
+test('rootless cross-project cycle uses one deterministic representative identity', () => {
+  const snapshot = rootlessCrossProjectCycleFixture();
+  const expectedFile = [...snapshot.files].sort((left, right) =>
+    left.session.sessionKey.localeCompare(right.session.sessionKey) ||
+    (left.session.projectKey ?? '').localeCompare(right.session.projectKey ?? '')
+  )[0];
+  const view = buildCodexUsageView(snapshot, NOW);
+  const reorderedView = buildCodexUsageView(
+    { ...snapshot, files: [...snapshot.files].reverse() },
+    NOW,
+  );
+  const expectedRow = view.recentThreads.find((row) =>
+    row.sessionKey === expectedFile.session.sessionKey
+  );
+
+  assert.ok(expectedRow);
+  assert.equal(expectedRow.parentStatus, 'cycle');
+  assert.equal(expectedRow.title, 'Representative cycle thread');
+  assert.equal(view.lastTask?.threads, 3);
+  assert.equal(view.lastTaskIdentity?.taskKey, expectedRow.viewKey);
+  assert.equal(view.lastTaskIdentity?.projectKey, expectedRow.projectViewKey);
+  assert.equal(view.lastTaskIdentity?.projectName, expectedRow.projectName);
+  assert.equal(
+    view.lastTaskIdentity?.projectDirectoryName,
+    expectedRow.projectDirectoryName,
+  );
+  // Without a canonical root, titles remain thread-only instead of being
+  // promoted to the task card from any member of the cycle.
+  assert.equal(view.lastTaskIdentity?.title, undefined);
+  assert.deepEqual(reorderedView.lastTaskIdentity, view.lastTaskIdentity);
+  assert.deepEqual(reorderedView.lastTask, view.lastTask);
+  assert.doesNotMatch(
+    JSON.stringify(view.lastTaskIdentity),
+    /session:|project:|rootless-cycle/,
   );
 });
 

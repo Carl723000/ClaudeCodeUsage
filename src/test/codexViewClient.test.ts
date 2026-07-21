@@ -166,6 +166,8 @@ function el(tag: string, attributes: Record<string, string> = {}): FixtureElemen
 interface ControllerFixtureOptions {
   sevenDayPeriodDisabled?: boolean;
   sevenDayPeriodAriaDisabled?: boolean;
+  rootlessCycle?: boolean;
+  rootBeyondCap?: boolean;
 }
 
 function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: ControllerFixtureOptions = {}): {
@@ -234,7 +236,11 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
 
   const search = el('input', { type: 'search', 'data-codex-action': 'filter-sessions', 'data-codex-session-search': '' });
   const role = select('role', [option('', 'All roles'), option('root', 'Root'), option('subagent', 'Subagent')]);
-  const projectFilter = select('project', [option('', 'All projects'), option('p-a', 'Alpha'), option('p-b', 'Beta')]);
+  const projectOptions = [option('', 'All projects'), option('p-a', 'Alpha'), option('p-b', 'Beta')];
+  if (fixtureOptions.rootlessCycle) {
+    projectOptions.push(option('p-cycle', 'Cycle Project'));
+  }
+  const projectFilter = select('project', projectOptions);
   const modelFilter = select('model', [option('', 'All models'), option('gpt-5', 'gpt-5'), option('gpt-4.1', 'gpt-4.1')]);
   const effortFilter = select('effort', [option('', 'All efforts'), option('high', 'High'), option('medium', 'Medium')]);
   const sevenDayPeriodOption = option(
@@ -244,37 +250,57 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
     fixtureOptions.sevenDayPeriodAriaDisabled,
   );
   const periodFilter = select('period', [option('', 'All periods'), option('recent', 'Recent'), sevenDayPeriodOption, option('30d', 'Last 30 days')]);
-  const chips = el('div', { 'data-codex-filter-chips': '', 'data-codex-search-label': 'Search' });
+  const chips = el('div', { 'data-codex-filter-chips': '', 'data-codex-search-label': 'Search', 'data-codex-date-label': 'Date' });
   const clearFilters = el('button', { 'data-codex-action': 'clear-filters' });
   const count = el('span', { 'data-codex-thread-visible': '' });
   const layout = el('section', { 'data-codex-session-layout': 'tree' });
-  const rootRow = el('tr', { 'data-codex-thread-row': '', 'data-codex-view-key': 'root-a', 'data-codex-root-task-view-key': 'task-a', 'data-search': 'alpha', 'data-role': 'root', 'data-project': 'p-a', 'data-models': 'gpt-5', 'data-efforts': 'high', 'data-codex-periods': 'recent|7d|30d|all', 'data-sort-title': 'alpha', 'data-sort-time': '10' });
-  const childRow = el('tr', { class: 'codex-child-thread', 'data-codex-thread-row': '', 'data-codex-view-key': 'child-a', 'data-codex-parent-view-key': 'root-a', 'data-codex-root-task-view-key': 'task-a', 'data-search': 'beta', 'data-role': 'subagent', 'data-project': 'p-a', 'data-models': 'gpt-5', 'data-efforts': 'medium', 'data-codex-periods': '7d|30d|all', 'data-sort-title': 'beta', 'data-sort-time': '20' });
-  const rootBRow = el('tr', { 'data-codex-thread-row': '', 'data-codex-view-key': 'root-b', 'data-codex-root-task-view-key': 'root-b', 'data-search': 'gamma', 'data-role': 'root', 'data-project': 'p-b', 'data-models': 'gpt-4.1', 'data-efforts': 'high', 'data-codex-periods': 'recent|7d|30d|all', 'data-sort-title': 'gamma', 'data-sort-time': '30' });
+  const rootRow = el('tr', { 'data-codex-thread-row': '', 'data-codex-view-key': 'root-a', 'data-codex-root-task-view-key': 'task-a', 'data-search': 'alpha', 'data-role': 'root', 'data-project': 'p-a', 'data-models': 'gpt-5', 'data-efforts': 'high', 'data-codex-periods': 'recent|7d|30d|all', 'data-codex-days': '2026-07-20', 'data-sort-title': 'alpha', 'data-sort-time': '10' });
+  const childRow = el('tr', { class: 'codex-child-thread', 'data-codex-thread-row': '', 'data-codex-view-key': 'child-a', 'data-codex-parent-view-key': 'root-a', 'data-codex-root-task-view-key': 'task-a', 'data-search': 'beta', 'data-role': 'subagent', 'data-project': 'p-a', 'data-models': 'gpt-5', 'data-efforts': 'medium', 'data-codex-periods': '7d|30d|all', 'data-codex-days': '2026-07-19', 'data-sort-title': 'beta', 'data-sort-time': '20' });
+  const rootBRow = el('tr', { 'data-codex-thread-row': '', 'data-codex-view-key': 'root-b', 'data-codex-root-task-view-key': 'root-b', 'data-search': 'gamma', 'data-role': 'root', 'data-project': 'p-b', 'data-models': 'gpt-4.1', 'data-efforts': 'high', 'data-codex-periods': 'recent|7d|30d|all', 'data-codex-days': '2026-07-20', 'data-sort-title': 'gamma', 'data-sort-time': '30' });
+  const cycleRow = el('tr', { 'data-codex-thread-row': '', 'data-codex-view-key': 'cycle-representative', 'data-codex-root-task-view-key': 'cycle-representative', 'data-parent-status': 'cycle', 'data-search': 'cycle', 'data-role': 'subagent', 'data-project': 'p-cycle', 'data-models': 'gpt-5', 'data-efforts': 'high', 'data-codex-periods': 'recent|7d|30d|all', 'data-codex-days': '2026-07-20', 'data-sort-title': 'cycle', 'data-sort-time': '40' });
+  const cappedRootChildRow = el('tr', { class: 'codex-child-thread', 'data-codex-thread-row': '', 'data-codex-view-key': 'capped-child', 'data-codex-parent-view-key': 'capped-root', 'data-codex-root-task-view-key': 'capped-root', 'data-parent-status': 'available', 'data-search': 'capped child', 'data-role': 'subagent', 'data-project': 'p-a', 'data-models': 'gpt-5', 'data-efforts': 'high', 'data-codex-periods': 'recent|7d|30d|all', 'data-codex-days': '2026-07-20', 'data-sort-title': 'capped child', 'data-sort-time': '50' });
   const toggle = el('button', { 'data-codex-action': 'toggle-thread-children', 'data-codex-thread-key': 'root-a' });
   rootRow.append(toggle);
   const sessionTable = el('table', { 'data-codex-sort-table': 'sessions' });
-  const sessionTitleSort = el('th', { 'data-codex-action': 'sort-sessions', 'data-codex-sort-key': 'title' });
-  const sessionSort = el('th', { 'data-codex-action': 'sort-sessions', 'data-codex-sort-key': 'recent' });
+  const sessionTitleSort = el('th', { 'data-codex-sort-key': 'title', 'aria-sort': 'none' });
+  const sessionTitleSortButton = el('button', { 'data-codex-action': 'sort-sessions', 'data-codex-sort-key': 'title' });
+  sessionTitleSort.append(sessionTitleSortButton);
+  const sessionSort = el('th', { 'data-codex-sort-key': 'recent', 'aria-sort': 'none' });
+  const sessionSortButton = el('button', { 'data-codex-action': 'sort-sessions', 'data-codex-sort-key': 'recent' });
+  sessionSort.append(sessionSortButton);
   const sessionBody = el('tbody').append(rootRow, childRow, rootBRow);
+  if (fixtureOptions.rootlessCycle) {
+    sessionBody.append(cycleRow);
+  }
+  if (fixtureOptions.rootBeyondCap) {
+    sessionBody.append(cappedRootChildRow);
+  }
   sessionTable.append(el('thead').append(el('tr').append(sessionTitleSort, sessionSort)), sessionBody);
 
   const projectRow = el('tr', { 'data-codex-project-view-key': 'p-a', 'data-sort-name': 'alpha', 'data-sort-processed': '5' });
   const projectDetail = el('tr', { 'data-codex-project-detail': 'p-a' });
   const projectToggle = el('button', { 'data-codex-action': 'project-sessions', 'data-codex-project-view-key': 'p-a' });
   projectRow.append(projectToggle);
+  const projectSessionsAction = el('button', { 'data-codex-action': 'view-project-sessions', 'data-codex-project-view-key': 'p-a' });
+  projectDetail.append(projectSessionsAction);
   const projectBRow = el('tr', { 'data-codex-project-view-key': 'p-b', 'data-sort-name': 'beta', 'data-sort-processed': '2' });
   const projectBDetail = el('tr', { 'data-codex-project-detail': 'p-b' });
   const projectTable = el('table', { 'data-codex-sort-table': 'projects' });
   const projectBody = el('tbody').append(projectRow, projectDetail, projectBRow, projectBDetail);
-  const projectSort = el('th', { 'data-codex-action': 'sort-projects', 'data-codex-sort-key': 'name' });
-  const projectProcessedSort = el('th', { 'data-codex-action': 'sort-projects', 'data-codex-sort-key': 'processed' });
+  const projectSort = el('th', { 'data-codex-sort-key': 'name', 'aria-sort': 'none' });
+  const projectSortButton = el('button', { 'data-codex-action': 'sort-projects', 'data-codex-sort-key': 'name' });
+  projectSort.append(projectSortButton);
+  const projectProcessedSort = el('th', { 'data-codex-sort-key': 'processed', 'aria-sort': 'none' });
+  const projectProcessedSortButton = el('button', { 'data-codex-action': 'sort-projects', 'data-codex-sort-key': 'processed' });
+  projectProcessedSort.append(projectProcessedSortButton);
   const validSetting = el('input', { 'data-codex-action': 'set-setting', 'data-codex-setting-key': 'compactNumbers', 'data-codex-setting-type': 'boolean', 'data-codex-setting-value-source': 'checked' });
   validSetting.checked = true;
   const numberSetting = el('input', { type: 'number', min: '0', max: '2', step: '1', 'data-codex-action': 'set-setting', 'data-codex-setting-key': 'tokenDecimalPlaces', 'data-codex-setting-type': 'number', 'data-codex-setting-value-source': 'value' });
   const validReset = el('button', { 'data-codex-action': 'reset-settings', 'data-codex-setting-keys': '["compactNumbers","language"]' });
   const validViewTask = el('button', { 'data-codex-action': 'view-task', 'data-codex-task-key': 'root-a', 'data-codex-project-key': 'p-a' });
   const fallbackViewTask = el('button', { 'data-codex-action': 'view-task', 'data-codex-task-key': 'task-a', 'data-codex-project-key': 'p-a' });
+  const rootlessCycleViewTask = el('button', { 'data-codex-action': 'view-task', 'data-codex-task-key': 'cycle-representative', 'data-codex-project-key': 'p-cycle' });
+  const cappedRootViewTask = el('button', { 'data-codex-action': 'view-task', 'data-codex-task-key': 'capped-root', 'data-codex-project-key': 'p-a' });
 
   projectTable.append(el('thead').append(el('tr').append(projectSort, projectProcessedSort)), projectBody);
   layout.append(search, role, projectFilter, modelFilter, effortFilter, periodFilter, chips, clearFilters, count, sessionTable);
@@ -300,6 +326,8 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
     validReset,
     validViewTask,
     fallbackViewTask,
+    ...(fixtureOptions.rootlessCycle ? [rootlessCycleViewTask] : []),
+    ...(fixtureOptions.rootBeyondCap ? [cappedRootViewTask] : []),
   );
   const vscode = {
     state: { openDetails: ['host-sibling'], codexUi: initialCodexUi } as Record<string, unknown>,
@@ -309,7 +337,11 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
     setState(value: Record<string, unknown>): void { this.setStateCalls += 1; this.state = value; },
     postMessage(value: unknown): void { this.messages.push(value); },
   };
-  assert.equal(root.querySelectorAll('[data-codex-thread-row]').length, 3);
+  assert.equal(
+    root.querySelectorAll('[data-codex-thread-row]').length,
+    3 + Number(Boolean(fixtureOptions.rootlessCycle)) +
+      Number(Boolean(fixtureOptions.rootBeyondCap)),
+  );
   runInNewContext(getCodexClientScript(), {
     document: { querySelector: (selector: string) => selector === '[data-codex-root]' ? root : null, createElement: (tag: string) => el(tag) },
     vscode,
@@ -333,9 +365,9 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
       projectsTab, sessionsTab, modelsEffortTab, projects, sessions, modelsEffort,
       modelRecent, modelSeven, modelRecentPanel, modelSevenPanel,
       search, role, projectFilter, modelFilter, effortFilter, periodFilter, sevenDayPeriodOption, chips, clearFilters, count, layout,
-      rootRow, childRow, rootBRow, toggle, sessionTable, sessionTitleSort, sessionSort, sessionBody,
-      projectRow, projectDetail, projectToggle, projectBRow, projectBDetail, projectSort, projectProcessedSort, projectBody,
-      validSetting, numberSetting, validReset, validViewTask, fallbackViewTask,
+      rootRow, childRow, rootBRow, cycleRow, cappedRootChildRow, toggle, sessionTable, sessionTitleSort, sessionTitleSortButton, sessionSort, sessionSortButton, sessionBody,
+      projectRow, projectDetail, projectToggle, projectSessionsAction, projectBRow, projectBDetail, projectSort, projectSortButton, projectProcessedSort, projectProcessedSortButton, projectBody,
+      validSetting, numberSetting, validReset, validViewTask, fallbackViewTask, rootlessCycleViewTask, cappedRootViewTask,
     },
   };
 }
@@ -547,7 +579,7 @@ test('delegated page/filter/collapse/expand/sort and keyboard actions mutate the
   fixture.root.dispatch('click', fixture.elements.projectToggle);
   assert.equal(fixture.elements.projectDetail.hidden, false);
 
-  fixture.root.dispatch('click', fixture.elements.projectSort);
+  fixture.root.dispatch('click', fixture.elements.projectSortButton);
   assert.equal(fixture.elements.projectSort.getAttribute('aria-sort'), 'ascending');
 
   const keyEvent = fixture.root.dispatch('keydown', fixture.elements.overviewTab, 'ArrowRight');
@@ -776,7 +808,7 @@ test('project toggle requires a separate same-key detail row', () => {
 
 test('valid session sort keeps lineage adjacent and updates only the session sort state', () => {
   const fixture = controllerFixture();
-  const event = fixture.root.dispatch('click', fixture.elements.sessionTitleSort);
+  const event = fixture.root.dispatch('click', fixture.elements.sessionTitleSortButton);
   assert.equal(event.defaultPrevented, true);
   const state = fixture.vscode.state.codexUi as any;
   assert.equal(state.sort.sessions.key, 'title');
@@ -796,8 +828,10 @@ const malformedSortCases: Array<{
   {
     name: 'non-whitelisted key',
     target: (fixture) => {
-      const target = el('th', { 'data-codex-action': 'sort-sessions', 'data-codex-sort-key': '__proto__' });
-      fixture.elements.sessionTable.querySelector('thead')!.children[0].append(target);
+      const header = el('th', { 'data-codex-sort-key': '__proto__', 'aria-sort': 'none' });
+      const target = el('button', { 'data-codex-action': 'sort-sessions', 'data-codex-sort-key': '__proto__' });
+      header.append(target);
+      fixture.elements.sessionTable.querySelector('thead')!.children[0].append(header);
       return target;
     },
   },
@@ -813,8 +847,10 @@ const malformedSortCases: Array<{
     name: 'table without row inventory',
     target: (fixture) => {
       const table = el('table', { 'data-codex-sort-table': 'sessions' });
-      const target = el('th', { 'data-codex-action': 'sort-sessions', 'data-codex-sort-key': 'recent' });
-      table.append(el('thead').append(el('tr').append(target)), el('tbody'));
+      const header = el('th', { 'data-codex-sort-key': 'recent', 'aria-sort': 'none' });
+      const target = el('button', { 'data-codex-action': 'sort-sessions', 'data-codex-sort-key': 'recent' });
+      header.append(target);
+      table.append(el('thead').append(el('tr').append(header)), el('tbody'));
       fixture.root.append(table);
       return target;
     },
@@ -897,8 +933,13 @@ test('recommendation and model-effort scopes require enabled controls with match
   assert.equal(stateSnapshot(fixture), beforeRogue);
 });
 
-test('date drilldown only targets a row in the current visible Overview panel', () => {
-  const fixture = controllerFixture();
+test('date drilldown from the visible Overview panel opens exact-day Sessions results', () => {
+  const fixture = controllerFixture({
+    version: 1,
+    page: 'overview',
+    search: 'old search',
+    filters: { role: 'subagent', project: 'p-b', model: 'gpt-5', effort: 'medium', period: '7d' },
+  });
   const before = stateSnapshot(fixture);
   let event = fixture.root.dispatch('click', fixture.elements.sevenDateBar);
   assert.equal(event.defaultPrevented, false);
@@ -908,15 +949,58 @@ test('date drilldown only targets a row in the current visible Overview panel', 
 
   event = fixture.root.dispatch('click', fixture.elements.recentDateBar);
   assert.equal(event.defaultPrevented, true);
-  assert.equal(fixture.elements.recentDateRow.classList.contains('selected'), true);
-  assert.equal(fixture.elements.recentDateRow.focused, true);
-  assert.equal(fixture.elements.recentDateRow.scrolled, true);
+  const state = fixture.vscode.state.codexUi as any;
+  assert.equal(state.page, 'explore');
+  assert.equal(state.exploreView, 'sessions');
+  assert.deepEqual(
+    { ...state.filters },
+    { role: '', project: '', model: '', effort: '', period: '', date: '2026-07-20' },
+  );
+  assert.equal(fixture.elements.layout.getAttribute('data-codex-session-layout'), 'flat');
+  assert.equal(fixture.elements.rootRow.hidden, false);
+  assert.equal(fixture.elements.childRow.hidden, true);
+  assert.equal(fixture.elements.rootBRow.hidden, false);
+  assert.equal(fixture.elements.count.textContent, '2');
+  assert.equal(fixture.elements.chips.children[0].getAttribute('data-codex-filter-key'), 'date');
+  assert.equal(fixture.elements.chips.children[0].textContent, 'Date: 2026-07-20 ×');
+});
 
-  fixture.root.dispatch('click', fixture.elements.sevenScope);
-  event = fixture.root.dispatch('click', fixture.elements.sevenDateBar);
+test('restored absent exact day remains a safe zero-result filter instead of being pruned', () => {
+  const fixture = controllerFixture({
+    version: 1,
+    page: 'explore',
+    exploreView: 'sessions',
+    filters: { date: '2099-12-31' },
+  });
+  const state = fixture.vscode.state.codexUi as any;
+  assert.equal(state.filters.date, '2099-12-31');
+  assert.equal(fixture.elements.count.textContent, '0');
+  assert.equal(fixture.elements.chips.children[0].textContent, 'Date: 2099-12-31 ×');
+});
+
+test('project detail action opens Sessions with only its canonical project filter', () => {
+  const fixture = controllerFixture({
+    version: 1,
+    page: 'explore',
+    exploreView: 'projects',
+    search: 'old search',
+    filters: { role: 'subagent', model: 'gpt-5', effort: 'high', period: '7d', date: '2026-07-19' },
+  });
+  const event = fixture.root.dispatch('click', fixture.elements.projectSessionsAction);
   assert.equal(event.defaultPrevented, true);
-  assert.equal(fixture.elements.sevenDateRow.classList.contains('selected'), true);
-  assert.equal(fixture.elements.recentDateRow.classList.contains('selected'), false);
+  const state = fixture.vscode.state.codexUi as any;
+  assert.equal(state.page, 'explore');
+  assert.equal(state.exploreView, 'sessions');
+  assert.equal(state.search, '');
+  assert.deepEqual(
+    { ...state.filters },
+    { role: '', project: 'p-a', model: '', effort: '', period: '', date: '' },
+  );
+  assert.equal(fixture.elements.rootRow.hidden, false);
+  assert.equal(fixture.elements.childRow.hidden, false);
+  assert.equal(fixture.elements.rootBRow.hidden, true);
+  assert.equal(fixture.elements.count.textContent, '2');
+  assert.equal(fixture.elements.chips.children[0].textContent, 'project: Alpha ×');
 });
 
 test('view-task resolves only a same-project root row and focuses the resolved target', () => {
@@ -936,6 +1020,63 @@ test('view-task resolves only a same-project root row and focuses the resolved t
   state = fallback.vscode.state.codexUi as any;
   assert.equal(state.filters.project, 'p-a');
   assert.equal(fallback.elements.rootRow.focused, true);
+});
+
+test('view-task resolves a rootless cycle representative and filters its project', () => {
+  const fixture = controllerFixture(undefined, { rootlessCycle: true });
+  const event = fixture.root.dispatch(
+    'click',
+    fixture.elements.rootlessCycleViewTask,
+  );
+
+  assert.equal(event.defaultPrevented, true);
+  const state = fixture.vscode.state.codexUi as any;
+  assert.equal(state.page, 'explore');
+  assert.equal(state.exploreView, 'sessions');
+  assert.equal(state.filters.project, 'p-cycle');
+  assert.equal(fixture.elements.cycleRow.hidden, false);
+  assert.equal(fixture.elements.rootRow.hidden, true);
+  assert.equal(fixture.elements.childRow.hidden, true);
+  assert.equal(fixture.elements.rootBRow.hidden, true);
+  assert.equal(fixture.elements.count.textContent, '1');
+  assert.equal(fixture.elements.chips.children[0].textContent, 'project: Cycle Project ×');
+  assert.equal(fixture.elements.cycleRow.focused, true);
+  assert.equal(fixture.elements.cycleRow.scrolled, true);
+});
+
+test('view-task resolves a same-project descendant when its capped root row is absent', () => {
+  const fixture = controllerFixture(undefined, { rootBeyondCap: true });
+  const event = fixture.root.dispatch(
+    'click',
+    fixture.elements.cappedRootViewTask,
+  );
+
+  assert.equal(event.defaultPrevented, true);
+  const state = fixture.vscode.state.codexUi as any;
+  assert.equal(state.page, 'explore');
+  assert.equal(state.exploreView, 'sessions');
+  assert.equal(state.filters.project, 'p-a');
+  assert.equal(fixture.elements.cappedRootChildRow.hidden, false);
+  assert.equal(fixture.elements.rootBRow.hidden, true);
+  assert.equal(fixture.elements.cappedRootChildRow.focused, true);
+  assert.equal(fixture.elements.cappedRootChildRow.scrolled, true);
+});
+
+test('view-task capped-root fallback rejects a descendant from another project', () => {
+  const fixture = controllerFixture(undefined, { rootBeyondCap: true });
+  const target = el('button', {
+    'data-codex-action': 'view-task',
+    'data-codex-task-key': 'capped-root',
+    'data-codex-project-key': 'p-b',
+  });
+  fixture.root.append(target);
+  const before = stateSnapshot(fixture);
+  const event = fixture.root.dispatch('click', target);
+
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(stateSnapshot(fixture), before);
+  assert.equal(fixture.elements.cappedRootChildRow.focused, false);
+  assert.equal(fixture.elements.cappedRootChildRow.scrolled, false);
 });
 
 const rejectedViewTaskCases = [
