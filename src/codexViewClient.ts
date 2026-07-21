@@ -14,10 +14,11 @@ export function getCodexClientScript(): string {
   var scopes = ['recent', '7d', '30d', 'all'];
   var exploreViews = ['projects', 'sessions', 'models-effort'];
   var metrics = ['processed', 'fresh', 'output', 'reasoning', 'sessions'];
-  var filterKeys = ['role', 'project', 'model', 'effort', 'period'];
+  var selectFilterKeys = ['role', 'project', 'model', 'effort', 'period'];
+  var filterKeys = selectFilterKeys.concat(['date']);
   var filterRowAttributes = {
     role: 'data-role', project: 'data-project', model: 'data-models',
-    effort: 'data-efforts', period: 'data-codex-periods'
+    effort: 'data-efforts', period: 'data-codex-periods', date: 'data-codex-days'
   };
   var sortKeys = {
     projects: ['name', 'lastactive', 'processed', 'fresh', 'output', 'reasoning', 'roots', 'children'],
@@ -41,7 +42,7 @@ export function getCodexClientScript(): string {
     version: 1, page: 'overview', returnPage: 'overview',
     overviewScope: 'recent', recommendationScope: 'recent',
     exploreView: 'projects', exploreScope: 'recent', chartMetric: 'processed',
-    search: '', filters: { role: '', project: '', model: '', effort: '', period: '' },
+    search: '', filters: { role: '', project: '', model: '', effort: '', period: '', date: '' },
     sort: { projects: { key: 'processed', direction: 'desc' }, sessions: { key: 'recent', direction: 'desc' } },
     expandedProjects: [], collapsedTasks: []
   };
@@ -54,7 +55,7 @@ export function getCodexClientScript(): string {
       overviewScope: defaults.overviewScope, recommendationScope: defaults.recommendationScope,
       exploreView: defaults.exploreView, exploreScope: defaults.exploreScope,
       chartMetric: defaults.chartMetric, search: '',
-      filters: { role: '', project: '', model: '', effort: '', period: '' },
+      filters: { role: '', project: '', model: '', effort: '', period: '', date: '' },
       sort: {
         projects: { key: defaults.sort.projects.key, direction: defaults.sort.projects.direction },
         sessions: { key: defaults.sort.sessions.key, direction: defaults.sort.sessions.direction }
@@ -76,6 +77,10 @@ export function getCodexClientScript(): string {
   function text(value, fallback, maximum) {
     if (typeof value !== 'string') { return fallback; }
     return maximum === undefined ? value : value.slice(0, maximum);
+  }
+
+  function isoDay(value) {
+    return typeof value === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(value) ? value : '';
   }
 
   function stringList(value) {
@@ -102,7 +107,8 @@ export function getCodexClientScript(): string {
     next.chartMetric = choice(own(raw, 'chartMetric'), metrics, next.chartMetric);
     next.search = text(own(raw, 'search'), '', 200);
     var rawFilters = own(raw, 'filters');
-    filterKeys.forEach(function(key) { next.filters[key] = text(own(rawFilters, key), ''); });
+    selectFilterKeys.forEach(function(key) { next.filters[key] = text(own(rawFilters, key), ''); });
+    next.filters.date = isoDay(own(rawFilters, 'date'));
     var rawSort = own(raw, 'sort');
     ['projects', 'sessions'].forEach(function(group) {
       var value = own(rawSort, group);
@@ -194,7 +200,7 @@ export function getCodexClientScript(): string {
   }
 
   function validFilterValue(control, key, value) {
-    if (filterKeys.indexOf(key) === -1 || !tagIs(control, 'select') ||
+    if (selectFilterKeys.indexOf(key) === -1 || !tagIs(control, 'select') ||
         control.getAttribute('data-codex-session-filter') !== key ||
         control.hasAttribute('data-codex-session-search') || !enabledOption(control, value)) { return false; }
     return !value || rowHas(filterRowAttributes[key], value);
@@ -205,7 +211,7 @@ export function getCodexClientScript(): string {
         !element.hasAttribute('data-codex-session-filter') &&
         (element.getAttribute('type') || '').toLowerCase() === 'search') { return 'search'; }
     var key = element.getAttribute('data-codex-session-filter');
-    if (tagIs(element, 'select') && !element.hasAttribute('data-codex-session-search') && filterKeys.indexOf(key) !== -1) { return 'select'; }
+    if (tagIs(element, 'select') && !element.hasAttribute('data-codex-session-search') && selectFilterKeys.indexOf(key) !== -1) { return 'select'; }
     return '';
   }
 
@@ -228,10 +234,12 @@ export function getCodexClientScript(): string {
   }
 
   function validSortAction(element, group, key) {
-    if (!tagIs(element, 'th') || !sortKeys[group] || sortKeys[group].indexOf(key) === -1 ||
+    if (!tagIs(element, 'button') || !sortKeys[group] || sortKeys[group].indexOf(key) === -1 ||
         element.getAttribute('data-codex-action') !== (group === 'projects' ? 'sort-projects' : 'sort-sessions')) { return null; }
-    var table = element.closest('[data-codex-sort-table="' + group + '"]');
-    if (!table || !element.closest('thead') || !hasElement('[data-codex-sort-table="' + group + '"] [data-codex-sort-key]', element) ||
+    var header = element.closest('th[data-codex-sort-key]');
+    var table = header ? header.closest('[data-codex-sort-table="' + group + '"]') : null;
+    if (!header || header.getAttribute('data-codex-sort-key') !== key || !table || !header.closest('thead') ||
+        !hasElement('[data-codex-sort-table="' + group + '"] th[data-codex-sort-key]', header) ||
         !sortInventory(table, group, key)) { return null; }
     return table;
   }
@@ -260,9 +268,10 @@ export function getCodexClientScript(): string {
     }
     ['projects', 'sessions'].forEach(function(group) {
       var available = [];
-      root.querySelectorAll('[data-codex-sort-table="' + group + '"] [data-codex-sort-key]').forEach(function(header) {
+      root.querySelectorAll('[data-codex-sort-table="' + group + '"] th[data-codex-sort-key]').forEach(function(header) {
         var key = header.getAttribute('data-codex-sort-key');
-        if (validSortAction(header, group, key) && available.indexOf(key) === -1) { available.push(key); }
+        var trigger = header.querySelector('button[data-codex-action][data-codex-sort-key]');
+        if (validSortAction(trigger, group, key) && available.indexOf(key) === -1) { available.push(key); }
       });
       if (available.length && available.indexOf(next.sort[group].key) === -1) {
         next.sort[group].key = available.indexOf(defaults.sort[group].key) !== -1 ? defaults.sort[group].key : available[0];
@@ -273,9 +282,10 @@ export function getCodexClientScript(): string {
     var taskKeys = values('[data-codex-thread-row][data-codex-view-key]', 'data-codex-view-key');
     next.expandedProjects = next.expandedProjects.filter(function(key) { return projectKeys.indexOf(key) !== -1; });
     next.collapsedTasks = next.collapsedTasks.filter(function(key) { return taskKeys.indexOf(key) !== -1; });
-    filterKeys.forEach(function(key) {
+    selectFilterKeys.forEach(function(key) {
       if (!validFilterValue(filterControl(key), key, next.filters[key])) { next.filters[key] = ''; }
     });
+    if (!isoDay(next.filters.date)) { next.filters.date = ''; }
     return next;
   }
 
@@ -326,7 +336,7 @@ export function getCodexClientScript(): string {
       var label = column ? column.querySelector('[data-codex-chart-value]') : null;
       if (label) { label.textContent = rendered; }
     });
-    chart.querySelectorAll('[data-codex-chart-metric]').forEach(function(button) {
+    root.querySelectorAll('[data-codex-chart-metric]').forEach(function(button) {
       var selected = button.getAttribute('data-codex-chart-metric') === metric;
       button.classList.toggle('active', selected);
       button.setAttribute('aria-pressed', selected ? 'true' : 'false');
@@ -353,7 +363,7 @@ export function getCodexClientScript(): string {
   function syncFilterControls() {
     var search = searchControl();
     if (search) { search.value = state.search; }
-    filterKeys.forEach(function(key) {
+    selectFilterKeys.forEach(function(key) {
       var control = filterControl(key);
       if (control) { control.value = state.filters[key]; }
     });
@@ -368,7 +378,8 @@ export function getCodexClientScript(): string {
     filterKeys.forEach(function(key) {
       if (!state.filters[key]) { return; }
       var control = filterControl(key);
-      var label = control ? control.getAttribute('aria-label') || key : key;
+      var label = control ? control.getAttribute('aria-label') || key :
+        key === 'date' ? container.getAttribute('data-codex-date-label') || 'Date' : key;
       var rendered = state.filters[key];
       if (control && control.options && control.selectedIndex >= 0) { rendered = control.options[control.selectedIndex].text; }
       items.push([key, label, rendered]);
@@ -397,7 +408,8 @@ export function getCodexClientScript(): string {
         (!state.filters.project || row.getAttribute('data-project') === state.filters.project) &&
         (!state.filters.model || (row.getAttribute('data-models') || '').split('|').indexOf(state.filters.model) !== -1) &&
         (!state.filters.effort || (row.getAttribute('data-efforts') || '').split('|').indexOf(state.filters.effort) !== -1) &&
-        (!state.filters.period || (row.getAttribute('data-codex-periods') || '').split('|').indexOf(state.filters.period) !== -1);
+        (!state.filters.period || (row.getAttribute('data-codex-periods') || '').split('|').indexOf(state.filters.period) !== -1) &&
+        (!state.filters.date || (row.getAttribute('data-codex-days') || '').split('|').indexOf(state.filters.date) !== -1);
       var lineageVisible = true;
       if (!filtered) {
         var parent = row.getAttribute('data-codex-parent-view-key');
@@ -490,7 +502,7 @@ export function getCodexClientScript(): string {
       return direction === 'asc' ? compared : -compared;
     });
     units.forEach(function(unit) { unit.forEach(function(row) { body.appendChild(row); }); });
-    table.querySelectorAll('[data-codex-sort-key]').forEach(function(header) {
+    table.querySelectorAll('th[data-codex-sort-key]').forEach(function(header) {
       var active = header.getAttribute('data-codex-sort-key') === key;
       header.setAttribute('aria-sort', active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none');
       header.classList.toggle('sorted-asc', active && direction === 'asc');
@@ -596,8 +608,8 @@ export function getCodexClientScript(): string {
     }
     var fallback = null;
     rows.forEach(function(row) {
-      if (!fallback && !row.hasAttribute('data-codex-parent-view-key') &&
-          row.getAttribute('data-project') === project && row.getAttribute('data-codex-root-task-view-key') === task) { fallback = row; }
+      if (!fallback && row.getAttribute('data-project') === project &&
+          row.getAttribute('data-codex-root-task-view-key') === task) { fallback = row; }
     });
     return fallback;
   }
@@ -663,6 +675,19 @@ export function getCodexClientScript(): string {
       if (expandedAt === -1) { state.expandedProjects.push(value); } else { state.expandedProjects.splice(expandedAt, 1); }
       return true;
     }
+    if (action === 'view-project-sessions') {
+      value = element.getAttribute('data-codex-project-view-key');
+      var projectDetail = element.closest('[data-codex-project-detail]');
+      if (!tagIs(element, 'button') || !value || !projectDetail ||
+          projectDetail.getAttribute('data-codex-project-detail') !== value ||
+          !projectDetailExists(value) || !validFilterValue(filterControl('project'), 'project', value) ||
+          values('[data-codex-explore-panel]', 'data-codex-explore-panel').indexOf('sessions') === -1 ||
+          !hasEnabledValue('[data-codex-explore-view-button]', 'data-codex-explore-view-button', 'sessions') ||
+          !setPage('explore')) { return false; }
+      state.exploreView = 'sessions'; state.search = '';
+      filterKeys.forEach(function(key) { state.filters[key] = ''; });
+      state.filters.project = value; return true;
+    }
     if (action === 'sort-projects' || action === 'sort-sessions') {
       var group = action === 'sort-projects' ? 'projects' : 'sessions';
       value = element.getAttribute('data-codex-sort-key');
@@ -692,8 +717,12 @@ export function getCodexClientScript(): string {
       var row = scopePanel ? scopePanel.querySelector('[data-codex-date-row="' + value + '"]') : null;
       if (!scopePanel || !overviewPage || overviewPage.hidden || scopePanel.hidden || isDisabled(scopePanel) ||
           scopePanel.getAttribute('data-codex-overview-panel') !== state.overviewScope || !row || row.hidden || isDisabled(row)) { return false; }
-      root.querySelectorAll('[data-codex-date-row].selected').forEach(function(item) { item.classList.remove('selected'); });
-      row.classList.add('selected'); row.focus(); row.scrollIntoView({ behavior: scrollBehavior(), block: 'center' }); return true;
+      if (values('[data-codex-explore-panel]', 'data-codex-explore-panel').indexOf('sessions') === -1 ||
+          !hasEnabledValue('[data-codex-explore-view-button]', 'data-codex-explore-view-button', 'sessions') ||
+          !setPage('explore')) { return false; }
+      state.exploreView = 'sessions'; state.search = '';
+      filterKeys.forEach(function(key) { state.filters[key] = ''; });
+      state.filters.date = value; return true;
     }
     if (action === 'set-setting') {
       var message = validSettingValue(element.getAttribute('data-codex-setting-key'), element.getAttribute('data-codex-setting-type'), element.getAttribute('data-codex-setting-value-source'), element);

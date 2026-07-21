@@ -6306,6 +6306,10 @@ function handleChartTabClick(event) {
 }
 
 function updateMainChart(metric, container) {
+  if (typeof metric !== 'string' ||
+      ['cost', 'inputTokens', 'outputTokens', 'cacheCreation', 'cacheRead', 'messages'].indexOf(metric) === -1) {
+    return;
+  }
   console.log("[DEBUG] updateMainChart called with metric:", metric, "container:", container);
 
   // If container is provided, use it; otherwise find the active tab content

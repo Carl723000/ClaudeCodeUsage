@@ -14,13 +14,14 @@ test('Codex UI state restores only allow-listed values', () => {
     overviewScope: '30d',
     chartMetric: 'fresh',
     search: '<script>x</script>',
-    filters: { role: 'subagent', project: 'p-a', model: 'm', effort: 'high', period: '7d' },
+    filters: { role: 'subagent', project: 'p-a', model: 'm', effort: 'high', period: '7d', date: '2026-07-20' },
     expandedProjects: ['p-a', 42],
   });
 
   assert.equal(state.page, 'explore');
   assert.equal(state.overviewScope, '30d');
   assert.equal(state.search, '<script>x</script>');
+  assert.equal(state.filters.date, '2026-07-20');
   assert.deepEqual(state.expandedProjects, ['p-a']);
 });
 
@@ -34,13 +35,13 @@ test('sanitization bounds search and string lists while clearing unknown filters
   const state = sanitizeCodexUiState({
     version: 1,
     search: 'x'.repeat(201),
-    filters: { role: 1, project: null, model: 'm', effort: {}, period: '30d' },
+    filters: { role: 1, project: null, model: 'm', effort: {}, period: '30d', date: 'not-a-date' },
     expandedProjects: values.concat(['p-0', 1, null] as unknown as string),
     collapsedTasks: ['a', 'a', 'b', 1],
   });
 
   assert.equal(state.search.length, 200);
-  assert.deepEqual(state.filters, { role: '', project: '', model: 'm', effort: '', period: '30d' });
+  assert.deepEqual(state.filters, { role: '', project: '', model: 'm', effort: '', period: '30d', date: '' });
   assert.equal(state.expandedProjects.length, 100);
   assert.equal(new Set(state.expandedProjects).size, 100);
   assert.deepEqual(state.collapsedTasks, ['a', 'b']);
@@ -60,7 +61,7 @@ test('settings cannot be a return page and defaults are deeply cloned', () => {
 test('patch merges nested filters and sort without mutation before sanitizing', () => {
   const current = sanitizeCodexUiState({
     version: 1,
-    filters: { role: 'agent', project: 'alpha', model: 'gpt', effort: 'high', period: '7d' },
+    filters: { role: 'agent', project: 'alpha', model: 'gpt', effort: 'high', period: '7d', date: '2026-07-20' },
     sort: {
       projects: { key: 'processed', direction: 'desc' },
       sessions: { key: 'started', direction: 'asc' },
@@ -73,7 +74,7 @@ test('patch merges nested filters and sort without mutation before sanitizing', 
   } as unknown as Partial<typeof current>;
 
   const state = patchCodexUiState(current, patch);
-  assert.deepEqual(state.filters, { role: '', project: 'beta', model: 'gpt', effort: 'high', period: '7d' });
+  assert.deepEqual(state.filters, { role: '', project: 'beta', model: 'gpt', effort: 'high', period: '7d', date: '2026-07-20' });
   assert.deepEqual(state.sort, {
     projects: { key: 'processed', direction: 'asc' },
     sessions: { key: 'started', direction: 'asc' },
@@ -86,7 +87,7 @@ test('patch merges nested filters and sort without mutation before sanitizing', 
 test('patch sanitizes explicit unknown nested values instead of retaining them', () => {
   const current = sanitizeCodexUiState({
     version: 1,
-    filters: { role: 'agent', project: 'alpha', model: '', effort: '', period: '' },
+    filters: { role: 'agent', project: 'alpha', model: '', effort: '', period: '', date: '' },
     sort: { projects: { key: 'processed', direction: 'desc' }, sessions: { key: 'recent', direction: 'desc' } },
   });
   const state = patchCodexUiState(current, {
@@ -96,6 +97,13 @@ test('patch sanitizes explicit unknown nested values instead of retaining them',
 
   assert.equal(state.filters.role, '');
   assert.equal(state.sort.sessions.direction, DEFAULT_CODEX_UI_STATE.sort.sessions.direction);
+});
+
+test('date filters accept only the persisted ISO day contract', () => {
+  assert.equal(sanitizeCodexUiState({ version: 1, filters: { date: '2026-07-20' } }).filters.date, '2026-07-20');
+  for (const value of ['2026-7-20', '20-07-2026', '2026-07-20T00:00:00Z', '__proto__']) {
+    assert.equal(sanitizeCodexUiState({ version: 1, filters: { date: value } }).filters.date, '');
+  }
 });
 
 test('untrusted prototype-like objects do not invoke accessors', () => {

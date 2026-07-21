@@ -60,6 +60,8 @@ export interface CodexViewCopy {
   localDirectory: string;
   lastActive: string;
   expand: string;
+  viewAllSessions: string;
+  sortBy: string;
   rootRole: string;
   childRole: string;
   approvalReviewerRole: string;
@@ -193,6 +195,8 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   localDirectory: 'Local folder',
   lastActive: 'Last active',
   expand: 'Expand',
+  viewAllSessions: 'View all sessions',
+  sortBy: 'Sort by',
   rootRole: 'Root',
   childRole: 'Subagent',
   approvalReviewerRole: 'Approval reviewer',
@@ -359,6 +363,7 @@ export interface CodexExploreFilters {
   model?: string;
   effort?: string;
   period?: string;
+  date?: string;
 }
 
 export interface CodexRenderFormatters {
@@ -671,12 +676,15 @@ function threadTable(
   const query = filters.query ?? '';
   const normalizedQuery = query.trim().toLowerCase();
   const roles = new Set(['root', 'subagent', 'approval-reviewer', 'unknown']);
-  const projects = new Map(
-    rows.map((row) => [
-      row.projectViewKey,
-      row.projectName ?? copy.unidentifiedProject,
-    ]),
-  );
+  const projects = new Map<string, string>();
+  const projectRoles = new Map<string, CodexThreadUsageView['role']>();
+  for (const row of rows) {
+    if (!projects.has(row.projectViewKey) ||
+        (row.role === 'root' && projectRoles.get(row.projectViewKey) !== 'root')) {
+      projects.set(row.projectViewKey, row.projectName ?? copy.unidentifiedProject);
+      projectRoles.set(row.projectViewKey, row.role);
+    }
+  }
   const models = new Set(rows.flatMap((row) => row.models));
   const efforts = new Set(rows.flatMap((row) => row.efforts));
   const periods = new Set(['recent', '7d', '30d', 'all']);
@@ -693,9 +701,12 @@ function threadTable(
     periodAvailability[requestedPeriod as keyof typeof periodAvailability]
     ? requestedPeriod
     : '';
+  const dateFilter = typeof filters.date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(filters.date)
+    ? filters.date
+    : '';
   const hasFilters = Boolean(
     normalizedQuery || roleFilter || projectFilter || modelFilter ||
-    effortFilter || periodFilter,
+    effortFilter || periodFilter || dateFilter,
   );
   const matching = rows.filter((row) => {
     const searchable = [row.title, row.agentNickname, row.parentTitle, row.projectName, ...row.models, ...row.efforts]
@@ -707,7 +718,8 @@ function threadTable(
       (!effortFilter || row.efforts.includes(effortFilter)) &&
       (!periodFilter || row.periodMembership.includes(
         periodFilter as CodexThreadUsageView['periodMembership'][number],
-      ));
+      )) &&
+      (!dateFilter || row.dayMembership.includes(dateFilter));
   });
   const byParent = new Map<string, CodexThreadUsageView[]>();
   for (const row of matching) {
@@ -794,6 +806,7 @@ function threadTable(
     chip('model', copy.models, modelFilter),
     chip('effort', copy.efforts, effortFilter),
     chip('period', copy.scope, periodLabels.get(periodFilter) ?? ''),
+    chip('date', copy.date, dateFilter),
   ].join('');
   const hasUnavailablePeriods = Object.values(periodAvailability)
     .some((available) => !available);
@@ -807,7 +820,7 @@ function threadTable(
     ${select('model', copy.models, modelOptions, modelFilter)}
     ${select('effort', copy.efforts, effortOptions, effortFilter)}
     ${select('period', copy.scope, periodOptions, periodFilter, hasUnavailablePeriods ? 'codex-session-period-note' : '')}
-    ${periodNote}<div class="codex-filter-chips" aria-label="${escapeHtml(copy.activeFilters)}" data-codex-filter-chips data-codex-search-label="${escapeHtml(copy.searchThreads)}">${chips}</div><button class="btn-secondary" data-codex-action="clear-filters"${hasFilters ? '' : ' hidden'}>${escapeHtml(copy.clearFilters)}</button>
+    ${periodNote}<div class="codex-filter-chips" aria-label="${escapeHtml(copy.activeFilters)}" data-codex-filter-chips data-codex-search-label="${escapeHtml(copy.searchThreads)}" data-codex-date-label="${escapeHtml(copy.date)}">${chips}</div><button class="btn-secondary" data-codex-action="clear-filters"${hasFilters ? '' : ' hidden'}>${escapeHtml(copy.clearFilters)}</button>
   </div>`;
   const body = displayed
     .map((row) => {
@@ -849,12 +862,12 @@ function threadTable(
         [copy.duration, formatDuration(row.durationMs)],
       ].map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
       const mobile = `<details class="codex-mobile-details"><summary aria-label="${escapeHtml(`${copy.threadLabel}: ${title}`)}">${escapeHtml(title)}</summary><dl>${mobileFacts}</dl></details>`;
-      return `<tr class="sort-row codex-thread-row${!hasFilters && row.parentViewKey ? ' codex-child-thread' : ''}" tabindex="-1" data-codex-thread-row data-codex-view-key="${escapeHtml(row.viewKey)}" data-codex-root-task-view-key="${escapeHtml(row.rootTaskViewKey)}" data-parent-status="${row.parentStatus}"${row.parentViewKey ? ` data-codex-parent-view-key="${escapeHtml(row.parentViewKey)}"` : ''} data-search="${escapeHtml(search)}" data-role="${escapeHtml(row.role)}" data-project="${escapeHtml(row.projectViewKey)}" data-models="${escapeHtml(row.models.join('|'))}" data-efforts="${escapeHtml(row.efforts.join('|'))}" data-codex-periods="${escapeHtml(row.periodMembership.join('|'))}" data-sort-title="${escapeHtml(title.toLowerCase())}" data-sort-time="${Math.max(0, row.observedAt)}" data-sort-role="${escapeHtml(row.role)}" data-sort-project="${escapeHtml(project.toLowerCase())}" data-sort-model="${escapeHtml(row.models.join(',').toLowerCase())}" data-sort-effort="${escapeHtml(row.efforts.join(',').toLowerCase())}" data-sort-processed="${Math.max(0, row.total.processed)}" data-sort-fresh="${Math.max(0, row.total.fresh)}" data-sort-cache="${row.total.input > 0 ? row.total.cachedInput / row.total.input : 0}" data-sort-output="${Math.max(0, row.total.output)}" data-sort-reasoning="${Math.max(0, row.total.reasoning)}" data-sort-duration="${Math.max(0, row.durationMs)}"><td class="name-cell">${childToggle}<strong>${escapeHtml(title)}</strong>${parent}${mobile}</td><td class="date-cell codex-wide-only">${escapeHtml(formatDateTime(row.observedAt))}</td><td class="codex-wide-only">${escapeHtml(roleLabel(row.role, copy))}</td><td class="codex-wide-only"><strong>${escapeHtml(project)}</strong>${directory}</td><td class="codex-wide-only">${escapeHtml(row.models.join(', '))}</td><td class="codex-wide-only">${escapeHtml(row.efforts.join(', '))}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.processed)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.fresh)}</td><td class="number-cell codex-wide-only">${percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.output)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.reasoning)}</td><td class="number-cell codex-wide-only">${escapeHtml(formatDuration(row.durationMs))}</td></tr>`;
+      return `<tr class="sort-row codex-thread-row${!hasFilters && row.parentViewKey ? ' codex-child-thread' : ''}" tabindex="-1" data-codex-thread-row data-codex-view-key="${escapeHtml(row.viewKey)}" data-codex-root-task-view-key="${escapeHtml(row.rootTaskViewKey)}" data-parent-status="${row.parentStatus}"${row.parentViewKey ? ` data-codex-parent-view-key="${escapeHtml(row.parentViewKey)}"` : ''} data-search="${escapeHtml(search)}" data-role="${escapeHtml(row.role)}" data-project="${escapeHtml(row.projectViewKey)}" data-models="${escapeHtml(row.models.join('|'))}" data-efforts="${escapeHtml(row.efforts.join('|'))}" data-codex-periods="${escapeHtml(row.periodMembership.join('|'))}" data-codex-days="${escapeHtml(row.dayMembership.join('|'))}" data-sort-title="${escapeHtml(title.toLowerCase())}" data-sort-time="${Math.max(0, row.observedAt)}" data-sort-role="${escapeHtml(row.role)}" data-sort-project="${escapeHtml(project.toLowerCase())}" data-sort-model="${escapeHtml(row.models.join(',').toLowerCase())}" data-sort-effort="${escapeHtml(row.efforts.join(',').toLowerCase())}" data-sort-processed="${Math.max(0, row.total.processed)}" data-sort-fresh="${Math.max(0, row.total.fresh)}" data-sort-cache="${row.total.input > 0 ? row.total.cachedInput / row.total.input : 0}" data-sort-output="${Math.max(0, row.total.output)}" data-sort-reasoning="${Math.max(0, row.total.reasoning)}" data-sort-duration="${Math.max(0, row.durationMs)}"><td class="name-cell">${childToggle}<strong>${escapeHtml(title)}</strong>${parent}${mobile}</td><td class="date-cell codex-wide-only">${escapeHtml(formatDateTime(row.observedAt))}</td><td class="codex-wide-only">${escapeHtml(roleLabel(row.role, copy))}</td><td class="codex-wide-only"><strong>${escapeHtml(project)}</strong>${directory}</td><td class="codex-wide-only">${escapeHtml(row.models.join(', '))}</td><td class="codex-wide-only">${escapeHtml(row.efforts.join(', '))}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.processed)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.fresh)}</td><td class="number-cell codex-wide-only">${percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.output)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.reasoning)}</td><td class="number-cell codex-wide-only">${escapeHtml(formatDuration(row.durationMs))}</td></tr>`;
     })
     .join('');
   const th = (key: string, label: string, legacyKey = key): string => {
     const numeric = ['processed', 'fresh', 'cache', 'output', 'reasoning', 'duration'].includes(key);
-    return `<th class="sortable${numeric ? ' number-cell' : ''}${key === 'title' ? '' : ' codex-wide-only'}" data-sortkey="${legacyKey}" data-codex-action="sort-sessions" data-codex-sort-key="${key}" aria-sort="none">${escapeHtml(label)}</th>`;
+    return `<th class="sortable${numeric ? ' number-cell' : ''}${key === 'title' ? '' : ' codex-wide-only'}" data-sortkey="${legacyKey}" data-codex-sort-key="${key}" aria-sort="none"><button type="button" class="codex-sort-button" aria-label="${escapeHtml(`${copy.sortBy}: ${label}`)}" data-codex-action="sort-sessions" data-codex-sort-key="${key}">${escapeHtml(label)}</button></th>`;
   };
   return `<section class="daily-breakdown" data-codex-session-layout="${hasFilters ? 'flat' : 'tree'}"><h3>${escapeHtml(copy.sessions)}</h3><p class="model-details"><span data-codex-thread-visible aria-live="polite" aria-atomic="true">${formatted(format, displayed.length)}</span>/${formatted(format, totalCount)} ${escapeHtml(copy.sessions)}</p>${filterToolbar}<div class="daily-table-container codex-scroll-region"><table class="daily-table sortable-table codex-session-table" data-codex-sort-table="sessions"><thead><tr>${th('title', copy.threadLabel)}${th('recent', copy.date, 'time')}${th('role', copy.role)}${th('project', copy.projectLabel)}${th('model', copy.models)}${th('effort', copy.efforts)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('cache', copy.cacheShare)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('duration', copy.duration)}</tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
@@ -878,12 +891,12 @@ function projectTable(
         .map((thread) => `<div class="codex-project-thread"><strong>${escapeHtml(thread.title ?? thread.agentNickname ?? copy.unnamedSession)}</strong><span>${escapeHtml(roleLabel(thread.role, copy))} · ${formatted(format, thread.total.fresh)} ${escapeHtml(copy.fresh)}</span></div>`)
         .join('');
       const shown = project.recentThreads.length;
-      return `<tr class="sort-row codex-project-row" data-codex-project-view-key="${escapeHtml(project.viewKey)}" data-sort-name="${escapeHtml(name.toLowerCase())}" data-sort-lastactive="${Math.max(0, project.lastActiveAt)}" data-sort-processed="${Math.max(0, project.scope.total.processed)}" data-sort-fresh="${Math.max(0, project.scope.total.fresh)}" data-sort-output="${Math.max(0, project.scope.total.output)}" data-sort-reasoning="${Math.max(0, project.scope.total.reasoning)}" data-sort-roots="${Math.max(0, project.scope.rootTasks)}" data-sort-children="${Math.max(0, project.scope.childThreads)}"><td><button class="group-toggle codex-disclosure" aria-label="${escapeHtml(copy.expand)} ${escapeHtml(name)}" aria-expanded="false" data-codex-action="project-sessions" data-codex-project-view-key="${escapeHtml(project.viewKey)}">▶</button><strong>${escapeHtml(name)}</strong>${directory}<div class="model-details">${formatted(format, shown)}/${formatted(format, project.threadCount)} ${escapeHtml(copy.sessions)}</div></td><td class="codex-wide-only">${escapeHtml(formatDateTime(project.lastActiveAt))}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.total.processed)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.total.fresh)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.total.output)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.total.reasoning)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.rootTasks)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.childThreads)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.approvalReviewerThreads)}</td></tr><tr class="sort-child codex-project-detail-row" data-codex-project-detail="${escapeHtml(project.viewKey)}" hidden><td colspan="9">${threads || escapeHtml(copy.noThreadData)}</td></tr>`;
+      return `<tr class="sort-row codex-project-row" data-codex-project-view-key="${escapeHtml(project.viewKey)}" data-sort-name="${escapeHtml(name.toLowerCase())}" data-sort-lastactive="${Math.max(0, project.lastActiveAt)}" data-sort-processed="${Math.max(0, project.scope.total.processed)}" data-sort-fresh="${Math.max(0, project.scope.total.fresh)}" data-sort-output="${Math.max(0, project.scope.total.output)}" data-sort-reasoning="${Math.max(0, project.scope.total.reasoning)}" data-sort-roots="${Math.max(0, project.scope.rootTasks)}" data-sort-children="${Math.max(0, project.scope.childThreads)}"><td><button class="group-toggle codex-disclosure" aria-label="${escapeHtml(copy.expand)} ${escapeHtml(name)}" aria-expanded="false" data-codex-action="project-sessions" data-codex-project-view-key="${escapeHtml(project.viewKey)}">▶</button><strong>${escapeHtml(name)}</strong>${directory}<div class="model-details">${formatted(format, shown)}/${formatted(format, project.threadCount)} ${escapeHtml(copy.sessions)}</div></td><td class="codex-wide-only">${escapeHtml(formatDateTime(project.lastActiveAt))}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.total.processed)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.total.fresh)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.total.output)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.total.reasoning)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.rootTasks)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.childThreads)}</td><td class="number-cell codex-wide-only">${formatted(format, project.scope.approvalReviewerThreads)}</td></tr><tr class="sort-child codex-project-detail-row" data-codex-project-detail="${escapeHtml(project.viewKey)}" hidden><td colspan="9">${threads || escapeHtml(copy.noThreadData)}<button type="button" class="btn-secondary codex-project-sessions-action" data-codex-action="view-project-sessions" data-codex-project-view-key="${escapeHtml(project.viewKey)}">${escapeHtml(`${copy.viewAllSessions}: ${name}`)}</button></td></tr>`;
     })
     .join('');
   const th = (key: string, label: string): string => {
     const numeric = ['processed', 'fresh', 'output', 'reasoning', 'roots', 'children'].includes(key);
-    return `<th class="sortable${numeric ? ' number-cell' : ''}${key === 'name' ? '' : ' codex-wide-only'}" data-sortkey="${key}" data-codex-action="sort-projects" data-codex-sort-key="${key}" aria-sort="none">${escapeHtml(label)}</th>`;
+    return `<th class="sortable${numeric ? ' number-cell' : ''}${key === 'name' ? '' : ' codex-wide-only'}" data-sortkey="${key}" data-codex-sort-key="${key}" aria-sort="none"><button type="button" class="codex-sort-button" aria-label="${escapeHtml(`${copy.sortBy}: ${label}`)}" data-codex-action="sort-projects" data-codex-sort-key="${key}">${escapeHtml(label)}</button></th>`;
   };
   return `<section class="daily-breakdown"><h3>${escapeHtml(copy.projects)}</h3><div class="daily-table-container codex-scroll-region"><table class="daily-table sortable-table" data-codex-sort-table="projects"><thead><tr>${th('name', copy.projectLabel)}${th('lastactive', copy.lastActive)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('roots', copy.rootTasks)}${th('children', copy.childThreads)}<th class="number-cell codex-wide-only">${escapeHtml(copy.approvalReviewers)}</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
 }

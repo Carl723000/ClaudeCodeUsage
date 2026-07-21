@@ -78,6 +78,8 @@ export interface CodexThreadUsageView {
   models: string[];
   efforts: string[];
   periodMembership: Array<'recent' | '7d' | '30d' | 'all'>;
+  /** Exact indexed local days from the provider period data. */
+  dayMembership: string[];
   total: CodexMetricTotals;
   durationMs: number;
   structural: CodexStructuralSummary;
@@ -609,6 +611,15 @@ function periodMembership(
   return result;
 }
 
+function dayMembership(
+  file: CodexFileAggregate,
+  context: CodexThreadPeriodContext,
+): string[] {
+  return file.period?.timeZone === context.timeZone
+    ? Object.keys(file.period.days).sort()
+    : [];
+}
+
 function recentThreadRows(
   files: CodexFileAggregate[],
   periodContext: CodexThreadPeriodContext,
@@ -695,6 +706,7 @@ function recentThreadRows(
         models: sortedBucketKeys(file.byModel),
         efforts: sortedBucketKeys(file.byEffort),
         periodMembership: periodMembership(file, periodContext),
+        dayMembership: dayMembership(file, periodContext),
         total: metrics(file.total),
         durationMs: sessionDuration(file),
         structural: { ...file.structural },
@@ -764,6 +776,31 @@ function taskRootFile(
     )[0];
 }
 
+function compareStableText(left: string | undefined, right: string | undefined): number {
+  const leftValue = left ?? '';
+  const rightValue = right ?? '';
+  return leftValue < rightValue ? -1 : leftValue > rightValue ? 1 : 0;
+}
+
+function fallbackTaskIdentityFile(
+  files: CodexFileAggregate[],
+): CodexFileAggregate | undefined {
+  return [...files].sort(
+    (left, right) =>
+      compareStableText(sessionIdentityKey(left), sessionIdentityKey(right)) ||
+      compareStableText(projectIdentityKey(left), projectIdentityKey(right)) ||
+      observedAt(left) - observedAt(right) ||
+      compareStableText(left.session.role, right.session.role) ||
+      compareStableText(left.session.projectName, right.session.projectName) ||
+      compareStableText(
+        left.session.projectDirectoryName,
+        right.session.projectDirectoryName,
+      ) ||
+      compareStableText(left.session.sessionTitle, right.session.sessionTitle) ||
+      compareStableText(left.session.agentNickname, right.session.agentNickname),
+  )[0];
+}
+
 function currentLimit(
   limit: ProviderLimitSnapshot | null,
   now: number,
@@ -819,6 +856,7 @@ export function buildCodexUsageView(
   const allTime = scope(snapshot.files);
   const daily = dailyRows(snapshot.files, periodCoverage.timeZone);
   const taskRoot = taskRootFile(recent);
+  const taskIdentityFile = taskRoot ?? fallbackTaskIdentityFile(recent);
   const sourceLimits = snapshot.limits.length > 0
     ? snapshot.limits
     : snapshot.limit
@@ -826,12 +864,12 @@ export function buildCodexUsageView(
       : [];
   const limits = buildCodexLimitViews(sourceLimits, now);
   const lastActiveAt = recent.length > 0 ? Math.max(...recent.map(observedAt)) : 0;
-  const recentProjectIdentityKey = recent
-    .map(projectIdentityKey)
-    .sort()[0] ?? NEUTRAL_CODEX_PROJECT_KEY;
-  const taskIdentityKey = taskRoot
-    ? sessionIdentityKey(taskRoot)
-    : recent.map(sessionIdentityKey).sort()[0] ?? NEUTRAL_CODEX_SESSION_KEY;
+  const recentProjectIdentityKey = taskIdentityFile
+    ? projectIdentityKey(taskIdentityFile)
+    : NEUTRAL_CODEX_PROJECT_KEY;
+  const taskIdentityKey = taskIdentityFile
+    ? sessionIdentityKey(taskIdentityFile)
+    : NEUTRAL_CODEX_SESSION_KEY;
 
   return {
     lastTask: recentScope,
@@ -840,11 +878,8 @@ export function buildCodexUsageView(
           taskKey: stableCodexViewKey(taskIdentityKey),
           projectKey: stableCodexViewKey(recentProjectIdentityKey),
           title: taskRoot?.session.sessionTitle,
-          projectName: identityValue(recent, 'projectName'),
-          projectDirectoryName: identityValue(
-            recent,
-            'projectDirectoryName',
-          ),
+          projectName: taskIdentityFile?.session.projectName,
+          projectDirectoryName: taskIdentityFile?.session.projectDirectoryName,
           lastActiveAt,
           observedAt: lastActiveAt,
         }

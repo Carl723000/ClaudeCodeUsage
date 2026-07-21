@@ -125,6 +125,23 @@ export function getCodexViewStyles(): string {
       color: var(--vscode-foreground);
     }
 
+    [data-codex-root] .codex-sort-button {
+      appearance: none;
+      font: inherit;
+      width: 100%;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      text-align: inherit;
+      cursor: pointer;
+    }
+
+    [data-codex-root] .codex-project-sessions-action {
+      display: block;
+      margin-top: 10px;
+    }
+
     [data-codex-root] button:focus-visible,
     [data-codex-root] summary:focus-visible,
     .provider-tab:focus-visible {
