@@ -256,7 +256,7 @@ const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverri
       'approval-reviewer-share': 'Prüfe vor dem Hinzufügen von Freigabe-Prüfern, ob diese Rolle benötigt wird.',
     },
     insightEvidenceLabels: {
-      taskCount: 'Hauptaufgaben', rootSessionFresh: 'Frische Nutzung der Hauptrolle', subagentFresh: 'Frische Nutzung der Subagenten', approvalReviewerFresh: 'Frische Nutzung der Freigabe-Prüfer', observedEffort: 'Beobachtete Aufwandsstufe', highEffortFresh: 'Frische Nutzung bei hoher Aufwandsstufe', lowMediumEffortFresh: 'Frische Nutzung bei niedrigerer Aufwandsstufe', patchCalls: 'Patch-Aufrufe (Proxy)', toolCalls: 'Werkzeugaufrufe (Proxy)', postPatchToolCalls: 'Werkzeugaufrufe nach Patch (Proxy)', compactCount: 'Kontextkomprimierungen (Proxy)', taskCompleteCount: 'Aufgabenabschluss-Ereignisse (Proxy)', processedToFreshRatio: 'Proxy verarbeitet / frisch', cachedInputShare: 'Anteil gecachter Eingabe', reasoningOutputShare: 'Reasoning-Anteil der Ausgabe',
+      taskCount: 'Hauptaufgaben', rootSessionFresh: 'Frische Nutzung durch Haupt- oder unbekannte Rollen', subagentFresh: 'Frische Nutzung der Subagenten', approvalReviewerFresh: 'Frische Nutzung der Freigabe-Prüfer', observedEffort: 'Beobachtete Aufwandsstufe', highEffortFresh: 'Frische Nutzung bei hoher Aufwandsstufe', lowMediumEffortFresh: 'Frische Nutzung bei niedrigerer Aufwandsstufe', patchCalls: 'Patch-Aufrufe (Proxy)', toolCalls: 'Werkzeugaufrufe (Proxy)', postPatchToolCalls: 'Werkzeugaufrufe nach Patch (Proxy)', compactCount: 'Kontextkomprimierungen (Proxy)', taskCompleteCount: 'Aufgabenabschluss-Ereignisse (Proxy)', processedToFreshRatio: 'Proxy verarbeitet / frisch', cachedInputShare: 'Anteil gecachter Eingabe', reasoningOutputShare: 'Reasoning-Anteil der Ausgabe',
     },
   },
   'zh-TW': {
@@ -288,7 +288,7 @@ const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverri
       'approval-reviewer-share': '加入權限審批角色前，先確認任務是否需要此角色。',
     },
     insightEvidenceLabels: {
-      taskCount: '根任務數', rootSessionFresh: '根角色新鮮用量', subagentFresh: 'Subagent 新鮮用量', approvalReviewerFresh: '權限審批新鮮用量', observedEffort: '觀測到的推理強度', highEffortFresh: '高推理強度新鮮用量', lowMediumEffortFresh: '較低推理強度新鮮用量', patchCalls: '修補呼叫（代理）', toolCalls: '工具呼叫（代理）', postPatchToolCalls: '修補後工具呼叫（代理）', compactCount: '上下文壓縮（代理）', taskCompleteCount: '任務完成事件（代理）', processedToFreshRatio: '已處理／新鮮用量代理比值', cachedInputShare: '快取輸入占比', reasoningOutputShare: '推理輸出占比',
+      taskCount: '根任務數', rootSessionFresh: '根角色或未知角色的新鮮用量', subagentFresh: 'Subagent 新鮮用量', approvalReviewerFresh: '權限審批新鮮用量', observedEffort: '觀測到的推理強度', highEffortFresh: '高推理強度新鮮用量', lowMediumEffortFresh: '較低推理強度新鮮用量', patchCalls: '修補呼叫（代理）', toolCalls: '工具呼叫（代理）', postPatchToolCalls: '修補後工具呼叫（代理）', compactCount: '上下文壓縮（代理）', taskCompleteCount: '任務完成事件（代理）', processedToFreshRatio: '已處理／新鮮用量代理比值', cachedInputShare: '快取輸入占比', reasoningOutputShare: '推理輸出占比',
     },
   },
   'zh-CN': {
@@ -320,7 +320,7 @@ const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverri
       'approval-reviewer-share': '加入权限审批角色前，先确认任务是否需要此角色。',
     },
     insightEvidenceLabels: {
-      taskCount: '根任务数', rootSessionFresh: '根角色新鲜用量', subagentFresh: 'Subagent 新鲜用量', approvalReviewerFresh: '权限审批新鲜用量', observedEffort: '观测到的推理强度', highEffortFresh: '高推理强度新鲜用量', lowMediumEffortFresh: '较低推理强度新鲜用量', patchCalls: '补丁调用（代理）', toolCalls: '工具调用（代理）', postPatchToolCalls: '补丁后工具调用（代理）', compactCount: '上下文压缩（代理）', taskCompleteCount: '任务完成事件（代理）', processedToFreshRatio: '已处理／新鲜用量代理比值', cachedInputShare: '缓存输入占比', reasoningOutputShare: '推理输出占比',
+      taskCount: '根任务数', rootSessionFresh: '根角色或未知角色的新鲜用量', subagentFresh: 'Subagent 新鲜用量', approvalReviewerFresh: '权限审批新鲜用量', observedEffort: '观测到的推理强度', highEffortFresh: '高推理强度新鲜用量', lowMediumEffortFresh: '较低推理强度新鲜用量', patchCalls: '补丁调用（代理）', toolCalls: '工具调用（代理）', postPatchToolCalls: '补丁后工具调用（代理）', compactCount: '上下文压缩（代理）', taskCompleteCount: '任务完成事件（代理）', processedToFreshRatio: '已处理／新鲜用量代理比值', cachedInputShare: '缓存输入占比', reasoningOutputShare: '推理输出占比',
     },
   },
   ja: {
@@ -352,7 +352,7 @@ const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverri
       'approval-reviewer-share': '承認レビュアーを追加する前に、その役割が必要か確認してください。',
     },
     insightEvidenceLabels: {
-      taskCount: 'ルートタスク数', rootSessionFresh: 'ルート役割の新規使用量', subagentFresh: 'サブエージェントの新規使用量', approvalReviewerFresh: '承認レビュアーの新規使用量', observedEffort: '観測された推論強度', highEffortFresh: '高い推論強度の新規使用量', lowMediumEffortFresh: '低い推論強度の新規使用量', patchCalls: 'パッチ呼び出し（プロキシ）', toolCalls: 'ツール呼び出し（プロキシ）', postPatchToolCalls: 'パッチ後ツール呼び出し（プロキシ）', compactCount: 'コンテキスト圧縮（プロキシ）', taskCompleteCount: 'タスク完了イベント（プロキシ）', processedToFreshRatio: '処理済み／新規のプロキシ比率', cachedInputShare: 'キャッシュ入力の割合', reasoningOutputShare: '出力に占める推論の割合',
+      taskCount: 'ルートタスク数', rootSessionFresh: 'ルート／役割不明の新規使用量', subagentFresh: 'サブエージェントの新規使用量', approvalReviewerFresh: '承認レビュアーの新規使用量', observedEffort: '観測された推論強度', highEffortFresh: '高い推論強度の新規使用量', lowMediumEffortFresh: '低い推論強度の新規使用量', patchCalls: 'パッチ呼び出し（プロキシ）', toolCalls: 'ツール呼び出し（プロキシ）', postPatchToolCalls: 'パッチ後ツール呼び出し（プロキシ）', compactCount: 'コンテキスト圧縮（プロキシ）', taskCompleteCount: 'タスク完了イベント（プロキシ）', processedToFreshRatio: '処理済み／新規のプロキシ比率', cachedInputShare: 'キャッシュ入力の割合', reasoningOutputShare: '出力に占める推論の割合',
     },
   },
   ko: {
@@ -384,7 +384,7 @@ const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverri
       'approval-reviewer-share': '승인 검토자를 추가하기 전에 그 역할이 필요한지 확인하세요.',
     },
     insightEvidenceLabels: {
-      taskCount: '루트 작업 수', rootSessionFresh: '루트 역할 새 사용량', subagentFresh: '하위 에이전트 새 사용량', approvalReviewerFresh: '승인 검토자 새 사용량', observedEffort: '관측된 추론 강도', highEffortFresh: '높은 추론 강도 새 사용량', lowMediumEffortFresh: '낮은 추론 강도 새 사용량', patchCalls: '패치 호출(프록시)', toolCalls: '도구 호출(프록시)', postPatchToolCalls: '패치 후 도구 호출(프록시)', compactCount: '컨텍스트 압축(프록시)', taskCompleteCount: '작업 완료 이벤트(프록시)', processedToFreshRatio: '처리됨／새 사용량 프록시 비율', cachedInputShare: '캐시 입력 비율', reasoningOutputShare: '출력 중 추론 비율',
+      taskCount: '루트 작업 수', rootSessionFresh: '루트 역할 또는 알 수 없는 역할의 새 사용량', subagentFresh: '하위 에이전트 새 사용량', approvalReviewerFresh: '승인 검토자 새 사용량', observedEffort: '관측된 추론 강도', highEffortFresh: '높은 추론 강도 새 사용량', lowMediumEffortFresh: '낮은 추론 강도 새 사용량', patchCalls: '패치 호출(프록시)', toolCalls: '도구 호출(프록시)', postPatchToolCalls: '패치 후 도구 호출(프록시)', compactCount: '컨텍스트 압축(프록시)', taskCompleteCount: '작업 완료 이벤트(프록시)', processedToFreshRatio: '처리됨／새 사용량 프록시 비율', cachedInputShare: '캐시 입력 비율', reasoningOutputShare: '출력 중 추론 비율',
     },
   },
   'pt-BR': {
@@ -416,7 +416,7 @@ const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverri
       'approval-reviewer-share': 'Antes de adicionar revisores de aprovação, confirme se essa função é necessária.',
     },
     insightEvidenceLabels: {
-      taskCount: 'Tarefas raiz', rootSessionFresh: 'Uso novo da função raiz', subagentFresh: 'Uso novo de subagentes', approvalReviewerFresh: 'Uso novo de revisores de aprovação', observedEffort: 'Esforço observado', highEffortFresh: 'Uso novo com esforço alto', lowMediumEffortFresh: 'Uso novo com esforço inferior', patchCalls: 'Chamadas de patch (proxy)', toolCalls: 'Chamadas de ferramenta (proxy)', postPatchToolCalls: 'Chamadas de ferramenta pós-patch (proxy)', compactCount: 'Compactações de contexto (proxy)', taskCompleteCount: 'Eventos de conclusão de tarefa (proxy)', processedToFreshRatio: 'Proxy processado / novo', cachedInputShare: 'Proporção de entrada em cache', reasoningOutputShare: 'Proporção de raciocínio na saída',
+      taskCount: 'Tarefas raiz', rootSessionFresh: 'Uso novo da função raiz ou de função desconhecida', subagentFresh: 'Uso novo de subagentes', approvalReviewerFresh: 'Uso novo de revisores de aprovação', observedEffort: 'Esforço observado', highEffortFresh: 'Uso novo com esforço alto', lowMediumEffortFresh: 'Uso novo com esforço inferior', patchCalls: 'Chamadas de patch (proxy)', toolCalls: 'Chamadas de ferramenta (proxy)', postPatchToolCalls: 'Chamadas de ferramenta pós-patch (proxy)', compactCount: 'Compactações de contexto (proxy)', taskCompleteCount: 'Eventos de conclusão de tarefa (proxy)', processedToFreshRatio: 'Proxy processado / novo', cachedInputShare: 'Proporção de entrada em cache', reasoningOutputShare: 'Proporção de raciocínio na saída',
     },
   },
   id: {
@@ -448,7 +448,7 @@ const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverri
       'approval-reviewer-share': 'Sebelum menambah peninjau persetujuan, pastikan peran itu diperlukan.',
     },
     insightEvidenceLabels: {
-      taskCount: 'Jumlah tugas utama', rootSessionFresh: 'Penggunaan baru peran utama', subagentFresh: 'Penggunaan baru subagen', approvalReviewerFresh: 'Penggunaan baru peninjau persetujuan', observedEffort: 'Effort teramati', highEffortFresh: 'Penggunaan baru effort tinggi', lowMediumEffortFresh: 'Penggunaan baru effort lebih rendah', patchCalls: 'Panggilan patch (proksi)', toolCalls: 'Panggilan alat (proksi)', postPatchToolCalls: 'Panggilan alat pasca-patch (proksi)', compactCount: 'Pemadatan konteks (proksi)', taskCompleteCount: 'Peristiwa penyelesaian tugas (proksi)', processedToFreshRatio: 'Proksi diproses / baru', cachedInputShare: 'Porsi input cache', reasoningOutputShare: 'Porsi penalaran dalam output',
+      taskCount: 'Jumlah tugas utama', rootSessionFresh: 'Penggunaan baru oleh peran utama atau peran yang tidak diketahui', subagentFresh: 'Penggunaan baru subagen', approvalReviewerFresh: 'Penggunaan baru peninjau persetujuan', observedEffort: 'Effort teramati', highEffortFresh: 'Penggunaan baru effort tinggi', lowMediumEffortFresh: 'Penggunaan baru effort lebih rendah', patchCalls: 'Panggilan patch (proksi)', toolCalls: 'Panggilan alat (proksi)', postPatchToolCalls: 'Panggilan alat pasca-patch (proksi)', compactCount: 'Pemadatan konteks (proksi)', taskCompleteCount: 'Peristiwa penyelesaian tugas (proksi)', processedToFreshRatio: 'Proksi diproses / baru', cachedInputShare: 'Porsi input cache', reasoningOutputShare: 'Porsi penalaran dalam output',
     },
   },
 };

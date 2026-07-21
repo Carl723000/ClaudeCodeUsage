@@ -329,7 +329,7 @@ export const CODEX_COPY_EN: CodexViewCopy = {
     'approval-reviewer-share': 'Before adding approval reviewers, check whether that role is needed for this task.',
   },
   insightEvidenceLabels: {
-    taskCount: 'Root tasks', rootSessionFresh: 'Root-role fresh usage', subagentFresh: 'Subagent fresh usage', approvalReviewerFresh: 'Approval-reviewer fresh usage', observedEffort: 'Observed effort', highEffortFresh: 'High-effort fresh usage', lowMediumEffortFresh: 'Lower-effort fresh usage', patchCalls: 'Patch calls (proxy)', toolCalls: 'Tool calls (proxy)', postPatchToolCalls: 'Post-patch tool calls (proxy)', compactCount: 'Context compactions (proxy)', taskCompleteCount: 'Task-complete events (proxy)', processedToFreshRatio: 'Processed / fresh proxy', cachedInputShare: 'Cached-input share', reasoningOutputShare: 'Reasoning share of output',
+    taskCount: 'Root tasks', rootSessionFresh: 'Root / unknown-role fresh usage', subagentFresh: 'Subagent fresh usage', approvalReviewerFresh: 'Approval-reviewer fresh usage', observedEffort: 'Observed effort', highEffortFresh: 'High-effort fresh usage', lowMediumEffortFresh: 'Lower-effort fresh usage', patchCalls: 'Patch calls (proxy)', toolCalls: 'Tool calls (proxy)', postPatchToolCalls: 'Post-patch tool calls (proxy)', compactCount: 'Context compactions (proxy)', taskCompleteCount: 'Task-complete events (proxy)', processedToFreshRatio: 'Processed / fresh proxy', cachedInputShare: 'Cached-input share', reasoningOutputShare: 'Reasoning share of output',
   },
 };
 
@@ -1333,7 +1333,7 @@ function recommendationComposition(
   const freshFact = (label: string, fresh: number): string =>
     `${escapeHtml(label)}: ${formatted(format, fresh)} ${escapeHtml(copy.fresh)} (${percent(totalFresh > 0 ? fresh / totalFresh : 0)})`;
   const roles = [
-    freshFact(copy.rootRole, rootFresh),
+    freshFact(`${copy.rootRole} / ${copy.unknownRole}`, rootFresh),
     freshFact(copy.childRole, childFresh),
     freshFact(copy.approvalReviewerRole, reviewerFresh),
   ].join(' · ');
