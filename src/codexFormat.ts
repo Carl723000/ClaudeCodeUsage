@@ -75,16 +75,21 @@ export function formatLocalizedRelativeTime(
 export function formatLocalizedBytes(bytes: number, locale: string): string {
   const activeLocale = localeOrDefault(locale);
   const value = finiteNonNegative(bytes);
-  const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+  const units: Intl.NumberFormatOptions['unit'][] = [
+    'byte', 'kilobyte', 'megabyte', 'gigabyte', 'terabyte',
+  ];
   let index = 0;
   let scaled = value;
   while (scaled >= 1_024 && index < units.length - 1) {
     scaled /= 1_024;
     index += 1;
   }
-  return `${new Intl.NumberFormat(activeLocale, {
+  return new Intl.NumberFormat(activeLocale, {
+    style: 'unit',
+    unit: units[index],
+    unitDisplay: 'narrow',
     maximumFractionDigits: index === 0 ? 0 : 1,
-  }).format(scaled)} ${units[index]}`;
+  }).format(scaled);
 }
 
 export interface CodexLocalizedFormatters {

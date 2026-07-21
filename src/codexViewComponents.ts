@@ -17,15 +17,36 @@ import {
 import { CodexLimitView } from './providers/codex/codexLimits';
 import {
   createCodexLocalizedFormatters,
+  formatLocalizedDuration,
 } from './codexFormat';
+
+export const CODEX_QUALITY_FLAGS = [
+  'invalid-turn-context',
+  'invalid-session-meta',
+  'missing-pseudonymizer',
+  'missing-token-info',
+  'invalid-token-count',
+  'counter-regression',
+  'invalid-json',
+  'invalid-event-payload',
+  'unknown-event',
+  'invalid-event-timestamp',
+  'oversized-jsonl-line',
+  'truncated-jsonl',
+  'replaced-jsonl',
+  'stale-file',
+  'stale-reset-required',
+] as const;
+
+export type CodexQualityFlag = (typeof CODEX_QUALITY_FLAGS)[number];
 
 export interface CodexViewCopy {
   title: string;
   beta: string;
-  refresh?: string;
+  refresh: string;
   overview: string;
-  explore?: string;
-  recommendations?: string;
+  explore: string;
+  recommendations: string;
   daily: string;
   date: string;
   role: string;
@@ -44,7 +65,7 @@ export interface CodexViewCopy {
   approvalReviewerRole: string;
   unknownRole: string;
   noDailyData: string;
-  noMonthlyData?: string;
+  noMonthlyData: string;
   noThreadData: string;
   lastTask: string;
   last7Days: string;
@@ -84,6 +105,8 @@ export interface CodexViewCopy {
   cacheShare: string;
   coverage: string;
   quality: string;
+  qualityFlagLabels: Record<CodexQualityFlag, string>;
+  qualityFlagUnknown: string;
   complete: string;
   partial: string;
   lastObserved: string;
@@ -120,16 +143,22 @@ export interface CodexViewCopy {
   modelsEffort: string;
   clearFilters: string;
   activeFilters: string;
-  parentTask?: string;
-  fiveHourWindow?: string;
-  weeklyWindow?: string;
-  used?: string;
-  remaining?: string;
-  localLogNotLive?: string;
-  accountSnapshotLastObserved?: string;
-  limitExpired?: string;
-  limitMissing?: string;
-  observedSessionDuration?: string;
+  parentTask: string;
+  fiveHourWindow: string;
+  weeklyWindow: string;
+  used: string;
+  remaining: string;
+  localLogNotLive: string;
+  accountSnapshotLastObserved: string;
+  limitExpired: string;
+  limitMissing: string;
+  observedSessionDuration: string;
+  indexedLogEntries: string;
+  indexedStorage: string;
+  indexedAllTime: string;
+  updatedAt: string;
+  claudeTokenAccounting: string;
+  codexTokenAccounting: string;
   insightTitles: Record<CodexInsightKind, string>;
 }
 
@@ -147,6 +176,7 @@ export function getCodexDocumentIdentity(
 export const CODEX_COPY_EN: CodexViewCopy = {
   title: 'Codex usage',
   beta: 'Beta',
+  refresh: 'Refresh',
   overview: 'Overview',
   explore: 'Explore',
   recommendations: 'Recommendations',
@@ -208,6 +238,24 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   cacheShare: 'Input cache share',
   coverage: 'Coverage',
   quality: 'Quality',
+  qualityFlagLabels: {
+    'invalid-turn-context': 'Invalid turn context',
+    'invalid-session-meta': 'Invalid session metadata',
+    'missing-pseudonymizer': 'Identity protection unavailable',
+    'missing-token-info': 'Missing token information',
+    'invalid-token-count': 'Invalid token count',
+    'counter-regression': 'Usage counter moved backwards',
+    'invalid-json': 'Unreadable JSON log entry',
+    'invalid-event-payload': 'Invalid event payload',
+    'unknown-event': 'Unrecognized log event',
+    'invalid-event-timestamp': 'Invalid event timestamp',
+    'oversized-jsonl-line': 'Oversized log entry',
+    'truncated-jsonl': 'Log file was truncated',
+    'replaced-jsonl': 'Log file was replaced',
+    'stale-file': 'Using last verified file data',
+    'stale-reset-required': 'Full file rescan required',
+  },
+  qualityFlagUnknown: 'Other data-quality issue',
   complete: 'Complete',
   partial: 'Partial',
   lastObserved: 'Last observed',
@@ -247,6 +295,12 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   limitExpired: 'Expired / stale last-observed limit',
   limitMissing: 'No locally observed usage limit',
   observedSessionDuration: 'Observed session duration total (proxy)',
+  indexedLogEntries: 'Indexed log entries',
+  indexedStorage: 'Indexed storage',
+  indexedAllTime: 'Indexed all time',
+  updatedAt: 'Updated at',
+  claudeTokenAccounting: 'Claude tokens',
+  codexTokenAccounting: 'Codex tokens',
   insightTitles: {
     'multi-agent-share': 'Subagent fresh-share proxy',
     'effort-comparison': 'Compare one lower effort level',
@@ -276,6 +330,12 @@ export const CODEX_COPY_EN: CodexViewCopy = {
 export interface ProviderCompareInput {
   claude: { label: string; input: number; output: number; cache: number };
   codex: { label: string; input: number; output: number; cache: number };
+  updatedAt: number;
+}
+
+export interface ProviderCompareRenderOptions {
+  formatNumber?: (value: number) => string;
+  formatDateTime?: (timestamp: number) => string;
 }
 
 export interface CodexRenderOptions {
@@ -343,13 +403,8 @@ function percent(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
-function duration(value: number): string {
-  const minutes = Math.round(Math.max(0, value) / 60_000);
-  if (minutes < 60) {
-    return `${minutes}m`;
-  }
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m`;
+function defaultDuration(value: number): string {
+  return formatLocalizedDuration(value, 'en');
 }
 
 function summaryCard(label: string, value: string): string {
@@ -411,7 +466,7 @@ function scopePanel(
   scope: CodexUsageScopeView,
   copy: CodexViewCopy,
   format: NumberFormatter,
-  formatDuration: (milliseconds: number) => string = duration,
+  formatDuration: (milliseconds: number) => string = defaultDuration,
 ): string {
   return `<div class="codex-scope-panel">
     <section class="usage-summary"><div class="summary-grid">
@@ -455,7 +510,7 @@ function monthlyTable(
   format: NumberFormatter,
 ): string {
   if (rows.length === 0) {
-    return `<section class="daily-breakdown"><h3>${escapeHtml(copy.monthly)}</h3><p>${escapeHtml(copy.noMonthlyData ?? 'No monthly Codex usage is indexed yet.')}</p></section>`;
+    return `<section class="daily-breakdown"><h3>${escapeHtml(copy.monthly)}</h3><p>${escapeHtml(copy.noMonthlyData)}</p></section>`;
   }
   const body = rows
     .map(
@@ -562,10 +617,10 @@ function observed(value: number, copy: CodexViewCopy): string {
 
 function limitWindowLabel(limit: CodexLimitView, ctx: CodexRenderContext): string {
   if (limit.windowMinutes === 300) {
-    return ctx.copy.fiveHourWindow ?? '5-hour window';
+    return ctx.copy.fiveHourWindow;
   }
   if (limit.windowMinutes === 10_080) {
-    return ctx.copy.weeklyWindow ?? 'Weekly window';
+    return ctx.copy.weeklyWindow;
   }
   return limit.windowMinutes
     ? ctx.formatters.duration(limit.windowMinutes * 60_000)
@@ -574,8 +629,8 @@ function limitWindowLabel(limit: CodexLimitView, ctx: CodexRenderContext): strin
 
 function limitSourceLabel(limit: CodexLimitView, copy: CodexViewCopy): string {
   return limit.source === 'oauth'
-    ? copy.accountSnapshotLastObserved ?? 'Account snapshot · last observed'
-    : copy.localLogNotLive ?? 'Local log · not live';
+    ? copy.accountSnapshotLastObserved
+    : copy.localLogNotLive;
 }
 
 function renderLimitsSection(ctx: CodexRenderContext): string {
@@ -585,7 +640,7 @@ function renderLimitsSection(ctx: CodexRenderContext): string {
       ? `<div class="model-details">${escapeHtml(copy.lastObserved)}: ${escapeHtml(ctx.formatters.dateTime(limit.observedAt))} · ${escapeHtml(limitSourceLabel(limit, copy))}</div>`
       : '';
     if (limit.state === 'missing') {
-      return `<article class="model-item codex-limit-card" data-codex-limit-state="missing"><h3>${escapeHtml(copy.limitMissing ?? 'No locally observed usage limit')}</h3></article>`;
+      return `<article class="model-item codex-limit-card" data-codex-limit-state="missing"><h3>${escapeHtml(copy.limitMissing)}</h3></article>`;
     }
     if (limit.state === 'unlimited') {
       return `<article class="model-item codex-limit-card" data-codex-limit-state="unlimited"><h3>${escapeHtml(limit.limitName ?? copy.usageLimits)}</h3><strong>${escapeHtml(copy.unlimited)}</strong>${observed}</article>`;
@@ -594,8 +649,8 @@ function renderLimitsSection(ctx: CodexRenderContext): string {
     const remaining = limit.remainingPercent ?? 100;
     const reset = limit.resetsAt && limit.state === 'current'
       ? `<div class="model-details">${escapeHtml(copy.resets)}: ${escapeHtml(ctx.formatters.dateTime(limit.resetsAt))} · ${escapeHtml(ctx.formatters.relativeTime(limit.resetsAt, ctx.now))}</div>`
-      : `<div class="model-details">${escapeHtml(copy.limitExpired ?? 'Expired / stale last-observed limit')}</div>`;
-    return `<article class="model-item codex-limit-card" data-codex-limit-state="${limit.state}"><h3>${escapeHtml(limit.limitName ?? limitWindowLabel(limit, ctx))}</h3><div class="codex-limit-window"><div class="cost-comp-head"><span>${escapeHtml(limitWindowLabel(limit, ctx))}</span><strong>${formatted(ctx.formatters.number, used)}% ${escapeHtml(copy.used ?? 'used')} · ${formatted(ctx.formatters.number, remaining)}% ${escapeHtml(copy.remaining ?? 'remaining')}</strong></div><div class="cost-comp-bar"><div class="cost-comp-seg seg-input" style="width:${used.toFixed(2)}%"></div></div>${reset}${observed}</div></article>`;
+      : `<div class="model-details">${escapeHtml(copy.limitExpired)}</div>`;
+    return `<article class="model-item codex-limit-card" data-codex-limit-state="${limit.state}"><h3>${escapeHtml(limit.limitName ?? limitWindowLabel(limit, ctx))}</h3><div class="codex-limit-window"><div class="cost-comp-head"><span>${escapeHtml(limitWindowLabel(limit, ctx))}</span><strong>${formatted(ctx.formatters.number, used)}% ${escapeHtml(copy.used)} · ${formatted(ctx.formatters.number, remaining)}% ${escapeHtml(copy.remaining)}</strong></div><div class="cost-comp-bar"><div class="cost-comp-seg seg-input" style="width:${used.toFixed(2)}%"></div></div>${reset}${observed}</div></article>`;
   }).join('');
   return `<section class="codex-limits" data-codex-section="limits"><h3>${escapeHtml(copy.usageLimits)}</h3><div class="model-list">${cards}</div></section>`;
 }
@@ -608,7 +663,7 @@ function threadTable(
   filters: CodexExploreFilters = {},
   periodAvailability: CodexUsageView['sessionPeriodAvailability'],
   formatDateTime: (timestamp: number) => string = (timestamp) => observed(timestamp, copy),
-  formatDuration: (milliseconds: number) => string = duration,
+  formatDuration: (milliseconds: number) => string = defaultDuration,
 ): string {
   if (rows.length === 0) {
     return `<p>${escapeHtml(copy.noThreadData)}</p>`;
@@ -972,7 +1027,7 @@ function behaviorPanel(
   return `<section class="codex-behavior">
     <div class="chart-tabs codex-behavior-tabs">${buttons}</div>
     ${panels}
-    <details class="model-item codex-coverage"><summary>${escapeHtml(copy.coverage)} · ${escapeHtml(copy.quality)}</summary><p><strong>${escapeHtml(copy.coverage)}</strong>: ${formatted(format, view.coverage.indexedFiles)}/${formatted(format, view.coverage.totalFiles)} files · ${formatted(formatBytes, view.coverage.indexedBytes)}/${formatted(formatBytes, view.coverage.totalBytes)} bytes · ${escapeHtml(view.coverage.complete ? copy.complete : copy.partial)}<br><strong>${escapeHtml(copy.quality)}</strong>: ${quality}</p></details>
+    <details class="model-item codex-coverage"><summary>${escapeHtml(copy.coverage)} · ${escapeHtml(copy.quality)}</summary><p><strong>${escapeHtml(copy.indexedLogEntries)}</strong>: ${formatted(format, view.coverage.indexedFiles)}/${formatted(format, view.coverage.totalFiles)} · <strong>${escapeHtml(copy.indexedStorage)}</strong>: ${formatted(formatBytes, view.coverage.indexedBytes)}/${formatted(formatBytes, view.coverage.totalBytes)} · ${escapeHtml(view.coverage.complete ? copy.complete : copy.partial)}<br><strong>${escapeHtml(copy.quality)}</strong>: ${quality}</p></details>
     <section class="codex-insights"><h3>${escapeHtml(copy.optimization)} · ${escapeHtml(copy.lastTask)}</h3>${insightHtml}${constraintHtml}</section>
   </section>`;
 }
@@ -1013,10 +1068,10 @@ export function renderCodexPrimaryNav(
 ): string {
   const pages = [
     { key: 'overview', label: copy.overview },
-    { key: 'explore', label: copy.explore ?? copy.projects },
+    { key: 'explore', label: copy.explore },
     {
       key: 'recommendations',
-      label: copy.recommendations ?? copy.optimization,
+      label: copy.recommendations,
     },
   ];
   const buttons = pages.map(({ key, label }, index) => {
@@ -1034,7 +1089,7 @@ export function renderCodexSettingsLauncher(copy: CodexViewCopy): string {
 export function renderCodexHeader(copy: CodexViewCopy): string {
   return `<header class="codex-header">
     <div class="codex-header-title"><h1>${escapeHtml(copy.title)}</h1><span class="codex-beta">${escapeHtml(copy.beta)}</span></div>
-    <div class="codex-header-actions"><button class="btn-secondary" data-codex-header-action="refresh" data-codex-action="refresh">${escapeHtml(copy.refresh ?? 'Refresh')}</button>${renderCodexSettingsLauncher(copy)}</div>
+    <div class="codex-header-actions"><button class="btn-secondary" data-codex-header-action="refresh" data-codex-action="refresh">${escapeHtml(copy.refresh)}</button>${renderCodexSettingsLauncher(copy)}</div>
   </header>`;
 }
 
@@ -1043,7 +1098,7 @@ function renderRecentTaskSection(ctx: CodexRenderContext): string {
   const format = ctx.formatters.number;
   const identity = view.lastTaskIdentity;
   const taskIdentity = identity
-    ? `<article class="model-item codex-task-identity" data-codex-task-key="${escapeHtml(identity.taskKey)}" data-codex-project-key="${escapeHtml(identity.projectKey)}"><h3>${escapeHtml(identity.title ?? copy.unnamedSession)}</h3><div class="model-details-stacked"><span><span class="model-stat-label">${escapeHtml(copy.projectLabel)}</span><strong>${escapeHtml(identity.projectName ?? copy.unidentifiedProject)}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.lastObserved)}</span><strong>${escapeHtml(ctx.formatters.dateTime(identity.lastActiveAt))} · ${escapeHtml(ctx.formatters.relativeTime(identity.lastActiveAt, ctx.now))}</strong></span>${identity.projectDirectoryName && identity.projectDirectoryName !== identity.projectName ? `<span><span class="model-stat-label">${escapeHtml(copy.localDirectory)}</span><strong>${escapeHtml(identity.projectDirectoryName)}</strong></span>` : ''}</div><button class="btn-secondary" data-codex-action="view-task" data-codex-task-key="${escapeHtml(identity.taskKey)}" data-codex-project-key="${escapeHtml(identity.projectKey)}">${escapeHtml(copy.explore ?? 'Explore')}</button></article>`
+    ? `<article class="model-item codex-task-identity" data-codex-task-key="${escapeHtml(identity.taskKey)}" data-codex-project-key="${escapeHtml(identity.projectKey)}"><h3>${escapeHtml(identity.title ?? copy.unnamedSession)}</h3><div class="model-details-stacked"><span><span class="model-stat-label">${escapeHtml(copy.projectLabel)}</span><strong>${escapeHtml(identity.projectName ?? copy.unidentifiedProject)}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.lastObserved)}</span><strong>${escapeHtml(ctx.formatters.dateTime(identity.lastActiveAt))} · ${escapeHtml(ctx.formatters.relativeTime(identity.lastActiveAt, ctx.now))}</strong></span>${identity.projectDirectoryName && identity.projectDirectoryName !== identity.projectName ? `<span><span class="model-stat-label">${escapeHtml(copy.localDirectory)}</span><strong>${escapeHtml(identity.projectDirectoryName)}</strong></span>` : ''}</div><button class="btn-secondary" data-codex-action="view-task" data-codex-task-key="${escapeHtml(identity.taskKey)}" data-codex-project-key="${escapeHtml(identity.projectKey)}">${escapeHtml(copy.explore)}</button></article>`
     : '';
   const recent = view.lastTask
     ? taskIdentity + scopePanel(view.lastTask, copy, format, ctx.formatters.duration)
@@ -1120,7 +1175,7 @@ function renderTrendSection(ctx: CodexRenderContext): string {
     }).join('');
     const table = rows.length
       ? `<div class="daily-table-container codex-scroll-region"><table class="daily-table"><thead><tr><th>${escapeHtml(copy.date)}</th><th class="number-cell">${escapeHtml(copy.processed)}</th><th class="number-cell">${escapeHtml(copy.fresh)}</th><th class="number-cell">${escapeHtml(copy.output)}</th><th class="number-cell">${escapeHtml(copy.threads)}</th></tr></thead><tbody>${tableRows}</tbody></table></div>`
-      : `<p>${escapeHtml(daily ? copy.noDailyData : copy.noMonthlyData ?? copy.noDailyData)}</p>`;
+      : `<p>${escapeHtml(daily ? copy.noDailyData : copy.noMonthlyData)}</p>`;
     return `<section id="codex-overview-panel-${key}" role="tabpanel" aria-labelledby="codex-overview-tab-${key}" data-codex-overview-panel="${key}" data-codex-overview-dataset="${key}" ${axis}${index === 0 ? '' : ' hidden'}>${scopePanel(scope, copy, format, ctx.formatters.duration)}<div class="hc-wrap"><div class="hc-yaxis"><span class="hc-yval">${formatted(format, maximum('processed'))}</span><span class="hc-yval">${formatted(format, maximum('processed') / 2)}</span><span class="hc-yval">${formatted(format, 0)}</span></div><div class="hc-main"><div class="hc-scroll codex-scroll-region"><div class="hc-plot"><div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div><div class="hc-bars chart-bars">${bars}</div></div></div></div></div>${table}</section>`;
   }).join('');
   return `<section class="daily-breakdown codex-overview-trend" data-codex-section="trend"><h3>${escapeHtml(copy.daily)}</h3><div class="chart-tabs codex-overview-scope" role="tablist" aria-label="${escapeHtml(copy.scope)}">${scopeButtons}</div><div class="chart-tabs codex-overview-metric" role="group" aria-label="${escapeHtml(copy.daily)}">${metrics}</div>${panels}</section>`;
@@ -1129,10 +1184,17 @@ function renderTrendSection(ctx: CodexRenderContext): string {
 function taskPanel(ctx: CodexRenderContext): string {
   const { view, copy } = ctx;
   const format = ctx.formatters.number;
-  const quality = view.qualityFlags.length > 0
-    ? view.qualityFlags.map((item) => `${escapeHtml(item.flag)}: ${formatted(format, item.count)}`).join(', ')
+  const qualityCounts = new Map<string, number>();
+  for (const item of view.qualityFlags) {
+    const label = Object.prototype.hasOwnProperty.call(copy.qualityFlagLabels, item.flag)
+      ? copy.qualityFlagLabels[item.flag as CodexQualityFlag]
+      : copy.qualityFlagUnknown;
+    qualityCounts.set(label, (qualityCounts.get(label) ?? 0) + Math.max(0, item.count));
+  }
+  const quality = qualityCounts.size > 0
+    ? [...qualityCounts].map(([label, count]) => `${escapeHtml(label)}: ${formatted(format, count)}`).join(', ')
     : copy.complete;
-  return `${renderLimitsSection(ctx)}${renderRecentTaskSection(ctx)}${renderTrendSection(ctx)}<details class="model-item codex-coverage"><summary>${escapeHtml(copy.coverage)} · ${escapeHtml(copy.quality)}</summary><p><strong>${escapeHtml(copy.coverage)}</strong>: ${formatted(format, view.coverage.indexedFiles)}/${formatted(format, view.coverage.totalFiles)} files · ${formatted(ctx.formatters.bytes, view.coverage.indexedBytes)}/${formatted(ctx.formatters.bytes, view.coverage.totalBytes)} bytes · ${escapeHtml(view.coverage.complete ? copy.complete : copy.partial)}<br><strong>${escapeHtml(copy.quality)}</strong>: ${quality}</p></details>`;
+  return `${renderLimitsSection(ctx)}${renderRecentTaskSection(ctx)}${renderTrendSection(ctx)}<details class="model-item codex-coverage"><summary>${escapeHtml(copy.coverage)} · ${escapeHtml(copy.quality)}</summary><p><strong>${escapeHtml(copy.indexedLogEntries)}</strong>: ${formatted(format, view.coverage.indexedFiles)}/${formatted(format, view.coverage.totalFiles)} · <strong>${escapeHtml(copy.indexedStorage)}</strong>: ${formatted(ctx.formatters.bytes, view.coverage.indexedBytes)}/${formatted(ctx.formatters.bytes, view.coverage.totalBytes)} · ${escapeHtml(view.coverage.complete ? copy.complete : copy.partial)}<br><strong>${escapeHtml(copy.quality)}</strong>: ${quality}</p></details>`;
 }
 
 function coverageMarker(
@@ -1140,7 +1202,7 @@ function coverageMarker(
   coverage: CodexUsageView['periodCoverage']['last7Days'],
   ctx: CodexRenderContext,
 ): string {
-  return `<p class="model-details codex-period-coverage" data-codex-coverage-range="${range}" data-codex-coverage-status="${coverage.complete ? 'complete' : 'partial'}" data-codex-migrated-files="${Math.max(0, coverage.migratedFiles)}" data-codex-total-files="${Math.max(0, coverage.totalFiles)}" data-codex-migrated-bytes="${Math.max(0, coverage.migratedBytes)}" data-codex-total-bytes="${Math.max(0, coverage.totalBytes)}">${escapeHtml(ctx.copy.coverage)}: ${formatted(ctx.formatters.number, coverage.migratedFiles)}/${formatted(ctx.formatters.number, coverage.totalFiles)} files · ${formatted(ctx.formatters.bytes, coverage.migratedBytes)}/${formatted(ctx.formatters.bytes, coverage.totalBytes)} bytes · ${escapeHtml(coverage.complete ? ctx.copy.complete : ctx.copy.partial)}</p>`;
+  return `<p class="model-details codex-period-coverage" data-codex-coverage-range="${range}" data-codex-coverage-status="${coverage.complete ? 'complete' : 'partial'}" data-codex-migrated-files="${Math.max(0, coverage.migratedFiles)}" data-codex-total-files="${Math.max(0, coverage.totalFiles)}" data-codex-migrated-bytes="${Math.max(0, coverage.migratedBytes)}" data-codex-total-bytes="${Math.max(0, coverage.totalBytes)}">${escapeHtml(ctx.copy.coverage)}: ${escapeHtml(ctx.copy.indexedLogEntries)} ${formatted(ctx.formatters.number, coverage.migratedFiles)}/${formatted(ctx.formatters.number, coverage.totalFiles)} · ${escapeHtml(ctx.copy.indexedStorage)} ${formatted(ctx.formatters.bytes, coverage.migratedBytes)}/${formatted(ctx.formatters.bytes, coverage.totalBytes)} · ${escapeHtml(coverage.complete ? ctx.copy.complete : ctx.copy.partial)}</p>`;
 }
 
 export function renderCodexOverview(ctx: CodexRenderContext): string {
@@ -1189,7 +1251,7 @@ export function renderCodexExplore(ctx: CodexRenderContext): string {
     }
     return `<section class="codex-model-effort-scope${index === 0 ? ' active' : ''}" id="codex-model-effort-panel-${key}" role="tabpanel" aria-labelledby="codex-model-effort-tab-${key}"${index === 0 ? '' : ' hidden'} data-codex-model-effort-panel="${key}">${content}</section>`;
   }).join('');
-  return `<nav class="chart-tabs codex-explore-views" id="codex-explore-tablist" role="tablist" aria-label="${escapeHtml(copy.explore ?? copy.projects)}">${viewButtons}</nav>
+  return `<nav class="chart-tabs codex-explore-views" id="codex-explore-tablist" role="tablist" aria-label="${escapeHtml(copy.explore)}">${viewButtons}</nav>
     <section class="codex-explore-view active" id="codex-explore-panel-projects" role="tabpanel" aria-labelledby="codex-explore-tab-projects" data-codex-explore-view="projects" data-codex-explore-panel="projects">${projectTable(view, copy, format, ctx.formatters.dateTime)}</section>
     <section class="codex-explore-view" id="codex-explore-panel-sessions" role="tabpanel" aria-labelledby="codex-explore-tab-sessions" hidden data-codex-explore-view="sessions" data-codex-explore-panel="sessions">${threadTable(view.recentThreads, view.totalThreadCount, copy, format, ctx.exploreFilters, view.sessionPeriodAvailability, ctx.formatters.dateTime, ctx.formatters.duration)}</section>
     <section class="codex-explore-view" id="codex-explore-panel-models-effort" role="tabpanel" aria-labelledby="codex-explore-tab-models-effort" hidden data-codex-explore-view="models-effort" data-codex-explore-panel="models-effort"><h3>${escapeHtml(copy.modelsEffort)}</h3><div class="chart-tabs" id="codex-model-effort-tablist" role="tablist" aria-label="${escapeHtml(copy.scope)}">${scopeButtons}</div>${scopePanels}</section>`;
@@ -1231,7 +1293,7 @@ export function renderCodexRecommendations(ctx: CodexRenderContext): string {
       : '';
     return `<section class="codex-recommendation-scope${item.domKey === defaultScope ? ' active' : ''}" id="codex-recommendation-panel-${item.domKey}" role="tabpanel" aria-labelledby="codex-recommendation-tab-${item.domKey}" data-codex-recommendation-panel="${item.domKey}"${item.domKey === defaultScope ? '' : ' hidden'}>${composition}${cards}${empty}${constraintHtml}</section>`;
   }).join('');
-  return `<section class="codex-recommendations"><h3>${escapeHtml(ctx.copy.recommendations ?? ctx.copy.optimization)}</h3><div class="chart-tabs codex-recommendation-tabs" role="tablist" aria-label="${escapeHtml(ctx.copy.scope)}">${buttons}</div>${partialNote}${panels}</section>`;
+  return `<section class="codex-recommendations"><h3>${escapeHtml(ctx.copy.recommendations)}</h3><div class="chart-tabs codex-recommendation-tabs" role="tablist" aria-label="${escapeHtml(ctx.copy.scope)}">${buttons}</div>${partialNote}${panels}</section>`;
 }
 
 function recommendationComposition(
@@ -1320,11 +1382,18 @@ function parseCodexResetKeys(handler: string): string[] | null {
 export function renderProviderCompare(
   input: ProviderCompareInput,
   copy: CodexViewCopy = CODEX_COPY_EN,
+  options: ProviderCompareRenderOptions = {},
 ): string {
+  const formatNumber = options.formatNumber ?? number;
+  const formatDateTime = options.formatDateTime ?? createCodexLocalizedFormatters(
+    'en',
+    new Intl.DateTimeFormat().resolvedOptions().timeZone,
+  ).formatDateTime;
   const provider = (
     value: ProviderCompareInput['claude'] | ProviderCompareInput['codex'],
-  ): string => `<article class="summary-item provider-compare-card"><h3>${escapeHtml(value.label)}</h3><dl><dt>${escapeHtml(copy.input)}</dt><dd>${number(value.input)}</dd><dt>${escapeHtml(copy.cachedInput)}</dt><dd>${number(value.cache)}</dd><dt>${escapeHtml(copy.output)}</dt><dd>${number(value.output)}</dd></dl></article>`;
-  return `<section class="provider-compare"><div class="provider-compare-grid">${provider(input.claude)}${provider(input.codex)}</div></section>`;
+    accountingLabel: string,
+  ): string => `<article class="summary-item provider-compare-card"><h3>${escapeHtml(value.label)}</h3><p class="model-details">${escapeHtml(accountingLabel)}</p><dl><dt>${escapeHtml(copy.input)}</dt><dd>${formatted(formatNumber, value.input)}</dd><dt>${escapeHtml(copy.cachedInput)}</dt><dd>${formatted(formatNumber, value.cache)}</dd><dt>${escapeHtml(copy.output)}</dt><dd>${formatted(formatNumber, value.output)}</dd></dl></article>`;
+  return `<section class="provider-compare"><p class="model-details provider-compare-meta"><strong>${escapeHtml(copy.indexedAllTime)}</strong> · ${escapeHtml(copy.updatedAt)}: <time datetime="${new Date(input.updatedAt).toISOString()}">${escapeHtml(formatDateTime(input.updatedAt))}</time></p><div class="provider-compare-grid">${provider(input.claude, copy.claudeTokenAccounting)}${provider(input.codex, copy.codexTokenAccounting)}</div></section>`;
 }
 
 export function defaultDashboardProvider(

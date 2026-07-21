@@ -22,6 +22,7 @@ export {
   CodexRenderOptions,
   CodexViewCopy,
   ProviderCompareInput,
+  ProviderCompareRenderOptions,
   defaultDashboardProvider,
   getCodexDocumentIdentity,
   renderCodexExplore,

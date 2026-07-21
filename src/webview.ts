@@ -732,6 +732,11 @@ export class UsageWebviewProvider {
 
   private renderCodexCompare(): string {
     const claude = this.allTimeData;
+    const updatedAt = Date.now();
+    const formatters = createCodexLocalizedFormatters(
+      I18n.getLocale(),
+      I18n.getTimezone(),
+    );
     const codexTotals = (this.codexView?.projects ?? []).reduce(
       (total, project) => ({
         input: total.input + project.scope.total.input,
@@ -751,8 +756,13 @@ export class UsageWebviewProvider {
             (claude?.totalCacheReadTokens ?? 0),
         },
         codex: { label: I18n.t.providers.codexBeta, ...codexTotals },
+        updatedAt,
       },
       I18n.t.providers.codex,
+      {
+        formatNumber: (value) => I18n.formatNumber(value),
+        formatDateTime: formatters.formatDateTime,
+      },
     );
   }
 
@@ -767,6 +777,10 @@ export class UsageWebviewProvider {
       codexCopy,
       I18n.getLocale(),
     );
+    const formatters = createCodexLocalizedFormatters(
+      I18n.getLocale(),
+      I18n.getTimezone(),
+    );
     const content =
       alternateProvider === 'compare'
         ? this.renderCodexCompare()
@@ -776,11 +790,12 @@ export class UsageWebviewProvider {
               this.codexInsights,
               codexCopy,
               {
+                now: Date.now(),
                 formatNumber: (value) => I18n.formatNumber(value),
-                ...createCodexLocalizedFormatters(
-                  I18n.getLocale(),
-                  I18n.getTimezone(),
-                ),
+                formatDateTime: formatters.formatDateTime,
+                formatDuration: formatters.formatDuration,
+                formatRelativeTime: formatters.formatRelativeTime,
+                formatBytes: formatters.formatBytes,
                 settingsHtml: this.renderSettingsPanel('codex'),
                 optimizationEnabled: this.setting<boolean>(
                   'codex.optimization.enabled',
