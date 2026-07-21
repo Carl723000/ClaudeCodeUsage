@@ -15,6 +15,13 @@ function webviewSourceFixture(): string {
   );
 }
 
+function codexStylesSourceFixture(): string {
+  return readFileSync(
+    path.resolve(__dirname, '..', '..', 'src', 'codexViewStyles.ts'),
+    'utf8',
+  );
+}
+
 test('dashboard provider defaults preserve Claude and support Codex-only installs', () => {
   assert.equal(defaultDashboardProvider(true, false), 'claude');
   assert.equal(defaultDashboardProvider(false, true), 'codex');
@@ -38,6 +45,7 @@ test('webview provider changes are allowlisted and kept outside time tabs', () =
 
 test('Codex settings and charts stay inside the provider view', () => {
   const webview = webviewSourceFixture();
+  const codexStyles = codexStylesSourceFixture();
   const settings = readFileSync(
     path.resolve(__dirname, '..', '..', 'src', 'settings.ts'),
     'utf8',
@@ -70,6 +78,7 @@ test('Codex settings and charts stay inside the provider view', () => {
     /createCodexLocalizedFormatters\(\s*I18n\.getLocale\(\),\s*I18n\.getTimezone\(\)/,
   );
   assert.match(webview, /getCodexClientScript\(\)/);
+  assert.match(webview, /getProviderNavClientScript\(\)/);
   assert.doesNotMatch(webview, /showCodexTab\('settings'\)/);
   assert.doesNotMatch(webview, /function showCodexChartMetric/);
   assert.doesNotMatch(webview, /function filterCodexThreads/);
@@ -77,8 +86,9 @@ test('Codex settings and charts stay inside the provider view', () => {
   assert.doesNotMatch(webview, /function toggleCodexThreadChildren/);
   assert.doesNotMatch(webview, /function showCodexBehaviorScope/);
   assert.doesNotMatch(webview, /ccu\.codex/);
-  assert.match(webview, /\.codex-chart-value\s*\{/);
-  assert.match(webview, /\.codex-period-chart \.hc-wrap/);
+  assert.match(codexStyles, /\.codex-chart-value\s*\{/);
+  assert.match(codexStyles, /\.codex-period-chart \.hc-wrap/);
+  assert.doesNotMatch(webview, /^\s*\.codex-chart-value\s*\{/m);
   assert.match(extension, /codexOptimizationEnabled:/);
   assert.match(extension, /private codexInsights: CodexScopedInsights/);
   assert.match(extension, /buildScopedCodexInsights\(this\.codexView\)/);
@@ -93,6 +103,33 @@ test('Claude chart delegation rejects Codex controls and missing metrics', () =>
   assert.match(source, /if \(event\.target\.closest && event\.target\.closest\('\[data-codex-root\]'\)\) \{? return;? \}?/);
   assert.match(source, /closest\('\.chart-tab\[data-metric\]'\)/);
   assert.doesNotMatch(source, /document\.querySelectorAll\('\.daily-breakdown'\)/);
+});
+
+test('provider-aware document shell localizes navigation and keeps Codex actions inside its root', () => {
+  const source = webviewSourceFixture();
+
+  assert.match(source, /getCodexDocumentIdentity\(\s*alternateProvider,\s*codexCopy,\s*I18n\.getLocale\(\),?\s*\)/);
+  assert.match(source, /<html lang="\$\{this\.escapeHtml\(documentIdentity\.lang\)\}">/);
+  assert.match(source, /<title>\$\{this\.escapeHtml\(documentIdentity\.title\)\}<\/title>/);
+  assert.match(source, /<body class="codex-document/);
+  assert.match(source, /getStyles\(\)[\s\S]*getCodexViewStyles\(\)/);
+  assert.doesNotMatch(source, /<header><h1>\$\{this\.escapeHtml\(I18n\.t\.popup\.title\)\}/);
+  assert.doesNotMatch(source, /showProvider\('claude', 'settings'\)/);
+
+  assert.match(source, /<nav class="provider-tabs" role="tablist" aria-label="\$\{this\.escapeHtml\(I18n\.t\.popup\.settingsGroupProviders\)\}">/);
+  assert.match(source, /id="provider-tab-\$\{provider\}"[^\n]+role="tab"[^\n]+data-provider-target="\$\{provider\}"[^\n]+aria-controls="provider-panel"[^\n]+aria-selected="\$\{selected\}"[^\n]+tabindex="\$\{selected \? '0' : '-1'\}"/);
+  assert.match(source, /id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-\$\{this\.currentProvider\}"/);
+  assert.doesNotMatch(source, /class="provider-tab[^\n]+onclick="showProvider/);
+});
+
+test('Claude dashboard shell markers and provider switching behavior remain intact', () => {
+  const source = webviewSourceFixture();
+
+  assert.match(source, /id="refreshNowBtn" class="btn-secondary btn-refresh-now"/);
+  assert.match(source, /onclick="showTab\('content'\)" class="btn-secondary">✨/);
+  assert.match(source, /onclick="showTab\('settings'\)" class="btn-secondary">⚙/);
+  assert.match(source, /function showProvider\(provider, tab\) \{\s*vscode\.postMessage\(\{ command: 'providerChanged', provider: provider, tab: tab \|\| '' \}\);\s*\}/);
+  assert.match(source, /renderProviderTabs\(\)[\s\S]*renderQuotaBanner\(\)/);
 });
 
 test('provider and Codex view copy is complete in every UI locale', () => {

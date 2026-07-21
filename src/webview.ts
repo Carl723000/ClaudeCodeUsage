@@ -19,6 +19,7 @@ import { formatUsageDate, shortUsageDate } from './usageDateLabels';
 import { normalizeQuotaWindows } from './quotaWindows';
 import {
   defaultDashboardProvider,
+  getCodexDocumentIdentity,
   renderCodexView,
   renderProviderCompare,
 } from './codexView';
@@ -29,6 +30,8 @@ import {
 import { CodexUsageView } from './providers/codex/codexUsage';
 import { createCodexLocalizedFormatters } from './codexFormat';
 import { getCodexClientScript } from './codexViewClient';
+import { getCodexViewStyles } from './codexViewStyles';
+import { getProviderNavClientScript } from './providerNavClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -635,7 +638,7 @@ export class UsageWebviewProvider {
   private getLoadingContent(): string {
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
@@ -657,7 +660,7 @@ export class UsageWebviewProvider {
   private getErrorContent(): string {
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
@@ -681,7 +684,7 @@ export class UsageWebviewProvider {
   private getNoDataContent(): string {
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
@@ -709,9 +712,11 @@ export class UsageWebviewProvider {
     const button = (
       provider: 'claude' | 'codex' | 'compare',
       label: string,
-    ): string =>
-      `<button class="provider-tab ${this.currentProvider === provider ? 'active' : ''}" onclick="showProvider('${provider}')">${this.escapeHtml(label)}</button>`;
-    let html = '<nav class="provider-tabs" aria-label="Usage provider">';
+    ): string => {
+      const selected = this.currentProvider === provider;
+      return `<button id="provider-tab-${provider}" class="provider-tab ${selected ? 'active' : ''}" role="tab" data-provider-target="${provider}" aria-controls="provider-panel" aria-selected="${selected}" tabindex="${selected ? '0' : '-1'}">${this.escapeHtml(label)}</button>`;
+    };
+    let html = `<nav class="provider-tabs" role="tablist" aria-label="${this.escapeHtml(I18n.t.popup.settingsGroupProviders)}">`;
     const labels = I18n.t.providers;
     if (this.providerAvailability.claude) {
       html += button('claude', labels.claude);
@@ -752,14 +757,24 @@ export class UsageWebviewProvider {
   }
 
   private getAlternateProviderContent(): string {
+    const alternateProvider = this.currentProvider === 'compare' ? 'compare' : 'codex';
+    const codexCopy = {
+      ...I18n.t.providers.codex,
+      refresh: I18n.t.popup.refresh,
+    };
+    const documentIdentity = getCodexDocumentIdentity(
+      alternateProvider,
+      codexCopy,
+      I18n.getLocale(),
+    );
     const content =
-      this.currentProvider === 'compare'
+      alternateProvider === 'compare'
         ? this.renderCodexCompare()
         : this.codexView
           ? renderCodexView(
               this.codexView,
               this.codexInsights,
-              I18n.t.providers.codex,
+              codexCopy,
               {
                 formatNumber: (value) => I18n.formatNumber(value),
                 ...createCodexLocalizedFormatters(
@@ -773,28 +788,26 @@ export class UsageWebviewProvider {
                 ),
               },
             )
-          : `<p>${this.escapeHtml(I18n.t.providers.codex.noRecentTask)}</p>`;
-    const settingsButton =
-      this.currentProvider === 'codex' && this.codexView
-        ? ''
-        : `<button onclick="showProvider('claude', 'settings')" class="btn-secondary">⚙ ${this.escapeHtml(I18n.t.popup.settings)}</button>`;
+          : `<p>${this.escapeHtml(codexCopy.noRecentTask)}</p>`;
+    const alternateHeader = alternateProvider === 'compare'
+      ? `<header class="provider-compare-header"><h1>${this.escapeHtml(documentIdentity.title)}</h1><div class="actions"><button onclick="refresh()" class="btn-secondary">${this.escapeHtml(I18n.t.popup.refresh)}</button></div></header>`
+      : '';
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(documentIdentity.lang)}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
-        <title>${this.escapeHtml(I18n.t.popup.title)}</title>
-        <style>${this.getStyles()}</style>
+        <title>${this.escapeHtml(documentIdentity.title)}</title>
+        <style>${this.getStyles()}\n${getCodexViewStyles()}</style>
       </head>
-      <body class="${this.setting<boolean>('dashboardAutoRefresh', true) ? '' : 'auto-off'}">
+      <body class="codex-document${this.setting<boolean>('dashboardAutoRefresh', true) ? '' : ' auto-off'}">
         <div class="container">
-          <header><h1>${this.escapeHtml(I18n.t.popup.title)}</h1><div class="actions">
-            <button onclick="refresh()" class="btn-secondary">↻ ${this.escapeHtml(I18n.t.popup.refresh)}</button>
-            ${settingsButton}
-          </div></header>
           ${this.renderProviderTabs()}
-          ${content}
+          <div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">
+            ${alternateHeader}
+            ${content}
+          </div>
         </div>
         <script>${this.getScript()}\n${getCodexClientScript()}</script>
       </body>
@@ -843,7 +856,7 @@ export class UsageWebviewProvider {
     return (
       `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
@@ -875,6 +888,7 @@ export class UsageWebviewProvider {
             </div>
           </header>` +
       this.renderProviderTabs() +
+      `<div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">` +
       this.renderQuotaBanner() +
       `
           <div class="tabs">
@@ -990,6 +1004,7 @@ export class UsageWebviewProvider {
       this.renderSettingsPanel('claude') +
       `
           </div>
+        </div>
         </div>
         <script>` +
       this.getScript() +
@@ -5342,74 +5357,6 @@ export class UsageWebviewProvider {
         color: var(--vscode-button-foreground);
         border-color: var(--vscode-button-background);
       }
-      .codex-header, .codex-evidence, .provider-compare-grid {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 12px;
-      }
-      .codex-header { align-items: center; justify-content: space-between; }
-      .codex-beta {
-        font-size: 11px;
-        padding: 2px 7px;
-        border: 1px solid var(--vscode-panel-border);
-        border-radius: 999px;
-        color: var(--vscode-descriptionForeground);
-      }
-      .codex-tabs {
-        overflow-x: auto;
-      }
-      .codex-tab-content {
-        display: none;
-      }
-      .codex-tab-content.active {
-        display: block;
-      }
-      .codex-behavior-scope { display: none; }
-      .codex-behavior-scope.active { display: block; }
-      .codex-period-chart .hc-wrap { margin-bottom: 12px; }
-      .codex-chart-value {
-        color: var(--vscode-descriptionForeground);
-        font-size: 9px;
-        line-height: 12px;
-        margin-bottom: 3px;
-        white-space: nowrap;
-      }
-      .codex-evidence span { font-size: 12px; }
-      .codex-coverage, .codex-limit { margin: 12px 0; line-height: 1.6; }
-      .codex-insight { margin: 8px 0; }
-      .codex-insight-strong { border-left: 4px solid var(--vscode-charts-red); }
-      .codex-insight-normal { border-left: 4px solid var(--vscode-charts-orange); }
-      .codex-insight-info { border-left: 4px solid var(--vscode-charts-blue); }
-      .codex-insights pre { white-space: pre-wrap; word-break: break-word; }
-      .codex-thread-filters input,
-      .codex-thread-filters select {
-        min-height: 30px;
-        border: 1px solid var(--vscode-input-border, var(--vscode-panel-border));
-        background: var(--vscode-input-background);
-        color: var(--vscode-input-foreground);
-        border-radius: 4px;
-        padding: 4px 8px;
-      }
-      .codex-thread-filters input { flex: 1 1 220px; }
-      .codex-child-thread .name-cell { padding-left: 28px; }
-      .codex-task-identity { margin-bottom: 12px; }
-      .codex-task-identity h3 { margin: 0 0 8px; }
-      .codex-project-thread {
-        display: flex;
-        justify-content: space-between;
-        gap: 16px;
-        padding: 7px 4px;
-        border-bottom: 1px solid var(--vscode-panel-border);
-      }
-      .codex-project-thread:last-child { border-bottom: 0; }
-      .codex-project-thread span { color: var(--vscode-descriptionForeground); }
-      .provider-compare-card { flex: 1 1 240px; }
-      .provider-compare-card dl {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 8px 16px;
-      }
-      .provider-compare-card dd { margin: 0; font-weight: 700; }
       .sr-only {
         position: absolute;
         width: 1px;
@@ -5495,6 +5442,8 @@ const __dateOpts = (extra) => {
 function showProvider(provider, tab) {
   vscode.postMessage({ command: 'providerChanged', provider: provider, tab: tab || '' });
 }
+
+${getProviderNavClientScript()}
 
 function scReadConfig() {
   var rangeEl = document.getElementById('scRange');

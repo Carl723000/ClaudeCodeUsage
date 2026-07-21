@@ -185,12 +185,15 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
     el('select', { 'data-codex-action': 'filter-sessions', 'data-codex-session-filter': filter, 'aria-label': filter }).append(...options);
 
   const root = el('section', { 'data-codex-root': '' });
+  const refreshHeader = el('button', { 'data-codex-header-action': 'refresh', 'data-codex-action': 'refresh' });
+  const settingsHeader = el('button', { 'data-codex-header-action': 'settings', 'data-codex-action': 'open-settings' });
   const overviewTab = el('button', { 'data-codex-action': 'select-page', 'data-codex-page-target': 'overview', 'data-codex-page-button': 'overview', role: 'tab' });
   const exploreTab = el('button', { 'data-codex-action': 'select-page', 'data-codex-page-target': 'explore', 'data-codex-page-button': 'explore', role: 'tab' });
   const recommendationsTab = el('button', { 'data-codex-action': 'select-page', 'data-codex-page-target': 'recommendations', 'data-codex-page-button': 'recommendations', role: 'tab' });
   const overview = el('section', { 'data-codex-page': 'overview' });
   const explore = el('section', { 'data-codex-page': 'explore' });
   const recommendations = el('section', { 'data-codex-page': 'recommendations' });
+  const settings = el('section', { 'data-codex-page': 'settings' });
   const recentScope = el('button', { 'data-codex-action': 'set-overview-scope', 'data-codex-overview-scope': 'recent', role: 'tab' });
   const sevenScope = el('button', { 'data-codex-action': 'set-overview-scope', 'data-codex-overview-scope': '7d', role: 'tab' });
   const recentPanel = el('section', { 'data-codex-overview-panel': 'recent', 'data-codex-overview-dataset': 'recent', 'data-axis-top-processed': '10', 'data-axis-mid-processed': '5', 'data-axis-top-fresh': '8', 'data-axis-mid-fresh': '4' });
@@ -276,6 +279,8 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
   projectTable.append(el('thead').append(el('tr').append(projectSort, projectProcessedSort)), projectBody);
   layout.append(search, role, projectFilter, modelFilter, effortFilter, periodFilter, chips, clearFilters, count, sessionTable);
   root.append(
+    refreshHeader,
+    settingsHeader,
     overviewTab,
     exploreTab,
     recommendationsTab,
@@ -289,6 +294,7 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
       modelsEffort,
     ),
     recommendations,
+    settings,
     validSetting,
     numberSetting,
     validReset,
@@ -319,6 +325,7 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
     root,
     vscode,
     elements: {
+      refreshHeader, settingsHeader, settings,
       overviewTab, exploreTab, recommendationsTab, overview, explore, recommendations,
       recentScope, sevenScope, recentPanel, sevenPanel, recentDateBar, recentDateRow, sevenDateBar, sevenDateRow,
       processedMetric, freshMetric, firstValue, firstBar, secondBar, yaxis,
@@ -350,6 +357,24 @@ test('Codex client installs one root-scoped delegated controller', () => {
   assert.match(script, /vscode\.setState\(hostState\)/);
   assert.doesNotMatch(script, /\['click', 'keydown'\]\.indexOf\(event\.type\)/);
   assert.doesNotMatch(script, /window\.|localStorage|eval\(|new Function|onclick=/);
+});
+
+test('Codex header refresh posts once and settings stays in the Codex controller', () => {
+  const fixture = controllerFixture();
+
+  const refresh = fixture.root.dispatch('click', fixture.elements.refreshHeader);
+  assert.equal(refresh.defaultPrevented, true);
+  assert.equal(refresh.propagationStopped, true);
+  assert.equal(JSON.stringify(fixture.vscode.messages), JSON.stringify([{ command: 'refresh' }]));
+
+  const settings = fixture.root.dispatch('click', fixture.elements.settingsHeader);
+  assert.equal(settings.defaultPrevented, true);
+  assert.equal(settings.propagationStopped, true);
+  const state = fixture.vscode.state.codexUi as Record<string, unknown>;
+  assert.equal(state.page, 'settings');
+  assert.equal(state.returnPage, 'overview');
+  assert.equal(fixture.elements.settings.hidden, false);
+  assert.equal(JSON.stringify(fixture.vscode.messages), JSON.stringify([{ command: 'refresh' }]));
 });
 
 test('controller restores pruned state without overwriting host siblings', () => {
@@ -820,7 +845,13 @@ test('delegated scope metric and valid settings actions update DOM state and hos
   assert.equal(fixture.elements.secondBar.style.height, '100px');
   assert.equal(fixture.elements.firstBar.classList.contains('input-bar'), true);
   assert.equal(fixture.elements.firstBar.getAttribute('title'), 'one · Fresh: 2f');
+  assert.equal(fixture.elements.firstBar.getAttribute('aria-label'), 'one · Fresh: 2f');
+  assert.equal(fixture.elements.secondBar.getAttribute('title'), 'two · Fresh: 8f');
+  assert.equal(fixture.elements.secondBar.getAttribute('aria-label'), 'two · Fresh: 8f');
   assert.equal(fixture.elements.firstValue.textContent, '2f');
+  assert.equal(fixture.elements.processedMetric.getAttribute('aria-pressed'), 'false');
+  assert.equal(fixture.elements.freshMetric.getAttribute('aria-pressed'), 'true');
+  assert.deepEqual(fixture.elements.yaxis.children.map((value) => value.textContent), ['8', '4', '0']);
   assert.equal((fixture.vscode.state.codexUi as any).chartMetric, 'fresh');
 
   fixture.root.dispatch('click', fixture.elements.validSetting);

@@ -4,6 +4,7 @@ import * as assert from 'node:assert/strict';
 import {
   CODEX_COPY_EN,
   CodexScopedInsights,
+  getCodexDocumentIdentity,
   renderCodexView,
   renderProviderCompare,
 } from '../codexView';
@@ -14,6 +15,8 @@ import { createCodexLocalizedFormatters } from '../codexFormat';
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 import { snapshotFixture } from './codexFixtures';
 import { getCodexClientScript } from '../codexViewClient';
+import { getCodexViewStyles } from '../codexViewStyles';
+import { dailyTable } from '../codexViewComponents';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
 const VIEW_SALT = 'codex-view-render-test';
@@ -57,6 +60,32 @@ function decodeHtmlAttribute(value: string): string {
     .replace(/&#39;/g, "'")
     .replace(/&amp;/g, '&');
 }
+
+function htmlTags(fragment: string, name: 'th' | 'td'): string[] {
+  return fragment.match(new RegExp(`<${name}\\b[^>]*>`, 'g')) ?? [];
+}
+
+function hasHtmlClass(tag: string, className: string): boolean {
+  const classes = tag.match(/class="([^"]*)"/)?.[1].split(/\s+/) ?? [];
+  return classes.includes(className);
+}
+
+test('Codex styles are responsive accessible and scoped to semantic VS Code tokens', () => {
+  const css = getCodexViewStyles();
+
+  assert.match(css, /body\.codex-document[\s\S]*?min-width:\s*0[\s\S]*?max-width:\s*100%/);
+  assert.match(css, /\.container[\s\S]*?min-width:\s*0[\s\S]*?max-width:\s*100%/);
+  assert.match(css, /\[data-codex-root\][\s\S]*?\.number-cell/);
+  assert.match(css, /\.codex-scroll-region\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(css, /\.codex-mobile-details\s*\{/);
+  assert.match(css, /button\.codex-disclosure\s*\{[^}]*appearance:\s*none/);
+  assert.match(css, /:focus-visible[\s\S]*?var\(--vscode-focusBorder\)/);
+  assert.match(css, /@media\s*\(max-width:\s*480px\)/);
+  assert.match(css, /@media\s*\(max-width:\s*380px\)/);
+  assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
+  assert.doesNotMatch(css, /(?:linear|radial|conic)-gradient|#[0-9a-f]{3,8}|box-shadow|@font-face|url\s*\(/i);
+  assert.doesNotMatch(css, /font-family:\s*(?!var\(--vscode-)/i);
+});
 
 test('Codex renderer labels provider semantics and never renders subscription cost', () => {
   const view = buildCodexUsageView(snapshotFixture(), NOW);
@@ -188,8 +217,12 @@ test('recommendation composition shows comparable fresh totals and shares for ro
 test('Codex renderer exposes three product destinations and auxiliary settings', () => {
   const html = renderFixture();
   const primaryNav = html.match(/<nav class="tabs codex-tabs"[\s\S]*?<\/nav>/)?.[0] ?? '';
+  const root = html.match(/<section[^>]*data-codex-root(?:="")?[^>]*>[\s\S]*<\/section>/)?.[0] ?? '';
 
-  assert.match(html, /<section[^>]*data-codex-root(?:="")?[^>]*>/);
+  assert.equal((html.match(/data-codex-root(?=[\s>])/g) ?? []).length, 1);
+  assert.match(root, /<header class="codex-header">[\s\S]*?<h1>Codex usage<\/h1>[\s\S]*?class="codex-beta">Beta<\/span>/);
+  assert.match(root, /data-codex-header-action="refresh"[^>]*data-codex-action="refresh"/);
+  assert.match(root, /data-codex-header-action="settings"[^>]*data-codex-action="open-settings"/);
   assert.equal(primaryNav.match(/<nav\b[^>]*role="tablist"[^>]*>/g)?.length, 1);
   assert.equal(primaryNav.match(/\brole="tab"/g)?.length, 3);
   assert.equal(html.match(/id="codex-page-panel-[^"]+"/g)?.length, 4);
@@ -244,7 +277,7 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /data-codex-action="set-recommendation-scope"[^>]*data-codex-recommendation-scope="recent"/);
   assert.doesNotMatch(html, /\sonclick=/);
   assert.doesNotMatch(html, /codex-metric-card|project:a|session:|Thread 1|Project 1/);
-  assert.doesNotMatch(html, /class="codex-header"/);
+  assert.equal((html.match(/class="codex-header"/g) ?? []).length, 1);
   assert.doesNotMatch(html, /\$|raw-session|\/Users\/|https?:\/\//);
 });
 
@@ -271,7 +304,7 @@ test('Explore renders Projects, Sessions, and Models & effort with private view 
   assert.match(html, /aria-label="Expand .*ClaudeCodeUsage"/);
   assert.match(html, /aria-live="polite"/);
   assert.match(html, /data-codex-action="clear-filters"/);
-  assert.match(html, /class="number-cell"/);
+  assert.match(html, /class="[^"]*\bnumber-cell\b[^"]*"/);
   assert.match(html, /data-codex-session-layout="tree"/);
   assert.doesNotMatch(html, /project:a|session:explore-|Thread 1|Project 1/);
 });
@@ -442,7 +475,7 @@ test('Sessions canonicalizes a stale unavailable period to the unfiltered UI sta
   assert.match(sessions, /data-codex-session-layout="tree"/);
   assert.match(
     sessions,
-    new RegExp(`<span data-codex-thread-visible>${view.recentThreads.length}<\\/span>/${view.totalThreadCount}`),
+    new RegExp(`<span data-codex-thread-visible[^>]*>${view.recentThreads.length}<\\/span>/${view.totalThreadCount}`),
   );
   assert.equal(
     (sessions.match(/data-codex-thread-row(?:\s|>)/g) ?? []).length,
@@ -500,7 +533,7 @@ test('mobile session details preserve every desktop fact with injected formatter
     formatDateTime: (value) => `DATE(${value})`,
     formatDuration: (value) => `DURATION(${value})`,
   });
-  const mobile = html.match(/<details class="codex-session-mobile">[\s\S]*?<\/details>/)?.[0] ?? '';
+  const mobile = html.match(/<details class="codex-mobile-details">[\s\S]*?<\/details>/)?.[0] ?? '';
 
   assert.match(mobile, /<summary[^>]*aria-label=/);
   for (const label of [
@@ -525,7 +558,7 @@ test('desktop and mobile sessions include an escaped distinct local directory', 
     'id="codex-explore-panel-sessions"',
     'id="codex-explore-panel-models-effort"',
   );
-  const mobile = sessions.match(/<details class="codex-session-mobile">[\s\S]*?<\/details>/)?.[0] ?? '';
+  const mobile = sessions.match(/<details class="codex-mobile-details">[\s\S]*?<\/details>/)?.[0] ?? '';
   const escapedDirectory = '&lt;img src=x onerror=&quot;alert(1)&quot;&gt;';
 
   assert.ok(sessions.includes(
@@ -1018,7 +1051,8 @@ test('production Codex action inventory is explicit and controller-ready', () =>
   );
   assert.deepEqual([...actions].sort(), [
     'clear-filters', 'close-settings', 'drilldown-date', 'filter-sessions',
-    'open-settings', 'project-sessions', 'remove-filter', 'reset-settings',
+    'open-settings', 'project-sessions', 'refresh', 'remove-filter',
+    'reset-settings',
     'select-chart-metric', 'select-explore-view', 'select-page',
     'set-chart-metric', 'set-model-effort-scope', 'set-overview-scope',
     'set-recommendation-scope', 'set-setting',
@@ -1028,8 +1062,110 @@ test('production Codex action inventory is explicit and controller-ready', () =>
   for (const action of actions) {
     assert.match(controller, new RegExp(`action === '${action}'`), `unhandled production action: ${action}`);
   }
+  assert.match(controller, /if \(action === 'refresh'\) \{ vscode\.postMessage\(\{ command: 'refresh' \}\); return true; \}/);
   assert.doesNotMatch(html, /data-codex-action="settings-(?:click|change|input)"/);
   assert.doesNotMatch(html, /\son(?:click|change|input)=/);
+});
+
+test('Codex charts tables disclosures and mobile details expose the accessible UI contract', () => {
+  const html = renderFixture();
+  const chartBars = html.match(/<button\b[^>]*class="[^"]*codex-chart-bar[^"]*"[^>]*>/g) ?? [];
+  const metricButtons = html.match(/<button\b[^>]*data-codex-chart-metric="[^"]+"[^>]*>/g) ?? [];
+  const tablists = html.match(/<(?:nav|div)\b[^>]*role="tablist"[^>]*>/g) ?? [];
+
+  assert.ok(chartBars.length > 0);
+  for (const bar of chartBars) {
+    assert.match(bar, /aria-label="[^"]+"/);
+  }
+  assert.doesNotMatch(html, /<div\b[^>]*class="[^"]*codex-chart-bar/);
+  assert.ok(metricButtons.length > 0);
+  for (const button of metricButtons) {
+    assert.match(button, /aria-pressed="(?:true|false)"/);
+  }
+  assert.match(html, /data-codex-chart-metric="processed"[^>]*aria-pressed="true"/);
+  assert.doesNotMatch(html, /data-codex-chart-metric="fresh"[^>]*aria-pressed="true"/);
+  assert.ok(tablists.length > 0);
+  for (const tablist of tablists) {
+    assert.match(tablist, /aria-label="[^"]+"/);
+  }
+  assert.match(html, /data-codex-action="sort-sessions"[^>]*aria-sort="none"/);
+  assert.match(html, /class="[^"]*codex-disclosure[^"]*"[^>]*aria-expanded="true"/);
+  assert.match(html, /data-codex-thread-visible[^>]*aria-live="polite"/);
+  assert.match(html, /class="daily-table-container codex-scroll-region"/);
+  assert.match(html, /class="hc-scroll codex-scroll-region"/);
+  assert.doesNotMatch(html, /class="(?:daily-table-container|hc-scroll)"/);
+  assert.match(html, /class="codex-mobile-details"/);
+  assert.match(html, /class="[^"]*codex-wide-only/);
+  assert.match(html, /class="sortable codex-wide-only"[^>]*data-codex-action="sort-projects"/);
+  assert.doesNotMatch(html, /codex-session-mobile/);
+
+  const controller = getCodexClientScript();
+  assert.match(controller, /bar\.setAttribute\('aria-label',/);
+  assert.match(controller, /matchMedia\('\(prefers-reduced-motion: reduce\)'\)/);
+});
+
+test('every Codex numeric table header and cell uses number-cell without marking labels or dates', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderFixture() + dailyTable(
+    view.last7DaysDaily,
+    CODEX_COPY_EN,
+    (value) => `N:${value}`,
+  );
+  const tables = html.match(/<table\b[^>]*class="[^"]*\bdaily-table\b[^"]*"[^>]*>[\s\S]*?<\/table>/g) ?? [];
+  const seen = new Set<string>();
+  assert.ok(tables.length > 0);
+
+  for (const table of tables) {
+    const header = table.match(/<thead><tr>([\s\S]*?)<\/tr><\/thead>/)?.[1];
+    const firstRow = table.match(/<tbody><tr\b[^>]*>([\s\S]*?)<\/tr>/)?.[1];
+    assert.ok(header, 'table has a header row');
+    assert.ok(firstRow, 'table fixture has a data row');
+    const headers = htmlTags(header, 'th');
+    const cells = htmlTags(firstRow, 'td');
+    assert.equal(cells.length, headers.length, 'header and data column counts agree');
+
+    let kind = '';
+    let firstNumeric = 1;
+    if (/data-codex-sort-table="projects"/.test(table)) {
+      kind = 'projects';
+      firstNumeric = 2;
+    } else if (/data-codex-sort-table="sessions"/.test(table)) {
+      kind = 'sessions';
+      firstNumeric = 6;
+    } else {
+      kind = ({ 4: 'dimension', 5: 'overview', 8: 'monthly', 10: 'daily' } as Record<number, string>)[headers.length] ?? '';
+    }
+    assert.ok(kind, `recognized ${headers.length}-column Codex table`);
+    seen.add(kind);
+
+    for (let index = 0; index < headers.length; index += 1) {
+      const numeric = index >= firstNumeric;
+      assert.equal(hasHtmlClass(headers[index], 'number-cell'), numeric, `${kind} header ${index}`);
+      assert.equal(hasHtmlClass(cells[index], 'number-cell'), numeric, `${kind} cell ${index}`);
+    }
+  }
+
+  assert.deepEqual([...seen].sort(), ['daily', 'dimension', 'monthly', 'overview', 'projects', 'sessions']);
+});
+
+test('all eight locales provide provider-aware Codex and Compare document identity', () => {
+  const languages = ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'] as const;
+  const previous = I18n.getCurrentLanguage();
+  try {
+    for (const language of languages) {
+      I18n.setLanguage(language);
+      assert.deepEqual(
+        getCodexDocumentIdentity('codex', I18n.t.providers.codex, I18n.getLocale()),
+        { lang: I18n.getLocale(), title: I18n.t.providers.codex.title },
+      );
+      assert.deepEqual(
+        getCodexDocumentIdentity('compare', I18n.t.providers.codex, I18n.getLocale()),
+        { lang: I18n.getLocale(), title: I18n.t.providers.codex.compareTitle },
+      );
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
 });
 
 test('Overview renders four truthful scope panels and drilldown row contracts', () => {
