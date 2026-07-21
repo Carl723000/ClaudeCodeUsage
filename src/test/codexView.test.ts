@@ -218,7 +218,8 @@ test('recommendation composition shows comparable fresh totals and shares for ro
   });
   const panel = htmlBetween(html, 'data-codex-recommendation-panel="recent"', 'data-codex-recommendation-panel="7d"');
 
-  assert.match(panel, /Root[^<]*N:200[^<]*50%/);
+  assert.match(panel, /Root \/ Unknown[^<]*N:200[^<]*50%/);
+  assert.doesNotMatch(panel, /(?:>|·\s*)Root:\s*N:200[^<]*50%/);
   assert.match(panel, /Subagent[^<]*N:200[^<]*50%/);
   assert.match(panel, /gpt-5\.6-sol[^<]*N:400[^<]*100%/);
   assert.match(panel, /high[^<]*N:400[^<]*100%/);
@@ -1147,6 +1148,32 @@ test('all eight locales deeply translate every evidence-driven recommendation co
         if (language !== 'en') assert.notEqual(copy.insightEvidenceLabels[key], english.insightEvidenceLabels[key], `${language}.evidence.${key} fell back to English`);
       }
       assert.doesNotMatch(`${copy.constraintNoAgents} ${copy.constraintLowerEffort}`, /small change|kleine Änderung|小改動|小改动|작은 변경|mudança pequena|perubahan kecil/i);
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
+test('all eight locales label unclassified root-or-unknown insight evidence truthfully', () => {
+  const expected = {
+    en: 'Root / unknown-role fresh usage',
+    'de-DE': 'Frische Nutzung durch Haupt- oder unbekannte Rollen',
+    'zh-TW': '根角色或未知角色的新鮮用量',
+    'zh-CN': '根角色或未知角色的新鲜用量',
+    ja: 'ルート／役割不明の新規使用量',
+    ko: '루트 역할 또는 알 수 없는 역할의 새 사용량',
+    'pt-BR': 'Uso novo da função raiz ou de função desconhecida',
+    id: 'Penggunaan baru oleh peran utama atau peran yang tidak diketahui',
+  } as const;
+  const previous = I18n.getCurrentLanguage();
+  try {
+    for (const [language, label] of Object.entries(expected)) {
+      I18n.setLanguage(language as keyof typeof expected);
+      assert.equal(
+        I18n.t.providers.codex.insightEvidenceLabels.rootSessionFresh,
+        label,
+        language,
+      );
     }
   } finally {
     I18n.setLanguage(previous);
