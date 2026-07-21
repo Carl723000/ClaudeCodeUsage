@@ -7,15 +7,20 @@ it grows.
 ## Project scope
 
 Before proposing a feature, it helps to know the positioning: this extension is
-provider-aware and lightweight. Claude Code is supported alongside the opt-in
-**Codex Beta**, with an emphasis on truthful local usage and token attribution
-rather than billing reconciliation. Features that sharpen attribution, privacy,
-or the advice experience are the best fit.
+provider-aware and lightweight, supporting Claude Code and **Codex Beta**.
+Codex Beta is enabled by default and can be turned off in provider settings.
+The emphasis is truthful local usage and token attribution rather than billing
+reconciliation. Features that sharpen attribution, privacy, or the advice
+experience are the best fit.
 
-The extension reads only the enabled provider's local metadata and usage logs,
-read-only; it never writes to Claude or Codex data. Codex does not estimate
+Usage ingestion reads only each provider's local metadata and usage logs.
+Usage ingestion is read-only, and Codex data is never mutated. Codex does not estimate
 dollar cost and never reads conversation bodies. Codex limits are last-observed
 values from local logs, not real-time billing data.
+
+Claude session actions are separately gated and disabled by default. When enabled,
+they can resume or delete a selected session.
+Deleting the selected session moves its log to the OS trash.
 
 ## Development setup
 

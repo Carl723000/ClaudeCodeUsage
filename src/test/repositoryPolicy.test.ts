@@ -1426,9 +1426,13 @@ test('publish pins the Node-20-compatible VSCE and verifies before publishing', 
 test('CONTRIBUTING documents provider-aware privacy and three testing layers', () => {
   const guide = repoFile('CONTRIBUTING.md');
 
-  assert.match(guide, /provider-aware[\s\S]*Claude Code[\s\S]*opt-in[\s\S]*Codex Beta/i);
+  assert.match(guide, /Codex Beta is enabled by default and can be turned off in provider settings\./);
+  assert.doesNotMatch(guide, /(?:opt-in[\s\S]{0,80}Codex Beta|Codex Beta[\s\S]{0,80}opt-in)/i);
   assert.doesNotMatch(guide, /Claude-only|Multi-provider monitoring[^\n]*out of scope/i);
-  assert.match(guide, /local metadata and usage logs[\s\S]*read-only/i);
+  assert.match(guide, /Usage ingestion is read-only, and Codex data is never mutated\./);
+  assert.match(guide, /Claude session actions are separately gated and disabled by default\./);
+  assert.match(guide, /they can resume or delete a selected session\./);
+  assert.match(guide, /Deleting the selected session moves its log to the OS trash\./);
   assert.match(guide, /Codex does not estimate\s+dollar cost/i);
   assert.match(guide, /never reads conversation bodies/i);
   assert.match(guide, /limits are last-observed\s+values from local logs, not real-time billing data/i);
