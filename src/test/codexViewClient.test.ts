@@ -192,6 +192,7 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
   const overviewTab = el('button', { 'data-codex-action': 'select-page', 'data-codex-page-target': 'overview', 'data-codex-page-button': 'overview', role: 'tab' });
   const exploreTab = el('button', { 'data-codex-action': 'select-page', 'data-codex-page-target': 'explore', 'data-codex-page-button': 'explore', role: 'tab' });
   const recommendationsTab = el('button', { 'data-codex-action': 'select-page', 'data-codex-page-target': 'recommendations', 'data-codex-page-button': 'recommendations', role: 'tab' });
+  const pageTablist = el('nav', { role: 'tablist' }).append(overviewTab, exploreTab, recommendationsTab);
   const overview = el('section', { 'data-codex-page': 'overview' });
   const explore = el('section', { 'data-codex-page': 'explore' });
   const recommendations = el('section', { 'data-codex-page': 'recommendations' });
@@ -307,9 +308,7 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
   root.append(
     refreshHeader,
     settingsHeader,
-    overviewTab,
-    exploreTab,
-    recommendationsTab,
+    pageTablist,
     overview,
     explore.append(
       projectsTab,
@@ -358,7 +357,7 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
     vscode,
     elements: {
       refreshHeader, settingsHeader, settings,
-      overviewTab, exploreTab, recommendationsTab, overview, explore, recommendations,
+      pageTablist, overviewTab, exploreTab, recommendationsTab, overview, explore, recommendations,
       recentScope, sevenScope, recentPanel, sevenPanel, recentDateBar, recentDateRow, sevenDateBar, sevenDateRow,
       processedMetric, freshMetric, firstValue, firstBar, secondBar, yaxis,
       recommendationRecent, recommendationSeven, recommendationAll, recommendationRecentPanel, recommendationSevenPanel, recommendationAllPanel,
@@ -582,9 +581,12 @@ test('delegated page/filter/collapse/expand/sort and keyboard actions mutate the
   fixture.root.dispatch('click', fixture.elements.projectSortButton);
   assert.equal(fixture.elements.projectSort.getAttribute('aria-sort'), 'ascending');
 
+  const callsBeforeArrow = fixture.vscode.setStateCalls;
   const keyEvent = fixture.root.dispatch('keydown', fixture.elements.overviewTab, 'ArrowRight');
   assert.equal(keyEvent.defaultPrevented, true);
   assert.equal(fixture.elements.exploreTab.focused, true);
+  assert.equal(fixture.elements.explore.hidden, false);
+  assert.equal(fixture.vscode.setStateCalls, callsBeforeArrow + 1);
 });
 
 for (const keyCase of [{ key: 'Enter', label: 'Enter' }, { key: ' ', label: 'Space' }]) {
@@ -600,16 +602,20 @@ for (const keyCase of [{ key: 'Enter', label: 'Enter' }, { key: ' ', label: 'Spa
   });
 }
 
-for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End']) {
-  test(`tab ${key} changes roving focus without performing or persisting an action`, () => {
+for (const keyCase of [
+  { key: 'ArrowLeft', page: 'recommendations' },
+  { key: 'ArrowRight', page: 'explore' },
+  { key: 'Home', page: 'overview' },
+  { key: 'End', page: 'recommendations' },
+]) {
+  test(`tab ${keyCase.key} changes roving focus and activates exactly once`, () => {
     const fixture = controllerFixture();
-    const before = stateSnapshot(fixture);
     const callsBeforeKey = fixture.vscode.setStateCalls;
-    const event = fixture.root.dispatch('keydown', fixture.elements.overviewTab, key);
+    const event = fixture.root.dispatch('keydown', fixture.elements.overviewTab, keyCase.key);
     assert.equal(event.defaultPrevented, true);
     assert.equal(event.propagationStopped, true);
-    assert.equal(fixture.vscode.setStateCalls, callsBeforeKey);
-    assert.equal(stateSnapshot(fixture), before);
+    assert.equal(fixture.vscode.setStateCalls, callsBeforeKey + 1);
+    assert.equal((fixture.vscode.state.codexUi as any).page, keyCase.page);
   });
 }
 

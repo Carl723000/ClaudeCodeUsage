@@ -1286,6 +1286,8 @@ test('Codex charts tables disclosures and mobile details expose the accessible U
   assert.match(html, /<button[^>]*class="codex-sort-button"[^>]*data-codex-action="sort-sessions"[^>]*data-codex-sort-key="title"/);
   assert.match(html, /class="[^"]*codex-disclosure[^"]*"[^>]*aria-expanded="true"/);
   assert.match(html, /data-codex-thread-visible[^>]*aria-live="polite"/);
+  assert.match(html, /data-codex-thread-visible[^>]*data-codex-result-count/);
+  assert.match(html, /data-codex-chart-summary[^>]*aria-live="polite"/);
   assert.match(html, /class="daily-table-container codex-scroll-region"/);
   assert.match(html, /class="hc-scroll codex-scroll-region"/);
   assert.doesNotMatch(html, /class="(?:daily-table-container|hc-scroll)"/);
