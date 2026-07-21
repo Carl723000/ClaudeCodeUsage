@@ -24,6 +24,8 @@ const validBundle = [
   'hostState.codexUi = nextState',
 ].join('\n');
 
+const sourceMain = './out/extension.js';
+
 test('VSIX policy accepts runtime files and normal publication assets', () => {
   assert.doesNotThrow(() => assertSafeVsixEntries([
     ...minimalEntries,
@@ -81,6 +83,20 @@ test('VSIX policy rejects unsafe or non-canonical archive paths', () => {
     '../extension/out/extra.js',
     'unexpected-root-file.txt',
     '_rels/.rels',
+  ]) {
+    assert.throws(
+      () => assertSafeVsixEntries([...minimalEntries, entry]),
+      /unsafe VSIX entry/,
+      entry,
+    );
+  }
+});
+
+test('VSIX policy rejects archive paths with empty segments', () => {
+  for (const entry of [
+    'extension//.superpowers/sdd/private.md',
+    'extension/out//test/private.js',
+    'extension//node_modules/pkg/index.js',
   ]) {
     assert.throws(
       () => assertSafeVsixEntries([...minimalEntries, entry]),
@@ -166,9 +182,22 @@ test('packaged manifest policy returns its verified runtime main entry', () => {
     assertPackagedManifest(
       { version: '2.1.1', main: './out/extension.js' },
       '2.1.1',
+      sourceMain,
       minimalEntries,
     ),
     'extension/out/extension.js',
+  );
+});
+
+test('packaged manifest policy rejects a runtime main that differs from the source manifest', () => {
+  assert.throws(
+    () => assertPackagedManifest(
+      { version: '2.1.1', main: './out/evil.js' },
+      '2.1.1',
+      sourceMain,
+      [...minimalEntries, 'extension/out/evil.js'],
+    ),
+    /VSIX main mismatch/,
   );
 });
 
@@ -177,6 +206,7 @@ test('packaged manifest policy rejects version mismatches', () => {
     () => assertPackagedManifest(
       { version: '9.9.9', main: './out/extension.js' },
       '2.1.1',
+      sourceMain,
       minimalEntries,
     ),
     /VSIX version mismatch: expected 2\.1\.1, got 9\.9\.9/,
@@ -192,12 +222,49 @@ test('packaged manifest policy rejects unsafe or missing runtime mains', () => {
     './out/../private.js',
     './out//extension.js',
     './README.md',
-    './out/missing.js',
   ]) {
     assert.throws(
-      () => assertPackagedManifest({ version: '2.1.1', main }, '2.1.1', minimalEntries),
+      () => assertPackagedManifest(
+        { version: '2.1.1', main },
+        '2.1.1',
+        sourceMain,
+        minimalEntries,
+      ),
       /invalid VSIX main|missing VSIX main entry/,
       main,
+    );
+  }
+
+  assert.throws(
+    () => assertPackagedManifest(
+      { version: '2.1.1', main: './out/missing.js' },
+      '2.1.1',
+      './out/missing.js',
+      minimalEntries,
+    ),
+    /missing VSIX main entry: extension\/out\/missing\.js/,
+  );
+});
+
+test('packaged manifest policy rejects an invalid source runtime main', () => {
+  for (const expectedMain of [
+    undefined,
+    42,
+    '',
+    '/out/extension.js',
+    './out/../extension.js',
+    './out//extension.js',
+    './README.md',
+  ]) {
+    assert.throws(
+      () => assertPackagedManifest(
+        { version: '2.1.1', main: './out/extension.js' },
+        '2.1.1',
+        expectedMain,
+        minimalEntries,
+      ),
+      /invalid source main/,
+      String(expectedMain),
     );
   }
 });

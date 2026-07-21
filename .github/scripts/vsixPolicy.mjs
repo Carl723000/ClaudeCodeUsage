@@ -46,7 +46,7 @@ function assertCanonicalEntry(entry) {
       entry.endsWith('/')) {
     throw new Error(`unsafe VSIX entry: ${String(entry)}`);
   }
-  if (entry.split('/').some((segment) => segment === '.' || segment === '..')) {
+  if (entry.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
     throw new Error(`unsafe VSIX entry: ${entry}`);
   }
   if (!ROOT_METADATA_ENTRIES.has(entry) && !entry.startsWith('extension/')) {
