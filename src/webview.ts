@@ -21,7 +21,10 @@ import {
   renderCodexView,
   renderProviderCompare,
 } from './codexView';
-import { CodexInsight } from './providers/codex/codexInsights';
+import {
+  CodexScopedInsights,
+  emptyCodexScopedInsights,
+} from './providers/codex/codexInsights';
 import { CodexUsageView } from './providers/codex/codexUsage';
 import { createCodexLocalizedFormatters } from './codexFormat';
 import * as os from 'os';
@@ -57,7 +60,7 @@ export class UsageWebviewProvider {
   private currentTab: string = 'today';
   private currentProvider: 'claude' | 'codex' | 'compare' = 'claude';
   private codexView: CodexUsageView | null = null;
-  private codexInsights: CodexInsight[] = [];
+  private codexInsights: CodexScopedInsights = emptyCodexScopedInsights();
   private providerAvailability = { claude: false, codex: false };
   private providerSelectionInitialized = false;
   private hourlyDataCache: Map<string, { hour: string; data: UsageData }[]> = new Map();
@@ -509,11 +512,11 @@ export class UsageWebviewProvider {
 
   updateProviderData(
     codexView: CodexUsageView | null,
-    insights: CodexInsight[],
+    insights: CodexScopedInsights,
     providerAvailability: { claude: boolean; codex: boolean },
   ): void {
     this.codexView = codexView;
-    this.codexInsights = insights;
+    this.codexInsights = codexView ? insights : emptyCodexScopedInsights();
     this.providerAvailability = { ...providerAvailability };
     if (!this.providerSelectionInitialized) {
       this.currentProvider = defaultDashboardProvider(

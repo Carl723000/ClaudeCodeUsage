@@ -74,6 +74,12 @@ test('Codex settings and charts stay inside the provider view', () => {
   assert.match(webview, /\.codex-chart-value\s*\{/);
   assert.match(webview, /\.codex-period-chart \.hc-wrap/);
   assert.match(extension, /codexOptimizationEnabled:/);
+  assert.match(extension, /private codexInsights: CodexScopedInsights/);
+  assert.match(extension, /buildScopedCodexInsights\(this\.codexView\)/);
+  assert.match(extension, /catch \{\s+this\.codexView = null;\s+this\.codexInsights = emptyCodexScopedInsights\(\);\s+this\.codexHasData = false;/);
+  assert.match(webview, /private codexInsights: CodexScopedInsights/);
+  assert.match(webview, /insights: CodexScopedInsights/);
+  assert.match(webview, /this\.codexInsights = codexView \? insights : emptyCodexScopedInsights\(\);/);
 });
 
 test('provider and Codex view copy is complete in every UI locale', () => {
@@ -99,7 +105,7 @@ test('provider and Codex view copy is complete in every UI locale', () => {
         if (typeof value === 'string') {
           assert.notEqual(value.trim(), '', `${language} has empty Codex copy`);
         } else {
-          assert.equal(Object.keys(value).length, 5);
+          assert.ok([5, 15].includes(Object.keys(value).length));
         }
       }
       if (language !== 'en') {

@@ -7,7 +7,7 @@ import {
   renderCodexView,
   renderProviderCompare,
 } from '../codexView';
-import { buildCodexInsights } from '../providers/codex/codexInsights';
+import { buildCodexInsights, buildScopedCodexInsights } from '../providers/codex/codexInsights';
 import { buildCodexUsageView } from '../providers/codex/codexUsage';
 import { I18n } from '../i18n';
 import { createCodexLocalizedFormatters } from '../codexFormat';
@@ -30,12 +30,7 @@ type CodexFixtureView = ReturnType<typeof buildCodexUsageView>;
 function scopedInsights(
   view: CodexFixtureView,
 ): CodexScopedInsights {
-  return {
-    recent: view.lastTask ? buildCodexInsights(view.lastTask) : [],
-    last7Days: buildCodexInsights(view.last7Days),
-    last30Days: buildCodexInsights(view.last30Days),
-    allTime: buildCodexInsights(view.allTime),
-  };
+  return buildScopedCodexInsights(view);
 }
 
 function renderFixture(): string {
@@ -81,7 +76,7 @@ test('empty or partial insights render no paste-ready constraint fallback', () =
   const snapshot = snapshotFixture();
   snapshot.coverage.period.last7Days.complete = false;
   const view = buildCodexUsageView(snapshot, NOW);
-  const partialInsights = buildCodexInsights(view.last7Days);
+  const partialInsights = buildCodexInsights(view.last7Days, '7d');
 
   for (const insights of [[], partialInsights]) {
     const html = renderCodexView(view, insights, CODEX_COPY_EN);
@@ -96,8 +91,97 @@ test('empty or partial insights render no paste-ready constraint fallback', () =
     CODEX_COPY_EN,
   );
   assert.match(evidenced, /Paste-ready constraint/);
-  assert.match(evidenced, /Run one focused test tied to the change/);
-  assert.match(evidenced, /Stop when the acceptance criteria pass/);
+  assert.match(evidenced, /cache and context proxy/i);
+  assert.doesNotMatch(evidenced, /full test|hardening/i);
+});
+
+test('recommendation cards contain scope observation evidence proxy note and conditional action', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, {
+    recent: buildCodexInsights(view.lastTask!, 'recent'),
+    last7Days: [],
+    last30Days: [],
+    allTime: [],
+  }, CODEX_COPY_EN);
+  const recommendations = htmlBetween(html, 'data-codex-page="recommendations"', 'data-codex-page="settings"');
+
+  for (const marker of ['insight-observation', 'insight-evidence', 'insight-note', 'insight-tip']) {
+    assert.match(recommendations, new RegExp(`class="[^"]*${marker}`));
+  }
+  assert.match(recommendations, /Recent task/);
+  assert.match(recommendations, /data-codex-action="set-recommendation-scope"/);
+  assert.doesNotMatch(recommendations, /tax|overhead|files changed|commands per file|patchCalls|toolCalls/i);
+});
+
+test('Recommendations disables only partial daily scopes while recent and aggregate all-time remain available', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.last7Days.complete = false;
+  snapshot.coverage.period.last30Days.complete = false;
+  const view = buildCodexUsageView(snapshot, NOW);
+  const insights = {
+    recent: buildCodexInsights(view.lastTask!, 'recent'),
+    last7Days: buildCodexInsights(view.last7Days, '7d'),
+    last30Days: buildCodexInsights(view.last30Days, '30d'),
+    allTime: buildCodexInsights(view.allTime, 'all'),
+  };
+  const html = renderCodexView(view, insights, CODEX_COPY_EN);
+  const recommendations = htmlBetween(html, 'data-codex-page="recommendations"', 'data-codex-page="settings"');
+
+  for (const period of ['7d', '30d']) {
+    assert.match(recommendations, new RegExp(`data-codex-recommendation-scope="${period}"[^>]*disabled[^>]*aria-disabled="true"`));
+    const panel = htmlBetween(recommendations, `data-codex-recommendation-panel="${period}"`, period === '7d' ? 'data-codex-recommendation-panel="30d"' : 'data-codex-recommendation-panel="all"');
+    assert.doesNotMatch(panel, /class="[^"]*insight-card/);
+  }
+  assert.match(recommendations, /index.*catching up/i);
+  for (const period of ['recent', 'all']) {
+    assert.match(recommendations, new RegExp(`data-codex-recommendation-scope="${period}"(?![^>]*disabled)`));
+  }
+});
+
+test('every complete recommendation scope renders its own cards and localized constraint', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.last7Days.complete = true;
+  snapshot.coverage.period.last30Days.complete = true;
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, buildScopedCodexInsights(view), CODEX_COPY_EN);
+  const recommendations = htmlBetween(html, 'data-codex-page="recommendations"', 'data-codex-page="settings"');
+  const panels = [
+    ['recent', '7d'], ['7d', '30d'], ['30d', 'all'], ['all', undefined],
+  ] as const;
+
+  for (const [scope, next] of panels) {
+    const panel = htmlBetween(recommendations, `data-codex-recommendation-panel="${scope}"`, next ? `data-codex-recommendation-panel="${next}"` : undefined);
+    assert.match(panel, /class="[^"]*insight-card/);
+    assert.equal((panel.match(/<summary>Paste-ready constraint<\/summary>/g) ?? []).length, 1);
+  }
+});
+
+test('partial rolling recommendation panels contain neither cards nor constraints', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.last7Days.complete = false;
+  snapshot.coverage.period.last30Days.complete = false;
+  const view = buildCodexUsageView(snapshot, NOW);
+  const html = renderCodexView(view, buildScopedCodexInsights(view), CODEX_COPY_EN);
+  const recommendations = htmlBetween(html, 'data-codex-page="recommendations"', 'data-codex-page="settings"');
+
+  for (const [scope, next] of [['7d', '30d'], ['30d', 'all']] as const) {
+    const panel = htmlBetween(recommendations, `data-codex-recommendation-panel="${scope}"`, `data-codex-recommendation-panel="${next}"`);
+    assert.doesNotMatch(panel, /insight-card|Paste-ready constraint/);
+  }
+});
+
+test('recommendation composition shows comparable fresh totals and shares for roles models and effort', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, buildScopedCodexInsights(view), CODEX_COPY_EN, {
+    formatNumber: (value) => `N:${value}`,
+  });
+  const panel = htmlBetween(html, 'data-codex-recommendation-panel="recent"', 'data-codex-recommendation-panel="7d"');
+
+  assert.match(panel, /Root[^<]*N:200[^<]*50%/);
+  assert.match(panel, /Subagent[^<]*N:200[^<]*50%/);
+  assert.match(panel, /gpt-5\.6-sol[^<]*N:400[^<]*100%/);
+  assert.match(panel, /high[^<]*N:400[^<]*100%/);
+  assert.doesNotMatch(panel, /\$/);
 });
 
 test('Codex renderer exposes three product destinations and auxiliary settings', () => {
@@ -145,8 +229,8 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /class="sortable" data-sortkey="title"/);
   assert.match(html, /data-codex-project-detail="[a-f0-9]{16}"/);
   for (const scope of ['recent', '7d', '30d', 'all']) {
-    assert.match(html, new RegExp(`data-codex-behavior-button="${scope}"`));
-    assert.match(html, new RegExp(`data-codex-behavior-panel="${scope}"`));
+    assert.match(html, new RegExp(`data-codex-recommendation-scope="${scope}"`));
+    assert.match(html, new RegExp(`data-codex-recommendation-panel="${scope}"`));
   }
   assert.match(html, /<details class="model-item codex-coverage">/);
   assert.match(html, /data-test-settings/);
@@ -156,7 +240,7 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /data-codex-action="select-chart-metric"[^>]*data-codex-chart-id="codex-7d"[^>]*data-codex-chart-metric="processed"/);
   assert.match(html, /data-codex-action="toggle-thread-children"[^>]*data-codex-thread-key="[a-f0-9]{16}"/);
   assert.match(html, /data-codex-action="project-sessions"[^>]*data-codex-project-view-key="[a-f0-9]{16}"/);
-  assert.match(html, /data-codex-action="select-behavior-scope"[^>]*data-codex-behavior-scope="recent"/);
+  assert.match(html, /data-codex-action="set-recommendation-scope"[^>]*data-codex-recommendation-scope="recent"/);
   assert.doesNotMatch(html, /\sonclick=/);
   assert.doesNotMatch(html, /codex-metric-card|project:a|session:|Thread 1|Project 1/);
   assert.doesNotMatch(html, /class="codex-header"/);
@@ -509,7 +593,7 @@ test('Codex renderer scopes period coverage and keeps verified all-time aggregat
   assert.match(html, /data-codex-chart-root="codex-all"[^>]*data-codex-coverage-range="all"[^>]*data-codex-coverage-status="partial"/);
   assert.doesNotMatch(html, /data-codex-scope-summary="all"[^>]*data-codex-coverage-status="partial"/);
   assert.match(html, /data-codex-page="recommendations"/);
-  assert.match(html, /data-codex-behavior-panel="all"/);
+  assert.match(html, /data-codex-recommendation-panel="all"/);
 });
 
 test('Codex renderer adapts production-shaped settings to declarative actions', () => {
@@ -606,8 +690,6 @@ test('Codex renderer consumes every injected temporal and byte formatter', () =>
     701,
     702,
     1_301,
-    1_301,
-    1_501,
     1_501,
     3_001,
     3_002,
@@ -806,7 +888,7 @@ test('Simplified Chinese Codex dashboard localizes the new Claude-style modules'
       { settingsHtml: '<section>设置内容</section>' },
     );
 
-    for (const label of ['最近任务', '最近 7 天', '最近 30 天', '全部时间', '线程', '项目', '行为', '设置']) {
+    for (const label of ['最近任务', '最近 7 天', '最近 30 天', '全部时间', '线程', '项目', '优化建议', '设置']) {
       assert.match(html, new RegExp(label));
     }
     assert.match(html, /Token 构成/);
@@ -854,6 +936,44 @@ test('every Codex locale labels structural data as patch and tool-call proxies',
       assert.match(html, new RegExp(expected[language][1]));
       assert.match(html, new RegExp(expected[language][2]));
       assert.doesNotMatch(html, prohibited);
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
+test('all eight locales deeply translate every evidence-driven recommendation copy key', () => {
+  const languages = ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'] as const;
+  const kinds = ['multi-agent-share', 'effort-comparison', 'post-patch-tool-intensity', 'cache-context', 'approval-reviewer-share'] as const;
+  const evidence = ['taskCount', 'rootSessionFresh', 'subagentFresh', 'approvalReviewerFresh', 'observedEffort', 'highEffortFresh', 'lowMediumEffortFresh', 'patchCalls', 'toolCalls', 'postPatchToolCalls', 'compactCount', 'taskCompleteCount', 'processedToFreshRatio', 'cachedInputShare', 'reasoningOutputShare'] as const;
+  const scalarKeys = ['recommendations', 'constraintNoAgents', 'constraintLowerEffort', 'constraintPostPatch', 'constraintCacheContext', 'constraintApprovalReviewer', 'recommendationComposition', 'recommendationProxyKpi', 'recommendationEmpty', 'recommendationPartial', 'insightObservation', 'insightEvidence', 'insightConditionalAction'] as const;
+  const english = CODEX_COPY_EN;
+  const previous = I18n.getCurrentLanguage();
+  try {
+    for (const language of languages) {
+      I18n.setLanguage(language);
+      const copy = I18n.t.providers.codex;
+      assert.equal('constraintTests' in copy, false, `${language} retained a generic test constraint`);
+      assert.equal('constraintStop' in copy, false, `${language} retained a generic stop constraint`);
+      for (const key of scalarKeys) {
+        assert.ok(copy[key], `${language}.${key} is missing`);
+        if (language !== 'en') assert.notEqual(copy[key], english[key], `${language}.${key} fell back to English`);
+      }
+      for (const key of kinds) {
+        assert.ok(copy.insightTitles[key]);
+        assert.ok(copy.insightObservations[key]);
+        assert.ok(copy.insightTips[key]);
+        if (language !== 'en') {
+          assert.notEqual(copy.insightTitles[key], english.insightTitles[key], `${language}.title.${key} fell back to English`);
+          assert.notEqual(copy.insightObservations[key], english.insightObservations[key], `${language}.observation.${key} fell back to English`);
+          assert.notEqual(copy.insightTips[key], english.insightTips[key], `${language}.tip.${key} fell back to English`);
+        }
+      }
+      for (const key of evidence) {
+        assert.ok(copy.insightEvidenceLabels[key], `${language}.evidence.${key} is missing`);
+        if (language !== 'en') assert.notEqual(copy.insightEvidenceLabels[key], english.insightEvidenceLabels[key], `${language}.evidence.${key} fell back to English`);
+      }
+      assert.doesNotMatch(`${copy.constraintNoAgents} ${copy.constraintLowerEffort}`, /small change|kleine Änderung|小改動|小改动|작은 변경|mudança pequena|perubahan kecil/i);
     }
   } finally {
     I18n.setLanguage(previous);

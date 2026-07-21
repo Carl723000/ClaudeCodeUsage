@@ -387,9 +387,9 @@ test('rolling scopes stay anchored to snapshot coverage across Hong Kong midnigh
   assert.equal(view.last7DaysDaily[0].day, '2026-07-14');
   assert.equal(view.last7DaysDaily[6].day, '2026-07-20');
   assert.equal(view.last7DaysDaily.some((row) => row.day === '2026-07-21'), false);
-  assert.deepEqual(buildCodexInsights(view.last7Days), []);
+  assert.deepEqual(buildCodexInsights(view.last7Days, '7d'), []);
   assert.equal(
-    buildCodexInsights(view.last30Days).some((insight) => insight.kind === 'effort-comparison'),
+    buildCodexInsights(view.last30Days, '30d').some((insight) => insight.kind === 'effort-comparison'),
     true,
   );
 });
