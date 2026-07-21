@@ -459,6 +459,8 @@ interface CodexChartRow {
   threads: number;
 }
 
+type CodexMetricKey = 'processed' | 'fresh' | 'output' | 'reasoning' | 'sessions';
+
 function periodChart(
   chartId: string,
   rows: CodexChartRow[],
@@ -480,10 +482,10 @@ function periodChart(
     ['fresh', copy.fresh],
     ['output', copy.output],
     ['reasoning', copy.reasoning],
-    ['threads', copy.threads],
+    ['sessions', copy.threads],
   ];
   const metricValue = (row: CodexChartRow, key: string): number =>
-    key === 'threads'
+    key === 'sessions'
       ? row.threads
       : row.total[key as keyof CodexMetricTotals];
   const axisAttributes = metrics.map(([key]) => {
@@ -502,7 +504,7 @@ function periodChart(
         fresh: row.total.fresh,
         output: row.total.output,
         reasoning: row.total.reasoning,
-        threads: row.threads,
+        sessions: row.threads,
       };
       const labelAttributes = metrics
         .map(
@@ -513,7 +515,7 @@ function periodChart(
       const height = maxFresh > 0
         ? Math.max(2, Math.round((row.total.fresh / maxFresh) * chartHeight))
         : 2;
-      return `<div class="hc-col"><div class="hc-barval codex-chart-value" data-codex-chart-value>${formatted(format, row.total.fresh)}</div><div class="chart-bar input-bar codex-chart-bar" style="height:${height}px" data-codex-chart="${escapeHtml(chartId)}" data-row-label="${escapeHtml(row.label)}" data-processed="${Math.max(0, row.total.processed)}" data-fresh="${Math.max(0, row.total.fresh)}" data-output="${Math.max(0, row.total.output)}" data-reasoning="${Math.max(0, row.total.reasoning)}" data-threads="${Math.max(0, row.threads)}" ${labelAttributes} title="${escapeHtml(row.label)} · ${escapeHtml(copy.fresh)}: ${formatted(format, row.total.fresh)}"></div></div>`;
+      return `<div class="hc-col"><div class="hc-barval codex-chart-value" data-codex-chart-value>${formatted(format, row.total.fresh)}</div><div class="chart-bar input-bar codex-chart-bar" style="height:${height}px" data-codex-chart="${escapeHtml(chartId)}" data-row-label="${escapeHtml(row.label)}" data-processed="${Math.max(0, row.total.processed)}" data-fresh="${Math.max(0, row.total.fresh)}" data-output="${Math.max(0, row.total.output)}" data-reasoning="${Math.max(0, row.total.reasoning)}" data-sessions="${Math.max(0, row.threads)}" data-threads="${Math.max(0, row.threads)}" ${labelAttributes} data-label-threads="${formatted(format, row.threads)}" title="${escapeHtml(row.label)} · ${escapeHtml(copy.fresh)}: ${formatted(format, row.total.fresh)}"></div></div>`;
     })
     .join('');
   const labels = ordered
@@ -716,7 +718,7 @@ function threadTable(
     ),
   ).join('');
   const chip = (key: string, label: string, value: string): string =>
-    value ? `<span data-codex-filter-chip="${key}">${escapeHtml(label)}: ${escapeHtml(value)}</span>` : '';
+    value ? `<button type="button" data-codex-filter-chip="${key}" data-codex-action="remove-filter" data-codex-filter-key="${key}">${escapeHtml(label)}: ${escapeHtml(value)} ×</button>` : '';
   const chips = [
     chip('query', copy.searchThreads, query),
     chip('role', copy.role, roleLabels.get(roleFilter) ?? ''),
@@ -737,7 +739,7 @@ function threadTable(
     ${select('model', copy.models, modelOptions, modelFilter)}
     ${select('effort', copy.efforts, effortOptions, effortFilter)}
     ${select('period', copy.scope, periodOptions, periodFilter, hasUnavailablePeriods ? 'codex-session-period-note' : '')}
-    ${periodNote}<div class="codex-filter-chips" aria-label="${escapeHtml(copy.activeFilters)}">${chips}</div><button class="btn-secondary" data-codex-action="clear-filters"${hasFilters ? '' : ' hidden'}>${escapeHtml(copy.clearFilters)}</button>
+    ${periodNote}<div class="codex-filter-chips" aria-label="${escapeHtml(copy.activeFilters)}" data-codex-filter-chips data-codex-search-label="${escapeHtml(copy.searchThreads)}">${chips}</div><button class="btn-secondary" data-codex-action="clear-filters"${hasFilters ? '' : ' hidden'}>${escapeHtml(copy.clearFilters)}</button>
   </div>`;
   const body = displayed
     .map((row) => {
@@ -746,8 +748,8 @@ function threadTable(
       const parentValue = row.parentStatus === 'available'
         ? row.parentTitle ?? copy.unavailable
         : copy.unavailable;
-      const parent = hasFilters && row.parentStatus !== 'none'
-        ? `<div class="model-details">${escapeHtml(parentLabel)}: ${escapeHtml(parentValue)}</div>`
+      const parent = row.parentStatus !== 'none'
+        ? `<div class="model-details" data-codex-filter-parent${hasFilters ? '' : ' hidden'}>${escapeHtml(parentLabel)}: ${escapeHtml(parentValue)}</div>`
         : '';
       const childCount = children.get(row.viewKey) ?? 0;
       const childToggle = childCount > 0
@@ -779,12 +781,12 @@ function threadTable(
         [copy.duration, formatDuration(row.durationMs)],
       ].map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
       const mobile = `<details class="codex-session-mobile"><summary aria-label="${escapeHtml(`${copy.threadLabel}: ${title}`)}">${escapeHtml(title)}</summary><dl>${mobileFacts}</dl></details>`;
-      return `<tr class="sort-row codex-thread-row${!hasFilters && row.parentViewKey ? ' codex-child-thread' : ''}" data-codex-thread-row data-codex-view-key="${escapeHtml(row.viewKey)}" data-parent-status="${row.parentStatus}"${row.parentViewKey ? ` data-codex-parent-view-key="${escapeHtml(row.parentViewKey)}"` : ''} data-search="${escapeHtml(search)}" data-role="${escapeHtml(row.role)}" data-project="${escapeHtml(row.projectViewKey)}" data-models="${escapeHtml(row.models.join('|'))}" data-efforts="${escapeHtml(row.efforts.join('|'))}" data-sort-title="${escapeHtml(title.toLowerCase())}" data-sort-time="${Math.max(0, row.observedAt)}" data-sort-role="${escapeHtml(row.role)}" data-sort-project="${escapeHtml(project.toLowerCase())}" data-sort-model="${escapeHtml(row.models.join(',').toLowerCase())}" data-sort-effort="${escapeHtml(row.efforts.join(',').toLowerCase())}" data-sort-processed="${Math.max(0, row.total.processed)}" data-sort-fresh="${Math.max(0, row.total.fresh)}" data-sort-cache="${row.total.input > 0 ? row.total.cachedInput / row.total.input : 0}" data-sort-output="${Math.max(0, row.total.output)}" data-sort-reasoning="${Math.max(0, row.total.reasoning)}" data-sort-duration="${Math.max(0, row.durationMs)}"><td class="name-cell">${childToggle}<strong>${escapeHtml(title)}</strong>${parent}${mobile}</td><td class="date-cell">${escapeHtml(formatDateTime(row.observedAt))}</td><td>${escapeHtml(roleLabel(row.role, copy))}</td><td><strong>${escapeHtml(project)}</strong>${directory}</td><td>${escapeHtml(row.models.join(', '))}</td><td>${escapeHtml(row.efforts.join(', '))}</td><td class="number-cell">${formatted(format, row.total.processed)}</td><td class="number-cell">${formatted(format, row.total.fresh)}</td><td class="number-cell">${percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)}</td><td class="number-cell">${formatted(format, row.total.output)}</td><td class="number-cell">${formatted(format, row.total.reasoning)}</td><td class="number-cell">${escapeHtml(formatDuration(row.durationMs))}</td></tr>`;
+      return `<tr class="sort-row codex-thread-row${!hasFilters && row.parentViewKey ? ' codex-child-thread' : ''}" tabindex="-1" data-codex-thread-row data-codex-view-key="${escapeHtml(row.viewKey)}" data-codex-root-task-view-key="${escapeHtml(row.rootTaskViewKey)}" data-parent-status="${row.parentStatus}"${row.parentViewKey ? ` data-codex-parent-view-key="${escapeHtml(row.parentViewKey)}"` : ''} data-search="${escapeHtml(search)}" data-role="${escapeHtml(row.role)}" data-project="${escapeHtml(row.projectViewKey)}" data-models="${escapeHtml(row.models.join('|'))}" data-efforts="${escapeHtml(row.efforts.join('|'))}" data-codex-periods="${escapeHtml(row.periodMembership.join('|'))}" data-sort-title="${escapeHtml(title.toLowerCase())}" data-sort-time="${Math.max(0, row.observedAt)}" data-sort-role="${escapeHtml(row.role)}" data-sort-project="${escapeHtml(project.toLowerCase())}" data-sort-model="${escapeHtml(row.models.join(',').toLowerCase())}" data-sort-effort="${escapeHtml(row.efforts.join(',').toLowerCase())}" data-sort-processed="${Math.max(0, row.total.processed)}" data-sort-fresh="${Math.max(0, row.total.fresh)}" data-sort-cache="${row.total.input > 0 ? row.total.cachedInput / row.total.input : 0}" data-sort-output="${Math.max(0, row.total.output)}" data-sort-reasoning="${Math.max(0, row.total.reasoning)}" data-sort-duration="${Math.max(0, row.durationMs)}"><td class="name-cell">${childToggle}<strong>${escapeHtml(title)}</strong>${parent}${mobile}</td><td class="date-cell">${escapeHtml(formatDateTime(row.observedAt))}</td><td>${escapeHtml(roleLabel(row.role, copy))}</td><td><strong>${escapeHtml(project)}</strong>${directory}</td><td>${escapeHtml(row.models.join(', '))}</td><td>${escapeHtml(row.efforts.join(', '))}</td><td class="number-cell">${formatted(format, row.total.processed)}</td><td class="number-cell">${formatted(format, row.total.fresh)}</td><td class="number-cell">${percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)}</td><td class="number-cell">${formatted(format, row.total.output)}</td><td class="number-cell">${formatted(format, row.total.reasoning)}</td><td class="number-cell">${escapeHtml(formatDuration(row.durationMs))}</td></tr>`;
     })
     .join('');
-  const th = (key: string, label: string): string =>
-    `<th class="sortable" data-sortkey="${key}">${escapeHtml(label)}</th>`;
-  return `<section class="daily-breakdown" data-codex-session-layout="${hasFilters ? 'flat' : 'tree'}"><h3>${escapeHtml(copy.sessions)}</h3><p class="model-details" aria-live="polite"><span data-codex-thread-visible>${formatted(format, displayed.length)}</span>/${formatted(format, totalCount)} ${escapeHtml(copy.sessions)}</p>${filterToolbar}<div class="daily-table-container"><table class="daily-table sortable-table"><thead><tr>${th('title', copy.threadLabel)}${th('time', copy.date)}${th('role', copy.role)}${th('project', copy.projectLabel)}${th('model', copy.models)}${th('effort', copy.efforts)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('cache', copy.cacheShare)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('duration', copy.duration)}</tr></thead><tbody>${body}</tbody></table></div></section>`;
+  const th = (key: string, label: string, legacyKey = key): string =>
+    `<th class="sortable" data-sortkey="${legacyKey}" data-codex-action="sort-sessions" data-codex-sort-key="${key}" aria-sort="none">${escapeHtml(label)}</th>`;
+  return `<section class="daily-breakdown" data-codex-session-layout="${hasFilters ? 'flat' : 'tree'}"><h3>${escapeHtml(copy.sessions)}</h3><p class="model-details" aria-live="polite"><span data-codex-thread-visible>${formatted(format, displayed.length)}</span>/${formatted(format, totalCount)} ${escapeHtml(copy.sessions)}</p>${filterToolbar}<div class="daily-table-container"><table class="daily-table sortable-table" data-codex-sort-table="sessions"><thead><tr>${th('title', copy.threadLabel)}${th('recent', copy.date, 'time')}${th('role', copy.role)}${th('project', copy.projectLabel)}${th('model', copy.models)}${th('effort', copy.efforts)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('cache', copy.cacheShare)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('duration', copy.duration)}</tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
 
 function projectTable(
@@ -810,8 +812,8 @@ function projectTable(
     })
     .join('');
   const th = (key: string, label: string): string =>
-    `<th class="sortable" data-sortkey="${key}">${escapeHtml(label)}</th>`;
-  return `<section class="daily-breakdown"><h3>${escapeHtml(copy.projects)}</h3><div class="daily-table-container"><table class="daily-table sortable-table"><thead><tr>${th('name', copy.projectLabel)}${th('lastactive', copy.lastActive)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('roots', copy.rootTasks)}${th('children', copy.childThreads)}<th>${escapeHtml(copy.approvalReviewers)}</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
+    `<th class="sortable" data-sortkey="${key}" data-codex-action="sort-projects" data-codex-sort-key="${key}" aria-sort="none">${escapeHtml(label)}</th>`;
+  return `<section class="daily-breakdown"><h3>${escapeHtml(copy.projects)}</h3><div class="daily-table-container"><table class="daily-table sortable-table" data-codex-sort-table="projects"><thead><tr>${th('name', copy.projectLabel)}${th('lastactive', copy.lastActive)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('roots', copy.rootTasks)}${th('children', copy.childThreads)}<th>${escapeHtml(copy.approvalReviewers)}</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
 
 function insightCard(
@@ -1028,17 +1030,75 @@ function renderRecentTaskSection(ctx: CodexRenderContext): string {
 function renderTrendSection(ctx: CodexRenderContext): string {
   const { copy, view } = ctx;
   const format = ctx.formatters.number;
-  const scopeButtons = [
-    ['recent', copy.lastTask], ['7d', copy.last7Days], ['30d', copy.last30Days], ['all', copy.allTime],
-  ].map(([key, label]) => `<button class="chart-tab${key === '7d' ? ' active' : ''}" data-codex-action="set-overview-scope" data-codex-overview-scope="${key}">${escapeHtml(label)}</button>`).join('');
-  const metrics = [
-    ['processed', copy.processed], ['fresh', copy.fresh], ['output', copy.output], ['reasoning', copy.reasoning], ['threads', copy.threads],
-  ].map(([key, label]) => `<button class="chart-tab${key === 'fresh' ? ' active' : ''}" data-codex-action="set-chart-metric" data-codex-chart-metric="${key}">${escapeHtml(label)}</button>`).join('');
-  const rows = view.last7DaysDaily;
-  const maxFresh = Math.max(1, ...rows.map((row) => row.total.fresh));
-  const bars = rows.map((row) => `<button class="chart-bar input-bar codex-chart-bar" data-codex-action="drilldown-date" data-codex-date="${escapeHtml(row.day)}" data-processed="${Math.max(0, row.total.processed)}" data-fresh="${Math.max(0, row.total.fresh)}" data-output="${Math.max(0, row.total.output)}" data-reasoning="${Math.max(0, row.total.reasoning)}" data-threads="${Math.max(0, row.threads)}" style="height:${Math.max(2, Math.round((row.total.fresh / maxFresh) * 100))}px" title="${escapeHtml(row.day)} · ${escapeHtml(copy.fresh)}: ${formatted(format, row.total.fresh)}"></button>`).join('');
-  const tableRows = rows.map((row) => `<tr><td class="date-cell">${escapeHtml(row.day)}</td><td>${formatted(format, row.total.processed)}</td><td>${formatted(format, row.total.fresh)}</td><td>${formatted(format, row.total.output)}</td><td>${formatted(format, row.threads)}</td></tr>`).join('');
-  return `<section class="daily-breakdown codex-overview-trend" data-codex-section="trend"><h3>${escapeHtml(copy.daily)}</h3><div class="chart-tabs codex-overview-scope">${scopeButtons}</div>${scopePanel(view.last7Days, copy, format, ctx.formatters.duration)}<div class="chart-tabs codex-overview-metric">${metrics}</div><div class="hc-wrap"><div class="hc-main"><div class="hc-scroll"><div class="hc-plot"><div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div><div class="hc-bars chart-bars">${bars}</div></div></div></div></div><div class="daily-table-container"><table class="daily-table"><thead><tr><th>${escapeHtml(copy.date)}</th><th>${escapeHtml(copy.processed)}</th><th>${escapeHtml(copy.fresh)}</th><th>${escapeHtml(copy.output)}</th><th>${escapeHtml(copy.threads)}</th></tr></thead><tbody>${tableRows}</tbody></table></div></section>`;
+  const scopeRows: Array<{
+    key: 'recent' | '7d' | '30d' | 'all';
+    label: string;
+    scope: CodexUsageScopeView | null;
+    rows: CodexChartRow[];
+    daily: boolean;
+  }> = [
+    {
+      key: 'recent', label: copy.lastTask, scope: view.lastTask,
+      rows: view.lastTask ? [{ label: copy.lastTask, total: view.lastTask.total, threads: view.lastTask.threads }] : [],
+      daily: false,
+    },
+    {
+      key: '7d', label: copy.last7Days, scope: view.last7Days,
+      rows: view.last7DaysDaily.map((row) => ({ label: row.day, total: row.total, threads: row.threads })),
+      daily: true,
+    },
+    {
+      key: '30d', label: copy.last30Days, scope: view.last30Days,
+      rows: view.last30DaysDaily.map((row) => ({ label: row.day, total: row.total, threads: row.threads })),
+      daily: true,
+    },
+    {
+      key: 'all', label: copy.allTime, scope: view.allTime,
+      rows: view.monthly.map((row) => ({ label: row.period, total: row.total, threads: row.threads })),
+      daily: false,
+    },
+  ];
+  const scopeButtons = scopeRows.map(({ key, label }, index) =>
+    `<button class="chart-tab${index === 0 ? ' active' : ''}" id="codex-overview-tab-${key}" role="tab" aria-controls="codex-overview-panel-${key}" aria-selected="${index === 0 ? 'true' : 'false'}" tabindex="${index === 0 ? '0' : '-1'}" data-codex-action="set-overview-scope" data-codex-overview-scope="${key}">${escapeHtml(label)}</button>`,
+  ).join('');
+  const metricRows: Array<[CodexMetricKey, string]> = [
+    ['processed', copy.processed], ['fresh', copy.fresh], ['output', copy.output],
+    ['reasoning', copy.reasoning], ['sessions', copy.threads],
+  ];
+  const metrics = metricRows.map(([key, label]) =>
+    `<button class="chart-tab${key === 'processed' ? ' active' : ''}" data-codex-action="set-chart-metric" data-codex-chart-metric="${key}" aria-pressed="${key === 'processed' ? 'true' : 'false'}">${escapeHtml(label)}</button>`,
+  ).join('');
+  const panels = scopeRows.map(({ key, scope, rows, daily }, index) => {
+    if (!scope) {
+      return `<section id="codex-overview-panel-${key}" role="tabpanel" aria-labelledby="codex-overview-tab-${key}" data-codex-overview-panel="${key}" data-codex-overview-dataset="${key}"${index === 0 ? '' : ' hidden'}><p>${escapeHtml(copy.noRecentTask)}</p></section>`;
+    }
+    const maximum = (metric: CodexMetricKey): number => Math.max(0, ...rows.map((row) => metric === 'sessions' ? row.threads : row.total[metric]));
+    const axis = metricRows.map(([metric]) =>
+      `data-axis-top-${metric}="${formatted(format, maximum(metric))}" data-axis-mid-${metric}="${formatted(format, maximum(metric) / 2)}"`,
+    ).join(' ');
+    const maxProcessed = Math.max(1, maximum('processed'));
+    const bars = rows.map((row) => {
+      const labels = metricRows.map(([metric, label]) => {
+        const value = metric === 'sessions' ? row.threads : row.total[metric];
+        return `data-label-${metric}="${formatted(format, value)}" data-name-${metric}="${escapeHtml(label)}"`;
+      }).join(' ');
+      const dateAction = daily
+        ? ` data-codex-action="drilldown-date" data-codex-date="${escapeHtml(row.label)}"`
+        : '';
+      return `<div class="hc-col"><span class="hc-barval codex-chart-value" data-codex-chart-value>${formatted(format, row.total.processed)}</span><button class="chart-bar cache-creation-bar codex-chart-bar" data-codex-chart-bar data-row-label="${escapeHtml(row.label)}" data-processed="${Math.max(0, row.total.processed)}" data-fresh="${Math.max(0, row.total.fresh)}" data-output="${Math.max(0, row.total.output)}" data-reasoning="${Math.max(0, row.total.reasoning)}" data-sessions="${Math.max(0, row.threads)}" ${labels}${dateAction} style="height:${Math.max(2, Math.round((row.total.processed / maxProcessed) * 100))}px" title="${escapeHtml(row.label)} · ${escapeHtml(copy.processed)}: ${formatted(format, row.total.processed)}"></button><span class="hc-xlabel">${escapeHtml(row.label)}</span></div>`;
+    }).join('');
+    const tableRows = rows.map((row) => {
+      const rowAttribute = daily
+        ? ` data-codex-date-row="${escapeHtml(row.label)}" tabindex="-1"`
+        : key === 'all' ? ` data-codex-month-row="${escapeHtml(row.label)}"` : '';
+      return `<tr${rowAttribute}><td class="date-cell">${escapeHtml(row.label)}</td><td>${formatted(format, row.total.processed)}</td><td>${formatted(format, row.total.fresh)}</td><td>${formatted(format, row.total.output)}</td><td>${formatted(format, row.threads)}</td></tr>`;
+    }).join('');
+    const table = rows.length
+      ? `<div class="daily-table-container"><table class="daily-table"><thead><tr><th>${escapeHtml(copy.date)}</th><th>${escapeHtml(copy.processed)}</th><th>${escapeHtml(copy.fresh)}</th><th>${escapeHtml(copy.output)}</th><th>${escapeHtml(copy.threads)}</th></tr></thead><tbody>${tableRows}</tbody></table></div>`
+      : `<p>${escapeHtml(daily ? copy.noDailyData : copy.noMonthlyData ?? copy.noDailyData)}</p>`;
+    return `<section id="codex-overview-panel-${key}" role="tabpanel" aria-labelledby="codex-overview-tab-${key}" data-codex-overview-panel="${key}" data-codex-overview-dataset="${key}" ${axis}${index === 0 ? '' : ' hidden'}>${scopePanel(scope, copy, format, ctx.formatters.duration)}<div class="hc-wrap"><div class="hc-yaxis"><span class="hc-yval">${formatted(format, maximum('processed'))}</span><span class="hc-yval">${formatted(format, maximum('processed') / 2)}</span><span class="hc-yval">${formatted(format, 0)}</span></div><div class="hc-main"><div class="hc-scroll"><div class="hc-plot"><div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div><div class="hc-bars chart-bars">${bars}</div></div></div></div></div>${table}</section>`;
+  }).join('');
+  return `<section class="daily-breakdown codex-overview-trend" data-codex-section="trend"><h3>${escapeHtml(copy.daily)}</h3><div class="chart-tabs codex-overview-scope" role="tablist">${scopeButtons}</div><div class="chart-tabs codex-overview-metric">${metrics}</div>${panels}</section>`;
 }
 
 function taskPanel(ctx: CodexRenderContext): string {
@@ -1105,9 +1165,9 @@ export function renderCodexExplore(ctx: CodexRenderContext): string {
     return `<section class="codex-model-effort-scope${index === 0 ? ' active' : ''}" id="codex-model-effort-panel-${key}" role="tabpanel" aria-labelledby="codex-model-effort-tab-${key}"${index === 0 ? '' : ' hidden'} data-codex-model-effort-panel="${key}">${content}</section>`;
   }).join('');
   return `<nav class="chart-tabs codex-explore-views" id="codex-explore-tablist" role="tablist" aria-label="${escapeHtml(copy.explore ?? copy.projects)}">${viewButtons}</nav>
-    <section class="codex-explore-view active" id="codex-explore-panel-projects" role="tabpanel" aria-labelledby="codex-explore-tab-projects" data-codex-explore-view="projects">${projectTable(view, copy, format, ctx.formatters.dateTime)}</section>
-    <section class="codex-explore-view" id="codex-explore-panel-sessions" role="tabpanel" aria-labelledby="codex-explore-tab-sessions" hidden data-codex-explore-view="sessions">${threadTable(view.recentThreads, view.totalThreadCount, copy, format, ctx.exploreFilters, view.sessionPeriodAvailability, ctx.formatters.dateTime, ctx.formatters.duration)}</section>
-    <section class="codex-explore-view" id="codex-explore-panel-models-effort" role="tabpanel" aria-labelledby="codex-explore-tab-models-effort" hidden data-codex-explore-view="models-effort"><h3>${escapeHtml(copy.modelsEffort)}</h3><div class="chart-tabs" id="codex-model-effort-tablist" role="tablist" aria-label="${escapeHtml(copy.scope)}">${scopeButtons}</div>${scopePanels}</section>`;
+    <section class="codex-explore-view active" id="codex-explore-panel-projects" role="tabpanel" aria-labelledby="codex-explore-tab-projects" data-codex-explore-view="projects" data-codex-explore-panel="projects">${projectTable(view, copy, format, ctx.formatters.dateTime)}</section>
+    <section class="codex-explore-view" id="codex-explore-panel-sessions" role="tabpanel" aria-labelledby="codex-explore-tab-sessions" hidden data-codex-explore-view="sessions" data-codex-explore-panel="sessions">${threadTable(view.recentThreads, view.totalThreadCount, copy, format, ctx.exploreFilters, view.sessionPeriodAvailability, ctx.formatters.dateTime, ctx.formatters.duration)}</section>
+    <section class="codex-explore-view" id="codex-explore-panel-models-effort" role="tabpanel" aria-labelledby="codex-explore-tab-models-effort" hidden data-codex-explore-view="models-effort" data-codex-explore-panel="models-effort"><h3>${escapeHtml(copy.modelsEffort)}</h3><div class="chart-tabs" id="codex-model-effort-tablist" role="tablist" aria-label="${escapeHtml(copy.scope)}">${scopeButtons}</div>${scopePanels}</section>`;
 }
 
 export function renderCodexRecommendations(ctx: CodexRenderContext): string {
@@ -1128,7 +1188,7 @@ export function renderCodexRecommendations(ctx: CodexRenderContext): string {
     { key: 'allTime', domKey: 'all', label: ctx.copy.allTime, scope: ctx.view.allTime, partial: false },
   ];
   const defaultScope = scopes.find((item) => !item.partial && item.scope)?.domKey ?? 'recent';
-  const buttons = scopes.map((item) => `<button class="chart-tab${item.domKey === defaultScope ? ' active' : ''}" data-codex-action="set-recommendation-scope" data-codex-recommendation-scope="${item.domKey}"${item.domKey === defaultScope ? ' aria-selected="true"' : ' aria-selected="false"'}${item.partial ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(item.label)}</button>`).join('');
+  const buttons = scopes.map((item) => `<button class="chart-tab${item.domKey === defaultScope ? ' active' : ''}" id="codex-recommendation-tab-${item.domKey}" role="tab" aria-controls="codex-recommendation-panel-${item.domKey}" aria-selected="${item.domKey === defaultScope ? 'true' : 'false'}" tabindex="${item.domKey === defaultScope ? '0' : '-1'}" data-codex-action="set-recommendation-scope" data-codex-recommendation-scope="${item.domKey}"${item.partial ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(item.label)}</button>`).join('');
   const partialNote = scopes.some((item) => item.partial)
     ? `<p class="insight-note codex-recommendation-coverage-note">${escapeHtml(ctx.copy.recommendationPartial)}</p>`
     : '';
@@ -1144,9 +1204,9 @@ export function renderCodexRecommendations(ctx: CodexRenderContext): string {
     const constraintHtml = constraint
       ? `<details class="model-item"><summary>${escapeHtml(ctx.copy.pasteConstraint)}</summary><pre>${escapeHtml(constraint)}</pre></details>`
       : '';
-    return `<section class="codex-recommendation-scope${item.domKey === defaultScope ? ' active' : ''}" data-codex-recommendation-panel="${item.domKey}"${item.domKey === defaultScope ? '' : ' hidden'}>${composition}${cards}${empty}${constraintHtml}</section>`;
+    return `<section class="codex-recommendation-scope${item.domKey === defaultScope ? ' active' : ''}" id="codex-recommendation-panel-${item.domKey}" role="tabpanel" aria-labelledby="codex-recommendation-tab-${item.domKey}" data-codex-recommendation-panel="${item.domKey}"${item.domKey === defaultScope ? '' : ' hidden'}>${composition}${cards}${empty}${constraintHtml}</section>`;
   }).join('');
-  return `<section class="codex-recommendations"><h3>${escapeHtml(ctx.copy.recommendations ?? ctx.copy.optimization)}</h3><div class="chart-tabs codex-recommendation-tabs">${buttons}</div>${partialNote}${panels}</section>`;
+  return `<section class="codex-recommendations"><h3>${escapeHtml(ctx.copy.recommendations ?? ctx.copy.optimization)}</h3><div class="chart-tabs codex-recommendation-tabs" role="tablist">${buttons}</div>${partialNote}${panels}</section>`;
 }
 
 function recommendationComposition(
@@ -1186,7 +1246,7 @@ export function renderCodexSettings(ctx: CodexRenderContext): string {
 function adaptCodexSettingsHtml(html: string): string {
   return html.replace(
     /\s+on(click|change|input)\s*=\s*(["'])(.*?)\2/gi,
-    (_attribute, eventName: string, _quote: string, handler: string) => {
+    (_attribute, _eventName: string, _quote: string, handler: string) => {
       const resetKeys = parseCodexResetKeys(handler);
       if (resetKeys) {
         return ` data-codex-action="reset-settings" data-codex-setting-keys="${escapeHtml(JSON.stringify(resetKeys))}"`;
@@ -1197,7 +1257,7 @@ function adaptCodexSettingsHtml(html: string): string {
       if (setting) {
         return ` data-codex-action="set-setting" data-codex-setting-key="${escapeHtml(setting[1])}" data-codex-setting-value-source="${setting[2]}" data-codex-setting-type="${setting[3]}"`;
       }
-      return ` data-codex-action="settings-${eventName.toLowerCase()}"`;
+      return '';
     },
   );
 }
