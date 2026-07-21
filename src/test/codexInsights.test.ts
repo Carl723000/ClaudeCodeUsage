@@ -3,9 +3,11 @@ import * as assert from 'node:assert/strict';
 
 import {
   buildCodexInsights,
+  buildScopedCodexInsights,
   pasteReadyConstraint,
 } from '../providers/codex/codexInsights';
-import { CodexUsageScopeView } from '../providers/codex/codexUsage';
+import { buildCodexUsageView, CodexUsageScopeView } from '../providers/codex/codexUsage';
+import { snapshotFixture } from './codexFixtures';
 
 function scope(
   overrides: Partial<CodexUsageScopeView> = {},
@@ -41,7 +43,7 @@ function scope(
   };
 }
 
-test('multi-agent tax uses fresh share and evidence', () => {
+test('multi-agent share uses fresh usage evidence', () => {
   const insights = buildCodexInsights(
     scope({
       childThreads: 5,
@@ -50,15 +52,26 @@ test('multi-agent tax uses fresh share and evidence', () => {
     }),
   );
   assert.deepEqual(insights[0], {
-    kind: 'multi-agent-tax',
+    kind: 'multi-agent-share',
     severity: 'strong',
+    scope: 'recent',
     evidence: {
-      childThreads: 5,
-      childProcessedShare: 0.8,
-      childFreshShare: 0.72,
-      durationMs: 600_000,
+      taskCount: 1,
+      rootSessionFresh: 112,
+      subagentFresh: 288,
     },
+    proxy: true,
   });
+});
+
+test('no evidence produces no recommendation or generic constraint', () => {
+  const neutral = scope({
+    total: { processed: 0, fresh: 0, input: 0, cachedInput: 0, output: 0, reasoning: 0 },
+    structural: { patchCalls: 0, toolCalls: 0, postPatchToolCalls: 0, compactCount: 0, taskCompleteCount: 0 },
+    efforts: [],
+  });
+  assert.deepEqual(buildCodexInsights(neutral, '7d'), []);
+  assert.equal(pasteReadyConstraint([]), '');
 });
 
 test('auto-review is never labelled independent code review', () => {
@@ -74,7 +87,7 @@ test('auto-review is never labelled independent code review', () => {
   assert.match(text, /approval-reviewer/);
 });
 
-test('post-patch tool calls are explicitly a structural proxy', () => {
+test('post-patch structural proxies use only approved structural evidence', () => {
   const base = scope();
   const insight = buildCodexInsights({
     ...base,
@@ -83,41 +96,41 @@ test('post-patch tool calls are explicitly a structural proxy', () => {
       postPatchToolCalls: 6,
       patchCalls: 2,
     },
-  }).find((item) => item.kind === 'post-patch-tool-call-intensity');
+  }, 'recent').find((item) => item.kind === 'post-patch-tool-intensity');
 
   assert.equal(insight?.proxy, true);
   assert.equal(insight?.evidence.postPatchToolCalls, 6);
+  assert.deepEqual(Object.keys(insight?.evidence ?? {}).sort(), [
+    'patchCalls', 'postPatchToolCalls', 'toolCalls',
+  ]);
 });
 
-test('small high-effort changes recommend comparison without claiming causality', () => {
-  const insight = buildCodexInsights(scope()).find(
+test('high effort only suggests a representative-task A/B comparison', () => {
+  const insight = buildCodexInsights(scope(), 'recent').find(
     (item) => item.kind === 'effort-comparison',
   );
 
-  assert.equal(insight?.evidence.effort, 'high');
-  assert.equal(insight?.evidence.compareOneLevelLower, 1);
+  assert.equal(insight?.evidence.observedEffort, 'high');
+  assert.equal(insight?.evidence.highEffortFresh, 400);
+  assert.match(pasteReadyConstraint([insight!]), /representative task/i);
+  assert.doesNotMatch(pasteReadyConstraint([insight!]), /waste|always|must/i);
 });
 
 test('high processed-to-fresh ratio explains cache without premature split advice', () => {
-  const insight = buildCodexInsights(scope()).find(
+  const insight = buildCodexInsights(scope(), 'recent').find(
     (item) => item.kind === 'cache-context',
   );
 
   assert.equal(insight?.severity, 'info');
-  assert.equal(insight?.evidence.splitCandidate, 0);
+  assert.equal(insight?.evidence.processedToFreshRatio, 3);
+  assert.doesNotMatch(pasteReadyConstraint([insight!]), /inefficient|inefficiency/i);
 });
 
-test('paste-ready constraints are fixed local text derived only from insight kinds', () => {
-  const text = pasteReadyConstraint(
-    buildCodexInsights(
-      scope({ childThreads: 4, childFreshShare: 0.6, childProcessedShare: 0.7 }),
-    ),
-  );
+test('paste-ready constraints contain only the triggered kind sentences', () => {
+  const text = pasteReadyConstraint([{ kind: 'cache-context', severity: 'info', scope: 'all', evidence: { cachedInputShare: 0.8 }, proxy: true }]);
 
-  assert.match(text, /Do not start unnecessary subagents/);
-  assert.match(text, /one focused test.*one full test pass/i);
-  assert.match(text, /Stop when the acceptance criteria pass/i);
-  assert.match(text, /production-grade hardening/i);
+  assert.match(text, /cache/i);
+  assert.doesNotMatch(text, /full test|hardening|subagent|representative task/i);
 });
 
 test('partial rolling coverage blocks deterministic advice without gating complete or aggregate scopes', () => {
@@ -140,16 +153,52 @@ test('partial rolling coverage blocks deterministic advice without gating comple
     },
   });
 
-  const partialInsights = buildCodexInsights(partial7Days);
+  const partialInsights = buildCodexInsights(partial7Days, '7d');
   assert.deepEqual(partialInsights, []);
   assert.equal(pasteReadyConstraint(partialInsights), '');
   assert.equal(
-    buildCodexInsights(complete30Days).some((item) => item.kind === 'effort-comparison'),
+    buildCodexInsights(complete30Days, '30d').some((item) => item.kind === 'effort-comparison'),
     true,
   );
   assert.equal(
-    buildCodexInsights(scope()).some((item) => item.kind === 'effort-comparison'),
+    buildCodexInsights(scope(), 'recent').some((item) => item.kind === 'effort-comparison'),
     true,
     'recent and aggregate-based all-time scopes have no natural-day coverage gate',
   );
+});
+
+test('deprecated one-argument period scopes fail closed even when coverage is complete', () => {
+  const complete = Object.assign(scope(), {
+    periodCoverage: {
+      migratedFiles: 2,
+      totalFiles: 2,
+      migratedBytes: 200,
+      totalBytes: 200,
+      complete: true,
+    },
+  });
+
+  assert.deepEqual(buildCodexInsights(complete), []);
+  const sevenDays = buildCodexInsights(complete, '7d');
+  assert.ok(sevenDays.length > 0);
+  assert.ok(sevenDays.every((insight) => insight.scope === '7d'));
+});
+
+test('production scoped helper builds all four explicit recommendation scopes', () => {
+  const snapshot = snapshotFixture();
+  snapshot.coverage.period.last7Days.complete = true;
+  snapshot.coverage.period.last30Days.complete = true;
+  const view = buildCodexUsageView(snapshot, Date.parse('2026-07-20T12:00:00.000Z'));
+  const insights = buildScopedCodexInsights(view);
+
+  assert.deepEqual({
+    recent: insights.recent.length,
+    last7Days: insights.last7Days.length,
+    last30Days: insights.last30Days.length,
+    allTime: insights.allTime.length,
+  }, { recent: 1, last7Days: 1, last30Days: 2, allTime: 1 });
+  assert.ok(insights.recent.every((item) => item.scope === 'recent'));
+  assert.ok(insights.last7Days.every((item) => item.scope === '7d'));
+  assert.ok(insights.last30Days.every((item) => item.scope === '30d'));
+  assert.ok(insights.allTime.every((item) => item.scope === 'all'));
 });

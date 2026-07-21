@@ -50,7 +50,11 @@ import {
 import { CodexProvider } from './providers/codex/codexProvider';
 import { resolveCodexHome } from './providers/codex/codexManifest';
 import { buildCodexUsageView, CodexUsageView } from './providers/codex/codexUsage';
-import { buildCodexInsights, CodexInsight } from './providers/codex/codexInsights';
+import {
+  buildScopedCodexInsights,
+  CodexScopedInsights,
+  emptyCodexScopedInsights,
+} from './providers/codex/codexInsights';
 import {
   announcementForUpgrade,
   latestAnnouncementVersion,
@@ -129,7 +133,7 @@ export class ClaudeCodeUsageExtension {
   private codexProvider: CodexProvider;
   private readonly codexSalt: string;
   private codexView: CodexUsageView | null = null;
-  private codexInsights: CodexInsight[] = [];
+  private codexInsights: CodexScopedInsights = emptyCodexScopedInsights();
   private codexHasData = false;
 
   constructor(private context: vscode.ExtensionContext) {
@@ -857,6 +861,9 @@ export class ClaudeCodeUsageExtension {
     try {
       await this.runCodexRefresh(trigger);
     } catch {
+      this.codexView = null;
+      this.codexInsights = emptyCodexScopedInsights();
+      this.codexHasData = false;
       this.outputChannel.appendLine(
         formatCodexIndexDiagnostic({
           outcome: 'error',
@@ -882,7 +889,7 @@ export class ClaudeCodeUsageExtension {
     const config = this.getConfiguration();
     if (!config.codexEnabled) {
       this.codexView = null;
-      this.codexInsights = [];
+      this.codexInsights = emptyCodexScopedInsights();
       this.codexHasData = false;
       this.syncProviderUi();
       return;
@@ -890,16 +897,14 @@ export class ClaudeCodeUsageExtension {
     const result = await this.codexProvider.refresh();
     if (result.outcome === 'unavailable') {
       this.codexView = null;
-      this.codexInsights = [];
+      this.codexInsights = emptyCodexScopedInsights();
       this.codexHasData = false;
       this.syncProviderUi();
       return;
     }
 
     this.codexView = buildCodexUsageView(result.snapshot);
-    this.codexInsights = this.codexView.lastTask
-      ? buildCodexInsights(this.codexView.lastTask)
-      : [];
+    this.codexInsights = buildScopedCodexInsights(this.codexView);
     this.codexHasData = result.snapshot.coverage.totalFiles > 0;
     this.syncProviderUi();
     const diagnostic = result.diagnostic;

@@ -1,9 +1,8 @@
-import { CodexInsight } from './providers/codex/codexInsights';
+import { CodexInsight, CodexScopedInsights } from './providers/codex/codexInsights';
 import { CodexUsageView } from './providers/codex/codexUsage';
 import {
   CODEX_COPY_EN,
   CodexRenderOptions,
-  CodexScopedInsights,
   CodexViewCopy,
   createCodexRenderContext,
   renderCodexExplore,
@@ -14,12 +13,13 @@ import {
   renderCodexSettingsLauncher,
 } from './codexViewComponents';
 
+export { CodexScopedInsights } from './providers/codex/codexInsights';
+
 export {
   CODEX_COPY_EN,
   CodexRenderContext,
   CodexRenderFormatters,
   CodexRenderOptions,
-  CodexScopedInsights,
   CodexViewCopy,
   ProviderCompareInput,
   defaultDashboardProvider,

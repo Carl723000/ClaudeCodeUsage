@@ -216,22 +216,281 @@ export interface Translations {
   };
 }
 
-type CodexCopyOverrides = Partial<Omit<CodexViewCopy, 'insightTitles'>> & {
+type CodexCopyMapKey =
+  | 'insightTitles'
+  | 'insightObservations'
+  | 'insightTips'
+  | 'insightEvidenceLabels';
+
+type CodexCopyOverrides = Partial<Omit<CodexViewCopy, CodexCopyMapKey>> & {
   insightTitles?: Partial<CodexViewCopy['insightTitles']>;
+  insightObservations?: Partial<CodexViewCopy['insightObservations']>;
+  insightTips?: Partial<CodexViewCopy['insightTips']>;
+  insightEvidenceLabels?: Partial<CodexViewCopy['insightEvidenceLabels']>;
+};
+
+const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverrides> = {
+  'de-DE': {
+    recommendations: 'Empfehlungen',
+    constraintNoAgents: 'Entscheide bei vergleichbaren Aufgaben vorab, ob Subagenten sinnvoll sind.',
+    constraintLowerEffort: 'Vergleiche bei einer repräsentativen Aufgabe die beobachtete hohe Aufwandsstufe per A/B-Test mit einer niedrigeren Stufe.',
+    constraintPostPatch: 'Nutze nach dem nächsten Patch den strukturellen Proxy, um eine kürzere Werkzeugfolge zu erwägen.',
+    constraintCacheContext: 'Beziehe den Cache- und Kontext-Proxy bei der Wahl der nächsten Aufgabengrenze ein.',
+    constraintApprovalReviewer: 'Prüfe vor dem Hinzufügen von Freigabe-Prüfern, ob diese Rolle für die Aufgabe benötigt wird.',
+    recommendationComposition: 'Beobachtete Rollen-, Modell- und Aufwandsverteilung',
+    recommendationProxyKpi: 'Struktureller Proxy-KPI',
+    recommendationEmpty: 'Für diesen Bereich liegen keine evidenzbasierten Empfehlungen vor.',
+    recommendationPartial: 'Der Tagesindex wird noch ergänzt; Empfehlungen für diesen Zeitraum sind nicht verfügbar.',
+    insightObservation: 'Beobachtung',
+    insightEvidence: 'Evidenz',
+    insightConditionalAction: 'Bedingte Maßnahme',
+    insightObservations: {
+      'multi-agent-share': 'Ein erheblicher Anteil der beobachteten frischen Nutzung ist Subagenten-Rollen zugeordnet.',
+      'effort-comparison': 'In diesem strukturellen Proxy-Bereich wurde eine hohe Aufwandsstufe beobachtet.',
+      'post-patch-tool-intensity': 'Die beobachtete Werkzeugaktivität nach Patches ist in diesem strukturellen Proxy-Bereich erhöht.',
+      'cache-context': 'Die verarbeitete Aktivität ist im Verhältnis zur frischen Aktivität hoch; Cache und Kontext können diesen Proxy beeinflussen.',
+      'approval-reviewer-share': 'Ein relevanter Anteil der beobachteten frischen Nutzung ist Freigabe-Prüfer-Rollen zugeordnet.',
+    },
+    insightTips: {
+      'multi-agent-share': 'Entscheide bei vergleichbaren Aufgaben vorab, ob Subagenten sinnvoll sind.',
+      'effort-comparison': 'Vergleiche bei einer repräsentativen Aufgabe die hohe Aufwandsstufe per A/B-Test mit einer niedrigeren Stufe.',
+      'post-patch-tool-intensity': 'Nutze diesen Proxy nach dem nächsten Patch, um eine kürzere Werkzeugfolge zu erwägen.',
+      'cache-context': 'Beziehe Cache- und Kontextbeobachtungen bei der Wahl der nächsten Aufgabengrenze ein.',
+      'approval-reviewer-share': 'Prüfe vor dem Hinzufügen von Freigabe-Prüfern, ob diese Rolle benötigt wird.',
+    },
+    insightEvidenceLabels: {
+      taskCount: 'Hauptaufgaben', rootSessionFresh: 'Frische Nutzung der Hauptrolle', subagentFresh: 'Frische Nutzung der Subagenten', approvalReviewerFresh: 'Frische Nutzung der Freigabe-Prüfer', observedEffort: 'Beobachtete Aufwandsstufe', highEffortFresh: 'Frische Nutzung bei hoher Aufwandsstufe', lowMediumEffortFresh: 'Frische Nutzung bei niedrigerer Aufwandsstufe', patchCalls: 'Patch-Aufrufe (Proxy)', toolCalls: 'Werkzeugaufrufe (Proxy)', postPatchToolCalls: 'Werkzeugaufrufe nach Patch (Proxy)', compactCount: 'Kontextkomprimierungen (Proxy)', taskCompleteCount: 'Aufgabenabschluss-Ereignisse (Proxy)', processedToFreshRatio: 'Proxy verarbeitet / frisch', cachedInputShare: 'Anteil gecachter Eingabe', reasoningOutputShare: 'Reasoning-Anteil der Ausgabe',
+    },
+  },
+  'zh-TW': {
+    recommendations: '最佳化建議',
+    constraintNoAgents: '對可比較的任務，先判斷是否需要 subagent，再決定是否啟動。',
+    constraintLowerEffort: '選一個代表性任務，將觀測到的高推理強度與低一級設定做 A/B 比較。',
+    constraintPostPatch: '下次修補後，參考結構性代理指標，評估是否可縮短工具使用流程。',
+    constraintCacheContext: '決定下一個任務邊界時，將快取與上下文代理指標納入考量。',
+    constraintApprovalReviewer: '加入權限審批角色前，先確認該任務是否需要此角色。',
+    recommendationComposition: '已觀測的角色、模型與推理強度構成',
+    recommendationProxyKpi: '結構性代理 KPI',
+    recommendationEmpty: '此範圍沒有具備證據的建議。',
+    recommendationPartial: '每日索引仍在補齊；此範圍暫時無法提供建議。',
+    insightObservation: '觀測',
+    insightEvidence: '證據',
+    insightConditionalAction: '條件式行動',
+    insightObservations: {
+      'multi-agent-share': '觀測到的新鮮用量中，有相當比例與 subagent 角色相關。',
+      'effort-comparison': '此結構性代理範圍觀測到高推理強度。',
+      'post-patch-tool-intensity': '此結構性代理範圍在修補後觀測到較高的工具活動。',
+      'cache-context': '已處理活動相對新鮮活動偏高；快取與上下文可能影響此代理指標。',
+      'approval-reviewer-share': '觀測到的新鮮用量中，有明顯比例與權限審批角色相關。',
+    },
+    insightTips: {
+      'multi-agent-share': '對可比較的任務，先判斷是否需要 subagent，再決定是否啟動。',
+      'effort-comparison': '選一個代表性任務，將高推理強度與低一級設定做 A/B 比較。',
+      'post-patch-tool-intensity': '下次修補後，參考此代理指標評估是否可縮短工具使用流程。',
+      'cache-context': '決定下一個任務邊界時，將快取與上下文觀測納入考量。',
+      'approval-reviewer-share': '加入權限審批角色前，先確認任務是否需要此角色。',
+    },
+    insightEvidenceLabels: {
+      taskCount: '根任務數', rootSessionFresh: '根角色新鮮用量', subagentFresh: 'Subagent 新鮮用量', approvalReviewerFresh: '權限審批新鮮用量', observedEffort: '觀測到的推理強度', highEffortFresh: '高推理強度新鮮用量', lowMediumEffortFresh: '較低推理強度新鮮用量', patchCalls: '修補呼叫（代理）', toolCalls: '工具呼叫（代理）', postPatchToolCalls: '修補後工具呼叫（代理）', compactCount: '上下文壓縮（代理）', taskCompleteCount: '任務完成事件（代理）', processedToFreshRatio: '已處理／新鮮用量代理比值', cachedInputShare: '快取輸入占比', reasoningOutputShare: '推理輸出占比',
+    },
+  },
+  'zh-CN': {
+    recommendations: '优化建议',
+    constraintNoAgents: '对可比较的任务，先判断是否需要 subagent，再决定是否启动。',
+    constraintLowerEffort: '选择一个代表性任务，将观测到的高推理强度与低一级设置做 A/B 对比。',
+    constraintPostPatch: '下次应用补丁后，参考结构性代理指标，评估是否可以缩短工具使用流程。',
+    constraintCacheContext: '决定下一个任务边界时，将缓存与上下文代理指标纳入考虑。',
+    constraintApprovalReviewer: '加入权限审批角色前，先确认该任务是否需要此角色。',
+    recommendationComposition: '已观测的角色、模型与推理强度构成',
+    recommendationProxyKpi: '结构性代理 KPI',
+    recommendationEmpty: '此范围没有具备证据的建议。',
+    recommendationPartial: '每日索引仍在补齐；此范围暂时无法提供建议。',
+    insightObservation: '观测',
+    insightEvidence: '证据',
+    insightConditionalAction: '条件式行动',
+    insightObservations: {
+      'multi-agent-share': '观测到的新鲜用量中，有相当比例与 subagent 角色相关。',
+      'effort-comparison': '此结构性代理范围观测到高推理强度。',
+      'post-patch-tool-intensity': '此结构性代理范围在应用补丁后观测到较高的工具活动。',
+      'cache-context': '已处理活动相对新鲜活动偏高；缓存与上下文可能影响此代理指标。',
+      'approval-reviewer-share': '观测到的新鲜用量中，有明显比例与权限审批角色相关。',
+    },
+    insightTips: {
+      'multi-agent-share': '对可比较的任务，先判断是否需要 subagent，再决定是否启动。',
+      'effort-comparison': '选择一个代表性任务，将高推理强度与低一级设置做 A/B 对比。',
+      'post-patch-tool-intensity': '下次应用补丁后，参考此代理指标评估是否可以缩短工具使用流程。',
+      'cache-context': '决定下一个任务边界时，将缓存与上下文观测纳入考虑。',
+      'approval-reviewer-share': '加入权限审批角色前，先确认任务是否需要此角色。',
+    },
+    insightEvidenceLabels: {
+      taskCount: '根任务数', rootSessionFresh: '根角色新鲜用量', subagentFresh: 'Subagent 新鲜用量', approvalReviewerFresh: '权限审批新鲜用量', observedEffort: '观测到的推理强度', highEffortFresh: '高推理强度新鲜用量', lowMediumEffortFresh: '较低推理强度新鲜用量', patchCalls: '补丁调用（代理）', toolCalls: '工具调用（代理）', postPatchToolCalls: '补丁后工具调用（代理）', compactCount: '上下文压缩（代理）', taskCompleteCount: '任务完成事件（代理）', processedToFreshRatio: '已处理／新鲜用量代理比值', cachedInputShare: '缓存输入占比', reasoningOutputShare: '推理输出占比',
+    },
+  },
+  ja: {
+    recommendations: '最適化の提案',
+    constraintNoAgents: '比較可能なタスクでは、サブエージェントが必要かを起動前に判断してください。',
+    constraintLowerEffort: '代表的なタスクで、観測された高い推論強度と一段低い設定を A/B 比較してください。',
+    constraintPostPatch: '次のパッチ後に構造プロキシを参照し、ツール利用の流れを短くできるか検討してください。',
+    constraintCacheContext: '次のタスク境界を選ぶ際に、キャッシュとコンテキストのプロキシを考慮してください。',
+    constraintApprovalReviewer: '承認レビュアーを追加する前に、そのタスクで役割が必要か確認してください。',
+    recommendationComposition: '観測された役割・モデル・推論強度の構成',
+    recommendationProxyKpi: '構造プロキシ KPI',
+    recommendationEmpty: 'この範囲には根拠のある提案がありません。',
+    recommendationPartial: '日別インデックスを補完中のため、この範囲の提案はまだ利用できません。',
+    insightObservation: '観測',
+    insightEvidence: '根拠',
+    insightConditionalAction: '条件付きアクション',
+    insightObservations: {
+      'multi-agent-share': '観測された新規使用量の大きな割合がサブエージェント役割に関連しています。',
+      'effort-comparison': 'この構造プロキシ範囲で高い推論強度が観測されました。',
+      'post-patch-tool-intensity': 'この構造プロキシ範囲では、パッチ後のツール活動が高めです。',
+      'cache-context': '新規活動に対して処理済み活動が多く、キャッシュやコンテキストがこのプロキシに影響し得ます。',
+      'approval-reviewer-share': '観測された新規使用量の一定割合が承認レビュアー役割に関連しています。',
+    },
+    insightTips: {
+      'multi-agent-share': '比較可能なタスクでは、サブエージェントが必要かを起動前に判断してください。',
+      'effort-comparison': '代表的なタスクで、高い推論強度と一段低い設定を A/B 比較してください。',
+      'post-patch-tool-intensity': '次のパッチ後にこのプロキシを参照し、ツール利用の流れを短くできるか検討してください。',
+      'cache-context': '次のタスク境界を選ぶ際に、キャッシュとコンテキストの観測を考慮してください。',
+      'approval-reviewer-share': '承認レビュアーを追加する前に、その役割が必要か確認してください。',
+    },
+    insightEvidenceLabels: {
+      taskCount: 'ルートタスク数', rootSessionFresh: 'ルート役割の新規使用量', subagentFresh: 'サブエージェントの新規使用量', approvalReviewerFresh: '承認レビュアーの新規使用量', observedEffort: '観測された推論強度', highEffortFresh: '高い推論強度の新規使用量', lowMediumEffortFresh: '低い推論強度の新規使用量', patchCalls: 'パッチ呼び出し（プロキシ）', toolCalls: 'ツール呼び出し（プロキシ）', postPatchToolCalls: 'パッチ後ツール呼び出し（プロキシ）', compactCount: 'コンテキスト圧縮（プロキシ）', taskCompleteCount: 'タスク完了イベント（プロキシ）', processedToFreshRatio: '処理済み／新規のプロキシ比率', cachedInputShare: 'キャッシュ入力の割合', reasoningOutputShare: '出力に占める推論の割合',
+    },
+  },
+  ko: {
+    recommendations: '최적화 제안',
+    constraintNoAgents: '비교 가능한 작업에서는 하위 에이전트가 필요한지 시작 전에 판단하세요.',
+    constraintLowerEffort: '대표 작업에서 관측된 높은 추론 강도와 한 단계 낮은 설정을 A/B 비교하세요.',
+    constraintPostPatch: '다음 패치 후 구조적 프록시를 참고해 도구 사용 흐름을 줄일 수 있는지 검토하세요.',
+    constraintCacheContext: '다음 작업 경계를 정할 때 캐시 및 컨텍스트 프록시를 고려하세요.',
+    constraintApprovalReviewer: '승인 검토자를 추가하기 전에 해당 작업에 그 역할이 필요한지 확인하세요.',
+    recommendationComposition: '관측된 역할·모델·추론 강도 구성',
+    recommendationProxyKpi: '구조적 프록시 KPI',
+    recommendationEmpty: '이 범위에는 근거가 있는 제안이 없습니다.',
+    recommendationPartial: '일별 인덱스를 보완 중이므로 이 범위의 제안은 아직 사용할 수 없습니다.',
+    insightObservation: '관측',
+    insightEvidence: '근거',
+    insightConditionalAction: '조건부 조치',
+    insightObservations: {
+      'multi-agent-share': '관측된 새 사용량의 상당 부분이 하위 에이전트 역할과 연관되어 있습니다.',
+      'effort-comparison': '이 구조적 프록시 범위에서 높은 추론 강도가 관측되었습니다.',
+      'post-patch-tool-intensity': '이 구조적 프록시 범위에서 패치 후 도구 활동이 높게 관측되었습니다.',
+      'cache-context': '새 활동에 비해 처리된 활동이 많으며 캐시와 컨텍스트가 이 프록시에 영향을 줄 수 있습니다.',
+      'approval-reviewer-share': '관측된 새 사용량의 일정 부분이 승인 검토자 역할과 연관되어 있습니다.',
+    },
+    insightTips: {
+      'multi-agent-share': '비교 가능한 작업에서는 하위 에이전트가 필요한지 시작 전에 판단하세요.',
+      'effort-comparison': '대표 작업에서 높은 추론 강도와 한 단계 낮은 설정을 A/B 비교하세요.',
+      'post-patch-tool-intensity': '다음 패치 후 이 프록시를 참고해 도구 사용 흐름을 줄일 수 있는지 검토하세요.',
+      'cache-context': '다음 작업 경계를 정할 때 캐시 및 컨텍스트 관측을 고려하세요.',
+      'approval-reviewer-share': '승인 검토자를 추가하기 전에 그 역할이 필요한지 확인하세요.',
+    },
+    insightEvidenceLabels: {
+      taskCount: '루트 작업 수', rootSessionFresh: '루트 역할 새 사용량', subagentFresh: '하위 에이전트 새 사용량', approvalReviewerFresh: '승인 검토자 새 사용량', observedEffort: '관측된 추론 강도', highEffortFresh: '높은 추론 강도 새 사용량', lowMediumEffortFresh: '낮은 추론 강도 새 사용량', patchCalls: '패치 호출(프록시)', toolCalls: '도구 호출(프록시)', postPatchToolCalls: '패치 후 도구 호출(프록시)', compactCount: '컨텍스트 압축(프록시)', taskCompleteCount: '작업 완료 이벤트(프록시)', processedToFreshRatio: '처리됨／새 사용량 프록시 비율', cachedInputShare: '캐시 입력 비율', reasoningOutputShare: '출력 중 추론 비율',
+    },
+  },
+  'pt-BR': {
+    recommendations: 'Recomendações de otimização',
+    constraintNoAgents: 'Em tarefas comparáveis, decida antes se subagentes são necessários.',
+    constraintLowerEffort: 'Em uma tarefa representativa, compare por A/B o esforço alto observado com um nível inferior.',
+    constraintPostPatch: 'Após o próximo patch, use o proxy estrutural para avaliar um fluxo de ferramentas mais curto.',
+    constraintCacheContext: 'Considere o proxy de cache e contexto ao escolher o próximo limite da tarefa.',
+    constraintApprovalReviewer: 'Antes de adicionar revisores de aprovação, confirme se a tarefa precisa dessa função.',
+    recommendationComposition: 'Composição observada de funções, modelos e esforço',
+    recommendationProxyKpi: 'KPI de proxy estrutural',
+    recommendationEmpty: 'Não há recomendações baseadas em evidências para este escopo.',
+    recommendationPartial: 'O índice diário ainda está sendo completado; as recomendações deste período não estão disponíveis.',
+    insightObservation: 'Observação',
+    insightEvidence: 'Evidência',
+    insightConditionalAction: 'Ação condicional',
+    insightObservations: {
+      'multi-agent-share': 'Uma parcela relevante do uso novo observado está associada a funções de subagente.',
+      'effort-comparison': 'Foi observado esforço alto neste escopo de proxy estrutural.',
+      'post-patch-tool-intensity': 'A atividade de ferramentas após patches está elevada neste escopo de proxy estrutural.',
+      'cache-context': 'A atividade processada está alta em relação à atividade nova; cache e contexto podem influenciar este proxy.',
+      'approval-reviewer-share': 'Uma parcela relevante do uso novo observado está associada a funções de revisor de aprovação.',
+    },
+    insightTips: {
+      'multi-agent-share': 'Em tarefas comparáveis, decida antes se subagentes são necessários.',
+      'effort-comparison': 'Em uma tarefa representativa, compare por A/B o esforço alto com um nível inferior.',
+      'post-patch-tool-intensity': 'Após o próximo patch, use este proxy para avaliar um fluxo de ferramentas mais curto.',
+      'cache-context': 'Considere as observações de cache e contexto ao escolher o próximo limite da tarefa.',
+      'approval-reviewer-share': 'Antes de adicionar revisores de aprovação, confirme se essa função é necessária.',
+    },
+    insightEvidenceLabels: {
+      taskCount: 'Tarefas raiz', rootSessionFresh: 'Uso novo da função raiz', subagentFresh: 'Uso novo de subagentes', approvalReviewerFresh: 'Uso novo de revisores de aprovação', observedEffort: 'Esforço observado', highEffortFresh: 'Uso novo com esforço alto', lowMediumEffortFresh: 'Uso novo com esforço inferior', patchCalls: 'Chamadas de patch (proxy)', toolCalls: 'Chamadas de ferramenta (proxy)', postPatchToolCalls: 'Chamadas de ferramenta pós-patch (proxy)', compactCount: 'Compactações de contexto (proxy)', taskCompleteCount: 'Eventos de conclusão de tarefa (proxy)', processedToFreshRatio: 'Proxy processado / novo', cachedInputShare: 'Proporção de entrada em cache', reasoningOutputShare: 'Proporção de raciocínio na saída',
+    },
+  },
+  id: {
+    recommendations: 'Rekomendasi optimasi',
+    constraintNoAgents: 'Untuk tugas yang sebanding, tentukan lebih dulu apakah subagen diperlukan.',
+    constraintLowerEffort: 'Pada tugas perwakilan, bandingkan secara A/B effort tinggi yang teramati dengan satu tingkat lebih rendah.',
+    constraintPostPatch: 'Setelah patch berikutnya, gunakan proksi struktural untuk menilai alur alat yang lebih singkat.',
+    constraintCacheContext: 'Pertimbangkan proksi cache dan konteks saat memilih batas tugas berikutnya.',
+    constraintApprovalReviewer: 'Sebelum menambah peninjau persetujuan, pastikan tugas tersebut memerlukan peran itu.',
+    recommendationComposition: 'Komposisi peran, model, dan effort yang teramati',
+    recommendationProxyKpi: 'KPI proksi struktural',
+    recommendationEmpty: 'Tidak ada rekomendasi berbasis bukti untuk cakupan ini.',
+    recommendationPartial: 'Indeks harian masih dilengkapi; rekomendasi untuk rentang ini belum tersedia.',
+    insightObservation: 'Pengamatan',
+    insightEvidence: 'Bukti',
+    insightConditionalAction: 'Tindakan bersyarat',
+    insightObservations: {
+      'multi-agent-share': 'Porsi yang berarti dari penggunaan baru teramati berkaitan dengan peran subagen.',
+      'effort-comparison': 'Effort tinggi teramati dalam cakupan proksi struktural ini.',
+      'post-patch-tool-intensity': 'Aktivitas alat setelah patch teramati lebih tinggi dalam cakupan proksi struktural ini.',
+      'cache-context': 'Aktivitas terproses tinggi dibanding aktivitas baru; cache dan konteks dapat memengaruhi proksi ini.',
+      'approval-reviewer-share': 'Porsi yang berarti dari penggunaan baru teramati berkaitan dengan peran peninjau persetujuan.',
+    },
+    insightTips: {
+      'multi-agent-share': 'Untuk tugas yang sebanding, tentukan lebih dulu apakah subagen diperlukan.',
+      'effort-comparison': 'Pada tugas perwakilan, bandingkan secara A/B effort tinggi dengan satu tingkat lebih rendah.',
+      'post-patch-tool-intensity': 'Setelah patch berikutnya, gunakan proksi ini untuk menilai alur alat yang lebih singkat.',
+      'cache-context': 'Pertimbangkan pengamatan cache dan konteks saat memilih batas tugas berikutnya.',
+      'approval-reviewer-share': 'Sebelum menambah peninjau persetujuan, pastikan peran itu diperlukan.',
+    },
+    insightEvidenceLabels: {
+      taskCount: 'Jumlah tugas utama', rootSessionFresh: 'Penggunaan baru peran utama', subagentFresh: 'Penggunaan baru subagen', approvalReviewerFresh: 'Penggunaan baru peninjau persetujuan', observedEffort: 'Effort teramati', highEffortFresh: 'Penggunaan baru effort tinggi', lowMediumEffortFresh: 'Penggunaan baru effort lebih rendah', patchCalls: 'Panggilan patch (proksi)', toolCalls: 'Panggilan alat (proksi)', postPatchToolCalls: 'Panggilan alat pasca-patch (proksi)', compactCount: 'Pemadatan konteks (proksi)', taskCompleteCount: 'Peristiwa penyelesaian tugas (proksi)', processedToFreshRatio: 'Proksi diproses / baru', cachedInputShare: 'Porsi input cache', reasoningOutputShare: 'Porsi penalaran dalam output',
+    },
+  },
 };
 
 function providerTranslations(
   labels: { claude: string; codexBeta: string; compare: string },
   overrides: CodexCopyOverrides,
+  task5Overrides: CodexCopyOverrides = {},
 ): ProviderTranslations {
+  const {
+    constraintTests: _legacyConstraintTests,
+    constraintStop: _legacyConstraintStop,
+    ...safeOverrides
+  } = overrides;
+  const merged = { ...safeOverrides, ...task5Overrides };
   return {
     ...labels,
     codex: {
       ...CODEX_COPY_EN,
-      ...overrides,
+      ...merged,
       insightTitles: {
         ...CODEX_COPY_EN.insightTitles,
         ...overrides.insightTitles,
+        ...task5Overrides.insightTitles,
+      },
+      insightObservations: {
+        ...CODEX_COPY_EN.insightObservations,
+        ...overrides.insightObservations,
+        ...task5Overrides.insightObservations,
+      },
+      insightTips: {
+        ...CODEX_COPY_EN.insightTips,
+        ...overrides.insightTips,
+        ...task5Overrides.insightTips,
+      },
+      insightEvidenceLabels: {
+        ...CODEX_COPY_EN.insightEvidenceLabels,
+        ...overrides.insightEvidenceLabels,
+        ...task5Overrides.insightEvidenceLabels,
       },
     },
   };
@@ -252,8 +511,9 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: 'Verarbeitete Token', fresh: 'Frische Eingabe + Ausgabe', input: 'Eingabe-Token', cachedInput: 'Gecachte Eingabe', output: 'Ausgabe-Token', reasoning: 'Reasoning-Ausgabe',
       models: 'Modelle', efforts: 'Aufwand', threads: 'Threads', rootTasks: 'Hauptaufgaben', childThreads: 'Unter-Threads', approvalReviewers: 'Freigabe-Prüfer', duration: 'Beobachtete Sitzungsdauer gesamt (Proxy)', cacheShare: 'Eingabe-Cache-Anteil',
       coverage: 'Abdeckung', quality: 'Qualität', complete: 'Vollständig', partial: 'Teilweise', lastObserved: 'Zuletzt beobachtet', unavailable: 'Nicht verfügbar', optimization: 'Lokale Optimierungssignale', structuralProxy: 'Struktureller Proxy; Tool-Call-Details werden nicht gelesen.', pasteConstraint: 'Kopierbare Einschränkung', constraintNoAgents: 'Keine unnötigen Unteragenten oder unabhängigen Prüfungen starten.', constraintLowerEffort: 'Für diese kleine Änderung eine niedrigere Aufwandsstufe an einer repräsentativen Aufgabe vergleichen.', constraintTests: 'Einen fokussierten Test und danach einen vollständigen Testlauf ausführen.', constraintStop: 'Bei erfüllten Kriterien stoppen; nicht zu produktionsreifer Härtung ausweiten.', compareTitle: 'Anbietervergleich', noRecentTask: 'Noch keine aktuelle Codex-Aufgabe indexiert.', fiveHourWindow: '5-Stunden-Fenster', weeklyWindow: 'Wöchentliches Fenster', used: 'verwendet', remaining: 'verbleibend', localLogNotLive: 'Lokales Protokoll · nicht live', limitExpired: 'Abgelaufen / zuletzt beobachtet', limitMissing: 'Kein lokal beobachtetes Nutzungslimit', observedSessionDuration: 'Beobachtete Sitzungsdauer gesamt (Proxy)',
-      insightTitles: { 'multi-agent-tax': 'Frische Nutzung durch Unter-Threads', 'effort-comparison': 'Eine niedrigere Aufwandsstufe vergleichen', 'post-patch-tool-call-intensity': 'Post-Patch-Tool-Call-Proxy', 'cache-context': 'Cache- und Langkontext', 'approval-reviewer': 'Freigabe-Prüfer-Aufwand' },
+      insightTitles: { 'multi-agent-share': 'Frischer Anteil der Unter-Threads', 'effort-comparison': 'Eine niedrigere Aufwandsstufe vergleichen', 'post-patch-tool-intensity': 'Post-Patch-Tool-Proxy', 'cache-context': 'Cache- und Langkontext', 'approval-reviewer-share': 'Frischer Anteil der Freigabe-Prüfer' },
     },
+    TASK5_CODEX_COPY['de-DE'],
   ),
   'zh-TW': providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '比較' },
@@ -265,8 +525,9 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: '已處理 Token', fresh: '新鮮輸入 + 輸出', input: '輸入 Token', cachedInput: '快取輸入', output: '輸出 Token', reasoning: '推理輸出',
       models: '模型', efforts: '推理強度', threads: '執行緒', rootTasks: '根任務', childThreads: '子執行緒', approvalReviewers: '權限審批執行緒', duration: '已觀測工作階段時長合計（代理）', cacheShare: '輸入快取占比',
       coverage: '索引覆蓋率', quality: '資料品質', complete: '完整', partial: '部分', lastObserved: '最後觀測', unavailable: '無資料', optimization: '本機最佳化訊號', structuralProxy: '結構性代理指標；不讀取工具呼叫細節。', pasteConstraint: '可複製約束', constraintNoAgents: '不要啟動不必要的 subagent 或獨立審閱。', constraintLowerEffort: '對這個小改動，用代表性任務比較低一級推理強度。', constraintTests: '只執行一次聚焦測試，再執行一次完整測試。', constraintStop: '達到驗收條件後停止，不要擴展為生產級加固。', compareTitle: '供應商比較', noRecentTask: '尚未索引到最近的 Codex 任務。', fiveHourWindow: '5 小時視窗', weeklyWindow: '每週視窗', used: '已使用', remaining: '剩餘', localLogNotLive: '本機記錄 · 非即時', limitExpired: '已過期／最後觀測', limitMissing: '沒有本機觀測到的用量限制', observedSessionDuration: '已觀測工作階段時長合計（代理）',
-      insightTitles: { 'multi-agent-tax': '子執行緒的新鮮用量', 'effort-comparison': '比較低一級推理強度', 'post-patch-tool-call-intensity': '修補後工具呼叫代理量', 'cache-context': '快取與長上下文解讀', 'approval-reviewer': '權限審批開銷' },
+      insightTitles: { 'multi-agent-share': '子執行緒的新鮮用量占比', 'effort-comparison': '比較低一級推理強度', 'post-patch-tool-intensity': '修補後工具呼叫代理量', 'cache-context': '快取與長上下文解讀', 'approval-reviewer-share': '權限審批的新鮮用量占比' },
     },
+    TASK5_CODEX_COPY['zh-TW'],
   ),
   'zh-CN': providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '对比' },
@@ -278,8 +539,9 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: '已处理 Token', fresh: '新鲜输入 + 输出', input: '输入 Token', cachedInput: '缓存输入', output: '输出 Token', reasoning: '推理输出',
       models: '模型', efforts: '推理强度', threads: '线程', rootTasks: '根任务', childThreads: '子线程', approvalReviewers: '权限审批线程', duration: '已观测会话时长合计（代理）', cacheShare: '输入缓存占比',
       coverage: '索引覆盖率', quality: '数据质量', complete: '完整', partial: '部分', lastObserved: '最后观测', unavailable: '无数据', optimization: '本地优化信号', structuralProxy: '结构性代理指标；不读取工具调用细节。', pasteConstraint: '可复制约束', constraintNoAgents: '不要启动不必要的 subagent 或独立审阅。', constraintLowerEffort: '对这个小改动，用代表性任务对比低一级推理强度。', constraintTests: '只运行一次聚焦测试，再运行一次完整测试。', constraintStop: '达到验收条件后停止，不要扩展为生产级加固。', compareTitle: '供应商对比', noRecentTask: '尚未索引到最近的 Codex 任务。', fiveHourWindow: '5 小时窗口', weeklyWindow: '每周窗口', used: '已使用', remaining: '剩余', localLogNotLive: '本地日志 · 非实时', limitExpired: '已过期／最后观测', limitMissing: '没有本地观测到的用量限制', observedSessionDuration: '已观测会话时长合计（代理）',
-      insightTitles: { 'multi-agent-tax': '子线程的新鲜用量', 'effort-comparison': '对比低一级推理强度', 'post-patch-tool-call-intensity': '补丁后工具调用代理量', 'cache-context': '缓存与长上下文解读', 'approval-reviewer': '权限审批开销' },
+      insightTitles: { 'multi-agent-share': '子线程的新鲜用量占比', 'effort-comparison': '对比低一级推理强度', 'post-patch-tool-intensity': '补丁后工具调用代理量', 'cache-context': '缓存与长上下文解读', 'approval-reviewer-share': '权限审批的新鲜用量占比' },
     },
+    TASK5_CODEX_COPY['zh-CN'],
   ),
   ja: providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '比較' },
@@ -291,8 +553,9 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: '処理済みトークン', fresh: '新規入力 + 出力', input: '入力トークン', cachedInput: 'キャッシュ入力', output: '出力トークン', reasoning: '推論出力',
       models: 'モデル', efforts: '推論強度', threads: 'スレッド', rootTasks: 'ルートタスク', childThreads: '子スレッド', approvalReviewers: '承認レビュアー', duration: '観測済みセッション時間の合計（プロキシ）', cacheShare: '入力キャッシュ比率',
       coverage: 'カバレッジ', quality: '品質', complete: '完了', partial: '一部', lastObserved: '最終観測', unavailable: '利用不可', optimization: 'ローカル最適化シグナル', structuralProxy: '構造的プロキシです。ツール呼び出しの詳細は読みません。', pasteConstraint: '貼り付け用制約', constraintNoAgents: '不要なサブエージェントや独立レビューを開始しないでください。', constraintLowerEffort: 'この小さな変更では代表タスクで 1 段低い推論強度を比較してください。', constraintTests: '変更に直結するテストを 1 回、その後に全テストを 1 回実行してください。', constraintStop: '受け入れ条件を満たしたら停止し、本番級の堅牢化へ拡張しないでください。', compareTitle: 'プロバイダー比較', noRecentTask: '最近の Codex タスクはまだ索引化されていません。', fiveHourWindow: '5 時間枠', weeklyWindow: '週間枠', used: '使用済み', remaining: '残り', localLogNotLive: 'ローカルログ · ライブではありません', limitExpired: '期限切れ／最終観測', limitMissing: 'ローカルで観測された使用量上限はありません', observedSessionDuration: '観測済みセッション時間の合計（プロキシ）',
-      insightTitles: { 'multi-agent-tax': '子スレッドの新規使用量', 'effort-comparison': '1 段低い推論強度との比較', 'post-patch-tool-call-intensity': 'パッチ後ツール呼び出しプロキシ', 'cache-context': 'キャッシュと長いコンテキスト', 'approval-reviewer': '承認レビュアーの負荷' },
+      insightTitles: { 'multi-agent-share': '子スレッドの新規使用量比率', 'effort-comparison': '1 段低い推論強度との比較', 'post-patch-tool-intensity': 'パッチ後ツール呼び出しプロキシ', 'cache-context': 'キャッシュと長いコンテキスト', 'approval-reviewer-share': '承認レビュアーの新規使用量比率' },
     },
+    TASK5_CODEX_COPY.ja,
   ),
   ko: providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '비교' },
@@ -304,8 +567,9 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: '처리된 토큰', fresh: '새 입력 + 출력', input: '입력 토큰', cachedInput: '캐시 입력', output: '출력 토큰', reasoning: '추론 출력',
       models: '모델', efforts: '추론 강도', threads: '스레드', rootTasks: '루트 작업', childThreads: '하위 스레드', approvalReviewers: '승인 검토자', duration: '관측된 세션 시간 합계(프록시)', cacheShare: '입력 캐시 비율',
       coverage: '커버리지', quality: '품질', complete: '완료', partial: '부분', lastObserved: '마지막 관측', unavailable: '사용 불가', optimization: '로컬 최적화 신호', structuralProxy: '구조적 프록시이며 도구 호출 세부 정보는 읽지 않습니다.', pasteConstraint: '붙여넣기용 제약', constraintNoAgents: '불필요한 하위 에이전트나 독립 검토를 시작하지 마세요.', constraintLowerEffort: '이 작은 변경은 대표 작업에서 한 단계 낮은 추론 강도를 비교하세요.', constraintTests: '변경에 맞춘 테스트 한 번과 전체 테스트 한 번만 실행하세요.', constraintStop: '수용 기준을 통과하면 중단하고 운영급 강화로 확장하지 마세요.', compareTitle: '공급자 비교', noRecentTask: '최근 Codex 작업이 아직 인덱싱되지 않았습니다.', fiveHourWindow: '5시간 창', weeklyWindow: '주간 창', used: '사용됨', remaining: '남음', localLogNotLive: '로컬 로그 · 실시간 아님', limitExpired: '만료됨 / 마지막 관측', limitMissing: '로컬에서 관측된 사용량 한도가 없습니다', observedSessionDuration: '관측된 세션 시간 합계(프록시)',
-      insightTitles: { 'multi-agent-tax': '하위 스레드의 새 사용량', 'effort-comparison': '한 단계 낮은 추론 강도 비교', 'post-patch-tool-call-intensity': '패치 후 도구 호출 프록시', 'cache-context': '캐시 및 긴 컨텍스트', 'approval-reviewer': '승인 검토자 오버헤드' },
+      insightTitles: { 'multi-agent-share': '하위 스레드 새 사용량 비율', 'effort-comparison': '한 단계 낮은 추론 강도 비교', 'post-patch-tool-intensity': '패치 후 도구 호출 프록시', 'cache-context': '캐시 및 긴 컨텍스트', 'approval-reviewer-share': '승인 검토자 새 사용량 비율' },
     },
+    TASK5_CODEX_COPY.ko,
   ),
   'pt-BR': providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Comparar' },
@@ -317,8 +581,9 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: 'Tokens processados', fresh: 'Entrada nova + saída', input: 'Tokens de entrada', cachedInput: 'Entrada em cache', output: 'Tokens de saída', reasoning: 'Saída de raciocínio',
       models: 'Modelos', efforts: 'Esforço', threads: 'Threads', rootTasks: 'Tarefas raiz', childThreads: 'Threads filhas', approvalReviewers: 'Revisores de aprovação', duration: 'Total de duração de sessão observada (proxy)', cacheShare: 'Proporção de cache de entrada',
       coverage: 'Cobertura', quality: 'Qualidade', complete: 'Completa', partial: 'Parcial', lastObserved: 'Última observação', unavailable: 'Indisponível', optimization: 'Sinais locais de otimização', structuralProxy: 'Proxy estrutural; detalhes das chamadas de ferramenta não são lidos.', pasteConstraint: 'Restrição pronta para colar', constraintNoAgents: 'Não inicie subagentes ou revisões independentes desnecessárias.', constraintLowerEffort: 'Nesta mudança pequena, compare um nível de esforço menor em uma tarefa representativa.', constraintTests: 'Execute um teste focado e depois uma única execução completa.', constraintStop: 'Pare ao cumprir os critérios; não expanda para endurecimento de produção.', compareTitle: 'Comparação de provedores', noRecentTask: 'Nenhuma tarefa recente do Codex foi indexada.', fiveHourWindow: 'Janela de 5 horas', weeklyWindow: 'Janela semanal', used: 'usado', remaining: 'restante', localLogNotLive: 'Registro local · não é ao vivo', limitExpired: 'Expirado / última observação', limitMissing: 'Nenhum limite de uso observado localmente', observedSessionDuration: 'Total de duração de sessão observada (proxy)',
-      insightTitles: { 'multi-agent-tax': 'Uso novo das threads filhas', 'effort-comparison': 'Compare um nível de esforço menor', 'post-patch-tool-call-intensity': 'Proxy de chamadas de ferramenta pós-patch', 'cache-context': 'Cache e contexto longo', 'approval-reviewer': 'Sobrecarga do revisor de aprovação' },
+      insightTitles: { 'multi-agent-share': 'Participação de uso novo das threads filhas', 'effort-comparison': 'Compare um nível de esforço menor', 'post-patch-tool-intensity': 'Proxy de chamadas de ferramenta pós-patch', 'cache-context': 'Cache e contexto longo', 'approval-reviewer-share': 'Participação de uso novo do revisor de aprovação' },
     },
+    TASK5_CODEX_COPY['pt-BR'],
   ),
   id: providerTranslations(
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Bandingkan' },
@@ -330,8 +595,9 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
       processed: 'Token diproses', fresh: 'Input baru + output', input: 'Token input', cachedInput: 'Input cache', output: 'Token output', reasoning: 'Output penalaran',
       models: 'Model', efforts: 'Upaya', threads: 'Thread', rootTasks: 'Tugas utama', childThreads: 'Thread anak', approvalReviewers: 'Peninjau persetujuan', duration: 'Total durasi sesi yang diamati (proksi)', cacheShare: 'Porsi cache input',
       coverage: 'Cakupan', quality: 'Kualitas', complete: 'Lengkap', partial: 'Sebagian', lastObserved: 'Terakhir diamati', unavailable: 'Tidak tersedia', optimization: 'Sinyal optimasi lokal', structuralProxy: 'Proksi struktural; detail panggilan alat tidak dibaca.', pasteConstraint: 'Batasan siap tempel', constraintNoAgents: 'Jangan mulai subagen atau tinjauan independen yang tidak perlu.', constraintLowerEffort: 'Untuk perubahan kecil ini, bandingkan satu tingkat upaya lebih rendah pada tugas perwakilan.', constraintTests: 'Jalankan satu tes terfokus lalu satu kali tes lengkap.', constraintStop: 'Berhenti saat kriteria terpenuhi; jangan perluas menjadi pengerasan tingkat produksi.', compareTitle: 'Perbandingan penyedia', noRecentTask: 'Belum ada tugas Codex terbaru yang diindeks.', fiveHourWindow: 'Jendela 5 jam', weeklyWindow: 'Jendela mingguan', used: 'terpakai', remaining: 'tersisa', localLogNotLive: 'Log lokal · bukan langsung', limitExpired: 'Kedaluwarsa / terakhir diamati', limitMissing: 'Tidak ada batas penggunaan yang diamati secara lokal', observedSessionDuration: 'Total durasi sesi yang diamati (proksi)',
-      insightTitles: { 'multi-agent-tax': 'Penggunaan baru thread anak', 'effort-comparison': 'Bandingkan satu tingkat upaya lebih rendah', 'post-patch-tool-call-intensity': 'Proksi panggilan alat pasca-patch', 'cache-context': 'Cache dan konteks panjang', 'approval-reviewer': 'Beban peninjau persetujuan' },
+      insightTitles: { 'multi-agent-share': 'Porsi penggunaan baru thread anak', 'effort-comparison': 'Bandingkan satu tingkat upaya lebih rendah', 'post-patch-tool-intensity': 'Proksi panggilan alat pasca-patch', 'cache-context': 'Cache dan konteks panjang', 'approval-reviewer-share': 'Porsi penggunaan baru peninjau persetujuan' },
     },
+    TASK5_CODEX_COPY.id,
   ),
 };
 

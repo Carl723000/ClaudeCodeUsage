@@ -1,6 +1,8 @@
 import {
   CodexInsight,
+  CodexInsightEvidenceKey,
   CodexInsightKind,
+  CodexScopedInsights,
 } from './providers/codex/codexInsights';
 import {
   CodexDailyUsageView,
@@ -94,8 +96,23 @@ export interface CodexViewCopy {
   pasteConstraint: string;
   constraintNoAgents: string;
   constraintLowerEffort: string;
-  constraintTests: string;
-  constraintStop: string;
+  constraintPostPatch: string;
+  constraintCacheContext: string;
+  constraintApprovalReviewer: string;
+  /** @deprecated Legacy locale overrides; no recommendation renderer uses these. */
+  constraintTests?: string;
+  /** @deprecated Legacy locale overrides; no recommendation renderer uses these. */
+  constraintStop?: string;
+  recommendationComposition: string;
+  recommendationProxyKpi: string;
+  recommendationEmpty: string;
+  recommendationPartial: string;
+  insightObservation: string;
+  insightEvidence: string;
+  insightConditionalAction: string;
+  insightObservations: Record<CodexInsightKind, string>;
+  insightTips: Record<CodexInsightKind, string>;
+  insightEvidenceLabels: Record<CodexInsightEvidenceKey, string>;
   compareTitle: string;
   noRecentTask: string;
   sessions: string;
@@ -190,10 +207,18 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   optimization: 'Local optimization signals',
   structuralProxy: 'Structural proxy; tool-call details are not read.',
   pasteConstraint: 'Paste-ready constraint',
-  constraintNoAgents: 'Do not start unnecessary subagents or independent review passes.',
-  constraintLowerEffort: 'For this small change, compare one lower effort level on a representative task.',
-  constraintTests: 'Run one focused test tied to the change, then one full test pass.',
-  constraintStop: 'Stop when the acceptance criteria pass; do not expand this into production-grade hardening.',
+  constraintNoAgents: 'For comparable tasks, decide whether subagents are needed before spawning them.',
+  constraintLowerEffort: 'On a representative task, A/B the observed high effort against one lower effort level.',
+  constraintPostPatch: 'After the next patch, use the structural proxy to consider a shorter tool sequence.',
+  constraintCacheContext: 'Keep the cache and context proxy in view when choosing the next task boundary.',
+  constraintApprovalReviewer: 'Before adding approval reviewers, check whether that role is needed for this task.',
+  recommendationComposition: 'Observed role, model, and effort composition',
+  recommendationProxyKpi: 'Structural proxy KPI',
+  recommendationEmpty: 'No evidence-based recommendations for this scope.',
+  recommendationPartial: 'The daily index is catching up; recommendations for this range are unavailable.',
+  insightObservation: 'Observation',
+  insightEvidence: 'Evidence',
+  insightConditionalAction: 'Conditional action',
   compareTitle: 'Provider comparison',
   noRecentTask: 'No recent Codex task is indexed yet.',
   sessions: 'Sessions',
@@ -211,11 +236,28 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   limitMissing: 'No locally observed usage limit',
   observedSessionDuration: 'Observed session duration total (proxy)',
   insightTitles: {
-    'multi-agent-tax': 'Child-thread fresh usage',
+    'multi-agent-share': 'Subagent fresh-share proxy',
     'effort-comparison': 'Compare one lower effort level',
-    'post-patch-tool-call-intensity': 'Post-patch tool-call proxy',
+    'post-patch-tool-intensity': 'Post-patch tool intensity proxy',
     'cache-context': 'Cache and long-context context',
-    'approval-reviewer': 'Approval-reviewer overhead',
+    'approval-reviewer-share': 'Approval-reviewer fresh-share proxy',
+  },
+  insightObservations: {
+    'multi-agent-share': 'A substantial share of observed fresh usage is associated with subagent roles.',
+    'effort-comparison': 'High effort appears in this structural proxy scope.',
+    'post-patch-tool-intensity': 'Observed tool activity after patches is elevated in this structural proxy scope.',
+    'cache-context': 'Processed activity is high relative to fresh activity; cache/context can affect this proxy.',
+    'approval-reviewer-share': 'A material share of observed fresh usage is associated with approval-reviewer roles.',
+  },
+  insightTips: {
+    'multi-agent-share': 'For comparable tasks, decide whether subagents are needed before spawning them.',
+    'effort-comparison': 'On a representative task, A/B the observed high effort against one lower effort level.',
+    'post-patch-tool-intensity': 'After the next patch, use this proxy to consider a shorter tool sequence.',
+    'cache-context': 'Keep cache/context observations in view when choosing the next task boundary.',
+    'approval-reviewer-share': 'Before adding approval reviewers, check whether that role is needed for this task.',
+  },
+  insightEvidenceLabels: {
+    taskCount: 'Root tasks', rootSessionFresh: 'Root-role fresh usage', subagentFresh: 'Subagent fresh usage', approvalReviewerFresh: 'Approval-reviewer fresh usage', observedEffort: 'Observed effort', highEffortFresh: 'High-effort fresh usage', lowMediumEffortFresh: 'Lower-effort fresh usage', patchCalls: 'Patch calls (proxy)', toolCalls: 'Tool calls (proxy)', postPatchToolCalls: 'Post-patch tool calls (proxy)', compactCount: 'Context compactions (proxy)', taskCompleteCount: 'Task-complete events (proxy)', processedToFreshRatio: 'Processed / fresh proxy', cachedInputShare: 'Cached-input share', reasoningOutputShare: 'Reasoning share of output',
   },
 };
 
@@ -245,13 +287,6 @@ export interface CodexExploreFilters {
   model?: string;
   effort?: string;
   period?: string;
-}
-
-export interface CodexScopedInsights {
-  recent: CodexInsight[];
-  last7Days: CodexInsight[];
-  last30Days: CodexInsight[];
-  allTime: CodexInsight[];
 }
 
 export interface CodexRenderFormatters {
@@ -779,11 +814,20 @@ function projectTable(
   return `<section class="daily-breakdown"><h3>${escapeHtml(copy.projects)}</h3><div class="daily-table-container"><table class="daily-table sortable-table"><thead><tr>${th('name', copy.projectLabel)}${th('lastactive', copy.lastActive)}${th('processed', copy.processed)}${th('fresh', copy.fresh)}${th('output', copy.output)}${th('reasoning', copy.reasoning)}${th('roots', copy.rootTasks)}${th('children', copy.childThreads)}<th>${escapeHtml(copy.approvalReviewers)}</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
 
-function insightCard(insight: CodexInsight, copy: CodexViewCopy): string {
+function insightCard(
+  insight: CodexInsight,
+  scopeLabel: string,
+  copy: CodexViewCopy,
+  format: NumberFormatter,
+): string {
   const evidence = Object.entries(insight.evidence)
-    .map(([key, value]) => `<span>${escapeHtml(key)}: ${escapeHtml(value)}</span>`)
+    .map(([key, value]) => {
+      const label = copy.insightEvidenceLabels[key as CodexInsightEvidenceKey];
+      const rendered = typeof value === 'number' ? formatted(format, value) : value;
+      return `<span>${escapeHtml(label)}: ${escapeHtml(rendered)}</span>`;
+    })
     .join('');
-  return `<article class="model-item codex-insight codex-insight-${escapeHtml(insight.severity)}"><h4>${escapeHtml(copy.insightTitles[insight.kind])}</h4><div class="codex-evidence">${evidence}</div>${insight.proxy ? `<p>${escapeHtml(copy.structuralProxy)}</p>` : ''}</article>`;
+  return `<article class="model-item insight-card codex-insight codex-insight-${escapeHtml(insight.severity)}"><div class="insight-head"><span class="insight-tag">${escapeHtml(scopeLabel)}</span><h4>${escapeHtml(copy.insightTitles[insight.kind])}</h4></div><p class="insight-observation"><strong>${escapeHtml(copy.insightObservation)}:</strong> ${escapeHtml(copy.insightObservations[insight.kind])}</p><p class="insight-evidence"><strong>${escapeHtml(copy.insightEvidence)}:</strong> ${evidence}</p><p class="insight-note">${escapeHtml(copy.structuralProxy)}</p><p class="insight-tip"><strong>${escapeHtml(copy.insightConditionalAction)}:</strong> ${escapeHtml(copy.insightTips[insight.kind])}</p></article>`;
 }
 
 function localizedConstraint(
@@ -795,13 +839,21 @@ function localizedConstraint(
   }
   const kinds = new Set(insights.map((insight) => insight.kind));
   const sentences: string[] = [];
-  if (kinds.has('multi-agent-tax') || kinds.has('approval-reviewer')) {
+  if (kinds.has('multi-agent-share')) {
     sentences.push(copy.constraintNoAgents);
   }
   if (kinds.has('effort-comparison')) {
     sentences.push(copy.constraintLowerEffort);
   }
-  sentences.push(copy.constraintTests, copy.constraintStop);
+  if (kinds.has('post-patch-tool-intensity')) {
+    sentences.push(copy.constraintPostPatch);
+  }
+  if (kinds.has('cache-context')) {
+    sentences.push(copy.constraintCacheContext);
+  }
+  if (kinds.has('approval-reviewer-share')) {
+    sentences.push(copy.constraintApprovalReviewer);
+  }
   return sentences.join(' ');
 }
 
@@ -889,7 +941,7 @@ function behaviorPanel(
     ['allTime', copy.allTime],
   ];
   const insightHtml = insightScopes.map(([key, label]) => {
-    const cards = insights[key].map((insight) => insightCard(insight, copy)).join('');
+    const cards = insights[key].map((insight) => insightCard(insight, label, copy, format)).join('');
     return cards
       ? `<section class="codex-insight-scope" data-codex-insight-scope="${key}"><h4>${escapeHtml(label)}</h4>${cards}</section>`
       : '';
@@ -1062,19 +1114,69 @@ export function renderCodexRecommendations(ctx: CodexRenderContext): string {
   if (!ctx.optimizationEnabled) {
     return '';
   }
-  const quality = ctx.view.qualityFlags.length > 0
-    ? ctx.view.qualityFlags
-        .map((item) => `${escapeHtml(item.flag)}: ${formatted(ctx.formatters.number, item.count)}`)
-        .join(', ')
-    : ctx.copy.complete;
-  return `<h3>${escapeHtml(ctx.copy.behavior)}</h3>${behaviorPanel(
-    ctx.view,
-    ctx.insights,
-    quality,
-    ctx.copy,
-    ctx.formatters.number,
-    ctx.formatters.bytes,
-  )}`;
+  const scopes: Array<{
+    key: keyof CodexScopedInsights;
+    domKey: 'recent' | '7d' | '30d' | 'all';
+    label: string;
+    scope: CodexUsageScopeView | null;
+    partial: boolean;
+  }> = [
+    { key: 'recent', domKey: 'recent', label: ctx.copy.lastTask, scope: ctx.view.lastTask, partial: false },
+    { key: 'last7Days', domKey: '7d', label: ctx.copy.last7Days, scope: ctx.view.last7Days, partial: !ctx.view.periodCoverage.last7Days.complete },
+    { key: 'last30Days', domKey: '30d', label: ctx.copy.last30Days, scope: ctx.view.last30Days, partial: !ctx.view.periodCoverage.last30Days.complete },
+    // All-time summary uses verified aggregates; its trend migration state does not gate advice.
+    { key: 'allTime', domKey: 'all', label: ctx.copy.allTime, scope: ctx.view.allTime, partial: false },
+  ];
+  const defaultScope = scopes.find((item) => !item.partial && item.scope)?.domKey ?? 'recent';
+  const buttons = scopes.map((item) => `<button class="chart-tab${item.domKey === defaultScope ? ' active' : ''}" data-codex-action="set-recommendation-scope" data-codex-recommendation-scope="${item.domKey}"${item.domKey === defaultScope ? ' aria-selected="true"' : ' aria-selected="false"'}${item.partial ? ' disabled aria-disabled="true"' : ''}>${escapeHtml(item.label)}</button>`).join('');
+  const partialNote = scopes.some((item) => item.partial)
+    ? `<p class="insight-note codex-recommendation-coverage-note">${escapeHtml(ctx.copy.recommendationPartial)}</p>`
+    : '';
+  const panels = scopes.map((item) => {
+    const cards = item.partial
+      ? ''
+      : ctx.insights[item.key].map((insight) => insightCard(insight, item.label, ctx.copy, ctx.formatters.number)).join('');
+    const empty = item.partial || cards
+      ? ''
+      : `<article class="model-item codex-insight-empty"><p class="insight-note">${escapeHtml(ctx.copy.recommendationEmpty)}</p></article>`;
+    const composition = item.scope ? recommendationComposition(item.scope, ctx.copy, ctx.formatters.number) : '';
+    const constraint = item.partial ? '' : localizedConstraint(ctx.insights[item.key], ctx.copy);
+    const constraintHtml = constraint
+      ? `<details class="model-item"><summary>${escapeHtml(ctx.copy.pasteConstraint)}</summary><pre>${escapeHtml(constraint)}</pre></details>`
+      : '';
+    return `<section class="codex-recommendation-scope${item.domKey === defaultScope ? ' active' : ''}" data-codex-recommendation-panel="${item.domKey}"${item.domKey === defaultScope ? '' : ' hidden'}>${composition}${cards}${empty}${constraintHtml}</section>`;
+  }).join('');
+  return `<section class="codex-recommendations"><h3>${escapeHtml(ctx.copy.recommendations ?? ctx.copy.optimization)}</h3><div class="chart-tabs codex-recommendation-tabs">${buttons}</div>${partialNote}${panels}</section>`;
+}
+
+function recommendationComposition(
+  scope: CodexUsageScopeView,
+  copy: CodexViewCopy,
+  format: NumberFormatter,
+): string {
+  const totalFresh = Math.max(0, scope.total.fresh);
+  const childFresh = totalFresh * Math.max(0, Math.min(1, scope.childFreshShare));
+  const reviewerFresh = totalFresh * Math.max(0, Math.min(1, scope.approvalReviewerFreshShare));
+  const rootFresh = Math.max(0, totalFresh - childFresh - reviewerFresh);
+  const freshFact = (label: string, fresh: number): string =>
+    `${escapeHtml(label)}: ${formatted(format, fresh)} ${escapeHtml(copy.fresh)} (${percent(totalFresh > 0 ? fresh / totalFresh : 0)})`;
+  const roles = [
+    freshFact(copy.rootRole, rootFresh),
+    freshFact(copy.childRole, childFresh),
+    freshFact(copy.approvalReviewerRole, reviewerFresh),
+  ].join(' · ');
+  const dimension = (items: CodexUsageScopeView['models']): string => items
+    .map((item) => freshFact(item.key, Math.max(0, item.totals.fresh)))
+    .join(', ') || escapeHtml(copy.unavailable);
+  const models = dimension(scope.models);
+  const efforts = dimension(scope.efforts);
+  const structural = scope.structural;
+  const proxyKpi = [
+    `${escapeHtml(copy.patchCalls)}: ${formatted(format, structural.patchCalls)}`,
+    `${escapeHtml(copy.postPatchToolCallsPerPatchCall)}: ${formatted(format, structural.patchCalls > 0 ? structural.postPatchToolCalls / structural.patchCalls : 0)}`,
+    `${escapeHtml(copy.compactions)}: ${formatted(format, structural.compactCount)}`,
+  ].join(' · ');
+  return `<section class="model-item codex-recommendation-composition"><h4>${escapeHtml(copy.recommendationComposition)}</h4><p>${roles}</p><p>${escapeHtml(copy.models)}: ${models} · ${escapeHtml(copy.efforts)}: ${efforts}</p><p class="insight-note"><strong>${escapeHtml(copy.recommendationProxyKpi)}:</strong> ${proxyKpi}</p></section>`;
 }
 
 export function renderCodexSettings(ctx: CodexRenderContext): string {
