@@ -687,7 +687,7 @@ test('all-time partial coverage stays visible when trend rows are empty', () => 
   });
 
   assert.match(html, /data-codex-trend="all"[^>]*data-codex-coverage-status="partial"/);
-  assert.match(html, /data-codex-coverage-range="all"[^>]*>Coverage: 3\/5 files · 300\/500 bytes · Partial<\/p>/);
+  assert.match(html, /data-codex-coverage-range="all"[^>]*>Coverage: Indexed log entries 3\/5 · Indexed storage 300\/500 · Partial<\/p>/);
   assert.match(html, /data-codex-chart-root="codex-all"/);
   assert.match(html, /data-codex-scope-summary="all"/);
   assert.match(html, /<h3>Monthly<\/h3>/);
@@ -739,14 +739,52 @@ test('Compare is side-by-side and contains no summed total, cost, or quota', () 
     {
       claude: { label: 'Claude', input: 100, output: 20, cache: 300 },
       codex: { label: 'Codex', input: 500, output: 100, cache: 400 },
+      updatedAt: NOW,
     },
     CODEX_COPY_EN,
+    {
+      formatNumber: (value) => `N(${value})`,
+      formatDateTime: (value) => `DATE(${value})`,
+    },
   );
 
   assert.match(html, /Claude/);
   assert.match(html, /Codex/);
   assert.match(html, /provider-compare-grid/);
+  assert.match(html, /Indexed all time/);
+  assert.match(html, new RegExp(`Updated at.*DATE\\(${NOW}\\)`, 's'));
+  assert.match(html, /Claude tokens/);
+  assert.match(html, /Codex tokens/);
+  assert.match(html, /N\(100\)/);
   assert.doesNotMatch(html, /combined|quota|\$/i);
+});
+
+test('Compare localizes its all-time scope and timestamp without merging provider accounting', () => {
+  const previous = I18n.getCurrentLanguage();
+  try {
+    I18n.setLanguage('zh-CN');
+    const copy = I18n.t.providers.codex;
+    const html = renderProviderCompare(
+      {
+        claude: { label: 'Claude', input: 100, output: 20, cache: 300 },
+        codex: { label: 'Codex Beta', input: 500, output: 100, cache: 400 },
+        updatedAt: NOW,
+      },
+      copy,
+      {
+        formatNumber: (value) => `数字(${value})`,
+        formatDateTime: (value) => `时间(${value})`,
+      },
+    );
+
+    assert.match(html, /已索引的全部时间/);
+    assert.match(html, new RegExp(`更新时间.*时间\\(${NOW}\\)`, 's'));
+    assert.match(html, /Claude Token 口径/);
+    assert.match(html, /Codex Token 口径/);
+    assert.doesNotMatch(html, /Indexed all time|Updated at|combined|总计|\$/i);
+  } finally {
+    I18n.setLanguage(previous);
+  }
 });
 
 test('Codex renderer shows every current named last-observed limit with human window labels', () => {
@@ -849,6 +887,7 @@ test('production-shaped Codex render localizes time duration countdown and bytes
   const previous = I18n.getCurrentLanguage();
   try {
     I18n.setLanguage('de-DE');
+    const formatters = createCodexLocalizedFormatters('de-DE', 'Asia/Hong_Kong');
     const html = renderCodexView(
       view,
       scopedInsights(view),
@@ -856,7 +895,7 @@ test('production-shaped Codex render localizes time duration countdown and bytes
       {
         now: NOW,
         formatNumber: (value) => I18n.formatNumber(value),
-        ...createCodexLocalizedFormatters('de-DE', 'Asia/Hong_Kong'),
+        ...formatters,
       },
     );
 
@@ -864,7 +903,8 @@ test('production-shaped Codex render localizes time duration countdown and bytes
     assert.match(html, /20 Minuten/);
     assert.match(html, /21\.07\.2026.*07:30/);
     assert.match(html, /12 Stunden/);
-    assert.match(html, /1,3 KB.*1,5 KB/s);
+    assert.ok(html.includes(formatters.formatBytes(1_300)));
+    assert.ok(html.includes(formatters.formatBytes(1_500)));
   } finally {
     I18n.setLanguage(previous);
   }
@@ -929,6 +969,35 @@ test('Simplified Chinese Codex dashboard localizes the new Claude-style modules'
     }
     assert.match(html, /Token 构成/);
     assert.match(html, /推理已包含在输出中/);
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
+test('every locale renderer localizes coverage labels and never leaks internal units or limit aliases', () => {
+  const languages = ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'] as const;
+  const previous = I18n.getCurrentLanguage();
+  try {
+    const view = buildCodexUsageView(snapshotFixture(), NOW);
+    for (const language of languages) {
+      I18n.setLanguage(language);
+      const html = renderCodexView(view, scopedInsights(view), I18n.t.providers.codex, {
+        now: NOW,
+        locale: I18n.getLocale(),
+        timeZone: 'Asia/Hong_Kong',
+      });
+      const userFacingText = [
+        html.replace(/<[^>]+>/g, ' '),
+        ...[...html.matchAll(/\b(?:aria-label|title)="([^"]*)"/g)].map((match) => match[1]),
+      ].join(' ');
+      const leaked = userFacingText.match(
+        /\b(?:files|bytes|primary|secondary|commands per file|tax|overhead)\b/i,
+      );
+      const context = leaked?.index === undefined
+        ? ''
+        : userFacingText.slice(Math.max(0, leaked.index - 80), leaked.index + 80);
+      assert.equal(leaked, null, `${language}: ${leaked?.[0] ?? ''} in ${context}`);
+    }
   } finally {
     I18n.setLanguage(previous);
   }
@@ -1010,6 +1079,73 @@ test('all eight locales deeply translate every evidence-driven recommendation co
         if (language !== 'en') assert.notEqual(copy.insightEvidenceLabels[key], english.insightEvidenceLabels[key], `${language}.evidence.${key} fell back to English`);
       }
       assert.doesNotMatch(`${copy.constraintNoAgents} ${copy.constraintLowerEffort}`, /small change|kleine Änderung|小改動|小改动|작은 변경|mudança pequena|perubahan kecil/i);
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
+test('all eight Codex locales name every current data-quality flag and provide a neutral fallback', () => {
+  const languages = ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'] as const;
+  const flags = [
+    'invalid-turn-context',
+    'invalid-session-meta',
+    'missing-pseudonymizer',
+    'missing-token-info',
+    'invalid-token-count',
+    'counter-regression',
+    'invalid-json',
+    'invalid-event-payload',
+    'unknown-event',
+    'invalid-event-timestamp',
+    'oversized-jsonl-line',
+    'truncated-jsonl',
+    'replaced-jsonl',
+    'stale-file',
+    'stale-reset-required',
+  ].sort();
+  const previous = I18n.getCurrentLanguage();
+  try {
+    for (const language of languages) {
+      I18n.setLanguage(language);
+      const copy = I18n.t.providers.codex as unknown as {
+        qualityFlagLabels: Record<string, string>;
+        qualityFlagUnknown: string;
+      };
+      assert.deepEqual(
+        Object.keys(copy.qualityFlagLabels).sort(),
+        flags,
+        `${language} quality flag inventory drifted`,
+      );
+      for (const flag of flags) {
+        assert.ok(copy.qualityFlagLabels[flag]?.trim(), `${language}.${flag} is missing`);
+      }
+      assert.ok(copy.qualityFlagUnknown?.trim(), `${language} neutral fallback is missing`);
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
+test('localized quality summaries never expose known or forward-compatible machine keys', () => {
+  const previous = I18n.getCurrentLanguage();
+  try {
+    for (const [language, knownLabel, fallbackLabel] of [
+      ['zh-CN', '无法识别的日志事件', '其他数据质量问题'],
+      ['de-DE', 'Nicht erkanntes Protokollereignis', 'Anderes Datenqualitätsproblem'],
+    ] as const) {
+      I18n.setLanguage(language);
+      const snapshot = snapshotFixture();
+      snapshot.qualityFlags = {
+        'unknown-event': 2,
+        'future-machine-key': 3,
+      };
+      const view = buildCodexUsageView(snapshot, NOW);
+      const html = renderCodexView(view, scopedInsights(view), I18n.t.providers.codex);
+
+      assert.match(html, new RegExp(`${knownLabel}: 2`));
+      assert.match(html, new RegExp(`${fallbackLabel}: 3`));
+      assert.doesNotMatch(html, /unknown-event|future-machine-key/);
     }
   } finally {
     I18n.setLanguage(previous);

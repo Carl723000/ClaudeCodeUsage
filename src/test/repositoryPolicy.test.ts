@@ -615,6 +615,126 @@ function misleadingCopyViolations(files: readonly ts.SourceFile[]): string[] {
   return violations;
 }
 
+function hardcodedCodexRenderCopyViolations(file: ts.SourceFile): string[] {
+  const violations: string[] = [];
+  if (!/(?:^|[\\/])codexViewComponents\.ts$/.test(file.fileName)) {
+    return violations;
+  }
+  const forbiddenWords = /\b(?:files|bytes|primary|secondary|commands per file|tax|overhead)\b/i;
+  const compactUnit = /\{\{value\}\}\s*(?:m|h|d)\b/i;
+  const rendererName = /^(?:render)|(?:Card|Table|Chart|Panel|Bar|Marker|Label|Section|Composition|Constraint|Summary)$/;
+  const declarationName = (declaration: ts.FunctionLikeDeclaration): string | undefined => {
+    if (ts.isFunctionDeclaration(declaration) || ts.isMethodDeclaration(declaration) ||
+      ts.isFunctionExpression(declaration)) {
+      const named = propertyName(declaration.name);
+      if (named) {
+        return named;
+      }
+    }
+    const parent = declaration.parent;
+    return parent && ts.isVariableDeclaration(parent) && ts.isIdentifier(parent.name)
+      ? parent.name.text
+      : undefined;
+  };
+  const rawTemplate = (node: ts.TemplateExpression): string =>
+    node.head.text + node.templateSpans
+      .map((span) => `{{value}}${span.literal.text}`)
+      .join('');
+  const hasVisibleViolation = (raw: string, markup: boolean): boolean => {
+    if (compactUnit.test(raw)) {
+      return true;
+    }
+    if (!markup) {
+      return forbiddenWords.test(raw);
+    }
+    const attributes = [...raw.matchAll(/\b(?:aria-label|title)\s*=\s*(["'])(.*?)\1/gis)]
+      .map((match) => match[2]);
+    const visible = raw.replace(/<[^>]*>/gs, ' ');
+    return forbiddenWords.test(visible) || attributes.some((value) => forbiddenWords.test(value));
+  };
+  const inspectFunction = (declaration: ts.FunctionLikeDeclaration): void => {
+    if (!declaration.body) {
+      return;
+    }
+    const visit = (node: ts.Node): void => {
+      let raw: string | undefined;
+      if (ts.isTemplateExpression(node)) {
+        raw = rawTemplate(node);
+      } else if (ts.isNoSubstitutionTemplateLiteral(node) || ts.isStringLiteral(node)) {
+        raw = node.text;
+      }
+      if (raw !== undefined) {
+        if (hasVisibleViolation(raw, raw.includes('<'))) {
+          violations.push(`${file.fileName}:${raw.replace(/\s+/g, ' ').trim()}`);
+        }
+        if (ts.isTemplateExpression(node)) {
+          for (const span of node.templateSpans) {
+            visit(span.expression);
+          }
+          return;
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(declaration.body);
+  };
+  const inspected = new Set<ts.FunctionLikeDeclaration>();
+  const findRenderers = (node: ts.Node): void => {
+    if (ts.isFunctionDeclaration(node) || ts.isMethodDeclaration(node) ||
+      ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
+      const name = declarationName(node);
+      if (name && rendererName.test(name) && !inspected.has(node)) {
+        inspected.add(node);
+        inspectFunction(node);
+      }
+    }
+    ts.forEachChild(node, findRenderers);
+  };
+  findRenderers(file);
+  return violations;
+}
+
+function callOptionKeys(
+  file: ts.SourceFile,
+  methodName: string,
+  calleeName: string,
+  argumentIndex: number,
+): string[] {
+  let method: ts.MethodDeclaration | undefined;
+  const findMethod = (node: ts.Node): void => {
+    if (ts.isMethodDeclaration(node) && propertyName(node.name) === methodName) {
+      method = node;
+      return;
+    }
+    ts.forEachChild(node, findMethod);
+  };
+  findMethod(file);
+  if (!method?.body) {
+    return [];
+  }
+  const keys = new Set<string>();
+  const inspect = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) &&
+      node.expression.text === calleeName) {
+      const options = node.arguments[argumentIndex];
+      if (options && ts.isObjectLiteralExpression(options)) {
+        for (const property of options.properties) {
+          if (ts.isPropertyAssignment(property) || ts.isShorthandPropertyAssignment(property) ||
+            ts.isMethodDeclaration(property)) {
+            const name = propertyName(property.name);
+            if (name) {
+              keys.add(name);
+            }
+          }
+        }
+      }
+    }
+    ts.forEachChild(node, inspect);
+  };
+  inspect(method.body);
+  return [...keys].sort();
+}
+
 function projectSourceFiles(prefix: string): Record<string, string> {
   const paths = execFileSync('git', ['ls-files', prefix], {
     cwd: REPO_ROOT,
@@ -866,6 +986,67 @@ test('semantic Codex policy validators reject nested DTO leaks, comment-only san
   assert.deepEqual(misleadingCopyViolations([badCopy]), [
     'codexView.ts:Post-change commands run',
   ]);
+
+  const hardcodedRenderer = ts.createSourceFile(
+    'codexViewComponents.ts',
+    [
+      'function renderDuration(minutes: number) { return `${minutes}m`; }',
+      'function renderCoverage(count: number, size: number) {',
+      '  return `<p>${count} files · ${size} bytes</p>`;',
+      '}',
+      "function renderText() { return '5 files'; }",
+      'const renderArrow = () => `<button aria-label="5 files">ok</button>`;',
+      'class Renderer {',
+      '  renderMethod() { return `<span title="2 bytes">ok</span>`; }',
+      '}',
+    ].join('\n'),
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  assert.equal(hardcodedCodexRenderCopyViolations(hardcodedRenderer).length, 5);
+
+  const nonRendererDataLogic = ts.createSourceFile(
+    'codexViewComponents.ts',
+    "function countFiles() { return '5 files'; }",
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  assert.deepEqual(hardcodedCodexRenderCopyViolations(nonRendererDataLogic), []);
+  const otherProductionFile = ts.createSourceFile(
+    'codexUsage.ts',
+    "function renderCount() { return '5 files'; }",
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  assert.deepEqual(hardcodedCodexRenderCopyViolations(otherProductionFile), []);
+});
+
+test('Codex production render paths use localized formatter options and no hardcoded visible units', () => {
+  const components = ts.createSourceFile(
+    'src/codexViewComponents.ts',
+    repoFile('src/codexViewComponents.ts'),
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  assert.deepEqual(hardcodedCodexRenderCopyViolations(components), []);
+
+  const webview = ts.createSourceFile(
+    'src/webview.ts',
+    repoFile('src/webview.ts'),
+    ts.ScriptTarget.ES2020,
+    true,
+  );
+  assert.deepEqual(
+    callOptionKeys(webview, 'getAlternateProviderContent', 'renderCodexView', 3),
+    [
+      'formatBytes', 'formatDateTime', 'formatDuration', 'formatNumber',
+      'formatRelativeTime', 'now', 'optimizationEnabled', 'settingsHtml',
+    ],
+  );
+  assert.deepEqual(
+    callOptionKeys(webview, 'renderCodexCompare', 'renderProviderCompare', 2),
+    ['formatDateTime', 'formatNumber'],
+  );
 });
 
 test('Codex schema 2 persistence uses semantic AST gates across the complete DTO graph', () => {
