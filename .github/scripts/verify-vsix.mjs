@@ -11,7 +11,19 @@ import {
 
 const MAX_UNZIP_OUTPUT = 16 * 1024 * 1024;
 
-export function assertPackagedManifest(manifest, expectedVersion, entries) {
+function parseRuntimeMain(main, label) {
+  if (typeof main !== 'string' || !main.startsWith('./out/') || !main.endsWith('.js') ||
+      main.includes('\\') || main.includes('\0')) {
+    throw new Error(`invalid ${label} main: ${String(main)}`);
+  }
+  const relativeMain = main.slice(2);
+  if (relativeMain.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
+    throw new Error(`invalid ${label} main: ${main}`);
+  }
+  return relativeMain;
+}
+
+export function assertPackagedManifest(manifest, expectedVersion, expectedMain, entries) {
   if (!manifest || typeof manifest !== 'object' || Array.isArray(manifest)) {
     throw new Error('invalid packaged manifest');
   }
@@ -21,14 +33,12 @@ export function assertPackagedManifest(manifest, expectedVersion, entries) {
     );
   }
 
-  const main = manifest.main;
-  if (typeof main !== 'string' || !main.startsWith('./out/') || !main.endsWith('.js') ||
-      main.includes('\\') || main.includes('\0')) {
-    throw new Error(`invalid VSIX main: ${String(main)}`);
-  }
-  const relativeMain = main.slice(2);
-  if (relativeMain.split('/').some((segment) => segment === '' || segment === '.' || segment === '..')) {
-    throw new Error(`invalid VSIX main: ${main}`);
+  parseRuntimeMain(expectedMain, 'source');
+  const relativeMain = parseRuntimeMain(manifest.main, 'VSIX');
+  if (manifest.main !== expectedMain) {
+    throw new Error(
+      `VSIX main mismatch: expected ${expectedMain}, got ${manifest.main}`,
+    );
   }
 
   const mainEntry = `extension/${relativeMain}`;
@@ -45,7 +55,7 @@ function unzipText(vsixPath, entry) {
   });
 }
 
-export function verifyVsix(vsixPath, expectedVersion) {
+export function verifyVsix(vsixPath, expectedVersion, expectedMain) {
   const entries = execFileSync('unzip', ['-Z1', vsixPath], {
     encoding: 'utf8',
     maxBuffer: MAX_UNZIP_OUTPUT,
@@ -53,7 +63,7 @@ export function verifyVsix(vsixPath, expectedVersion) {
 
   assertSafeVsixEntries(entries);
   const packagedManifest = JSON.parse(unzipText(vsixPath, 'extension/package.json'));
-  const main = assertPackagedManifest(packagedManifest, expectedVersion, entries);
+  const main = assertPackagedManifest(packagedManifest, expectedVersion, expectedMain, entries);
   const javascriptEntries = entries.filter((entry) => /^extension\/out\/.*\.js$/.test(entry));
   const bundle = javascriptEntries.map((entry) => unzipText(vsixPath, entry)).join('\n');
   assertCodexBundleMarkers(bundle);
@@ -78,7 +88,11 @@ function main() {
   const vsixPath = resolve(requestedPath);
   const sourceManifest = JSON.parse(readFileSync(resolve('package.json'), 'utf8'));
   const expectedVersion = requestedVersion ?? sourceManifest.version;
-  process.stdout.write(`${JSON.stringify(verifyVsix(vsixPath, expectedVersion), null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify(
+    verifyVsix(vsixPath, expectedVersion, sourceManifest.main),
+    null,
+    2,
+  )}\n`);
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
