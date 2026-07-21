@@ -84,9 +84,12 @@ test('provider tabs use roving focus and activate on ArrowLeft/Right/Home/End', 
 test('segmented chart metric activates with Space and updates chart ARIA', async ({ page }) => {
   await openCodex(page, { locale: 'en' });
   const metricGroup = page.locator('.codex-overview-metric');
+  await expect(metricGroup).toBeHidden();
+  await page.locator('[data-codex-overview-scope="7d"]').click();
+  await expect(metricGroup).toBeVisible();
   const output = metricGroup.locator('[data-codex-chart-metric="output"]');
   const processed = metricGroup.locator('[data-codex-chart-metric="processed"]');
-  const bar = page.locator('[data-codex-overview-panel="recent"] [data-codex-chart-bar]').first();
+  const bar = page.locator('[data-codex-overview-panel="7d"] [data-codex-chart-bar]').first();
 
   await output.focus();
   await output.press('Space');

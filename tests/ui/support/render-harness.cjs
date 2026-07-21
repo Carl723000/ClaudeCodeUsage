@@ -49,6 +49,7 @@ const THEMES = {
     '--vscode-editor-font-family:Menlo,monospace;' +
     '--vscode-editor-background:#ffffff;' +
     '--vscode-editor-foreground:#24292f;' +
+    '--vscode-foreground:#24292f;' +
     '--vscode-descriptionForeground:#57606a;' +
     '--vscode-panel-border:#d0d7de;' +
     '--vscode-input-background:#ffffff;' +
@@ -67,6 +68,7 @@ const THEMES = {
     '--vscode-editor-font-family:Menlo,monospace;' +
     '--vscode-editor-background:#1e1e1e;' +
     '--vscode-editor-foreground:#f2f2f2;' +
+    '--vscode-foreground:#f2f2f2;' +
     '--vscode-descriptionForeground:#c4c4c4;' +
     '--vscode-panel-border:#555555;' +
     '--vscode-input-background:#2b2b2b;' +
