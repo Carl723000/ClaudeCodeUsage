@@ -57,6 +57,18 @@ test('UI harness returns a generic 500 body without stack or local path disclosu
   });
 
   await waitForServer(child, () => stderr);
+  await t.test('dark rendering exposes the VS Code foreground token', async () => {
+    const response = await request('/?theme=dark');
+    assert.equal(response.status, 200);
+    assert.match(response.body, /<body class="vscode-dark\b/);
+    assert.match(response.body, /--vscode-foreground:#f2f2f2/);
+  });
+  await t.test('light rendering exposes the VS Code foreground token', async () => {
+    const response = await request('/?theme=light');
+    assert.equal(response.status, 200);
+    assert.match(response.body, /<body class="vscode-light\b/);
+    assert.match(response.body, /--vscode-foreground:#24292f/);
+  });
   const response = await request('//[');
   assert.equal(response.status, 500);
   assert.equal(response.body, 'Internal Server Error');

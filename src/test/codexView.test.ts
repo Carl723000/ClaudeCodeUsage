@@ -80,12 +80,17 @@ test('Codex styles are responsive accessible and scoped to semantic VS Code toke
   assert.match(css, /\.container[\s\S]*?min-width:\s*0[\s\S]*?max-width:\s*100%/);
   assert.match(css, /\[data-codex-root\][\s\S]*?\.number-cell/);
   assert.match(css, /\.codex-scroll-region\s*\{[^}]*overflow-x:\s*auto/);
+  assert.match(css, /\.codex-overview-metric\[hidden\]\s*\{[^}]*display:\s*none/);
   assert.match(css, /\.codex-mobile-details\s*\{/);
   assert.match(css, /button\.codex-disclosure\s*\{[^}]*appearance:\s*none/);
   assert.match(css, /\.codex-sort-button\s*\{[^}]*appearance:\s*none[^}]*font:\s*inherit/);
   assert.match(css, /:focus-visible[\s\S]*?var\(--vscode-focusBorder\)/);
   assert.match(css, /@media\s*\(max-width:\s*480px\)/);
   assert.match(css, /@media\s*\(max-width:\s*380px\)/);
+  const mobile = htmlBetween(css, '@media (max-width: 480px)', '@media (max-width: 380px)');
+  assert.match(mobile, /\.codex-task-identity \.model-details-stacked > span\s*\{[^}]*gap:\s*12px/);
+  assert.match(mobile, /\.codex-task-identity \.model-stat-label\s*\{[^}]*flex:\s*0 0 104px/);
+  assert.match(mobile, /\.codex-task-identity \.model-details-stacked > span > strong\s*\{[^}]*flex:\s*1 1 0[^}]*min-width:\s*0[^}]*text-align:\s*right[^}]*overflow-wrap:\s*anywhere/);
   assert.match(css, /@media\s*\(prefers-reduced-motion:\s*reduce\)/);
   assert.doesNotMatch(css, /(?:linear|radial|conic)-gradient|#[0-9a-f]{3,8}|box-shadow|@font-face|url\s*\(/i);
   assert.doesNotMatch(css, /font-family:\s*(?!var\(--vscode-)/i);
@@ -142,6 +147,7 @@ test('recommendation cards contain scope observation evidence proxy note and con
   for (const marker of ['insight-observation', 'insight-evidence', 'insight-note', 'insight-tip']) {
     assert.match(recommendations, new RegExp(`class="[^"]*${marker}`));
   }
+  assert.match(recommendations, /<p class="insight-evidence codex-evidence"><strong>Evidence:<\/strong>/);
   assert.match(recommendations, /Recent task/);
   assert.match(recommendations, /data-codex-action="set-recommendation-scope"/);
   assert.doesNotMatch(recommendations, /tax|overhead|files changed|commands per file|patchCalls|toolCalls/i);
@@ -166,7 +172,8 @@ test('Recommendations disables only partial daily scopes while recent and aggreg
     const panel = htmlBetween(recommendations, `data-codex-recommendation-panel="${period}"`, period === '7d' ? 'data-codex-recommendation-panel="30d"' : 'data-codex-recommendation-panel="all"');
     assert.doesNotMatch(panel, /class="[^"]*insight-card/);
   }
-  assert.match(recommendations, /index.*catching up/i);
+  assert.match(recommendations, /Some date ranges are unavailable while the daily index catches up\./);
+  assert.doesNotMatch(recommendations, /this range/i);
   for (const period of ['recent', 'all']) {
     assert.match(recommendations, new RegExp(`data-codex-recommendation-scope="${period}"(?![^>]*disabled)`));
   }
@@ -846,10 +853,13 @@ test('Codex renderer shows every current named last-observed limit with human wi
   const view = buildCodexUsageView(snapshot, NOW);
   const html = renderCodexView(view, [], CODEX_COPY_EN);
 
-  assert.match(html, /Codex main/);
-  assert.match(html, /GPT-5\.3-Codex-Spark/);
-  assert.match(html, /5-hour window/);
-  assert.match(html, /Weekly window/);
+  assert.match(html, /<h3>Codex main · 5-hour window<\/h3>/);
+  assert.match(html, /<h3>Codex main · Weekly window<\/h3>/);
+  assert.match(html, /<h3>GPT-5\.3-Codex-Spark · Weekly window<\/h3>/);
+  assert.match(html, /<div class="cost-comp-head"><strong>31% used · 69% remaining<\/strong><\/div>/);
+  assert.match(html, /<div class="cost-comp-head"><strong>47% used · 53% remaining<\/strong><\/div>/);
+  assert.match(html, /<div class="cost-comp-head"><strong>4% used · 96% remaining<\/strong><\/div>/);
+  assert.doesNotMatch(html, /<div class="cost-comp-head"><span>(?:5-hour window|Weekly window)<\/span>/);
   assert.match(html, /31%/);
   assert.match(html, /47%/);
   assert.match(html, /Last observed/);
@@ -1143,6 +1153,53 @@ test('all eight locales deeply translate every evidence-driven recommendation co
   }
 });
 
+test('all eight locales localize usage trend separately from the daily-data label', () => {
+  const expected = {
+    en: 'Usage trend',
+    'de-DE': 'Nutzungstrend',
+    'zh-TW': '用量趨勢',
+    'zh-CN': '用量趋势',
+    ja: '使用量の推移',
+    ko: '사용량 추이',
+    'pt-BR': 'Tendência de uso',
+    id: 'Tren penggunaan',
+  } as const;
+  const previous = I18n.getCurrentLanguage();
+  try {
+    for (const language of Object.keys(expected) as Array<keyof typeof expected>) {
+      I18n.setLanguage(language);
+      const copy = I18n.t.providers.codex as unknown as Record<string, string>;
+      assert.equal(copy.usageTrend, expected[language], `${language}.usageTrend is missing or fell back`);
+      assert.ok(copy.daily, `${language}.daily is missing`);
+      assert.notEqual(copy.usageTrend, copy.daily, `${language}.usageTrend reused the daily-data label`);
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
+test('all eight locales describe only partial date-range recommendation unavailability', () => {
+  const expected = {
+    en: 'Some date ranges are unavailable while the daily index catches up.',
+    'de-DE': 'Einige Datumsbereiche sind nicht verfügbar, während der tägliche Index vervollständigt wird.',
+    'zh-TW': '每日索引補齊期間，部分日期範圍暫不可用。',
+    'zh-CN': '每日索引补齐期间，部分日期范围暂不可用。',
+    ja: '日別インデックスの更新中は、一部の日付範囲を利用できません。',
+    ko: '일별 인덱스를 보완하는 동안 일부 날짜 범위를 사용할 수 없습니다.',
+    'pt-BR': 'Alguns intervalos de datas ficam indisponíveis enquanto o índice diário é atualizado.',
+    id: 'Beberapa rentang tanggal tidak tersedia selama indeks harian dilengkapi.',
+  } as const;
+  const previous = I18n.getCurrentLanguage();
+  try {
+    for (const language of Object.keys(expected) as Array<keyof typeof expected>) {
+      I18n.setLanguage(language);
+      assert.equal(I18n.t.providers.codex.recommendationPartial, expected[language]);
+    }
+  } finally {
+    I18n.setLanguage(previous);
+  }
+});
+
 test('all eight Codex locales name every current data-quality flag and provide a neutral fallback', () => {
   const languages = ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'] as const;
   const flags = [
@@ -1411,6 +1468,38 @@ test('Overview renders four truthful scope panels and drilldown row contracts', 
     ),
   );
   assert.equal(new Set(panelBodies).size, 4);
+});
+
+test('Recent overview keeps its scope summary and composition without a one-bar time series', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, scopedInsights(view), CODEX_COPY_EN);
+  const overview = htmlBetween(
+    html,
+    'id="codex-page-panel-overview"',
+    'id="codex-page-panel-explore"',
+  );
+  const recent = htmlBetween(
+    overview,
+    'data-codex-overview-panel="recent"',
+    'data-codex-overview-panel="7d"',
+  );
+  const last7Days = htmlBetween(
+    overview,
+    'data-codex-overview-panel="7d"',
+    'data-codex-overview-panel="30d"',
+  );
+
+  assert.match(overview, /<h3>Usage trend<\/h3>/);
+  assert.match(overview, /class="chart-tabs codex-overview-metric"[^>]*hidden/);
+  assert.match(recent, /class="codex-scope-panel"/);
+  assert.match(recent, /class="summary-grid"/);
+  assert.match(recent, /class="cost-comp-bar"/);
+  assert.doesNotMatch(recent, /data-codex-chart-bar/);
+  assert.doesNotMatch(recent, /data-codex-chart-summary/);
+  assert.doesNotMatch(recent, /class="date-cell"/);
+  assert.match(last7Days, /data-codex-chart-bar/);
+  assert.match(last7Days, /data-codex-chart-summary/);
+  assert.match(last7Days, /class="date-cell"/);
 });
 
 test('Overview and Recommendation scope controls are complete restorable tabs', () => {

@@ -519,6 +519,9 @@ export function getCodexClientScript(): string {
     activate('[data-codex-page-button]', 'data-codex-page-button', '[data-codex-page]', 'data-codex-page', state.page);
     activate('[data-codex-explore-view-button]', 'data-codex-explore-view-button', '[data-codex-explore-panel]', 'data-codex-explore-panel', state.exploreView);
     activate('[data-codex-overview-scope]', 'data-codex-overview-scope', '[data-codex-overview-panel]', 'data-codex-overview-panel', state.overviewScope);
+    root.querySelectorAll('.codex-overview-metric').forEach(function(control) {
+      control.hidden = state.overviewScope === 'recent';
+    });
     activate('[data-codex-recommendation-scope]', 'data-codex-recommendation-scope', '[data-codex-recommendation-panel]', 'data-codex-recommendation-panel', state.recommendationScope);
     activate('[data-codex-model-effort-scope]', 'data-codex-model-effort-scope', '[data-codex-model-effort-panel]', 'data-codex-model-effort-panel', state.exploreScope);
     activate('[data-codex-behavior-scope]', 'data-codex-behavior-scope', '[data-codex-behavior-panel]', 'data-codex-behavior-panel', state.exploreScope);

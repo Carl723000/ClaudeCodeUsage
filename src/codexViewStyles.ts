@@ -70,6 +70,10 @@ export function getCodexViewStyles(): string {
       flex-wrap: wrap;
     }
 
+    [data-codex-root] .codex-overview-metric[hidden] {
+      display: none;
+    }
+
     [data-codex-root] .daily-table-container,
     [data-codex-root] .hc-scroll {
       overflow: visible;
@@ -302,6 +306,22 @@ export function getCodexViewStyles(): string {
 
       [data-codex-root] .codex-header-actions {
         margin-left: 0;
+      }
+
+      [data-codex-root] .codex-task-identity .model-details-stacked > span {
+        align-items: flex-start;
+        gap: 12px;
+      }
+
+      [data-codex-root] .codex-task-identity .model-stat-label {
+        flex: 0 0 104px;
+      }
+
+      [data-codex-root] .codex-task-identity .model-details-stacked > span > strong {
+        flex: 1 1 0;
+        min-width: 0;
+        text-align: right;
+        overflow-wrap: anywhere;
       }
     }
 

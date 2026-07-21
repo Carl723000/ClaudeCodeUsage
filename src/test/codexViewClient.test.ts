@@ -203,6 +203,7 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
   const sevenPanel = el('section', { 'data-codex-overview-panel': '7d', 'data-codex-overview-dataset': '7d' });
   const processedMetric = el('button', { 'data-codex-action': 'set-chart-metric', 'data-codex-chart-metric': 'processed' });
   const freshMetric = el('button', { 'data-codex-action': 'set-chart-metric', 'data-codex-chart-metric': 'fresh' });
+  const metricGroup = el('div', { class: 'codex-overview-metric' }).append(processedMetric, freshMetric);
   const firstValue = el('span', { 'data-codex-chart-value': '' });
   const firstBar = el('button', { 'data-codex-chart-bar': '', 'data-row-label': 'one', 'data-processed': '10', 'data-fresh': '2', 'data-label-processed': '10p', 'data-label-fresh': '2f', 'data-name-processed': 'Processed', 'data-name-fresh': 'Fresh' });
   const secondBar = el('button', { 'data-codex-chart-bar': '', 'data-row-label': 'two', 'data-processed': '5', 'data-fresh': '8', 'data-label-processed': '5p', 'data-label-fresh': '8f', 'data-name-processed': 'Processed', 'data-name-fresh': 'Fresh' });
@@ -211,9 +212,9 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
   const recentDateRow = el('tr', { 'data-codex-date-row': '2026-07-20' });
   const sevenDateBar = el('button', { 'data-codex-action': 'drilldown-date', 'data-codex-date': '2026-07-19' });
   const sevenDateRow = el('tr', { 'data-codex-date-row': '2026-07-19' });
-  recentPanel.append(processedMetric, freshMetric, el('div', { class: 'hc-col' }).append(firstValue, firstBar), el('div', { class: 'hc-col' }).append(secondBar), yaxis, recentDateBar, recentDateRow);
+  recentPanel.append(el('div', { class: 'hc-col' }).append(firstValue, firstBar), el('div', { class: 'hc-col' }).append(secondBar), yaxis, recentDateBar, recentDateRow);
   sevenPanel.append(sevenDateBar, sevenDateRow);
-  overview.append(recentScope, sevenScope, recentPanel, sevenPanel);
+  overview.append(recentScope, sevenScope, metricGroup, recentPanel, sevenPanel);
 
   const recommendationRecent = el('button', { 'data-codex-action': 'set-recommendation-scope', 'data-codex-recommendation-scope': 'recent', role: 'tab' });
   const recommendationSeven = el('button', { 'data-codex-action': 'set-recommendation-scope', 'data-codex-recommendation-scope': '7d', role: 'tab', disabled: '', 'aria-disabled': 'true' });
@@ -359,7 +360,7 @@ function controllerFixture(initialCodexUi: unknown = undefined, fixtureOptions: 
       refreshHeader, settingsHeader, settings,
       pageTablist, overviewTab, exploreTab, recommendationsTab, overview, explore, recommendations,
       recentScope, sevenScope, recentPanel, sevenPanel, recentDateBar, recentDateRow, sevenDateBar, sevenDateRow,
-      processedMetric, freshMetric, firstValue, firstBar, secondBar, yaxis,
+      metricGroup, processedMetric, freshMetric, firstValue, firstBar, secondBar, yaxis,
       recommendationRecent, recommendationSeven, recommendationAll, recommendationRecentPanel, recommendationSevenPanel, recommendationAllPanel,
       projectsTab, sessionsTab, modelsEffortTab, projects, sessions, modelsEffort,
       modelRecent, modelSeven, modelRecentPanel, modelSevenPanel,
@@ -877,9 +878,11 @@ for (const valueCase of malformedSortCases) {
 
 test('delegated scope metric and valid settings actions update DOM state and host messages', () => {
   const fixture = controllerFixture();
+  assert.equal(fixture.elements.metricGroup.hidden, true);
   fixture.root.dispatch('click', fixture.elements.sevenScope);
   assert.equal(fixture.elements.recentPanel.hidden, true);
   assert.equal(fixture.elements.sevenPanel.hidden, false);
+  assert.equal(fixture.elements.metricGroup.hidden, false);
   assert.equal((fixture.vscode.state.codexUi as any).overviewScope, '7d');
 
   fixture.root.dispatch('click', fixture.elements.freshMetric);

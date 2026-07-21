@@ -47,6 +47,7 @@ export interface CodexViewCopy {
   overview: string;
   explore: string;
   recommendations: string;
+  usageTrend: string;
   daily: string;
   date: string;
   role: string;
@@ -182,6 +183,7 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   overview: 'Overview',
   explore: 'Explore',
   recommendations: 'Recommendations',
+  usageTrend: 'Usage trend',
   daily: 'Daily',
   date: 'Date',
   role: 'Role',
@@ -279,7 +281,7 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   recommendationComposition: 'Observed role, model, and effort composition',
   recommendationProxyKpi: 'Structural proxy KPI',
   recommendationEmpty: 'No evidence-based recommendations for this scope.',
-  recommendationPartial: 'The daily index is catching up; recommendations for this range are unavailable.',
+  recommendationPartial: 'Some date ranges are unavailable while the daily index catches up.',
   insightObservation: 'Observation',
   insightEvidence: 'Evidence',
   insightConditionalAction: 'Conditional action',
@@ -652,10 +654,14 @@ function renderLimitsSection(ctx: CodexRenderContext): string {
     }
     const used = limit.usedPercent ?? 0;
     const remaining = limit.remainingPercent ?? 100;
+    const windowLabel = limitWindowLabel(limit, ctx);
+    const title = limit.limitName
+      ? `${limit.limitName} · ${windowLabel}`
+      : windowLabel;
     const reset = limit.resetsAt && limit.state === 'current'
       ? `<div class="model-details">${escapeHtml(copy.resets)}: ${escapeHtml(ctx.formatters.dateTime(limit.resetsAt))} · ${escapeHtml(ctx.formatters.relativeTime(limit.resetsAt, ctx.now))}</div>`
       : `<div class="model-details">${escapeHtml(copy.limitExpired)}</div>`;
-    return `<article class="model-item codex-limit-card" data-codex-limit-state="${limit.state}"><h3>${escapeHtml(limit.limitName ?? limitWindowLabel(limit, ctx))}</h3><div class="codex-limit-window"><div class="cost-comp-head"><span>${escapeHtml(limitWindowLabel(limit, ctx))}</span><strong>${formatted(ctx.formatters.number, used)}% ${escapeHtml(copy.used)} · ${formatted(ctx.formatters.number, remaining)}% ${escapeHtml(copy.remaining)}</strong></div><div class="cost-comp-bar"><div class="cost-comp-seg seg-input" style="width:${used.toFixed(2)}%"></div></div>${reset}${observed}</div></article>`;
+    return `<article class="model-item codex-limit-card" data-codex-limit-state="${limit.state}"><h3>${escapeHtml(title)}</h3><div class="codex-limit-window"><div class="cost-comp-head"><strong>${formatted(ctx.formatters.number, used)}% ${escapeHtml(copy.used)} · ${formatted(ctx.formatters.number, remaining)}% ${escapeHtml(copy.remaining)}</strong></div><div class="cost-comp-bar"><div class="cost-comp-seg seg-input" style="width:${used.toFixed(2)}%"></div></div>${reset}${observed}</div></article>`;
   }).join('');
   return `<section class="codex-limits" data-codex-section="limits"><h3>${escapeHtml(copy.usageLimits)}</h3><div class="model-list">${cards}</div></section>`;
 }
@@ -914,7 +920,7 @@ function insightCard(
       return `<span>${escapeHtml(label)}: ${escapeHtml(rendered)}</span>`;
     })
     .join('');
-  return `<article class="model-item insight-card codex-insight codex-insight-${escapeHtml(insight.severity)}"><div class="insight-head"><span class="insight-tag">${escapeHtml(scopeLabel)}</span><h4>${escapeHtml(copy.insightTitles[insight.kind])}</h4></div><p class="insight-observation"><strong>${escapeHtml(copy.insightObservation)}:</strong> ${escapeHtml(copy.insightObservations[insight.kind])}</p><p class="insight-evidence"><strong>${escapeHtml(copy.insightEvidence)}:</strong> ${evidence}</p><p class="insight-note">${escapeHtml(copy.structuralProxy)}</p><p class="insight-tip"><strong>${escapeHtml(copy.insightConditionalAction)}:</strong> ${escapeHtml(copy.insightTips[insight.kind])}</p></article>`;
+  return `<article class="model-item insight-card codex-insight codex-insight-${escapeHtml(insight.severity)}"><div class="insight-head"><span class="insight-tag">${escapeHtml(scopeLabel)}</span><h4>${escapeHtml(copy.insightTitles[insight.kind])}</h4></div><p class="insight-observation"><strong>${escapeHtml(copy.insightObservation)}:</strong> ${escapeHtml(copy.insightObservations[insight.kind])}</p><p class="insight-evidence codex-evidence"><strong>${escapeHtml(copy.insightEvidence)}:</strong> ${evidence}</p><p class="insight-note">${escapeHtml(copy.structuralProxy)}</p><p class="insight-tip"><strong>${escapeHtml(copy.insightConditionalAction)}:</strong> ${escapeHtml(copy.insightTips[insight.kind])}</p></article>`;
 }
 
 function localizedConstraint(
@@ -1164,6 +1170,9 @@ function renderTrendSection(ctx: CodexRenderContext): string {
     if (!scope) {
       return `<section id="codex-overview-panel-${key}" role="tabpanel" aria-labelledby="codex-overview-tab-${key}" data-codex-overview-panel="${key}" data-codex-overview-dataset="${key}"${index === 0 ? '' : ' hidden'}><p>${escapeHtml(copy.noRecentTask)}</p></section>`;
     }
+    if (key === 'recent') {
+      return `<section id="codex-overview-panel-${key}" role="tabpanel" aria-labelledby="codex-overview-tab-${key}" data-codex-overview-panel="${key}" data-codex-overview-dataset="${key}"${index === 0 ? '' : ' hidden'}>${scopePanel(scope, copy, format, ctx.formatters.duration)}</section>`;
+    }
     const maximum = (metric: CodexMetricKey): number => Math.max(0, ...rows.map((row) => metric === 'sessions' ? row.threads : row.total[metric]));
     const axis = metricRows.map(([metric]) =>
       `data-axis-top-${metric}="${formatted(format, maximum(metric))}" data-axis-mid-${metric}="${formatted(format, maximum(metric) / 2)}"`,
@@ -1194,7 +1203,7 @@ function renderTrendSection(ctx: CodexRenderContext): string {
       : `<p>${escapeHtml(daily ? copy.noDailyData : copy.noMonthlyData)}</p>`;
     return `<section id="codex-overview-panel-${key}" role="tabpanel" aria-labelledby="codex-overview-tab-${key}" data-codex-overview-panel="${key}" data-codex-overview-dataset="${key}" ${axis}${index === 0 ? '' : ' hidden'}>${scopePanel(scope, copy, format, ctx.formatters.duration)}<p class="sr-only" data-codex-chart-summary aria-live="polite" aria-atomic="true">${escapeHtml(initialSummary)}</p><div class="hc-wrap"><div class="hc-yaxis"><span class="hc-yval">${formatted(format, maximum('processed'))}</span><span class="hc-yval">${formatted(format, maximum('processed') / 2)}</span><span class="hc-yval">${formatted(format, 0)}</span></div><div class="hc-main"><div class="hc-scroll codex-scroll-region"><div class="hc-plot"><div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div><div class="hc-bars chart-bars">${bars}</div></div></div></div></div>${table}</section>`;
   }).join('');
-  return `<section class="daily-breakdown codex-overview-trend" data-codex-section="trend"><h3>${escapeHtml(copy.daily)}</h3><div class="chart-tabs codex-overview-scope" role="tablist" aria-label="${escapeHtml(copy.scope)}">${scopeButtons}</div><div class="chart-tabs codex-overview-metric" role="group" aria-label="${escapeHtml(copy.daily)}">${metrics}</div>${panels}</section>`;
+  return `<section class="daily-breakdown codex-overview-trend" data-codex-section="trend"><h3>${escapeHtml(copy.usageTrend)}</h3><div class="chart-tabs codex-overview-scope" role="tablist" aria-label="${escapeHtml(copy.scope)}">${scopeButtons}</div><div class="chart-tabs codex-overview-metric" role="group" aria-label="${escapeHtml(copy.usageTrend)}" hidden>${metrics}</div>${panels}</section>`;
 }
 
 function taskPanel(ctx: CodexRenderContext): string {
