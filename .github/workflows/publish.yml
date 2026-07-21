@@ -86,11 +86,14 @@ jobs:
         run: npm run compile
 
       - name: Package .vsix
-        run: npx -y @vscode/vsce package --out claude-code-usage.vsix
+        run: npx -y @vscode/vsce@3.9.1 package --out claude-code-usage.vsix
+
+      - name: Verify .vsix
+        run: node .github/scripts/verify-vsix.mjs claude-code-usage.vsix
 
       - name: Publish to VS Code Marketplace
         if: github.event_name == 'release' || inputs.publish_vscode
-        run: npx -y @vscode/vsce publish --packagePath claude-code-usage.vsix --pat "$VSCE_PAT"
+        run: npx -y @vscode/vsce@3.9.1 publish --packagePath claude-code-usage.vsix --pat "$VSCE_PAT"
         env:
           VSCE_PAT: ${{ secrets.VSCE_PAT }}
 

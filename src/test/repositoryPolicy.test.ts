@@ -11,6 +11,57 @@ function repoFile(relativePath: string): string {
   return readFileSync(resolve(REPO_ROOT, relativePath), 'utf8');
 }
 
+type WorkflowStepValue = {
+  readonly value: string;
+  readonly line: number;
+};
+
+function workflowStepValues(workflow: string, key: 'run' | 'uses'): WorkflowStepValue[] {
+  const lines = workflow.split(/\r?\n/);
+  const values: WorkflowStepValue[] = [];
+  const pattern = new RegExp(`^(\\s*)${key}:\\s*(.*?)\\s*$`);
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = lines[index].match(pattern);
+    if (!match) {
+      continue;
+    }
+    const indentation = match[1].length;
+    const scalar = match[2].replace(/\s+#.*$/, '').trim();
+    if (scalar !== '|' && scalar !== '>') {
+      values.push({ value: scalar, line: index + 1 });
+      continue;
+    }
+    const block: string[] = [];
+    let cursor = index + 1;
+    for (; cursor < lines.length; cursor += 1) {
+      const line = lines[cursor];
+      if (!line.trim()) {
+        continue;
+      }
+      const nextIndentation = line.match(/^\s*/)?.[0].length ?? 0;
+      if (nextIndentation <= indentation) {
+        break;
+      }
+      if (!line.trimStart().startsWith('#')) {
+        block.push(line.trim());
+      }
+    }
+    values.push({ value: block.join('\n'), line: index + 1 });
+    index = cursor - 1;
+  }
+  return values;
+}
+
+function assertExactVscePin(commands: readonly WorkflowStepValue[]): void {
+  const tokens = commands.flatMap(({ value }) =>
+    value.match(/@vscode\/vsce(?:@[^\s]+)?/g) ?? [],
+  );
+  assert.ok(tokens.length > 0, 'workflow must invoke VSCE');
+  for (const token of tokens) {
+    assert.equal(token, '@vscode/vsce@3.9.1', `unexpected VSCE invocation ${token}`);
+  }
+}
+
 function activePatterns(relativePath: string): Set<string> {
   return new Set(
     repoFile(relativePath)
@@ -1299,4 +1350,113 @@ test('Playwright sources stay tracked but never enter the VSIX', () => {
   }
   assert.equal(gitIgnore.has('tests/'), false);
   assert.equal(gitIgnore.has('tests/**'), false);
+});
+
+test('CI has separate Node, browser, and package release gates', () => {
+  const workflow = repoFile('.github/workflows/test.yml');
+  const runs = workflowStepValues(workflow, 'run');
+  const uses = workflowStepValues(workflow, 'uses');
+  const runValues = runs.map(({ value }) => value);
+  const browserInstall = /(?:^|\s)(?:npx\s+(?:-y\s+)?(?:@playwright\/test(?:@[^\s]+)?|playwright)|npm\s+exec\s+(?:--\s+)?playwright|playwright)\s+install(?:\s|$)/;
+
+  assert.match('npx -y @playwright/test@1.61.1 install chromium', browserInstall);
+  assert.doesNotMatch('npx playwright test', browserInstall);
+  assert.deepEqual(workflowStepValues('# run: npx -y @vscode/vsce@3.9.1 package', 'run'), []);
+  assert.throws(
+    () => assertExactVscePin([{ value: 'npx -y @vscode/vsce@latest package', line: 1 }]),
+    /unexpected VSCE invocation/,
+  );
+
+  assert.match(workflow, /^name:\s*Test\s*$/m);
+  assert.match(workflow, /^on:\s*$/m);
+  assert.match(workflow, /^  push:\s*$/m);
+  assert.match(workflow, /^      - main\s*$/m);
+  assert.match(workflow, /^  pull_request:\s*$/m);
+  assert.match(workflow, /^permissions:\s*\n  contents:\s*read\s*$/m);
+  assert.match(workflow, /^  test:\s*$/m);
+  assert.match(workflow, /^  ui:\s*$/m);
+  assert.match(workflow, /^  package:\s*$/m);
+  assert.match(workflow, /^    name:\s*Node Tests\s*$/m);
+  assert.match(workflow, /^    name:\s*UI Test\s*$/m);
+  assert.match(workflow, /^    name:\s*Release Package\s*$/m);
+  assert.match(workflow, /image:\s*mcr\.microsoft\.com\/playwright:v1\.61\.1-noble/);
+  assert.match(workflow, /PLAYWRIGHT_BROWSERS_PATH:\s*\/ms-playwright/);
+  assert.match(workflow, /needs:\s*\[test, ui\]/);
+  assert.ok(runValues.includes('npm run test:ui'));
+  const packageAt = runValues.indexOf('npx -y @vscode/vsce@3.9.1 package --out /tmp/claude-code-usage-ci.vsix');
+  const verifyAt = runValues.indexOf('node .github/scripts/verify-vsix.mjs /tmp/claude-code-usage-ci.vsix');
+  assert.ok(packageAt >= 0 && verifyAt > packageAt, 'smoke VSIX verification must follow packaging');
+  assertExactVscePin(runs);
+  assert.equal(
+    uses.some(({ value }) => /^actions\/(?:upload|download)-artifact@/.test(value)),
+    false,
+    'CI must not exchange build artifacts between jobs',
+  );
+  assert.doesNotMatch(
+    runValues.join('\n'),
+    browserInstall,
+  );
+  assert.doesNotMatch(workflow, /<pinned-[s]ha>/);
+});
+
+test('publish pins the Node-20-compatible VSCE and verifies before publishing', () => {
+  const workflow = repoFile('.github/workflows/publish.yml');
+  const runs = workflowStepValues(workflow, 'run');
+  const uses = workflowStepValues(workflow, 'uses');
+  const findRun = (value: string): WorkflowStepValue | undefined =>
+    runs.find((entry) => entry.value === value);
+
+  assert.match(workflow, /node-version:\s*'20'/);
+  const packageStep = findRun('npx -y @vscode/vsce@3.9.1 package --out claude-code-usage.vsix');
+  const verifyStep = findRun('node .github/scripts/verify-vsix.mjs claude-code-usage.vsix');
+  const publishStep = findRun('npx -y @vscode/vsce@3.9.1 publish --packagePath claude-code-usage.vsix --pat "$VSCE_PAT"');
+  const openVsxStep = findRun('npx -y ovsx publish claude-code-usage.vsix --pat "$OVSX_PAT"');
+  const attachStep = uses.find(({ value }) =>
+    value === 'softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65',
+  );
+  assert.ok(packageStep && verifyStep && verifyStep.line > packageStep.line, 'VSIX verification must follow packaging');
+  assert.ok(publishStep && publishStep.line > verifyStep.line, 'VSIX verification must precede Marketplace publish');
+  assert.ok(openVsxStep && openVsxStep.line > verifyStep.line, 'VSIX verification must precede Open VSX publish');
+  assert.ok(attachStep && attachStep.line > verifyStep.line, 'VSIX verification must precede Release attachment');
+  assertExactVscePin(runs);
+  assert.match(workflow, /RELEASE_TAG:[\s\S]*github\.event\.release\.tag_name[\s\S]*inputs\.tag/);
+  assert.ok(runs.some(({ value }) => value.includes('npm version "$VER" --no-git-tag-version --allow-same-version')));
+});
+
+test('CONTRIBUTING documents provider-aware privacy and three testing layers', () => {
+  const guide = repoFile('CONTRIBUTING.md');
+
+  assert.match(guide, /provider-aware[\s\S]*Claude Code[\s\S]*opt-in[\s\S]*Codex Beta/i);
+  assert.doesNotMatch(guide, /Claude-only|Multi-provider monitoring[^\n]*out of scope/i);
+  assert.match(guide, /local metadata and usage logs[\s\S]*read-only/i);
+  assert.match(guide, /Codex does not estimate\s+dollar cost/i);
+  assert.match(guide, /never reads conversation bodies/i);
+  assert.match(guide, /limits are last-observed\s+values from local logs, not real-time billing data/i);
+
+  const testsStart = guide.indexOf('## Tests');
+  const testsEnd = guide.indexOf('## Releases');
+  assert.ok(testsStart >= 0 && testsEnd > testsStart, 'CONTRIBUTING must retain a Tests section');
+  const testing = guide.slice(testsStart, testsEnd);
+  const nodeAt = testing.indexOf('`npm test`');
+  const browserAt = testing.indexOf('`npm run test:ui`');
+  const hostAt = testing.indexOf('**F5**');
+  assert.ok(nodeAt >= 0 && browserAt > nodeAt && hostAt > browserAt, 'testing layers must be documented in order');
+  assert.match(testing, /npm test[\s\S]*TypeScript compile[\s\S]*Node logic and repository-policy tests/i);
+  assert.match(testing, /npm run test:ui[\s\S]*real, complete Webview[\s\S]*Chromium/i);
+  for (const requirement of [/interaction/i, /reload/i, /Axe/, /eight-locale overflow/i, /visual baseline/i]) {
+    assert.match(testing, requirement);
+  }
+  assert.match(testing, /F5[\s\S]*install[^\n]*VSIX[\s\S]*real\s+VS Code host activation[\s\S]*real local metadata[\s\S]*theme smoke/i);
+  assert.match(testing, /does not replace the first two layers/i);
+  assert.match(testing, /separate gates, with packaging after both test jobs pass/i);
+  assert.doesNotMatch(testing, /gates independently/i);
+  assert.match(testing, /mcr\.microsoft\.com\/playwright:v1\.61\.1-noble/);
+  assert.match(testing, /macOS[\s\S]*must not[\s\S]*Linux snapshot/i);
+
+  assert.match(guide, /controlled, comment-only\s+first pass/i);
+  assert.match(guide, /Codex automatic attribution is not enabled in v2\.2\.1/);
+  assert.match(guide, /Codex automatic attribution remains disabled in v2\.3\.0/);
+  assert.match(guide, /separately\s+implemented and trusted OpenAI\/Codex transport/i);
+  assert.match(guide, /v2\.2\.1 does not migrate this privileged workflow to Codex/);
+  assert.match(guide, /v2\.3\.0 still does not migrate this privileged workflow to Codex/);
 });
