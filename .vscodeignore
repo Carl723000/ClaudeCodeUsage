@@ -4,6 +4,7 @@
 .agents/**
 .codex/**
 .worktrees/**
+.superpowers/**
 .github/**
 src/**
 out/test/**
