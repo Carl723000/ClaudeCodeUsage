@@ -319,7 +319,9 @@ export function getCodexClientScript(): string {
       var rendered = bar.getAttribute('data-label-' + metric) || String(value);
       var name = bar.getAttribute('data-name-' + metric) || metric;
       var rowLabel = bar.getAttribute('data-row-label') || bar.getAttribute('data-codex-date') || '';
-      bar.setAttribute('title', rowLabel + ' · ' + name + ': ' + rendered);
+      var accessibleLabel = rowLabel + ' · ' + name + ': ' + rendered;
+      bar.setAttribute('title', accessibleLabel);
+      bar.setAttribute('aria-label', accessibleLabel);
       var column = bar.closest('.hc-col');
       var label = column ? column.querySelector('[data-codex-chart-value]') : null;
       if (label) { label.textContent = rendered; }
@@ -603,6 +605,7 @@ export function getCodexClientScript(): string {
   function handleAction(element) {
     var action = element.getAttribute('data-codex-action');
     var value;
+    if (action === 'refresh') { vscode.postMessage({ command: 'refresh' }); return true; }
     if (action === 'select-page') { return setPage(element.getAttribute('data-codex-page-target')); }
     if (action === 'open-settings') { return setPage('settings'); }
     if (action === 'close-settings') { return setPage(state.returnPage); }
@@ -690,7 +693,7 @@ export function getCodexClientScript(): string {
       if (!scopePanel || !overviewPage || overviewPage.hidden || scopePanel.hidden || isDisabled(scopePanel) ||
           scopePanel.getAttribute('data-codex-overview-panel') !== state.overviewScope || !row || row.hidden || isDisabled(row)) { return false; }
       root.querySelectorAll('[data-codex-date-row].selected').forEach(function(item) { item.classList.remove('selected'); });
-      row.classList.add('selected'); row.focus(); row.scrollIntoView({ behavior: 'smooth', block: 'center' }); return true;
+      row.classList.add('selected'); row.focus(); row.scrollIntoView({ behavior: scrollBehavior(), block: 'center' }); return true;
     }
     if (action === 'set-setting') {
       var message = validSettingValue(element.getAttribute('data-codex-setting-key'), element.getAttribute('data-codex-setting-type'), element.getAttribute('data-codex-setting-value-source'), element);
@@ -713,7 +716,7 @@ export function getCodexClientScript(): string {
     applyState();
     persist();
     if (element.getAttribute('data-codex-action') === 'view-task') {
-      if (resolvedTaskTarget) { resolvedTaskTarget.focus(); resolvedTaskTarget.scrollIntoView({ behavior: 'smooth', block: 'center' }); }
+      if (resolvedTaskTarget) { resolvedTaskTarget.focus(); resolvedTaskTarget.scrollIntoView({ behavior: scrollBehavior(), block: 'center' }); }
     }
     resolvedTaskTarget = null;
   }
@@ -724,6 +727,10 @@ export function getCodexClientScript(): string {
     event.preventDefault();
     event.stopPropagation();
     return true;
+  }
+
+  function scrollBehavior() {
+    return typeof globalThis.matchMedia === 'function' && globalThis.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
   }
 
   function route(event) {
