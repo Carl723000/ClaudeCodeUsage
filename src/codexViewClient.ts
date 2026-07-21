@@ -315,6 +315,7 @@ export function getCodexClientScript(): string {
     if (!chart || metrics.indexOf(metric) === -1) { return; }
     var bars = chart.querySelectorAll('[data-codex-chart-bar], [data-codex-chart]');
     var maximum = 0;
+    var summaryRows = [];
     bars.forEach(function(bar) {
       var value = Number(bar.getAttribute('data-' + metric) || '0');
       if (isFinite(value) && value > maximum) { maximum = value; }
@@ -330,12 +331,15 @@ export function getCodexClientScript(): string {
       var name = bar.getAttribute('data-name-' + metric) || metric;
       var rowLabel = bar.getAttribute('data-row-label') || bar.getAttribute('data-codex-date') || '';
       var accessibleLabel = rowLabel + ' · ' + name + ': ' + rendered;
+      summaryRows.push(accessibleLabel);
       bar.setAttribute('title', accessibleLabel);
       bar.setAttribute('aria-label', accessibleLabel);
       var column = bar.closest('.hc-col');
       var label = column ? column.querySelector('[data-codex-chart-value]') : null;
       if (label) { label.textContent = rendered; }
     });
+    var summary = chart.querySelector('[data-codex-chart-summary]');
+    if (summary) { summary.textContent = summaryRows.join('; '); }
     root.querySelectorAll('[data-codex-chart-metric]').forEach(function(button) {
       var selected = button.getAttribute('data-codex-chart-metric') === metric;
       button.classList.toggle('active', selected);
@@ -796,6 +800,7 @@ export function getCodexClientScript(): string {
     if (event.key === 'Home') { index = 0; }
     else if (event.key === 'End') { index = tabs.length - 1; }
     else { index = (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; }
+    performAction(tabs[index], event);
     tabs[index].focus();
     event.preventDefault(); event.stopPropagation();
   });

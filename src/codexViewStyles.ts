@@ -212,6 +212,17 @@ export function getCodexViewStyles(): string {
       word-break: break-word;
     }
 
+    [data-codex-root] pre {
+      max-width: 100%;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    [data-codex-root] .model-stat-label {
+      opacity: 1;
+    }
+
     [data-codex-root] .codex-thread-filters input,
     [data-codex-root] .codex-thread-filters select {
       min-height: 30px;
