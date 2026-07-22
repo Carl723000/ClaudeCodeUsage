@@ -11,6 +11,7 @@ import {
 } from '../providers/codex/codexIdentity';
 import { buildCodexInsights } from '../providers/codex/codexInsights';
 import {
+  anonymousRootNamedChildProjectFixture,
   codexFixtureIdentityKey,
   identityLineageFixture,
   parentlessNonRootTitleFixture,
@@ -660,6 +661,33 @@ test('cross-project lineage keeps the recent task card anchored to its canonical
   assert.equal(view.lastTaskIdentity?.title, undefined);
   assert.equal(view.lastTaskIdentity?.observedAt, childEndedAt);
   assert.equal(view.lastTask?.threads, 3);
+});
+
+test('an anonymous root uses its named child project without changing root lineage identity', () => {
+  const snapshot = anonymousRootNamedChildProjectFixture();
+  const root = snapshot.files[0];
+  const child = snapshot.files[1];
+  const rootViewKey = stableCodexViewKey(
+    codexFixtureIdentityKey('session:root-a'),
+  );
+  const view = buildCodexUsageView(snapshot, NOW);
+  const project = view.projects.find((row) =>
+    row.projectKey === root.session.projectKey
+  );
+  const childRow = view.recentThreads.find((row) =>
+    row.sessionKey === child.session.sessionKey
+  );
+
+  assert.ok(project);
+  assert.equal(project.name, 'RealChildProject');
+  assert.equal(view.lastTaskIdentity?.projectName, project.name);
+  assert.equal(view.lastTaskIdentity?.projectName, 'RealChildProject');
+  assert.equal(view.lastTaskIdentity?.projectKey, project.viewKey);
+  assert.equal(view.lastTaskIdentity?.taskKey, rootViewKey);
+  assert.equal(view.lastTaskIdentity?.title, 'Canonical root task');
+  assert.equal(childRow?.parentViewKey, rootViewKey);
+  assert.equal(childRow?.rootTaskViewKey, rootViewKey);
+  assert.equal(childRow?.depth, 1);
 });
 
 test('rooted recent task key is anchored to the canonical root when a child is appended', () => {

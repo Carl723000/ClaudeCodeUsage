@@ -202,6 +202,26 @@ function functionDeclarations(file: ts.SourceFile): ReadonlyMap<string, ts.Funct
 
 function sanitizedDtoViolations(file: ts.SourceFile): string[] {
   const declarations = functionDeclarations(file);
+  const trustedLabelSanitizerBindings = new Set<string>();
+  for (const statement of file.statements) {
+    if (
+      !ts.isImportDeclaration(statement) ||
+      !ts.isStringLiteral(statement.moduleSpecifier) ||
+      statement.moduleSpecifier.text !== './codexMetadataLabel' ||
+      !statement.importClause ||
+      statement.importClause.isTypeOnly ||
+      !statement.importClause.namedBindings ||
+      !ts.isNamedImports(statement.importClause.namedBindings)
+    ) {
+      continue;
+    }
+    for (const specifier of statement.importClause.namedBindings.elements) {
+      const exportedName = specifier.propertyName?.text ?? specifier.name.text;
+      if (!specifier.isTypeOnly && exportedName === 'sanitizeCodexMetadataLabel') {
+        trustedLabelSanitizerBindings.add(specifier.name.text);
+      }
+    }
+  }
   const violations: string[] = [];
   const visited = new Set<string>();
   const fail = (message: string): void => {
@@ -223,9 +243,15 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
       ts.isBindingElement(element) ? bindingNames(element.name) : [],
     );
   };
-  const isExplicitSafeExternal = (call: ts.CallExpression): boolean => {
+  const isExplicitSafeExternal = (
+    call: ts.CallExpression,
+    shadowedBindings: ReadonlySet<string>,
+  ): boolean => {
     if (ts.isIdentifier(call.expression)) {
-      return call.expression.text === 'resolveTimeZone' || call.expression.text === 'dayKeyInZone';
+      return call.expression.text === 'resolveTimeZone' ||
+        call.expression.text === 'dayKeyInZone' ||
+        (trustedLabelSanitizerBindings.has(call.expression.text) &&
+          !shadowedBindings.has(call.expression.text));
     }
     if (!ts.isPropertyAccessExpression(call.expression)) {
       return false;
@@ -501,7 +527,10 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
           expression.expression.name.text === 'sort') {
           inspectCollection(expression.expression.expression);
           expression.arguments.forEach((argument) => inspectExpression(argument, false, false, true));
-        } else if (!isExplicitSafeExternal(expression)) {
+        } else if (!isExplicitSafeExternal(
+          expression,
+          new Set([...parameters, ...localInitializers.keys(), ...callbackParameters]),
+        )) {
           fail(inSpread
             ? `${name} spreads opaque external output`
             : `${name} persists opaque external output`);
@@ -921,6 +950,124 @@ test('semantic Codex policy validators reject nested DTO leaks, comment-only san
     'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
   ].join('\n'), ts.ScriptTarget.ES2020, true);
   assert.match(sanitizedDtoViolations(opaqueExternalOutput).join('\n'), /opaque external output/);
+
+  const explicitlyImportedLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    "import { sanitizeCodexMetadataLabel } from './codexMetadataLabel';",
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: sanitizeCodexMetadataLabel(input.coverage) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.deepEqual(
+    sanitizedDtoViolations(explicitlyImportedLabelSanitizer),
+    [],
+  );
+
+  const aliasedImportedLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    "import { sanitizeCodexMetadataLabel as safeLabel } from './codexMetadataLabel';",
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: safeLabel(input.coverage) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+
+  const unboundLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: sanitizeCodexMetadataLabel(input.coverage) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+
+  const wrongModuleLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    "import { sanitizeCodexMetadataLabel } from './thirdParty';",
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: sanitizeCodexMetadataLabel(input.coverage) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+
+  const defaultImportedLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    "import sanitizeCodexMetadataLabel from './codexMetadataLabel';",
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: sanitizeCodexMetadataLabel(input.coverage) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+
+  const namespaceImportedLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    "import * as labels from './codexMetadataLabel';",
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: labels.sanitizeCodexMetadataLabel(input.coverage) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+
+  const localLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    'function sanitizeCodexMetadataLabel(value: any) { return value; }',
+    'function sanitizeIndexV2(input: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: sanitizeCodexMetadataLabel(input) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+
+  const parameterShadowedLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    "import { sanitizeCodexMetadataLabel } from './codexMetadataLabel';",
+    'function sanitizeIndexV2(input: any, sanitizeCodexMetadataLabel: any) {',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: sanitizeCodexMetadataLabel(input.coverage) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+
+  const functionLocalShadowedLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    "import { sanitizeCodexMetadataLabel } from './codexMetadataLabel';",
+    'function sanitizeIndexV2(input: any) {',
+    '  const sanitizeCodexMetadataLabel = thirdPartyClone;',
+    '  return { schemaVersion: 2, files: {}, aggregate: {}, coverage: sanitizeCodexMetadataLabel(input.coverage) };',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+
+  const blockLocalShadowedLabelSanitizer = ts.createSourceFile('fixture.ts', [
+    "import { sanitizeCodexMetadataLabel } from './codexMetadataLabel';",
+    'function sanitizeIndexV2(input: any) {',
+    '  {',
+    '    const sanitizeCodexMetadataLabel = thirdPartyClone;',
+    '    return { schemaVersion: 2, files: {}, aggregate: {}, coverage: sanitizeCodexMetadataLabel(input.coverage) };',
+    '  }',
+    '}',
+    'async function saveCodexIndexAtomic(index: any) { await handle.writeFile(JSON.stringify(sanitizeIndexV2(index))); }',
+  ].join('\n'), ts.ScriptTarget.ES2020, true);
+  assert.deepEqual(
+    {
+      alias: sanitizedDtoViolations(aliasedImportedLabelSanitizer),
+      unbound: sanitizedDtoViolations(unboundLabelSanitizer),
+      wrongModule: sanitizedDtoViolations(wrongModuleLabelSanitizer),
+      defaultImport: sanitizedDtoViolations(defaultImportedLabelSanitizer),
+      namespaceImport: sanitizedDtoViolations(namespaceImportedLabelSanitizer),
+      localDeclaration: sanitizedDtoViolations(localLabelSanitizer),
+      parameterShadow: sanitizedDtoViolations(parameterShadowedLabelSanitizer),
+      functionLocalShadow: sanitizedDtoViolations(
+        functionLocalShadowedLabelSanitizer,
+      ),
+      blockLocalShadow: sanitizedDtoViolations(blockLocalShadowedLabelSanitizer),
+    },
+    {
+      alias: [],
+      unbound: ['sanitizeIndexV2 persists opaque external output'],
+      wrongModule: ['sanitizeIndexV2 persists opaque external output'],
+      defaultImport: ['sanitizeIndexV2 persists opaque external output'],
+      namespaceImport: ['sanitizeIndexV2 persists opaque external output'],
+      localDeclaration: [
+        'sanitizeCodexMetadataLabel persists tainted parameter value',
+      ],
+      parameterShadow: ['sanitizeIndexV2 persists opaque external output'],
+      functionLocalShadow: ['sanitizeIndexV2 persists opaque external output'],
+      blockLocalShadow: [
+        'sanitizeIndexV2 persists opaque external output',
+        'sanitizeIndexV2 must return an explicit object literal',
+      ],
+    },
+  );
 
   const constructedCarry = ts.createSourceFile('fixture.ts', [
     'function sanitizeIndexV2(raw: any) {',
@@ -1434,8 +1581,16 @@ test('CONTRIBUTING documents provider-aware privacy and three testing layers', (
   assert.match(guide, /they can resume or delete a selected session\./);
   assert.match(guide, /Deleting the selected session moves its log to the OS trash\./);
   assert.match(guide, /Codex does not estimate\s+dollar cost/i);
-  assert.match(guide, /never reads conversation bodies/i);
-  assert.match(guide, /limits are last-observed\s+values from local logs, not real-time billing data/i);
+  assert.match(
+    guide,
+    /usage JSONL is streamed and temporarily parsed for allowlisted\s+metadata/i,
+  );
+  assert.match(
+    guide,
+    /conversation fields are not inspected or used for analysis and are never\s+retained/i,
+  );
+  assert.doesNotMatch(guide, /never reads conversation bodies/i);
+  assert.match(guide, /limits are last-observed\s+values from local logs, not real-time billing\s+data/i);
 
   const testsStart = guide.indexOf('## Tests');
   const testsEnd = guide.indexOf('## Releases');

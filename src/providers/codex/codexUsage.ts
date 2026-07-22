@@ -870,6 +870,9 @@ export function buildCodexUsageView(
   const taskIdentityKey = taskIdentityFile
     ? sessionIdentityKey(taskIdentityFile)
     : NEUTRAL_CODEX_SESSION_KEY;
+  const recentProjectFiles = recent.filter((file) =>
+    projectIdentityKey(file) === recentProjectIdentityKey
+  );
 
   return {
     lastTask: recentScope,
@@ -878,8 +881,11 @@ export function buildCodexUsageView(
           taskKey: stableCodexViewKey(taskIdentityKey),
           projectKey: stableCodexViewKey(recentProjectIdentityKey),
           title: taskRoot?.session.sessionTitle,
-          projectName: taskIdentityFile?.session.projectName,
-          projectDirectoryName: taskIdentityFile?.session.projectDirectoryName,
+          projectName: identityValue(recentProjectFiles, 'projectName'),
+          projectDirectoryName: identityValue(
+            recentProjectFiles,
+            'projectDirectoryName',
+          ),
           lastActiveAt,
           observedAt: lastActiveAt,
         }

@@ -12,6 +12,7 @@ import {
   stringField,
 } from './codexSchema';
 import { safeProjectIdentity } from './codexIdentity';
+import { sanitizeCodexMetadataLabel } from './codexMetadataLabel';
 
 export interface CodexRawTokenCounts {
   inputTokens: number;
@@ -225,11 +226,17 @@ function parseTurnContext(
   if (!isObject(entry.payload)) {
     return { state: withFlag(state, 'invalid-turn-context'), events: [] };
   }
+  const model = Object.prototype.hasOwnProperty.call(entry.payload, 'model')
+    ? sanitizeCodexMetadataLabel(entry.payload.model)
+    : state.model;
+  const effort = Object.prototype.hasOwnProperty.call(entry.payload, 'effort')
+    ? sanitizeCodexMetadataLabel(entry.payload.effort)
+    : state.effort;
   return {
     state: {
       ...state,
-      model: stringField(entry.payload, 'model') ?? state.model,
-      effort: stringField(entry.payload, 'effort') ?? state.effort,
+      model,
+      effort,
     },
     events: [],
   };
@@ -289,8 +296,10 @@ function parseSessionMetadata(
     : undefined;
   const projectIdentity = safeProjectIdentity(rawProject, repositoryUrl);
   const agentNickname =
-    stringField(payload, 'agent_nickname') ??
-    (spawn ? stringField(spawn, 'agent_nickname') : undefined);
+    sanitizeCodexMetadataLabel(stringField(payload, 'agent_nickname')) ??
+    sanitizeCodexMetadataLabel(
+      spawn ? stringField(spawn, 'agent_nickname') : undefined,
+    );
   const rawRole =
     stringField(payload, 'agent_role') ??
     (spawn ? stringField(spawn, 'agent_role') : undefined) ??

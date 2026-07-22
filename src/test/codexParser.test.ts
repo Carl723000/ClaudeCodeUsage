@@ -116,6 +116,124 @@ test('cached and reasoning remain subsets and inherit turn context', () => {
   assert.equal(event.effort, 'high');
 });
 
+test('metadata labels reject identity and location leak vectors while preserving known labels', () => {
+  const uuid = '550e8400-e29b-41d4-a716-446655440000';
+  const uuidV7 = '019f6e61-0bf5-7a72-b6c1-2ace56bdd928';
+  const sessionKey = 'a'.repeat(64);
+  const unsafeLabels = [
+    '/Users/alice/Secret',
+    'C:\\Users\\alice\\Secret',
+    '\\\\server\\share\\Secret',
+    'file:///Users/alice/Secret',
+    'https://example.invalid/private',
+    'ssh://example.invalid/private',
+    `agent\u0000secret`,
+    `agent\u200dsecret`,
+    uuid,
+    uuidV7,
+    sessionKey,
+  ];
+
+  for (const unsafe of unsafeLabels) {
+    const metadata = parseCodexLine(
+      JSON.stringify({
+        timestamp: '2026-07-20T00:00:00.000Z',
+        type: 'session_meta',
+        payload: { agent_nickname: unsafe },
+      }),
+      createCodexParserState('file-key'),
+    ).state;
+    const context = parseCodexLine(
+      JSON.stringify({
+        timestamp: '2026-07-20T00:00:01.000Z',
+        type: 'turn_context',
+        payload: { model: unsafe, effort: unsafe },
+      }),
+      metadata,
+    ).state;
+
+    assert.equal(context.agentNickname, undefined, unsafe);
+    assert.equal(context.model, undefined, unsafe);
+    assert.equal(context.effort, undefined, unsafe);
+    assert.doesNotMatch(JSON.stringify(context), /Users|Secret|example\.invalid|550e8400|a{64}/);
+  }
+
+  let state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:00.000Z',
+      type: 'session_meta',
+      payload: { agent_nickname: 'Review Agent' },
+    }),
+    createCodexParserState('file-key'),
+  ).state;
+  state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:01.000Z',
+      type: 'turn_context',
+      payload: { model: 'gpt-5.6-sol', effort: 'xhigh' },
+    }),
+    state,
+  ).state;
+  assert.equal(state.agentNickname, 'Review Agent');
+  assert.equal(state.model, 'gpt-5.6-sol');
+  assert.equal(state.effort, 'xhigh');
+
+  const snapshot = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:02.000Z',
+      type: 'turn_context',
+      payload: { model: 'claude-opus-4-20250514', effort: 'high' },
+    }),
+    state,
+  ).state;
+  assert.equal(snapshot.model, 'claude-opus-4-20250514');
+  assert.equal(snapshot.effort, 'high');
+});
+
+test('explicit unsafe turn context clears stale labels before token attribution', () => {
+  let state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:00.000Z',
+      type: 'turn_context',
+      payload: { model: 'gpt-5.6-sol', effort: 'xhigh' },
+    }),
+    createCodexParserState('file-key'),
+  ).state;
+
+  state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:01.000Z',
+      type: 'turn_context',
+      payload: {},
+    }),
+    state,
+  ).state;
+  assert.equal(state.model, 'gpt-5.6-sol');
+  assert.equal(state.effort, 'xhigh');
+
+  state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:02.000Z',
+      type: 'turn_context',
+      payload: {
+        model: '/Users/alice/Secret',
+        effort: 'https://example.invalid/private',
+      },
+    }),
+    state,
+  ).state;
+  assert.equal(state.model, undefined);
+  assert.equal(state.effort, undefined);
+
+  const usage = parseCodexLine(
+    tokenLine({ inputTotal: 100, inputLast: 100 }),
+    state,
+  );
+  assert.equal(usage.events.length, 1);
+  assert.equal(usage.events[0].model, undefined);
+  assert.equal(usage.events[0].effort, undefined);
+});
+
 test('invalid JSON is flagged and unknown events contribute no usage', () => {
   let state = createCodexParserState('file-key');
   const invalid = parseCodexLine('{not-json', state);
