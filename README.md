@@ -6,24 +6,27 @@
 
 **The local Claude Code and Codex usage coach in your status bar.** Not a
 billing tool. Claude keeps its cost and quota views; the v2.3 Codex Beta adds
-provider-specific token and behaviour insights instead of pretending both
-providers expose the same data.
+provider-specific token and behaviour insights in a coherent **Overview /
+Explore / Recommendations** dashboard instead of pretending both providers
+expose the same data.
 
 > **What this is:** A VS Code status-bar monitor that reads your local
 > Claude Code and Codex logs and shows provider-appropriate usage views — plus
 > optional guidance that helps reduce avoidable token and workflow overhead.
 >
-> **What this is _not_:** a billing tool. All amounts are estimates based
-> on public per-million-token rates. Refer to your Anthropic account for
-> actual charges.
+> **What this is _not_:** a billing tool. Claude dollar amounts are estimates
+> based on public per-million-token rates; Codex dollar cost is not estimated.
+> Refer to the provider account for billing truth.
 
 > **看清 Claude Code 与 Codex 的本地用量，让 AI 帮你用得更好。**
 >
 > **简介**：一个 VS Code 状态栏小工具。Claude 保留成本与配额视图；
 > v2.3 的 Codex Beta 则按 Codex 自身的数据语义展示 token、effort、任务结构
-> 和本地优化建议，而不是强行套用 Claude 的统计方式。
+> 和本地优化建议，并统一组织为**概览 / 探索 / 优化建议**三页，而不是强行
+> 套用 Claude 的统计方式。
 >
-> **它不是什么**：账单工具。显示金额均为估算值，实际费用请以官方账单为准。
+> **它不是什么**：账单工具。Claude 金额为估算值；Codex 不估算美元成本。
+> 实际费用请以相应供应商的官方账单为准。
 
 🌐 **Multi-language documentation**:
 [English](README-en.md) ·
@@ -102,26 +105,49 @@ consent prompt.
 
 ## What's new in 2.3
 
-- **Codex Beta, enabled by default** — reads only local
-  `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`. Disable it at any
-  time in the dashboard's **Settings → Providers** section.
+- **Codex Beta, enabled by default** — usage records are discovered only from
+  `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; credential,
+  database, and unknown files stay excluded. Separately, the extension streams
+  exactly `$CODEX_HOME/session_index.jsonl` to map `id` to `thread_name` for
+  truthful thread titles. Absolute paths are redacted and titles stay memory-only.
+  Usage-record JSONL lines are streamed and temporarily parsed only to extract
+  allowlisted usage and structural metadata; prompt, response, command, and
+  tool-argument fields are not inspected or used for analysis, and are never
+  retained or persisted.
+  Disable Codex at any time in **Settings → Providers**.
 - **Codex-native metrics** — **processed** = input + output; **fresh** =
   uncached input + output; **cached input** is a subset of input; **reasoning**
   is a subset of output. No artificial Codex cost estimate is shown.
+- **Three focused pages, one visual language** — **Overview** provides Recent /
+  7 Days / 30 Days / All Time scopes with summaries, trends, composition,
+  last-observed limits, and the recent task. **Explore** contains Projects,
+  Sessions, and Models & effort, with search, filters, sorting, drill-downs, and
+  parent/child lineage. **Recommendations** follows the selected scope and shows
+  an observation, readable evidence, a structural-proxy explanation, and a
+  conditional action only when evidence supports it.
+- **Truthful names, no invented concepts** — root tasks use the latest real
+  thread title after path redaction. Child rows prefer their own real thread
+  title; when it is missing, they use the reported nickname and display the
+  parent/root title; if those are also missing, they receive a localized neutral
+  fallback. Projects use the Git repository name or, outside Git, the directory
+  basename. The Codex view does not manufacture Branches or Workflows that
+  cannot be measured reliably.
 - **Claude / Codex / Compare modes** — keep each provider's meaning intact.
   Compare shows input, output, and cache side by side; it never adds unrelated
   costs or quota windows together.
-- **Behaviour insights** — inspect model and effort mix, root/child task share,
-  approval-reviewer activity, command-round proxies, and cache reuse. The
-  recommendations specifically flag patterns such as high-effort or multi-agent
-  overhead on exploratory work and include localized, paste-ready constraints.
-- **Coverage you can audit** — indexing coverage, incomplete-record quality
-  flags, and the **last-observed** primary limit snapshot are labelled rather
-  than presented as live billing truth.
-- **Private, scalable local index** — prompt, response, command, and tool-argument
-  content is not inspected, used, or retained for Codex insights; credential and
-  database files are out of scope. A background worker scans large histories,
-  with a default 30-second watcher delay (Off / 10 / 30 / 60 / 120 / 300 seconds).
+- **Auditable time and coverage** — rolling 7-day and 30-day totals use exact
+  event-day slices in your configured timezone. Incomplete migration or index
+  coverage is visibly **partial**. Limits are **last-observed local-log**
+  snapshots, not live subscription or billing queries.
+- **Private, scalable local index** — stores machine-salted pseudonymous keys;
+  numeric and structural aggregates; and sanitized project, directory, agent,
+  model, effort, role, time, and quality metadata. It never persists raw IDs,
+  full paths or repository URLs, thread titles, or conversation bodies. A
+  background worker scans large histories with a default 30-second watcher delay
+  (Off / 10 / 30 / 60 / 120 / 300 seconds).
+- **Provider-aware controls** — Settings opens as an auxiliary page and returns
+  to the previous main page, rather than becoming a fourth destination. Codex
+  collection and local Codex recommendations can each be disabled.
 - **Exact-version release notice** — the upgrade message only describes the
   installed release. It is on by default and can be disabled in Settings.
 
@@ -331,13 +357,21 @@ authoritative.
 
 ## Privacy
 
-- All token / cost / session analysis runs **locally** by reading your
+- All **Claude** token / cost / session analysis runs locally by reading your
   `~/.claude/projects/**/*.jsonl` files.
-- Codex Beta reads only `sessions/**/*.jsonl` and
-  `archived_sessions/**/*.jsonl` below your Codex home. Its deterministic
-  insights do not inspect, use, or retain prompt, response, command, or
-  tool-argument content and make no network request. The persistent index
-  contains only machine-salted pseudonymous keys and numeric aggregates.
+- Codex usage records are discovered only from `sessions/**/*.jsonl` and
+  `archived_sessions/**/*.jsonl` below your Codex home. Separately, the extension
+  streams exactly `$CODEX_HOME/session_index.jsonl` for the `id` → `thread_name`
+  mapping used by truthful thread titles. Absolute paths in those titles are
+  redacted and the titles remain memory-only. Credentials, databases, and unknown
+  files are not read. Usage-record JSONL lines are streamed and temporarily
+  parsed only for allowlisted metadata; prompt, response, command, and
+  tool-argument fields are not inspected or used for analysis and are never
+  retained. Deterministic insights make no network request.
+- The Codex persistent index stores machine-salted pseudonymous keys, numeric
+  and structural aggregates, and sanitized project, directory, agent, model,
+  effort, role, time, and quality metadata. It never stores raw IDs, full paths
+  or repository URLs, thread titles, or conversation bodies.
 - The quota indicator calls **`api.anthropic.com/api/oauth/usage`** using
   Claude Code's existing OAuth token. No additional credentials are sent.
 - **AI advice** and the **Usage Optimizer** are the only features that call a

@@ -38,10 +38,14 @@ Hover the quota indicator for a breakdown:
 
 ## Codex Beta in v2.3
 
-- Reads only local Codex `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; credential and database files are excluded, while prompt, response, command, and tool-argument content is not inspected, used, or retained for deterministic insights.
-- **Processed** means input + output, **fresh** means uncached input + output, **cached input** remains a subset of input, and reasoning remains a subset of output. Codex cost is not estimated.
-- Claude / Codex / Compare views include model, effort, root/child task share, approval-reviewer activity, index coverage, quality flags, and the **last-observed** primary limit snapshot.
-- Local recommendations highlight high-effort, multi-agent, repeated-check, and low-cache patterns and provide paste-ready constraints. The background index uses a configurable watcher delay (30 seconds by default; Off is available).
+- Codex usage records are discovered only from `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; credential, database, and unknown files remain excluded. Separately, the extension streams exactly `$CODEX_HOME/session_index.jsonl` to map `id` to `thread_name` for truthful thread titles. Absolute paths are redacted and titles remain memory-only. Usage-record JSONL lines are streamed and temporarily parsed only to extract allowlisted usage and structural metadata; prompt, response, command, and tool-argument fields are not inspected or used for analysis, and are never retained or persisted.
+- **Processed** means input + output, **fresh** means uncached input + output, **cached input** remains a subset of input, and reasoning remains a subset of output. Codex dollar cost is not estimated; Claude / Codex / Compare modes keep each provider's accounting separate.
+- The three main pages share the existing dashboard's visual language: **Overview** offers Recent / 7 Days / 30 Days / All Time summaries, trends, composition, last-observed limits, and the recent task; **Explore** provides Projects, Sessions, and Models & effort with search, filters, sorting, drill-downs, and parent/child lineage; **Recommendations** follows the selected scope.
+- Root tasks use the latest real thread title after path redaction. Child rows prefer their own real thread title; when it is missing, they use the reported nickname and display the parent/root title; if those are also missing, they receive a localized neutral fallback. Project names use the Git repository name, or the directory basename outside Git. The extension does not invent Branches or Workflows that cannot be measured reliably.
+- Rolling 7-day and 30-day values use exact event-day slices in the configured timezone. Incomplete migration or coverage is visibly **partial**. Limits are **last-observed** local-log snapshots, not live subscription or billing data.
+- Each recommendation presents an observation, readable evidence, a structural-proxy explanation, and a conditional action only when the selected scope supports it; no evidence means no generic advice.
+- The persistent index stores machine-salted pseudonymous keys; numeric and structural aggregates; and sanitized project, directory, agent, model, effort, role, time, and quality metadata. It never stores raw IDs, full paths or repository URLs, thread titles, or conversation bodies.
+- Settings is a provider-aware auxiliary page that returns to the previous main page, not a fourth main tab. Codex collection and local Codex recommendations can be disabled independently; the background watcher delay is configurable (30 seconds by default, with Off and longer intervals available).
 
 ## Install
 
