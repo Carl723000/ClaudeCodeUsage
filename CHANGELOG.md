@@ -27,14 +27,19 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   index coverage, quality flags, and last-observed limit snapshots.
 - **Provider-aware dashboard** — Claude, Codex Beta, and side-by-side Compare
   modes preserve provider-specific semantics; Compare does not sum cost or quota.
-- **Codex diagnostic dashboard** — Claude-style Recent, 7 Days, 30 Days,
-  All Time, Threads, Projects, Behavior, and Settings tabs add daily/monthly
-  bars, token and thread-role composition, model/effort tables, and local
-  behavior signals without reading content or estimating Codex dollar cost.
-- **Truthful Codex identities** — root sessions use the latest local Codex
-  thread title, subagents retain their reported nickname and parent title, and
-  projects use the Git repository name (or a non-Git folder basename). Raw
-  session IDs, repository URLs, and full paths remain excluded.
+- **Three-page Codex dashboard** — **Overview** combines Recent / 7 Days /
+  30 Days / All Time summaries, trends, token composition, last-observed limits,
+  and the recent task; **Explore** provides Projects, Sessions, and Models &
+  effort views; **Recommendations** turns selected-scope evidence into
+  observations, readable evidence, proxy explanations, and conditional actions.
+  Provider-aware Settings is an auxiliary page that returns to the previous
+  destination rather than appearing as a fourth main tab.
+- **Truthful Codex identities** — root tasks use the latest path-redacted local
+  thread title; child rows prefer their own real thread title, then fall back to
+  their reported nickname while displaying the parent/root title. If those are
+  also missing, localized neutral fallbacks are used. Projects use the Git
+  repository name (or a non-Git folder basename). Raw session IDs, repository
+  URLs, and full paths remain excluded.
 - **Codex exploration and limits** — session search, role/project/model/effort
   filters, sortable tables, parent-child collapsing, project drill-downs, and
   all unexpired named primary/secondary limit windows make high usage traceable
@@ -44,7 +49,13 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   inspecting or retaining prompt, response, command, or tool-argument content.
 - **Scalable Codex indexing** — a cancellable background worker and persistent
   per-file aggregate index support incremental progress, tail-only append reads,
-  resume, and zero JSONL body reads for unchanged warm refreshes.
+  resume, and zero unchanged usage-record/rollout JSONL body rereads on warm
+  refreshes. This does not include the exact `$CODEX_HOME/session_index.jsonl`
+  title stream performed on every refresh.
+- **Codex UI release gate** — production-rendered Chromium coverage exercises
+  navigation, drill-downs, filtering, sorting, and state restoration, alongside
+  Axe checks, eight-locale responsive overflow checks, and six stable visual
+  baselines for wide, narrow, light, and dark states.
 
 ### Changed
 - **`showOpusWeekly` is now `showScopedWeekly`** — the setting no longer names a
@@ -75,9 +86,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   their own zero, repeated metadata preserves lineage, `guardian` sessions are
   approval reviewers, and known non-usage envelopes are not quality failures.
 - Codex Settings now shows only shared and Codex-effective controls; its reset
-  action is scoped to those visible settings. Behavior metrics can be compared
-  across the recent task, 7 days, 30 days, and all time, while recommendations
-  remain explicitly based on the recent task.
+  action is scoped to those visible settings. Codex and its local optimization
+  signals can be disabled independently. Recommendation ranges now follow the
+  selected Recent / 7 Days / 30 Days / All Time scope, withholding incomplete
+  rolling ranges and generic advice when there is no supporting evidence.
 - Codex period charts now reuse the existing dashboard's Y axis, grid, theme
   colors, horizontal scrolling, and metric-switching behavior.
 - **Schema-2 period indexing** — the compatible `codex-index-v1.json` path now
@@ -86,15 +98,25 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   coverage. All-time aggregates remain verified independently of partial period
   slices; exact active/archive copies are deduplicated while ambiguous identities
   remain visible as incomplete coverage.
+- Rolling 7-day and 30-day views now use exact event-day slices in the configured
+  timezone. Period migration and coverage gaps stay visibly partial instead of
+  being presented as complete data.
 
 ### Privacy
-- Codex discovery is restricted to `sessions/**/*.jsonl` and
-  `archived_sessions/**/*.jsonl`. The extension does not read Codex credentials,
-  SQLite databases, browser/keychain state, or unknown files, and persists only
-  machine-salted pseudonymous keys with numeric aggregates.
-- Absolute filesystem paths embedded by Codex in a generated thread title are
-  replaced with `[path]` before display; the remaining truthful title stays in
-  memory only.
+- Codex usage-record discovery is restricted to `sessions/**/*.jsonl` and
+  `archived_sessions/**/*.jsonl`. Separately, the extension streams exactly
+  `$CODEX_HOME/session_index.jsonl` to map `id` to `thread_name` for truthful
+  thread titles; credentials, SQLite databases, browser/keychain state, and
+  unknown files remain excluded.
+- Absolute filesystem paths embedded in a Codex thread title are replaced with
+  `[path]`, and the sanitized title remains memory-only. Usage-record JSONL lines
+  are streamed and temporarily parsed only for allowlisted metadata; prompt,
+  response, command, and tool-argument fields are not inspected or used for
+  analysis and are never retained.
+- The persistent index contains machine-salted pseudonymous keys, numeric and
+  structural aggregates, and sanitized project, directory, agent, model,
+  effort, role, time, and quality metadata. It never persists raw IDs, full
+  paths or repository URLs, thread titles, or conversation bodies.
 
 ## [2.2.2] — Unreleased
 
