@@ -55,6 +55,7 @@ import {
   PseudonymousIdentityKey,
   pseudonymousIdentityKey,
 } from './codexIdentity';
+import { sanitizeCodexMetadataLabel } from './codexMetadataLabel';
 
 export {
   CodexPeriodMigrationState,
@@ -1331,13 +1332,27 @@ function sanitizeBuckets(value: unknown): Record<string, ProviderTokenCounts> {
   );
 }
 
+function sanitizeLabelBuckets(
+  value: unknown,
+): Record<string, ProviderTokenCounts> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const buckets: Record<string, ProviderTokenCounts> = {};
+  for (const [key, tokens] of Object.entries(value)) {
+    const label = sanitizeCodexMetadataLabel(key) ?? 'unknown';
+    addTokens(bucket(buckets, label), sanitizeTokens(tokens));
+  }
+  return buckets;
+}
+
 function sanitizeProviderAggregate(value: unknown): CodexProviderAggregate {
   const record = isRecord(value) ? value : {};
   return {
     total: sanitizeTokens(record.total),
     byDay: sanitizeBuckets(record.byDay),
-    byModel: sanitizeBuckets(record.byModel),
-    byEffort: sanitizeBuckets(record.byEffort),
+    byModel: sanitizeLabelBuckets(record.byModel),
+    byEffort: sanitizeLabelBuckets(record.byEffort),
   };
 }
 
@@ -1377,6 +1392,9 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
     record.parentSessionKey,
   );
   const projectKey = sanitizePseudonymousIdentityKey(record.projectKey);
+  const agentNickname = sanitizeCodexMetadataLabel(record.agentNickname);
+  const model = sanitizeCodexMetadataLabel(record.model);
+  const effort = sanitizeCodexMetadataLabel(record.effort);
   const highWater = isRecord(record.highWater)
     ? {
         inputTokens: finiteNumber(record.highWater.inputTokens),
@@ -1398,11 +1416,9 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
     ...(optionalString(record.projectDirectoryName)
       ? { projectDirectoryName: optionalString(record.projectDirectoryName) }
       : {}),
-    ...(optionalString(record.agentNickname)
-      ? { agentNickname: optionalString(record.agentNickname) }
-      : {}),
-    ...(optionalString(record.model) ? { model: optionalString(record.model) } : {}),
-    ...(optionalString(record.effort) ? { effort: optionalString(record.effort) } : {}),
+    ...(agentNickname ? { agentNickname } : {}),
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
     role: sanitizeRole(record.role),
     ...(highWater ? { highWater } : {}),
     qualityFlags: sanitizeQualityFlags(record.qualityFlags),
@@ -1454,8 +1470,8 @@ function sanitizePeriod(value: unknown): CodexFilePeriodIndex | undefined {
       }
       return [[key, {
         total: sanitizeTokens(rawSlice.total),
-        byModel: sanitizeBuckets(rawSlice.byModel),
-        byEffort: sanitizeBuckets(rawSlice.byEffort),
+        byModel: sanitizeLabelBuckets(rawSlice.byModel),
+        byEffort: sanitizeLabelBuckets(rawSlice.byEffort),
         structural: sanitizeStructural(rawSlice.structural),
         ...(optionalNumber(rawSlice.firstObservedAt) !== undefined
           ? { firstObservedAt: optionalNumber(rawSlice.firstObservedAt) }
@@ -1574,6 +1590,7 @@ function sanitizeSession(
   const projectKey =
     sanitizePseudonymousIdentityKey(session.projectKey) ??
     sanitizePseudonymousIdentityKey(parserState.projectKey);
+  const agentNickname = sanitizeCodexMetadataLabel(session.agentNickname);
   return {
     sessionKey,
     ...(parentSessionKey ? { parentSessionKey } : {}),
@@ -1584,9 +1601,7 @@ function sanitizeSession(
     ...(optionalString(session.projectDirectoryName)
       ? { projectDirectoryName: optionalString(session.projectDirectoryName) }
       : {}),
-    ...(optionalString(session.agentNickname)
-      ? { agentNickname: optionalString(session.agentNickname) }
-      : {}),
+    ...(agentNickname ? { agentNickname } : {}),
     role: sanitizeRole(session.role),
     ...(optionalNumber(session.startedAt) !== undefined
       ? { startedAt: optionalNumber(session.startedAt) }
@@ -1606,8 +1621,8 @@ function sanitizeFileAggregate(
   return {
     total: sanitizeTokens(aggregate.total),
     byDay: sanitizeBuckets(aggregate.byDay),
-    byModel: sanitizeBuckets(aggregate.byModel),
-    byEffort: sanitizeBuckets(aggregate.byEffort),
+    byModel: sanitizeLabelBuckets(aggregate.byModel),
+    byEffort: sanitizeLabelBuckets(aggregate.byEffort),
     session: sanitizeSession(aggregate.session, parserState),
     structural: sanitizeStructural(aggregate.structural),
     ...(period ? { period } : {}),

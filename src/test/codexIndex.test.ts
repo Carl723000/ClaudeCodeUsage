@@ -96,6 +96,237 @@ test('index reload replaces invalid legacy session identity and drops raw parent
   }
 });
 
+test('index load and save fail closed for unsafe metadata labels and bucket keys', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-label-sanitize-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const fileKey = pseudonymousIdentityKey(SALT, 'label-file');
+    const sessionKey = pseudonymousIdentityKey(SALT, 'label-session');
+    const unsafe = {
+      posix: '/Users/alice/Secret',
+      windows: 'C:\\Users\\alice\\Secret',
+      unc: '\\\\server\\share\\Secret',
+      url: 'https://example.invalid/private',
+      fileUrl: 'file:///Users/alice/Secret',
+      sshUrl: 'ssh://example.invalid/private',
+      control: `agent\u0000secret`,
+      format: `agent\u200dsecret`,
+      uuid: '550e8400-e29b-41d4-a716-446655440000',
+      uuidV7: '019f6e61-0bf5-7a72-b6c1-2ace56bdd928',
+      sessionKey: 'b'.repeat(64),
+    };
+    const tokens = { inputTotal: 10, outputTotal: 2 };
+    const collisionTokens = { inputTotal: 3, outputTotal: 1 };
+    const explicitUnknownTokens = { inputTotal: 5, outputTotal: 1 };
+    const index = createEmptyCodexIndex('UTC');
+    index.files[fileKey] = {
+      fileKey,
+      sourceArea: 'sessions',
+      size: 100,
+      mtimeMs: 1,
+      offset: 100,
+      discardingOversizedLine: false,
+      parserState: {
+        schemaVersion: 1,
+        fileKey,
+        sessionKey,
+        agentNickname: unsafe.posix,
+        model: unsafe.windows,
+        effort: unsafe.url,
+        role: 'root',
+        qualityFlags: [],
+      },
+      aggregate: {
+        total: tokens,
+        byDay: {},
+        byModel: {
+          'gpt-5.6-sol': tokens,
+          'claude-opus-4-20250514': tokens,
+          [unsafe.posix]: tokens,
+          [unsafe.url]: tokens,
+          [unsafe.uuid]: tokens,
+          [unsafe.uuidV7]: tokens,
+          ' gpt-5.6-sol ': collisionTokens,
+        },
+        byEffort: {
+          xhigh: tokens,
+          [unsafe.windows]: tokens,
+          [unsafe.sessionKey]: tokens,
+          ' xhigh ': collisionTokens,
+          unknown: explicitUnknownTokens,
+        },
+        session: {
+          sessionKey,
+          agentNickname: unsafe.control,
+          role: 'root',
+        },
+        structural: {
+          patchCalls: 0,
+          toolCalls: 0,
+          postPatchToolCalls: 0,
+          compactCount: 0,
+          taskCompleteCount: 0,
+        },
+        period: {
+          timeZone: 'UTC',
+          indexedThrough: 100,
+          days: {
+            '2026-07-20': {
+              total: tokens,
+              byModel: {
+                'gpt-5.6-sol': tokens,
+                [unsafe.fileUrl]: tokens,
+                [unsafe.format]: tokens,
+                ' gpt-5.6-sol ': collisionTokens,
+                unknown: explicitUnknownTokens,
+              },
+              byEffort: {
+                xhigh: tokens,
+                [unsafe.unc]: tokens,
+                [unsafe.sshUrl]: tokens,
+                ' xhigh ': collisionTokens,
+              },
+              structural: {
+                patchCalls: 0,
+                toolCalls: 0,
+                postPatchToolCalls: 0,
+                compactCount: 0,
+                taskCompleteCount: 0,
+              },
+            },
+          },
+        },
+      },
+      qualityFlags: [],
+    };
+    index.aggregate.byModel = {
+      'gpt-5.6-sol': tokens,
+      [unsafe.posix]: tokens,
+      [unsafe.url]: tokens,
+      ' gpt-5.6-sol ': collisionTokens,
+      unknown: explicitUnknownTokens,
+    };
+    index.aggregate.byEffort = {
+      xhigh: tokens,
+      [unsafe.windows]: tokens,
+      [unsafe.uuid]: tokens,
+      ' xhigh ': collisionTokens,
+    };
+
+    await saveCodexIndexAtomic(indexPath, index);
+    const persisted = await readFile(indexPath, 'utf8');
+    assert.doesNotMatch(
+      persisted,
+      /Users|alice|Secret|example\.invalid|550e8400|b{64}|u0000|u200d/,
+    );
+    const saved = JSON.parse(persisted) as typeof index;
+    assert.equal(saved.files[fileKey].parserState.agentNickname, undefined);
+    assert.equal(saved.files[fileKey].parserState.model, undefined);
+    assert.equal(saved.files[fileKey].parserState.effort, undefined);
+    assert.equal(saved.files[fileKey].aggregate.session.agentNickname, undefined);
+    assert.deepEqual(Object.keys(saved.files[fileKey].aggregate.byModel).sort(), [
+      'claude-opus-4-20250514',
+      'gpt-5.6-sol',
+      'unknown',
+    ]);
+    assert.equal(saved.files[fileKey].aggregate.byModel['gpt-5.6-sol'].inputTotal, 13);
+    assert.equal(saved.files[fileKey].aggregate.byModel.unknown.inputTotal, 40);
+    assert.deepEqual(Object.keys(saved.files[fileKey].aggregate.byEffort).sort(), [
+      'unknown',
+      'xhigh',
+    ]);
+    assert.equal(saved.files[fileKey].aggregate.byEffort.xhigh.inputTotal, 13);
+    assert.equal(saved.files[fileKey].aggregate.byEffort.unknown.inputTotal, 25);
+    assert.deepEqual(Object.keys(saved.aggregate.byModel).sort(), [
+      'gpt-5.6-sol',
+      'unknown',
+    ]);
+    assert.equal(saved.aggregate.byModel['gpt-5.6-sol'].inputTotal, 13);
+    assert.equal(saved.aggregate.byModel.unknown.inputTotal, 25);
+    assert.deepEqual(Object.keys(saved.aggregate.byEffort).sort(), ['unknown', 'xhigh']);
+    assert.equal(saved.aggregate.byEffort.xhigh.inputTotal, 13);
+    assert.equal(saved.aggregate.byEffort.unknown.inputTotal, 20);
+    assert.deepEqual(
+      Object.keys(
+        saved.files[fileKey].aggregate.period!.days['2026-07-20'].byModel,
+      ).sort(),
+      ['gpt-5.6-sol', 'unknown'],
+    );
+    assert.equal(
+      saved.files[fileKey].aggregate.period!.days['2026-07-20']
+        .byModel['gpt-5.6-sol'].inputTotal,
+      13,
+    );
+    assert.equal(
+      saved.files[fileKey].aggregate.period!.days['2026-07-20']
+        .byModel.unknown.inputTotal,
+      25,
+    );
+    assert.deepEqual(
+      Object.keys(
+        saved.files[fileKey].aggregate.period!.days['2026-07-20'].byEffort,
+      ).sort(),
+      ['unknown', 'xhigh'],
+    );
+    assert.equal(
+      saved.files[fileKey].aggregate.period!.days['2026-07-20']
+        .byEffort.xhigh.inputTotal,
+      13,
+    );
+    assert.equal(
+      saved.files[fileKey].aggregate.period!.days['2026-07-20']
+        .byEffort.unknown.inputTotal,
+      20,
+    );
+
+    const unsafeOnDisk = structuredClone(index);
+    unsafeOnDisk.files[fileKey].parserState.agentNickname = unsafe.posix;
+    unsafeOnDisk.files[fileKey].parserState.model = unsafe.fileUrl;
+    unsafeOnDisk.files[fileKey].parserState.effort = unsafe.sessionKey;
+    unsafeOnDisk.files[fileKey].aggregate.session.agentNickname = unsafe.uuid;
+    await writeFile(indexPath, JSON.stringify(unsafeOnDisk), 'utf8');
+    const loaded = await loadCodexIndex(indexPath, 'UTC');
+    const loadedJson = JSON.stringify(loaded);
+    assert.doesNotMatch(
+      loadedJson,
+      /Users|alice|Secret|example\.invalid|550e8400|b{64}|u0000|u200d/,
+    );
+    assert.equal(loaded.files[fileKey].parserState.agentNickname, undefined);
+    assert.equal(loaded.files[fileKey].parserState.model, undefined);
+    assert.equal(loaded.files[fileKey].parserState.effort, undefined);
+    assert.equal(loaded.files[fileKey].aggregate.session.agentNickname, undefined);
+    assert.deepEqual(Object.keys(loaded.files[fileKey].aggregate.byModel).sort(), [
+      'claude-opus-4-20250514',
+      'gpt-5.6-sol',
+      'unknown',
+    ]);
+    assert.equal(loaded.files[fileKey].aggregate.byModel['gpt-5.6-sol'].inputTotal, 13);
+    assert.equal(loaded.files[fileKey].aggregate.byModel.unknown.inputTotal, 40);
+    assert.deepEqual(Object.keys(loaded.files[fileKey].aggregate.byEffort).sort(), [
+      'unknown',
+      'xhigh',
+    ]);
+    assert.equal(loaded.files[fileKey].aggregate.byEffort.xhigh.inputTotal, 13);
+    assert.equal(loaded.files[fileKey].aggregate.byEffort.unknown.inputTotal, 25);
+    assert.equal(loaded.aggregate.byModel['gpt-5.6-sol'].inputTotal, 13);
+    assert.equal(loaded.aggregate.byModel.unknown.inputTotal, 25);
+    assert.equal(loaded.aggregate.byEffort.xhigh.inputTotal, 13);
+    assert.equal(loaded.aggregate.byEffort.unknown.inputTotal, 20);
+    assert.equal(
+      loaded.files[fileKey].aggregate.period!.days['2026-07-20']
+        .byModel.unknown.inputTotal,
+      25,
+    );
+    assert.equal(
+      loaded.files[fileKey].aggregate.period!.days['2026-07-20']
+        .byEffort.unknown.inputTotal,
+      20,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function updateCodexIndex(
   previous: Parameters<typeof updateCodexIndexRaw>[0],
   manifest: Parameters<typeof updateCodexIndexRaw>[1],

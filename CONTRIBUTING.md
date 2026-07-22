@@ -15,8 +15,10 @@ experience are the best fit.
 
 Usage ingestion reads only each provider's local metadata and usage logs.
 Usage ingestion is read-only, and Codex data is never mutated. Codex does not estimate
-dollar cost and never reads conversation bodies. Codex limits are last-observed
-values from local logs, not real-time billing data.
+dollar cost. Its usage JSONL is streamed and temporarily parsed for allowlisted
+metadata; conversation fields are not inspected or used for analysis and are never
+retained. Codex limits are last-observed values from local logs, not real-time billing
+data.
 
 Claude session actions are separately gated and disabled by default. When enabled,
 they can resume or delete a selected session.

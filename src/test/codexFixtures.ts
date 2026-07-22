@@ -245,6 +245,24 @@ export function identityLineageFixture(): CodexProviderSnapshot {
   return snapshot;
 }
 
+export function anonymousRootNamedChildProjectFixture(): CodexProviderSnapshot {
+  const snapshot = snapshotFixture();
+  const [root, child] = snapshot.files;
+
+  root.session.sessionTitle = 'Canonical root task';
+  root.session.projectName = undefined;
+  root.session.projectDirectoryName = undefined;
+  root.session.endedAt = Date.parse('2026-07-20T11:55:00.000Z');
+
+  child.session.projectName = 'RealChildProject';
+  child.session.projectDirectoryName = 'RealChildDirectory';
+  child.session.endedAt = Date.parse('2026-07-20T11:50:00.000Z');
+
+  snapshot.files = [root, child];
+  snapshot.total = sum(snapshot.files);
+  return snapshot;
+}
+
 export function rootedTaskBeyondRecentRowCapFixture(): CodexProviderSnapshot {
   const snapshot = snapshotFixture();
   const root = structuredClone(snapshot.files[0]);

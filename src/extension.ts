@@ -1266,7 +1266,12 @@ export class ClaudeCodeUsageExtension {
     forceReload: boolean = false,
     trigger: RefreshTrigger = 'poll'
   ): Promise<void> {
-    void this.refreshCodexData(trigger);
+    // `watch` reaches this shared path only from the Claude projects watcher.
+    // Codex has its own watcher and quiet-delay setting, so refreshing it here
+    // would bypass codex.fileWatchSeconds whenever Claude writes a JSONL line.
+    if (trigger !== 'watch') {
+      void this.refreshCodexData(trigger);
+    }
     const request = this.refreshGate.request(forceReload, trigger);
     if (request === null) {
       this.coalescedTriggersSinceRefresh += 1;
