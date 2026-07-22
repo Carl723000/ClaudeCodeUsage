@@ -375,3 +375,34 @@ test('cancel during the final atomic save returns cancelled after preserving the
     },
   }]);
 });
+
+test('worker result reports a safe corrupt-index recovery reason', async () => {
+  const savedIndex = createEmptyCodexIndex(request.timeZone);
+  const messages: CodexWorkerMessage[] = [];
+
+  await runCodexWorkerRefresh(
+    { type: 'refresh', requestId: 'index-recovery', ...request },
+    {
+      isCancelled: () => false,
+      post: (message: CodexWorkerMessage) => messages.push(message),
+      loadCodexIndex: async (_path, _timeZone, onRecovery) => {
+        onRecovery?.({ reason: 'invalid-json' });
+        return savedIndex;
+      },
+      scanCodexManifest: async () => ({ files: [], persistable: {} }),
+      updateCodexIndex: async () => ({
+        index: savedIndex,
+        bodyReads: 0,
+        failedFiles: 0,
+        migration: { filePasses: 0, bytesRead: 0, pending: false },
+      }),
+      saveCodexIndexAtomic: async () => undefined,
+    },
+  );
+
+  const resultMessage = messages.find((message) => message.type === 'result');
+  assert.ok(resultMessage && resultMessage.type === 'result');
+  assert.deepEqual((resultMessage.result as any).indexRecovery, {
+    reason: 'invalid-json',
+  });
+});

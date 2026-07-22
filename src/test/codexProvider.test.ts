@@ -228,6 +228,7 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
   try {
     await mkdir(path.join(root, 'sessions'), { recursive: true });
     const result = workerResult();
+    (result as any).indexRecovery = { reason: 'invalid-json' };
     const sessionKey = pseudonymousIdentityKey('salt', 'raw-session-title');
     const file = Object.values(result.index.files)[0];
     file.parserState.sessionKey = sessionKey;
@@ -263,6 +264,9 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
     assert.equal(refreshed.snapshot.limits.length, 1);
     assert.deepEqual(provider.snapshot(), refreshed.snapshot);
     assert.equal(client.inputs[0].timeZone, 'Asia/Hong_Kong');
+    assert.deepEqual((refreshed.diagnostic as any).indexRecovery, {
+      reason: 'invalid-json',
+    });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -919,6 +919,7 @@ export class ClaudeCodeUsageExtension {
           result.snapshot.coverage.period.allTime.migratedBytes,
         periodTotalBytes: result.snapshot.coverage.period.allTime.totalBytes,
         migrationPending: diagnostic?.migrationPending ?? false,
+        indexRecovery: diagnostic?.indexRecovery?.reason,
         bodyReads: diagnostic?.bodyReads ?? 0,
         failedFiles: diagnostic?.failedFiles ?? 0,
         metadataMs: diagnostic?.metadataMs ?? 0,

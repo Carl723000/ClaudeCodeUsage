@@ -1,5 +1,6 @@
 import { RefreshTrigger } from './refreshPolicy';
 import { ProviderSourceOutcome } from './providers/providerTypes';
+import { CodexIndexRecoveryReason } from './providers/codex/codexIndex';
 
 export interface LoadUsageDiagnostics {
   filesDiscovered: number;
@@ -60,6 +61,7 @@ export interface CodexIndexDiagnostic {
   periodMigratedBytes: number;
   periodTotalBytes: number;
   migrationPending: boolean;
+  indexRecovery?: CodexIndexRecoveryReason;
   bodyReads: number;
   failedFiles: number;
   metadataMs: number;
@@ -83,12 +85,18 @@ function safeFlagCounts(flags: Record<string, number>): string {
 }
 
 export function formatCodexIndexDiagnostic(value: CodexIndexDiagnostic): string {
+  const recovery =
+    value.indexRecovery === 'invalid-json' ||
+    value.indexRecovery === 'unsupported-schema'
+      ? value.indexRecovery
+      : 'none';
   return (
     `codex-index outcome=${value.outcome} ` +
     `files=${value.indexedFiles}/${value.totalFiles} ` +
     `bytes=${value.indexedBytes}/${value.totalBytes} ` +
     `periodBytes=${value.periodMigratedBytes}/${value.periodTotalBytes} ` +
     `migrationPending=${value.migrationPending} ` +
+    `recovery=${recovery} ` +
     `bodyReads=${value.bodyReads} failed=${value.failedFiles} ` +
     `metadataMs=${ms(value.metadataMs)} parseMs=${ms(value.parseMs)} ` +
     `flags=${safeFlagCounts(value.qualityFlags)}`

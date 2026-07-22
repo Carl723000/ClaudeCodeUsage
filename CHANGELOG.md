@@ -102,6 +102,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   timezone. Period migration and coverage gaps stay visibly partial instead of
   being presented as complete data.
 
+### Fixed
+- **Codex index self-recovery** — malformed JSON and unsupported persisted index
+  schemas are atomically preserved as timestamped `.corrupt-*.json` backups,
+  then rebuilt from local usage records instead of leaving Codex Beta stuck in
+  an error state. Diagnostics expose only a safe recovery reason, never the
+  index path or contents; unrelated filesystem errors still fail closed.
 ### Privacy
 - Codex usage-record discovery is restricted to `sessions/**/*.jsonl` and
   `archived_sessions/**/*.jsonl`. Separately, the extension streams exactly

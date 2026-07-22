@@ -5,6 +5,7 @@ import {
   mkdir,
   mkdtemp,
   readFile,
+  readdir,
   rename,
   rm,
   writeFile,
@@ -32,6 +33,85 @@ import {
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 
 const SALT = 'test-machine-salt';
+
+async function corruptIndexBackups(root: string): Promise<string[]> {
+  return (await readdir(root))
+    .filter((name) => /^codex-index\.corrupt-\d+-\d+\.json$/.test(name))
+    .sort();
+}
+
+test('corrupt index trailing data is preserved and rebuilt from an empty index', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-corrupt-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const original = `${JSON.stringify(createEmptyCodexIndex('UTC'))},"cachedInput":1}`;
+    const recoveries: Array<{ reason: string }> = [];
+    await writeFile(indexPath, original, 'utf8');
+
+    const loaded = await (loadCodexIndex as any)(
+      indexPath,
+      'Asia/Hong_Kong',
+      (event: { reason: string }) => recoveries.push(event),
+    );
+
+    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.coverage.period.timeZone, 'Asia/Hong_Kong');
+    assert.deepEqual(recoveries, [{ reason: 'invalid-json' }]);
+    await assert.rejects(readFile(indexPath, 'utf8'), { code: 'ENOENT' });
+    const backups = await corruptIndexBackups(root);
+    assert.equal(backups.length, 1);
+    assert.equal(await readFile(path.join(root, backups[0]), 'utf8'), original);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('unsupported index schema is quarantined with its distinct recovery reason', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-schema-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const original = JSON.stringify({ schemaVersion: 99, files: {} });
+    const recoveries: Array<{ reason: string }> = [];
+    await writeFile(indexPath, original, 'utf8');
+
+    const loaded = await (loadCodexIndex as any)(
+      indexPath,
+      'UTC',
+      (event: { reason: string }) => recoveries.push(event),
+    );
+
+    assert.equal(loaded.schemaVersion, 2);
+    assert.deepEqual(recoveries, [{ reason: 'unsupported-schema' }]);
+    const backups = await corruptIndexBackups(root);
+    assert.equal(backups.length, 1);
+    assert.equal(await readFile(path.join(root, backups[0]), 'utf8'), original);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('valid and missing indexes do not report recovery while I/O errors still fail', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-boundary-'));
+  try {
+    const validPath = path.join(root, 'codex-index.json');
+    const missingPath = path.join(root, 'missing-index.json');
+    const directoryPath = path.join(root, 'directory-index.json');
+    const recoveries: Array<{ reason: string }> = [];
+    await writeFile(validPath, JSON.stringify(createEmptyCodexIndex('UTC')), 'utf8');
+    await mkdir(directoryPath);
+
+    await (loadCodexIndex as any)(validPath, 'UTC', (event: { reason: string }) => recoveries.push(event));
+    await (loadCodexIndex as any)(missingPath, 'UTC', (event: { reason: string }) => recoveries.push(event));
+    await assert.rejects(
+      (loadCodexIndex as any)(directoryPath, 'UTC', (event: { reason: string }) => recoveries.push(event)),
+    );
+
+    assert.deepEqual(recoveries, []);
+    assert.deepEqual(await corruptIndexBackups(root), []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('index reload replaces invalid legacy session identity and drops raw parent and project keys', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-identity-sanitize-'));

@@ -4,6 +4,7 @@ import {
   CODEX_REFRESH_MAX_BYTES,
   CODEX_REFRESH_MAX_FILE_PASSES,
   CodexIndexCancelledError,
+  CodexIndexRecovery,
   loadCodexIndex,
   saveCodexIndexAtomic,
   updateCodexIndex,
@@ -58,9 +59,12 @@ export async function runCodexWorkerRefresh(
 ): Promise<void> {
   const now = runtime.now ?? Date.now;
   try {
+    let indexRecovery: CodexIndexRecovery | undefined;
     const metadataStarted = now();
     const [previous, manifest] = await Promise.all([
-      runtime.loadCodexIndex(request.indexPath, request.timeZone),
+      runtime.loadCodexIndex(request.indexPath, request.timeZone, (event) => {
+        indexRecovery = event;
+      }),
       runtime.scanCodexManifest(request.codexHome, request.salt),
     ]);
     const metadataMs = now() - metadataStarted;
@@ -94,6 +98,7 @@ export async function runCodexWorkerRefresh(
       requestId: request.requestId,
       result: {
         ...updated,
+        ...(indexRecovery ? { indexRecovery } : {}),
         metadataMs,
         parseMs: now() - parseStarted,
       },
