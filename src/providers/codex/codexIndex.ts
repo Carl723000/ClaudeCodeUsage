@@ -1776,19 +1776,31 @@ function sanitizeIndexV2(value: unknown): CodexIndexV2 {
   };
 }
 
+export type CodexIndexRecoveryReason =
+  | 'invalid-json'
+  | 'unsupported-schema';
+
+export interface CodexIndexRecovery {
+  reason: CodexIndexRecoveryReason;
+}
+
+async function quarantineCorruptCodexIndex(indexPath: string): Promise<void> {
+  const parsed = path.parse(indexPath);
+  const backupPath = path.join(
+    parsed.dir,
+    `${parsed.name}.corrupt-${Date.now()}-${process.pid}${parsed.ext}`,
+  );
+  await rename(indexPath, backupPath);
+}
+
 export async function loadCodexIndex(
   indexPath: string,
   timeZone = 'UTC',
+  onRecovery?: (recovery: CodexIndexRecovery) => void,
 ): Promise<CodexIndexV2> {
+  let parsed: unknown;
   try {
-    const parsed: unknown = JSON.parse(await readFile(indexPath, 'utf8'));
-    if (isIndexV1(parsed)) {
-      return migrateIndexV1(parsed);
-    }
-    if (isIndexV2(parsed)) {
-      return sanitizeIndexV2(parsed);
-    }
-    throw new Error('Unsupported Codex index schema');
+    parsed = JSON.parse(await readFile(indexPath, 'utf8'));
   } catch (error) {
     if (
       typeof error === 'object' &&
@@ -1798,8 +1810,22 @@ export async function loadCodexIndex(
     ) {
       return createEmptyCodexIndex(timeZone);
     }
+    if (error instanceof SyntaxError) {
+      await quarantineCorruptCodexIndex(indexPath);
+      onRecovery?.({ reason: 'invalid-json' });
+      return createEmptyCodexIndex(timeZone);
+    }
     throw error;
   }
+  if (isIndexV1(parsed)) {
+    return migrateIndexV1(parsed);
+  }
+  if (isIndexV2(parsed)) {
+    return sanitizeIndexV2(parsed);
+  }
+  await quarantineCorruptCodexIndex(indexPath);
+  onRecovery?.({ reason: 'unsupported-schema' });
+  return createEmptyCodexIndex(timeZone);
 }
 
 export async function saveCodexIndexAtomic(

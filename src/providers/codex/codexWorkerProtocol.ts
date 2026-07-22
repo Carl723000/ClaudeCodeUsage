@@ -1,4 +1,5 @@
 import {
+  CodexIndexRecovery,
   CodexIndexProgress,
   CodexIndexUpdateResult,
   CodexIndexV1,
@@ -17,6 +18,7 @@ export type CodexWorkerRequest =
 
 export interface CodexWorkerResult {
   index: CodexIndexV1;
+  indexRecovery?: CodexIndexRecovery;
   bodyReads: number;
   failedFiles: number;
   metadataMs: number;

@@ -41,6 +41,7 @@ test('Codex diagnostics expose only anonymous coverage, timing, and safe flags',
     periodMigratedBytes: 900,
     periodTotalBytes: 1500,
     migrationPending: true,
+    indexRecovery: 'invalid-json',
     bodyReads: 1,
     failedFiles: 1,
     metadataMs: 12.34,
@@ -63,11 +64,18 @@ test('Codex diagnostics expose only anonymous coverage, timing, and safe flags',
   assert.equal(
     line,
     'codex-index outcome=partial files=4/5 bytes=1300/1500 periodBytes=900/1500 ' +
-      'migrationPending=true bodyReads=1 failed=1 metadataMs=12.3 parseMs=45.7 ' +
+      'migrationPending=true recovery=invalid-json bodyReads=1 failed=1 metadataMs=12.3 parseMs=45.7 ' +
       'flags=unknown:20,unknown-event:2',
   );
   assert.equal(
     /Users|carl|private-session|private-repository|github-token|private-repo|secret\.example|\.jsonl|prompt|command|credential|auth\.json/i.test(line),
     false,
   );
+
+  const unsafeRecovery = formatCodexIndexDiagnostic({
+    ...diagnostic,
+    indexRecovery: '/Users/carl/private-index.json',
+  } as any);
+  assert.match(unsafeRecovery, /recovery=none/);
+  assert.doesNotMatch(unsafeRecovery, /Users|private-index|\.json/);
 });

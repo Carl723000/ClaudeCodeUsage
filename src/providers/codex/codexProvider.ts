@@ -10,6 +10,7 @@ import {
   CodexFileAggregate,
   CodexIndexCoverage,
   CodexIndexProgress,
+  CodexIndexRecovery,
   CodexIndexV1,
   createEmptyCodexIndex,
 } from './codexIndex';
@@ -53,6 +54,7 @@ export interface CodexProviderResult {
     metadataMs: number;
     parseMs: number;
     migrationPending: boolean;
+    indexRecovery?: CodexIndexRecovery;
   };
 }
 
@@ -238,6 +240,9 @@ export class CodexProvider {
           metadataMs: result.metadataMs,
           parseMs: result.parseMs,
           migrationPending: result.migration.pending,
+          ...(result.indexRecovery
+            ? { indexRecovery: result.indexRecovery }
+            : {}),
         },
       };
     } catch {
