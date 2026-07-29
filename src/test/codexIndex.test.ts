@@ -517,6 +517,88 @@ function trackingIo(): TrackingIo {
   };
 }
 
+test('fully indexed unchanged corpus returns a warm no-op without body reads', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-noop-'));
+  try {
+    const refreshNow = Date.parse('2026-07-22T12:00:00.000Z');
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'unchanged.jsonl'),
+      completeSession('unchanged', 100, 20),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => refreshNow,
+    });
+    const io = trackingIo();
+    let checkpoints = 0;
+
+    const warm = await updateCodexIndex(cold.index, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => refreshNow,
+      io,
+      onCheckpoint: async () => { checkpoints += 1; },
+    });
+
+    assert.equal(warm.indexChanged, false);
+    assert.strictEqual(warm.index, cold.index);
+    assert.equal(warm.bodyReads, 0);
+    assert.equal(warm.failedFiles, 0);
+    assert.equal(warm.migration.pending, false);
+    assert.equal(io.bodyReads.size, 0);
+    assert.equal(checkpoints, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('day or timezone changes invalidate the warm no-op metadata shortcut', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-noop-boundary-'));
+  try {
+    const firstDay = Date.parse('2026-07-22T12:00:00.000Z');
+    const nextDay = Date.parse('2026-07-23T12:00:00.000Z');
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'boundary.jsonl'),
+      completeSession('boundary', 100, 20),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => firstDay,
+    });
+
+    const nextDayResult = await updateCodexIndex(cold.index, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => nextDay,
+    });
+    const changedZone = await updateCodexIndex(cold.index, manifest, {
+      salt: SALT,
+      timeZone: 'Asia/Hong_Kong',
+      now: () => firstDay,
+    });
+
+    assert.equal(nextDayResult.indexChanged, true);
+    assert.equal(nextDayResult.index.coverage.period.asOfDay, '2026-07-23');
+    assert.equal(changedZone.indexChanged, true);
+    assert.equal(
+      changedZone.index.coverage.period.timeZone,
+      'Asia/Hong_Kong',
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('period backfill is recent-first and globally bounded by file passes', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-order-'));
   try {
