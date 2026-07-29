@@ -72,6 +72,7 @@ export async function runCodexWorkerRefresh(
     const updated = await runtime.updateCodexIndex(previous, manifest, {
       salt: request.salt,
       timeZone: request.timeZone,
+      now,
       budget: {
         maxFilePasses: CODEX_REFRESH_MAX_FILE_PASSES,
         maxBytes: CODEX_REFRESH_MAX_BYTES,
@@ -89,7 +90,9 @@ export async function runCodexWorkerRefresh(
     if (runtime.isCancelled()) {
       throw new CodexIndexCancelledError();
     }
-    await runtime.saveCodexIndexAtomic(request.indexPath, updated.index);
+    if (updated.indexChanged || indexRecovery) {
+      await runtime.saveCodexIndexAtomic(request.indexPath, updated.index);
+    }
     if (runtime.isCancelled()) {
       throw new CodexIndexCancelledError();
     }

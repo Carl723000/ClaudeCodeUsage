@@ -19,6 +19,7 @@ export type CodexWorkerRequest =
 export interface CodexWorkerResult {
   index: CodexIndexV1;
   indexRecovery?: CodexIndexRecovery;
+  indexChanged: boolean;
   bodyReads: number;
   failedFiles: number;
   metadataMs: number;

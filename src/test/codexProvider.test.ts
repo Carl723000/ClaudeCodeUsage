@@ -172,6 +172,7 @@ class FakeClient implements CodexIndexClientLike {
 function workerResult(index = partialIndex()): CodexWorkerResult {
   return {
     index,
+    indexChanged: true,
     bodyReads: 1,
     failedFiles: 1,
     metadataMs: 2,
