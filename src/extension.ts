@@ -968,6 +968,9 @@ export class ClaudeCodeUsageExtension {
     this.stopCodexWatching();
     this.codexProvider.dispose();
     this.codexProvider = this.createCodexProvider(config);
+    if (!this.windowActivity.focused) {
+      return;
+    }
     void this.refreshData(true, 'settings').then(() => {
       void this.startFileWatching();
       this.startCodexWatching();
@@ -1037,6 +1040,10 @@ export class ClaudeCodeUsageExtension {
   }
 
   private startCodexWatching(): void {
+    if (!this.windowActivity.focused) {
+      this.stopCodexWatching();
+      return;
+    }
     const config = this.getConfiguration();
     if (!config.codexEnabled || !(config.codexFileWatchSeconds > 0)) {
       this.stopCodexWatching();
@@ -1186,9 +1193,9 @@ export class ClaudeCodeUsageExtension {
   }
 
   /** Keep recurring work only in the active VS Code window. Each window owns a
-   * separate Extension Host, so leaving timers and watchers active in every
-   * background window multiplies the same local scans. A focused window catches
-   * up immediately; a background window stays idle until then. */
+   * separate Extension Host, so leaving timers and both provider watchers active
+   * in every background window multiplies the same local scans. A focused window
+   * catches up immediately; a background window stays idle until then. */
   private startWindowFocusRefresh(): void {
     this.context.subscriptions.push(
       vscode.window.onDidChangeWindowState((state) => {

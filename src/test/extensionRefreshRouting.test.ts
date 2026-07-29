@@ -3,6 +3,7 @@ import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { WindowActivityGate } from '../refreshPolicy';
 
 type ExtensionModule = typeof import('../extension');
 
@@ -67,6 +68,7 @@ test('Codex watcher still schedules its own Codex-only refresh', () => {
 
   extension.codexWatchers = [];
   extension.codexWatchedHome = null;
+  extension.windowActivity = new WindowActivityGate(true);
   extension.codexWatchDebounce = {
     clear: () => undefined,
     push: (_ms: number, callback: () => void) => callback(),

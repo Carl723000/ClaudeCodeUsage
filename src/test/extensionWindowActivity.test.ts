@@ -35,12 +35,13 @@ function bareExtension(): any {
   return Object.create(ClaudeCodeUsageExtension.prototype) as any;
 }
 
-test('background transition stops every recurring resource once', () => {
+test('background transition stops every Claude and Codex recurring resource once', () => {
   const extension = bareExtension();
   const calls: string[] = [];
   extension.windowActivity = new WindowActivityGate(true);
   extension.stopAutoRefresh = () => calls.push('timer:stop');
   extension.stopFileWatching = () => calls.push('claude:stop');
+  extension.stopCodexWatching = () => calls.push('codex:stop');
   extension.stopCredentialsWatching = () => calls.push('credentials:stop');
 
   extension.handleWindowFocusChange(false);
@@ -49,11 +50,12 @@ test('background transition stops every recurring resource once', () => {
   assert.deepEqual(calls, [
     'timer:stop',
     'claude:stop',
+    'codex:stop',
     'credentials:stop',
   ]);
 });
 
-test('foreground transition resumes resources and immediately catches up once', () => {
+test('foreground transition resumes both providers and catches up once', () => {
   const extension = bareExtension();
   const calls: string[] = [];
   extension.windowActivity = new WindowActivityGate(false);
@@ -62,6 +64,7 @@ test('foreground transition resumes resources and immediately catches up once', 
     calls.push('claude:start');
     return Promise.resolve();
   };
+  extension.startCodexWatching = () => calls.push('codex:start');
   extension.startCredentialsWatching = () => calls.push('credentials:start');
   extension.refreshData = (_force: boolean, trigger: string) => {
     calls.push(`refresh:${trigger}`);
@@ -74,6 +77,7 @@ test('foreground transition resumes resources and immediately catches up once', 
   assert.deepEqual(calls, [
     'timer:start',
     'claude:start',
+    'codex:start',
     'credentials:start',
     'refresh:focus',
   ]);
@@ -112,16 +116,23 @@ test('background window does not open a credentials watcher', () => {
   assert.deepEqual(calls, ['credentials:stop']);
 });
 
-test('background window does not inspect or watch the Claude projects tree', async () => {
+test('background window does not inspect either provider log tree', async () => {
   const extension = bareExtension();
   const calls: string[] = [];
   const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
   extension.windowActivity = new WindowActivityGate(false);
   extension.stopFileWatching = () => calls.push('claude:stop');
+  extension.stopCodexWatching = () => calls.push('codex:stop');
   extension.getConfiguration = () => ({
     fileWatchSeconds: 30,
     dataDirectory: '',
+    codexEnabled: true,
+    codexFileWatchSeconds: 30,
   });
+  extension.codexHome = () => {
+    calls.push('codex:lookup');
+    return '/missing-codex-home';
+  };
   (ClaudeDataLoader as any).findClaudeDataDirectory = async () => {
     calls.push('claude:lookup');
     return null;
@@ -129,7 +140,8 @@ test('background window does not inspect or watch the Claude projects tree', asy
 
   try {
     await extension.startFileWatching();
-    assert.deepEqual(calls, ['claude:stop']);
+    extension.startCodexWatching();
+    assert.deepEqual(calls, ['claude:stop', 'codex:stop']);
   } finally {
     (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
   }
