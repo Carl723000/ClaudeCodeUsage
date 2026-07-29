@@ -70,6 +70,14 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   being presented as complete data.
 
 ### Fixed
+- **Codex idle energy and multi-window contention** — Unfocused VS Code windows
+  suspend Claude and Codex polling/watchers until focus returns. Complete,
+  unchanged Codex indexes now skip aggregate recomputation and disk writes;
+  cross-window refreshes share a single index lease, and atomic saves use unique
+  temporary files instead of competing for one `.tmp`.
+- **Stable rolling-period tests** — Codex index refreshes use an injectable clock
+  internally so recent-period coverage remains deterministic without changing
+  runtime date or timezone semantics.
 - **Codex index self-recovery** — malformed JSON and unsupported persisted index
   schemas are atomically preserved as timestamped `.corrupt-*.json` backups,
   then rebuilt from local usage records instead of leaving Codex Beta stuck in
