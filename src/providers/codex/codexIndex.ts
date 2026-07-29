@@ -172,6 +172,7 @@ export interface CodexIndexProgress {
 export interface CodexIndexUpdateOptions {
   salt: string;
   timeZone: string;
+  now?: () => number;
   io?: CodexIndexIo;
   budget?: CodexIndexWorkBudget;
   shouldCancel?: () => boolean;
@@ -927,7 +928,7 @@ export async function updateCodexIndex(
   const index = cloneIndex(previous);
   const io = options.io ?? defaultIo();
   const timeZone = resolveTimeZone(options.timeZone);
-  const refreshInstant = Date.now();
+  const refreshInstant = (options.now ?? Date.now)();
   const asOfDay = dayKeyInZone(new Date(refreshInstant), timeZone);
   const normalizedOptions: CodexIndexUpdateOptions = { ...options, timeZone };
   const budget: CodexIndexWorkBudget = {

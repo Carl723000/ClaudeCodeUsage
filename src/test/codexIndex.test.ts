@@ -670,6 +670,7 @@ test('changed main contributions run before newer period backfill work', async (
 test('period coverage can complete recent windows before all-time', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-coverage-'));
   try {
+    const refreshNow = Date.parse('2026-07-22T12:00:00.000Z');
     const sessions = path.join(root, 'sessions');
     await mkdir(sessions, { recursive: true });
     await writeFile(path.join(sessions, 'old.jsonl'), completeSession('old', 100, 10), 'utf8');
@@ -682,7 +683,7 @@ test('period coverage can complete recent windows before all-time', async () => 
     const legacy = structuredClone(cold.index);
     const recent = manifest.files.find((entry) => entry.absolutePath.endsWith('recent.jsonl'))!;
     const old = manifest.files.find((entry) => entry.absolutePath.endsWith('old.jsonl'))!;
-    legacy.files[recent.fileKey].aggregate.session.endedAt = Date.now();
+    legacy.files[recent.fileKey].aggregate.session.endedAt = refreshNow;
     legacy.files[old.fileKey].aggregate.session.endedAt = Date.parse('2000-01-01T00:00:00.000Z');
     delete legacy.files[recent.fileKey].aggregate.period;
     delete legacy.files[old.fileKey].aggregate.period;
@@ -694,6 +695,7 @@ test('period coverage can complete recent windows before all-time', async () => 
     const migrated = await updateCodexIndex(legacy, manifest, {
       salt: SALT,
       timeZone: 'UTC',
+      now: () => refreshNow,
       budget: { maxFilePasses: 1, maxBytes: 32 * 1024 * 1024 },
     });
     const coverage = migrated.index.coverage.period;
@@ -710,6 +712,7 @@ test('period coverage can complete recent windows before all-time', async () => 
 test('unknown endedAt remains in every period coverage denominator', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-period-unknown-'));
   try {
+    const refreshNow = Date.parse('2026-07-22T12:00:00.000Z');
     const sessions = path.join(root, 'sessions');
     await mkdir(sessions, { recursive: true });
     await writeFile(path.join(sessions, 'recent.jsonl'), completeSession('recent', 20, 2), 'utf8');
@@ -722,7 +725,7 @@ test('unknown endedAt remains in every period coverage denominator', async () =>
     const legacy = structuredClone(cold.index);
     const recent = manifest.files.find((entry) => entry.absolutePath.endsWith('recent.jsonl'))!;
     const unknown = manifest.files.find((entry) => entry.absolutePath.endsWith('unknown.jsonl'))!;
-    legacy.files[recent.fileKey].aggregate.session.endedAt = Date.now();
+    legacy.files[recent.fileKey].aggregate.session.endedAt = refreshNow;
     delete legacy.files[unknown.fileKey].aggregate.session.endedAt;
     delete legacy.files[recent.fileKey].aggregate.period;
     delete legacy.files[unknown.fileKey].aggregate.period;
@@ -734,6 +737,7 @@ test('unknown endedAt remains in every period coverage denominator', async () =>
     const result = await updateCodexIndex(legacy, manifest, {
       salt: SALT,
       timeZone: 'UTC',
+      now: () => refreshNow,
       budget: { maxFilePasses: 1, maxBytes: 32 * 1024 * 1024 },
     });
 
