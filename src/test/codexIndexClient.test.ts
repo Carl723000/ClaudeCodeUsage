@@ -333,6 +333,9 @@ test('unchanged worker refresh skips the final atomic index write', async () => 
     {
       isCancelled: () => false,
       post: (message: CodexWorkerMessage) => messages.push(message),
+      acquireCodexIndexLease: async () => ({
+        release: async () => undefined,
+      }),
       loadCodexIndex: async () => savedIndex,
       scanCodexManifest: async () => ({ files: [], persistable: {} }),
       updateCodexIndex: async () => ({
@@ -350,6 +353,52 @@ test('unchanged worker refresh skips the final atomic index write', async () => 
   const resultMessage = messages.find((message) => message.type === 'result');
   assert.ok(resultMessage && resultMessage.type === 'result');
   assert.equal((resultMessage.result as any).indexChanged, false);
+});
+
+test('worker lease encloses index load, manifest scan, and refresh', async () => {
+  const savedIndex = createEmptyCodexIndex(request.timeZone);
+  const events: string[] = [];
+
+  await runCodexWorkerRefresh(
+    { type: 'refresh', requestId: 'leased-refresh', ...request },
+    {
+      isCancelled: () => false,
+      post: () => undefined,
+      acquireCodexIndexLease: async () => {
+        events.push('acquire');
+        return {
+          release: async () => { events.push('release'); },
+        };
+      },
+      loadCodexIndex: async () => {
+        events.push('load');
+        return savedIndex;
+      },
+      scanCodexManifest: async () => {
+        events.push('scan');
+        return { files: [], persistable: {} };
+      },
+      updateCodexIndex: async () => {
+        events.push('update');
+        return {
+          index: savedIndex,
+          indexChanged: false,
+          bodyReads: 0,
+          failedFiles: 0,
+          migration: { filePasses: 0, bytesRead: 0, pending: false },
+        };
+      },
+      saveCodexIndexAtomic: async () => {
+        events.push('save');
+      },
+    },
+  );
+
+  assert.equal(events[0], 'acquire');
+  assert.ok(events.indexOf('load') > events.indexOf('acquire'));
+  assert.ok(events.indexOf('scan') > events.indexOf('acquire'));
+  assert.ok(events.indexOf('update') > events.indexOf('scan'));
+  assert.equal(events[events.length - 1], 'release');
 });
 
 test('cancel during the final atomic save returns cancelled after preserving the save', async () => {
@@ -371,6 +420,9 @@ test('cancel during the final atomic save returns cancelled after preserving the
     {
       isCancelled: () => cancelled,
       post: (message: CodexWorkerMessage) => messages.push(message),
+      acquireCodexIndexLease: async () => ({
+        release: async () => undefined,
+      }),
       loadCodexIndex: async () => savedIndex,
       scanCodexManifest: async () => ({ files: [], persistable: {} }),
       updateCodexIndex: async () => ({
@@ -417,6 +469,9 @@ test('worker result reports a safe corrupt-index recovery reason', async () => {
     {
       isCancelled: () => false,
       post: (message: CodexWorkerMessage) => messages.push(message),
+      acquireCodexIndexLease: async () => ({
+        release: async () => undefined,
+      }),
       loadCodexIndex: async (_path, _timeZone, onRecovery) => {
         onRecovery?.({ reason: 'invalid-json' });
         return savedIndex;
