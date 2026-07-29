@@ -53,6 +53,7 @@ const request = {
 function result(): CodexWorkerResult {
   return {
     index: createEmptyCodexIndex(request.timeZone),
+    indexChanged: false,
     bodyReads: 0,
     failedFiles: 0,
     metadataMs: 1,
@@ -322,6 +323,35 @@ test('worker cancellation persists a resumable atomic checkpoint', async () => {
   }
 });
 
+test('unchanged worker refresh skips the final atomic index write', async () => {
+  const savedIndex = createEmptyCodexIndex(request.timeZone);
+  const messages: CodexWorkerMessage[] = [];
+  let saves = 0;
+
+  await runCodexWorkerRefresh(
+    { type: 'refresh', requestId: 'warm-noop', ...request },
+    {
+      isCancelled: () => false,
+      post: (message: CodexWorkerMessage) => messages.push(message),
+      loadCodexIndex: async () => savedIndex,
+      scanCodexManifest: async () => ({ files: [], persistable: {} }),
+      updateCodexIndex: async () => ({
+        index: savedIndex,
+        indexChanged: false,
+        bodyReads: 0,
+        failedFiles: 0,
+        migration: { filePasses: 0, bytesRead: 0, pending: false },
+      }),
+      saveCodexIndexAtomic: async () => { saves += 1; },
+    },
+  );
+
+  assert.equal(saves, 0);
+  const resultMessage = messages.find((message) => message.type === 'result');
+  assert.ok(resultMessage && resultMessage.type === 'result');
+  assert.equal((resultMessage.result as any).indexChanged, false);
+});
+
 test('cancel during the final atomic save returns cancelled after preserving the save', async () => {
   const savedIndex = createEmptyCodexIndex(request.timeZone);
   const messages: CodexWorkerMessage[] = [];
@@ -380,6 +410,7 @@ test('cancel during the final atomic save returns cancelled after preserving the
 test('worker result reports a safe corrupt-index recovery reason', async () => {
   const savedIndex = createEmptyCodexIndex(request.timeZone);
   const messages: CodexWorkerMessage[] = [];
+  let saves = 0;
 
   await runCodexWorkerRefresh(
     { type: 'refresh', requestId: 'index-recovery', ...request },
@@ -393,12 +424,12 @@ test('worker result reports a safe corrupt-index recovery reason', async () => {
       scanCodexManifest: async () => ({ files: [], persistable: {} }),
       updateCodexIndex: async () => ({
         index: savedIndex,
-        indexChanged: true,
+        indexChanged: false,
         bodyReads: 0,
         failedFiles: 0,
         migration: { filePasses: 0, bytesRead: 0, pending: false },
       }),
-      saveCodexIndexAtomic: async () => undefined,
+      saveCodexIndexAtomic: async () => { saves += 1; },
     },
   );
 
@@ -407,4 +438,5 @@ test('worker result reports a safe corrupt-index recovery reason', async () => {
   assert.deepEqual((resultMessage.result as any).indexRecovery, {
     reason: 'invalid-json',
   });
+  assert.equal(saves, 1);
 });
