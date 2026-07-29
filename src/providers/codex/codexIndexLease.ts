@@ -3,6 +3,7 @@ import {
   mkdir,
   open,
   readFile,
+  stat,
   unlink,
 } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -10,6 +11,7 @@ import * as path from 'node:path';
 const DEFAULT_RETRY_DELAY_MS = 50;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STALE_MS = 30 * 60_000;
+const INCOMPLETE_OWNER_GRACE_MS = 5_000;
 
 interface CodexIndexLeaseOwner {
   pid: number;
@@ -97,9 +99,18 @@ async function staleLock(
   isProcessAlive: (pid: number) => boolean,
 ): Promise<boolean> {
   try {
-    const owner = parseOwner(await readFile(lockPath, 'utf8'));
+    const [contents, info] = await Promise.all([
+      readFile(lockPath, 'utf8'),
+      stat(lockPath),
+    ]);
+    const owner = parseOwner(contents);
+    if (!owner) {
+      // A contender can observe the file after open('wx') but before the
+      // creator finishes writing its owner record. Protect that acquisition
+      // window while still recovering a creator that died mid-write.
+      return now - info.mtimeMs >= INCOMPLETE_OWNER_GRACE_MS;
+    }
     return (
-      !owner ||
       now - owner.createdAt >= staleMs ||
       !isProcessAlive(owner.pid)
     );
@@ -157,12 +168,12 @@ export async function acquireCodexIndexLease(
           if (released) {
             return;
           }
-          released = true;
           let current: CodexIndexLeaseOwner | undefined;
           try {
             current = parseOwner(await readFile(lockPath, 'utf8'));
           } catch (error) {
             if (isErrorCode(error, 'ENOENT')) {
+              released = true;
               return;
             }
             throw error;
@@ -174,6 +185,7 @@ export async function acquireCodexIndexLease(
               }
             });
           }
+          released = true;
         },
       };
     } catch (error) {

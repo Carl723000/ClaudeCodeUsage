@@ -1,4 +1,12 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as os from 'node:os';
@@ -55,6 +63,37 @@ test('a dead lease owner is reclaimed without waiting for the timeout', async ()
 
     assert.doesNotMatch(await readFile(lockPath, 'utf8'), /dead-owner/);
     await lease.release();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a fresh incomplete owner file is protected while an abandoned one is reclaimed', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-incomplete-'));
+  try {
+    const indexPath = path.join(root, 'cache', 'index.json');
+    const lockPath = `${indexPath}.lock`;
+    const now = Date.now();
+    await mkdir(path.dirname(indexPath), { recursive: true });
+    await writeFile(lockPath, '', 'utf8');
+
+    await assert.rejects(
+      acquireCodexIndexLease(indexPath, {
+        now: () => now,
+        timeoutMs: 0,
+      }),
+      CodexIndexLeaseBusyError,
+    );
+    assert.equal(await readFile(lockPath, 'utf8'), '');
+
+    const abandonedAt = new Date(now - 10_000);
+    await utimes(lockPath, abandonedAt, abandonedAt);
+    const recovered = await acquireCodexIndexLease(indexPath, {
+      now: () => now,
+      timeoutMs: 0,
+    });
+    assert.doesNotMatch(await readFile(lockPath, 'utf8'), /^$/);
+    await recovered.release();
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -123,6 +162,27 @@ test('release never removes a lock whose ownership token changed', async () => {
     await lease.release();
 
     assert.match(await readFile(lockPath, 'utf8'), /new-owner/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('release can be retried after a transient lock read failure', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-release-retry-'));
+  try {
+    const indexPath = path.join(root, 'cache', 'index.json');
+    const lockPath = `${indexPath}.lock`;
+    const heldOwnerPath = `${lockPath}.held-owner`;
+    const lease = await acquireCodexIndexLease(indexPath);
+    await rename(lockPath, heldOwnerPath);
+    await mkdir(lockPath);
+
+    await assert.rejects(lease.release());
+
+    await rm(lockPath, { recursive: true, force: true });
+    await rename(heldOwnerPath, lockPath);
+    await lease.release();
+    await assert.rejects(readFile(lockPath, 'utf8'), { code: 'ENOENT' });
   } finally {
     await rm(root, { recursive: true, force: true });
   }
