@@ -113,6 +113,39 @@ test('valid and missing indexes do not report recovery while I/O errors still fa
   }
 });
 
+test('concurrent atomic saves use independent temporary files', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-concurrent-save-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const indexes = Array.from({ length: 8 }, (_, inputTotal) => {
+      const index = createEmptyCodexIndex('UTC');
+      index.aggregate.total.inputTotal = inputTotal;
+      return index;
+    });
+
+    await Promise.all(
+      indexes.map((index) => saveCodexIndexAtomic(indexPath, index)),
+    );
+
+    const persisted = JSON.parse(await readFile(indexPath, 'utf8')) as {
+      aggregate: { total: { inputTotal: number } };
+    };
+    assert.ok(
+      indexes.some(
+        (index) =>
+          index.aggregate.total.inputTotal ===
+          persisted.aggregate.total.inputTotal,
+      ),
+    );
+    assert.deepEqual(
+      (await readdir(root)).filter((name) => name.includes('.tmp-')),
+      [],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('index reload replaces invalid legacy session identity and drops raw parent and project keys', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-identity-sanitize-'));
   try {

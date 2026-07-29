@@ -5,6 +5,7 @@ import {
   rename,
   unlink,
 } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 
 import {
@@ -1890,7 +1891,7 @@ export async function saveCodexIndexAtomic(
   index: CodexIndexV2,
 ): Promise<void> {
   await mkdir(path.dirname(indexPath), { recursive: true });
-  const temporaryPath = `${indexPath}.tmp`;
+  const temporaryPath = `${indexPath}.tmp-${process.pid}-${randomUUID()}`;
   let handle: Awaited<ReturnType<typeof open>> | undefined;
   try {
     handle = await open(temporaryPath, 'w', 0o600);
