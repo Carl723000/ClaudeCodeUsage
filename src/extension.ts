@@ -32,6 +32,7 @@ import {
 import {
   commitRefreshSnapshot,
   pollIntervalMs,
+  quotaFailureBackoffMs,
   QuietDebounce,
   RefreshRequest,
   RefreshSingleFlight,
@@ -39,6 +40,7 @@ import {
   reportColdRefreshFailure,
   shouldCommitUsageLoad,
   shouldReloadUsage,
+  WindowActivityGate,
 } from './refreshPolicy';
 import {
   formatCodexIndexDiagnostic,
@@ -84,6 +86,8 @@ export class ClaudeCodeUsageExtension {
   private codexWatchedHome: string | null = null;
   private readonly watchDebounce = new QuietDebounce();
   private readonly refreshGate = new RefreshSingleFlight();
+  private readonly windowActivity =
+    new WindowActivityGate(vscode.window.state.focused);
   private watcherEventsSinceRefresh = 0;
   private coalescedTriggersSinceRefresh = 0;
   private watchedDir: string | null = null;
@@ -164,12 +168,14 @@ export class ClaudeCodeUsageExtension {
     this.setupCommands();
     this.loadConfiguration();
     this.loadPersistedQuota();
-    this.startAutoRefresh();
-    this.refreshData(false, 'startup').then(() => {
-      void this.startFileWatching();
-      this.startCodexWatching();
-    });
-    this.startCredentialsWatching();
+    if (this.windowActivity.focused) {
+      this.startAutoRefresh();
+      void this.refreshData(false, 'startup').then(() => {
+        void this.startFileWatching();
+        this.startCodexWatching();
+      });
+      this.startCredentialsWatching();
+    }
     this.startWindowFocusRefresh();
     this.maybeAnnounceWhatsNew();
     console.log('Claude Code Usage Extension: Initialization complete');
@@ -957,6 +963,9 @@ export class ClaudeCodeUsageExtension {
     this.stopCodexWatching();
     this.codexProvider.dispose();
     this.codexProvider = this.createCodexProvider(config);
+    if (!this.windowActivity.focused) {
+      return;
+    }
     void this.refreshData(true, 'settings').then(() => {
       void this.startFileWatching();
       this.startCodexWatching();
@@ -970,6 +979,10 @@ export class ClaudeCodeUsageExtension {
    * filesystems do not support recursive watching).
    */
   private async startFileWatching(): Promise<void> {
+    if (!this.windowActivity.focused) {
+      this.stopFileWatching();
+      return;
+    }
     const config = this.getConfiguration();
     if (!(config.fileWatchSeconds > 0)) {
       this.stopFileWatching(); // "Off"
@@ -1022,6 +1035,10 @@ export class ClaudeCodeUsageExtension {
   }
 
   private startCodexWatching(): void {
+    if (!this.windowActivity.focused) {
+      this.stopCodexWatching();
+      return;
+    }
     const config = this.getConfiguration();
     if (!config.codexEnabled || !(config.codexFileWatchSeconds > 0)) {
       this.stopCodexWatching();
@@ -1088,6 +1105,11 @@ export class ClaudeCodeUsageExtension {
    * watch — those still self-correct on the next refresh tick.
    */
   private startCredentialsWatching(): void {
+    if (!this.windowActivity.focused) {
+      this.stopCredentialsWatching();
+      return;
+    }
+    this.stopCredentialsWatching();
     const credsPath = this.apiClient.getCredentialsPath();
     const dir = path.dirname(credsPath);
     const name = path.basename(credsPath);
@@ -1103,17 +1125,22 @@ export class ClaudeCodeUsageExtension {
           clearTimeout(this.credsDebounceTimer);
         }
         this.credsDebounceTimer = setTimeout(() => {
-          // The cached quota belongs to the previous token/account. Expire it so
-          // the next refresh bypasses the TTL and refetches with the new token.
-          // The api client's own 429 cool-down still protects the endpoint.
-          this.cache.usageLimitsLastUpdate = new Date(0);
-          void this.refreshData(false, 'credentials');
+          this.handleCredentialsChange();
         }, 800);
       });
     } catch {
       // Watching unsupported on this platform/filesystem — the refresh tick
       // still picks up the new account within a TTL.
     }
+  }
+
+  private handleCredentialsChange(): void {
+    // The cached quota and any failure backoff belong to the previous
+    // token/account. Clear both so a successful re-login retries immediately.
+    this.cache.usageLimitsLastUpdate = new Date(0);
+    this.cache.usageLimitsFailStreak = 0;
+    this.cache.usageLimitsBackoffUntil = new Date(0);
+    void this.refreshData(false, 'credentials');
   }
 
   private stopCredentialsWatching(): void {
@@ -1136,33 +1163,55 @@ export class ClaudeCodeUsageExtension {
     return Date.now() - this.lastActivityAt < 60000;
   }
 
-  /** Refresh when this window regains focus (#55). Each VS Code window is a
-   * separate extension host; Electron heavily throttles timers AND fs.watch
-   * delivery in unfocused/hidden windows, so a background window's status bar
-   * goes stale (only the window you last worked in keeps up). On focus we force
-   * an immediate refresh and re-arm the timer + watcher so the window catches up
-   * at once instead of after the next (throttled) tick — or never. */
+  private suspendRecurringWork(): void {
+    this.stopAutoRefresh();
+    this.stopFileWatching();
+    this.stopCodexWatching();
+    this.stopCredentialsWatching();
+  }
+
+  private resumeRecurringWork(): void {
+    this.startAutoRefresh();
+    void this.startFileWatching();
+    this.startCodexWatching();
+    this.startCredentialsWatching();
+    void this.refreshData(false, 'focus');
+  }
+
+  private handleWindowFocusChange(focused: boolean): void {
+    const transition = this.windowActivity.update(focused);
+    if (transition === 'suspend') {
+      this.suspendRecurringWork();
+    } else if (transition === 'resume') {
+      this.resumeRecurringWork();
+    }
+  }
+
+  /** Keep recurring work only in the active VS Code window. Each window owns a
+   * separate Extension Host, so leaving timers and both provider watchers active
+   * in every background window multiplies the same local scans. */
   private startWindowFocusRefresh(): void {
-    let wasFocused = vscode.window.state.focused;
     this.context.subscriptions.push(
       vscode.window.onDidChangeWindowState((state) => {
-        if (state.focused && !wasFocused) {
-          this.startAutoRefresh(); // reset a cadence that may have been throttled
-          void this.startFileWatching(); // re-attach the watcher if it was dropped
-          this.startCodexWatching();
-          void this.refreshData(false, 'focus'); // catch up now
-        }
-        wasFocused = state.focused;
+        this.handleWindowFocusChange(state.focused);
       })
     );
   }
 
-  private startAutoRefresh(): void {
+  private stopAutoRefresh(): void {
+    this.refreshGen += 1;
     if (this.refreshTimer) {
       clearTimeout(this.refreshTimer);
       this.refreshTimer = undefined;
     }
-    const gen = ++this.refreshGen;
+  }
+
+  private startAutoRefresh(): void {
+    this.stopAutoRefresh();
+    if (!this.windowActivity.focused) {
+      return;
+    }
+    const gen = this.refreshGen;
     const tick = (): void => {
       if (gen !== this.refreshGen) {
         return; // superseded by a newer startAutoRefresh — stop this chain
@@ -1242,9 +1291,10 @@ export class ClaudeCodeUsageExtension {
       );
       return fetched;
     }
-    // Failed (usually a 429). Exponentially back off — 60s, 120s … capped at 10 min.
+    // Failed (usually a 429 or invalid/expired credentials). Exponentially back
+    // off to one hour; a credentials-file change clears this immediately.
     this.cache.usageLimitsFailStreak++;
-    const backoffMs = Math.min(600000, 60000 * Math.pow(2, this.cache.usageLimitsFailStreak - 1));
+    const backoffMs = quotaFailureBackoffMs(this.cache.usageLimitsFailStreak);
     this.cache.usageLimitsBackoffUntil = new Date(now + backoffMs);
     return this.cache.usageLimits;
   }
@@ -1531,10 +1581,7 @@ export class ClaudeCodeUsageExtension {
   }
 
   dispose(): void {
-    if (this.refreshTimer) {
-      clearTimeout(this.refreshTimer);
-      this.refreshTimer = undefined;
-    }
+    this.stopAutoRefresh();
     this.stopFileWatching();
     this.stopCodexWatching();
     this.stopCredentialsWatching();
