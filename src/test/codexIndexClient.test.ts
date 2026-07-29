@@ -345,6 +345,7 @@ test('cancel during the final atomic save returns cancelled after preserving the
       scanCodexManifest: async () => ({ files: [], persistable: {} }),
       updateCodexIndex: async () => ({
         index: savedIndex,
+        indexChanged: true,
         bodyReads: 0,
         failedFiles: 0,
         migration: { filePasses: 0, bytesRead: 0, pending: false },
@@ -392,6 +393,7 @@ test('worker result reports a safe corrupt-index recovery reason', async () => {
       scanCodexManifest: async () => ({ files: [], persistable: {} }),
       updateCodexIndex: async () => ({
         index: savedIndex,
+        indexChanged: true,
         bodyReads: 0,
         failedFiles: 0,
         migration: { filePasses: 0, bytesRead: 0, pending: false },

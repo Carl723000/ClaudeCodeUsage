@@ -182,6 +182,7 @@ export interface CodexIndexUpdateOptions {
 
 export interface CodexIndexUpdateResult {
   index: CodexIndexV2;
+  indexChanged: boolean;
   bodyReads: number;
   failedFiles: number;
   migration: {
@@ -912,6 +913,47 @@ function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgr
   };
 }
 
+function isWarmNoOp(
+  previous: CodexIndexV2,
+  manifest: CodexManifest,
+  diff: ReturnType<typeof diffCodexManifest>,
+  timeZone: string,
+  asOfDay: string,
+): boolean {
+  const totalBytes = manifest.files.reduce((sum, entry) => sum + entry.size, 0);
+  if (
+    diff.appended.length > 0 ||
+    diff.truncated.length > 0 ||
+    diff.replaced.length > 0 ||
+    diff.moved.length > 0 ||
+    diff.added.length > 0 ||
+    diff.removed.length > 0 ||
+    !previous.coverage.complete ||
+    previous.coverage.totalFiles !== manifest.files.length ||
+    previous.coverage.indexedFiles !== manifest.files.length ||
+    previous.coverage.totalBytes !== totalBytes ||
+    previous.coverage.indexedBytes !== totalBytes ||
+    !previous.coverage.period.allTime.complete ||
+    previous.coverage.period.timeZone !== timeZone ||
+    previous.coverage.period.asOfDay !== asOfDay
+  ) {
+    return false;
+  }
+  return manifest.files.every((entry) => {
+    const contribution = previous.files[entry.fileKey];
+    return Boolean(
+      contribution &&
+      contribution.offset === entry.size &&
+      !contribution.discardingOversizedLine &&
+      contribution.identityChecked === true &&
+      contribution.aggregate.period?.timeZone === timeZone &&
+      contribution.aggregate.period.indexedThrough >= contribution.offset &&
+      !contribution.qualityFlags.includes('stale-file') &&
+      !contribution.qualityFlags.includes('stale-reset-required'),
+    );
+  });
+}
+
 export async function updateCodexIndex(
   previous: CodexIndexV2,
   manifest: CodexManifest,
@@ -925,7 +967,6 @@ export async function updateCodexIndex(
   ) {
     throw new CodexIndexBudgetError();
   }
-  const index = cloneIndex(previous);
   const io = options.io ?? defaultIo();
   const timeZone = resolveTimeZone(options.timeZone);
   const refreshInstant = (options.now ?? Date.now)();
@@ -947,7 +988,21 @@ export async function updateCodexIndex(
       ),
     ),
   };
-  const diff = diffCodexManifest(previousManifest(index), manifest.persistable);
+  const diff = diffCodexManifest(previousManifest(previous), manifest.persistable);
+  if (isWarmNoOp(previous, manifest, diff, timeZone, asOfDay)) {
+    return {
+      index: previous,
+      indexChanged: false,
+      bodyReads: 0,
+      failedFiles: 0,
+      migration: {
+        filePasses: 0,
+        bytesRead: 0,
+        pending: false,
+      },
+    };
+  }
+  const index = cloneIndex(previous);
   const entries = new Map(manifest.files.map((entry) => [entry.fileKey, entry]));
   let bodyReads = 0;
   let failedFiles = 0;
@@ -1226,6 +1281,7 @@ export async function updateCodexIndex(
   }
   return {
     index,
+    indexChanged: true,
     bodyReads,
     failedFiles,
     migration: {
