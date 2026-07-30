@@ -1,13 +1,13 @@
 import { randomUUID } from 'node:crypto';
 import {
   mkdir,
+  lstat,
   open,
   readdir,
   readFile,
   rename,
   rm,
   rmdir,
-  stat,
   unlink,
 } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -23,6 +23,7 @@ interface CodexIndexLeaseOwner {
 }
 
 interface CodexIndexLeaseObservation {
+  legacyFile?: boolean;
   owner?: CodexIndexLeaseOwner;
   ownerFile?: string;
   stale: boolean;
@@ -116,6 +117,45 @@ async function observeLease(
   staleMs: number,
   isProcessAlive: (pid: number) => boolean,
 ): Promise<CodexIndexLeaseObservation | undefined> {
+  let lockInfo;
+  try {
+    lockInfo = await lstat(lockPath);
+  } catch (error) {
+    if (isErrorCode(error, 'ENOENT')) {
+      return undefined;
+    }
+    throw error;
+  }
+  if (lockInfo.isSymbolicLink()) {
+    return { stale: false };
+  }
+  if (!lockInfo.isDirectory()) {
+    if (!lockInfo.isFile()) {
+      return { stale: false };
+    }
+    let owner: CodexIndexLeaseOwner | undefined;
+    try {
+      owner = parseOwner(await readFile(lockPath, 'utf8'));
+    } catch (error) {
+      if (isErrorCode(error, 'ENOENT')) {
+        return undefined;
+      }
+      throw error;
+    }
+    if (!owner) {
+      return { stale: false };
+    }
+    return {
+      legacyFile: true,
+      owner,
+      ownerFile: lockPath,
+      stale: (
+        now - owner.createdAt >= staleMs ||
+        !isProcessAlive(owner.pid)
+      ),
+    };
+  }
+
   let entries;
   try {
     entries = await readdir(lockPath, { withFileTypes: true });
@@ -124,9 +164,8 @@ async function observeLease(
       return undefined;
     }
     if (isErrorCode(error, 'ENOTDIR')) {
-      // Pre-R6 beta builds used a file at this path. Never delete that file
-      // from the new protocol because an older Extension Host may still own it.
-      await stat(lockPath);
+      // The path changed between lstat() and readdir(); fail closed for this
+      // attempt and let the next retry observe one coherent lease shape.
       return { stale: false };
     }
     throw error;
@@ -182,7 +221,13 @@ async function reapObservedLease(
     // the owner it observed. A replacement lease has a different UUID file.
     await unlink(observed.ownerFile);
   } catch (error) {
-    if (isErrorCode(error, 'ENOENT')) {
+    if (
+      isErrorCode(error, 'ENOENT') ||
+      (
+        observed.legacyFile &&
+        (isErrorCode(error, 'EISDIR') || isErrorCode(error, 'EPERM'))
+      )
+    ) {
       return false;
     }
     throw error;
