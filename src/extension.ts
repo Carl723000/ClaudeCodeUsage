@@ -989,6 +989,10 @@ export class ClaudeCodeUsageExtension {
       return;
     }
     const dataDirectory = await ClaudeDataLoader.findClaudeDataDirectory(config.dataDirectory || undefined);
+    if (!this.windowActivity.focused) {
+      this.stopFileWatching();
+      return;
+    }
     if (!dataDirectory) {
       return;
     }

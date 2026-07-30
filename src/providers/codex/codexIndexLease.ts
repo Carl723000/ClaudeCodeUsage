@@ -2,7 +2,11 @@ import { randomUUID } from 'node:crypto';
 import {
   mkdir,
   open,
+  readdir,
   readFile,
+  rename,
+  rm,
+  rmdir,
   stat,
   unlink,
 } from 'node:fs/promises';
@@ -11,12 +15,17 @@ import * as path from 'node:path';
 const DEFAULT_RETRY_DELAY_MS = 50;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STALE_MS = 30 * 60_000;
-const INCOMPLETE_OWNER_GRACE_MS = 5_000;
 
 interface CodexIndexLeaseOwner {
   pid: number;
   token: string;
   createdAt: number;
+}
+
+interface CodexIndexLeaseObservation {
+  owner?: CodexIndexLeaseOwner;
+  ownerFile?: string;
+  stale: boolean;
 }
 
 export interface CodexIndexLease {
@@ -60,6 +69,15 @@ function isErrorCode(error: unknown, code: string): boolean {
   );
 }
 
+function isPublishConflict(error: unknown): boolean {
+  return (
+    isErrorCode(error, 'EEXIST') ||
+    isErrorCode(error, 'ENOTEMPTY') ||
+    isErrorCode(error, 'EISDIR') ||
+    isErrorCode(error, 'ENOTDIR')
+  );
+}
+
 function parseOwner(value: string): CodexIndexLeaseOwner | undefined {
   try {
     const parsed = JSON.parse(value) as Partial<CodexIndexLeaseOwner>;
@@ -74,7 +92,7 @@ function parseOwner(value: string): CodexIndexLeaseOwner | undefined {
       return parsed as CodexIndexLeaseOwner;
     }
   } catch {
-    // An interrupted creator left an invalid lock, so the next owner may recover it.
+    // A malformed owner is treated as busy rather than deleting unknown data.
   }
   return undefined;
 }
@@ -92,34 +110,96 @@ async function delay(milliseconds: number): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function staleLock(
+async function observeLease(
   lockPath: string,
   now: number,
   staleMs: number,
   isProcessAlive: (pid: number) => boolean,
-): Promise<boolean> {
+): Promise<CodexIndexLeaseObservation | undefined> {
+  let entries;
   try {
-    const [contents, info] = await Promise.all([
-      readFile(lockPath, 'utf8'),
-      stat(lockPath),
-    ]);
-    const owner = parseOwner(contents);
-    if (!owner) {
-      // A contender can observe the file after open('wx') but before the
-      // creator finishes writing its owner record. Protect that acquisition
-      // window while still recovering a creator that died mid-write.
-      return now - info.mtimeMs >= INCOMPLETE_OWNER_GRACE_MS;
+    entries = await readdir(lockPath, { withFileTypes: true });
+  } catch (error) {
+    if (isErrorCode(error, 'ENOENT')) {
+      return undefined;
     }
-    return (
-      now - owner.createdAt >= staleMs ||
-      !isProcessAlive(owner.pid)
-    );
+    if (isErrorCode(error, 'ENOTDIR')) {
+      // Pre-R6 beta builds used a file at this path. Never delete that file
+      // from the new protocol because an older Extension Host may still own it.
+      await stat(lockPath);
+      return { stale: false };
+    }
+    throw error;
+  }
+
+  const candidates: Array<{
+    owner: CodexIndexLeaseOwner;
+    ownerFile: string;
+  }> = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue;
+    }
+    const ownerFile = path.join(lockPath, entry.name);
+    let owner: CodexIndexLeaseOwner | undefined;
+    try {
+      owner = parseOwner(await readFile(ownerFile, 'utf8'));
+    } catch (error) {
+      if (isErrorCode(error, 'ENOENT')) {
+        continue;
+      }
+      throw error;
+    }
+    if (owner?.token === entry.name) {
+      candidates.push({ owner, ownerFile });
+    }
+  }
+
+  // A valid directory lease has exactly one token-named owner file. Unknown
+  // or partially modified directories stay busy rather than being destroyed.
+  if (candidates.length !== 1 || entries.length !== 1) {
+    return { stale: false };
+  }
+  const candidate = candidates[0];
+  return {
+    ...candidate,
+    stale: (
+      now - candidate.owner.createdAt >= staleMs ||
+      !isProcessAlive(candidate.owner.pid)
+    ),
+  };
+}
+
+async function reapObservedLease(
+  lockPath: string,
+  observed: CodexIndexLeaseObservation,
+): Promise<boolean> {
+  if (!observed.stale || !observed.ownerFile) {
+    return false;
+  }
+  try {
+    // The token is part of the pathname, so a delayed reaper can only remove
+    // the owner it observed. A replacement lease has a different UUID file.
+    await unlink(observed.ownerFile);
   } catch (error) {
     if (isErrorCode(error, 'ENOENT')) {
       return false;
     }
     throw error;
   }
+  try {
+    await rmdir(lockPath);
+  } catch (error) {
+    if (
+      isErrorCode(error, 'ENOENT') ||
+      isErrorCode(error, 'ENOTEMPTY') ||
+      isErrorCode(error, 'EEXIST')
+    ) {
+      return true;
+    }
+    throw error;
+  }
+  return true;
 }
 
 export async function acquireCodexIndexLease(
@@ -155,56 +235,86 @@ export async function acquireCodexIndexLease(
       token: randomUUID(),
       createdAt: now(),
     };
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
+    const pendingPath = `${lockPath}.pending-${owner.token}`;
+    const pendingOwnerPath = path.join(pendingPath, owner.token);
+    let ownerHandle: Awaited<ReturnType<typeof open>> | undefined;
+    let acquired = false;
     try {
-      handle = await open(lockPath, 'wx', 0o600);
-      await handle.writeFile(JSON.stringify(owner), 'utf8');
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
+      // Build a complete, non-empty lease directory before publishing it.
+      // rename() then exposes the directory atomically, so no contender can
+      // observe an empty owner-creation window.
+      await mkdir(pendingPath, { mode: 0o700 });
+      ownerHandle = await open(pendingOwnerPath, 'wx', 0o600);
+      await ownerHandle.writeFile(JSON.stringify(owner), 'utf8');
+      await ownerHandle.sync();
+      await ownerHandle.close();
+      ownerHandle = undefined;
+      await rename(pendingPath, lockPath);
+      acquired = true;
+
       let released = false;
+      let ownerRemoved = false;
       return {
         async release(): Promise<void> {
           if (released) {
             return;
           }
-          let current: CodexIndexLeaseOwner | undefined;
+          if (!ownerRemoved) {
+            try {
+              await unlink(path.join(lockPath, owner.token));
+              ownerRemoved = true;
+            } catch (error) {
+              if (isErrorCode(error, 'ENOENT')) {
+                released = true;
+                return;
+              }
+              throw error;
+            }
+          }
           try {
-            current = parseOwner(await readFile(lockPath, 'utf8'));
+            await rmdir(lockPath);
           } catch (error) {
-            if (isErrorCode(error, 'ENOENT')) {
+            if (
+              isErrorCode(error, 'ENOENT') ||
+              isErrorCode(error, 'ENOTEMPTY') ||
+              isErrorCode(error, 'EEXIST')
+            ) {
               released = true;
               return;
             }
             throw error;
           }
-          if (current?.token === owner.token) {
-            await unlink(lockPath).catch((error: unknown) => {
-              if (!isErrorCode(error, 'ENOENT')) {
-                throw error;
-              }
-            });
-          }
           released = true;
         },
       };
     } catch (error) {
-      await handle?.close().catch(() => undefined);
-      if (!isErrorCode(error, 'EEXIST')) {
+      await ownerHandle?.close().catch(() => undefined);
+      const observed = await observeLease(
+        lockPath,
+        now(),
+        staleMs,
+        isProcessAlive,
+      );
+      if (!observed) {
+        // The owner that made rename() fail can release before our follow-up
+        // inspection. That is a normal retry, not an acquisition failure.
+        if (isPublishConflict(error)) {
+          continue;
+        }
         throw error;
       }
-      if (await staleLock(lockPath, now(), staleMs, isProcessAlive)) {
-        await unlink(lockPath).catch((unlinkError: unknown) => {
-          if (!isErrorCode(unlinkError, 'ENOENT')) {
-            throw unlinkError;
-          }
-        });
+      if (await reapObservedLease(lockPath, observed)) {
         continue;
       }
       if (now() - startedAt >= timeoutMs) {
         throw new CodexIndexLeaseBusyError();
       }
       await sleep(retryDelayMs);
+    } finally {
+      if (!acquired) {
+        await rm(pendingPath, { recursive: true, force: true })
+          .catch(() => undefined);
+      }
     }
   }
 }
