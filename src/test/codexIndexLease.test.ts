@@ -1,10 +1,12 @@
 import {
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   rename,
   rm,
-  utimes,
+  rmdir,
+  unlink,
   writeFile,
 } from 'node:fs/promises';
 import { test } from 'node:test';
@@ -17,6 +19,31 @@ import {
   CodexIndexLeaseCancelledError,
   acquireCodexIndexLease,
 } from '../providers/codex/codexIndexLease';
+
+async function writeLeaseOwner(
+  lockPath: string,
+  owner: { pid: number; token: string; createdAt: number },
+): Promise<void> {
+  await mkdir(lockPath, { recursive: true });
+  await writeFile(
+    path.join(lockPath, owner.token),
+    JSON.stringify(owner),
+    'utf8',
+  );
+}
+
+async function readOnlyLeaseOwner(lockPath: string): Promise<{
+  path: string;
+  contents: string;
+}> {
+  const entries = await readdir(lockPath);
+  assert.equal(entries.length, 1);
+  const ownerPath = path.join(lockPath, entries[0]);
+  return {
+    path: ownerPath,
+    contents: await readFile(ownerPath, 'utf8'),
+  };
+}
 
 test('a second Codex index lease waits until the first lease releases', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-serial-'));
@@ -49,10 +76,9 @@ test('a dead lease owner is reclaimed without waiting for the timeout', async ()
     const indexPath = path.join(root, 'cache', 'index.json');
     const lockPath = `${indexPath}.lock`;
     await mkdir(path.dirname(indexPath), { recursive: true });
-    await writeFile(
+    await writeLeaseOwner(
       lockPath,
-      JSON.stringify({ pid: 424242, token: 'dead-owner', createdAt: 1_000 }),
-      'utf8',
+      { pid: 424242, token: 'dead-owner', createdAt: 1_000 },
     );
 
     const lease = await acquireCodexIndexLease(indexPath, {
@@ -61,39 +87,60 @@ test('a dead lease owner is reclaimed without waiting for the timeout', async ()
       timeoutMs: 0,
     });
 
-    assert.doesNotMatch(await readFile(lockPath, 'utf8'), /dead-owner/);
+    assert.doesNotMatch((await readOnlyLeaseOwner(lockPath)).contents, /dead-owner/);
     await lease.release();
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test('a fresh incomplete owner file is protected while an abandoned one is reclaimed', async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-incomplete-'));
+test('concurrent dead-owner recovery never overlaps live Codex index leases', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-contended-'));
   try {
     const indexPath = path.join(root, 'cache', 'index.json');
     const lockPath = `${indexPath}.lock`;
-    const now = Date.now();
     await mkdir(path.dirname(indexPath), { recursive: true });
-    await writeFile(lockPath, '', 'utf8');
+    await writeLeaseOwner(
+      lockPath,
+      { pid: 424242, token: 'dead-owner', createdAt: 1_000 },
+    );
+
+    let activeLeases = 0;
+    let maxActiveLeases = 0;
+    await Promise.all(Array.from({ length: 50 }, async () => {
+      const lease = await acquireCodexIndexLease(indexPath, {
+        retryDelayMs: 0,
+        timeoutMs: 15_000,
+        isProcessAlive: (pid) => pid === process.pid,
+      });
+      activeLeases += 1;
+      maxActiveLeases = Math.max(maxActiveLeases, activeLeases);
+      await new Promise((resolve) => setTimeout(resolve, 2));
+      activeLeases -= 1;
+      await lease.release();
+    }));
+
+    assert.equal(maxActiveLeases, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an unknown non-empty lease directory is protected as busy', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-unknown-'));
+  try {
+    const indexPath = path.join(root, 'cache', 'index.json');
+    const lockPath = `${indexPath}.lock`;
+    await mkdir(lockPath, { recursive: true });
+    await writeFile(path.join(lockPath, 'unknown'), '', 'utf8');
 
     await assert.rejects(
       acquireCodexIndexLease(indexPath, {
-        now: () => now,
         timeoutMs: 0,
       }),
       CodexIndexLeaseBusyError,
     );
-    assert.equal(await readFile(lockPath, 'utf8'), '');
-
-    const abandonedAt = new Date(now - 10_000);
-    await utimes(lockPath, abandonedAt, abandonedAt);
-    const recovered = await acquireCodexIndexLease(indexPath, {
-      now: () => now,
-      timeoutMs: 0,
-    });
-    assert.doesNotMatch(await readFile(lockPath, 'utf8'), /^$/);
-    await recovered.release();
+    assert.equal(await readFile(path.join(lockPath, 'unknown'), 'utf8'), '');
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -153,15 +200,17 @@ test('release never removes a lock whose ownership token changed', async () => {
     const indexPath = path.join(root, 'cache', 'index.json');
     const lockPath = `${indexPath}.lock`;
     const lease = await acquireCodexIndexLease(indexPath);
-    await writeFile(
+    const previous = await readOnlyLeaseOwner(lockPath);
+    await unlink(previous.path);
+    await rmdir(lockPath);
+    await writeLeaseOwner(
       lockPath,
-      JSON.stringify({ pid: process.pid, token: 'new-owner', createdAt: Date.now() }),
-      'utf8',
+      { pid: process.pid, token: 'new-owner', createdAt: Date.now() },
     );
 
     await lease.release();
 
-    assert.match(await readFile(lockPath, 'utf8'), /new-owner/);
+    assert.match((await readOnlyLeaseOwner(lockPath)).contents, /new-owner/);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -172,17 +221,18 @@ test('release can be retried after a transient lock read failure', async () => {
   try {
     const indexPath = path.join(root, 'cache', 'index.json');
     const lockPath = `${indexPath}.lock`;
-    const heldOwnerPath = `${lockPath}.held-owner`;
     const lease = await acquireCodexIndexLease(indexPath);
-    await rename(lockPath, heldOwnerPath);
-    await mkdir(lockPath);
+    const owner = await readOnlyLeaseOwner(lockPath);
+    const heldOwnerPath = `${owner.path}.held`;
+    await rename(owner.path, heldOwnerPath);
+    await mkdir(owner.path);
 
     await assert.rejects(lease.release());
 
-    await rm(lockPath, { recursive: true, force: true });
-    await rename(heldOwnerPath, lockPath);
+    await rm(owner.path, { recursive: true, force: true });
+    await rename(heldOwnerPath, owner.path);
     await lease.release();
-    await assert.rejects(readFile(lockPath, 'utf8'), { code: 'ENOENT' });
+    await assert.rejects(readdir(lockPath), { code: 'ENOENT' });
   } finally {
     await rm(root, { recursive: true, force: true });
   }

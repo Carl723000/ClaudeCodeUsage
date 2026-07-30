@@ -1,5 +1,8 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
+import * as path from 'node:path';
 
 import { ClaudeDataLoader } from '../dataLoader';
 import { WindowActivityGate } from '../refreshPolicy';
@@ -144,6 +147,44 @@ test('background window does not inspect either provider log tree', async () => 
     assert.deepEqual(calls, ['claude:stop', 'codex:stop']);
   } finally {
     (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
+  }
+});
+
+test('Claude watcher is not created when the window loses focus during directory lookup', async () => {
+  const extension = bareExtension();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-watch-focus-'));
+  fs.mkdirSync(path.join(root, 'projects'));
+  const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
+  const originalWatch = fs.watch;
+  let resolveDirectory: ((value: string) => void) | undefined;
+  let watchCalls = 0;
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.watchDebounce = { clear: () => undefined };
+  extension.fileWatcher = undefined;
+  extension.watchedDir = null;
+  extension.getConfiguration = () => ({
+    fileWatchSeconds: 30,
+    dataDirectory: '',
+  });
+  (ClaudeDataLoader as any).findClaudeDataDirectory = () => new Promise<string>((resolve) => {
+    resolveDirectory = resolve;
+  });
+  (fs as any).watch = () => {
+    watchCalls += 1;
+    return { close: () => undefined };
+  };
+
+  try {
+    const pending = extension.startFileWatching();
+    extension.windowActivity.update(false);
+    resolveDirectory?.(root);
+    await pending;
+    assert.equal(watchCalls, 0);
+    assert.equal(extension.fileWatcher, undefined);
+  } finally {
+    (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
+    (fs as any).watch = originalWatch;
+    fs.rmSync(root, { recursive: true, force: true });
   }
 });
 
