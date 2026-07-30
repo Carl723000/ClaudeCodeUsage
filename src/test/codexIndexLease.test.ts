@@ -6,6 +6,7 @@ import {
   rename,
   rm,
   rmdir,
+  symlink,
   unlink,
   writeFile,
 } from 'node:fs/promises';
@@ -89,6 +90,84 @@ test('a dead lease owner is reclaimed without waiting for the timeout', async ()
 
     assert.doesNotMatch((await readOnlyLeaseOwner(lockPath)).contents, /dead-owner/);
     await lease.release();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a dead legacy file lease is reclaimed during the directory-lease upgrade', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-legacy-dead-'));
+  try {
+    const indexPath = path.join(root, 'cache', 'index.json');
+    const lockPath = `${indexPath}.lock`;
+    await mkdir(path.dirname(indexPath), { recursive: true });
+    await writeFile(
+      lockPath,
+      JSON.stringify({ pid: 424242, token: 'legacy-dead', createdAt: 1_000 }),
+      'utf8',
+    );
+
+    const lease = await acquireCodexIndexLease(indexPath, {
+      isProcessAlive: () => false,
+      timeoutMs: 0,
+    });
+
+    assert.doesNotMatch((await readOnlyLeaseOwner(lockPath)).contents, /legacy-dead/);
+    await lease.release();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a live legacy file lease remains protected during upgrade', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-legacy-live-'));
+  try {
+    const indexPath = path.join(root, 'cache', 'index.json');
+    const lockPath = `${indexPath}.lock`;
+    const contents = JSON.stringify({
+      pid: process.pid,
+      token: 'legacy-live',
+      createdAt: Date.now(),
+    });
+    await mkdir(path.dirname(indexPath), { recursive: true });
+    await writeFile(lockPath, contents, 'utf8');
+
+    await assert.rejects(
+      acquireCodexIndexLease(indexPath, {
+        isProcessAlive: () => true,
+        timeoutMs: 0,
+      }),
+      CodexIndexLeaseBusyError,
+    );
+    assert.equal(await readFile(lockPath, 'utf8'), contents);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a symlinked lease path is never followed or reclaimed', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-lease-symlink-'));
+  try {
+    const indexPath = path.join(root, 'cache', 'index.json');
+    const lockPath = `${indexPath}.lock`;
+    const targetPath = path.join(root, 'outside-lock');
+    const contents = JSON.stringify({
+      pid: 424242,
+      token: 'linked-dead',
+      createdAt: 1_000,
+    });
+    await mkdir(path.dirname(indexPath), { recursive: true });
+    await writeFile(targetPath, contents, 'utf8');
+    await symlink(targetPath, lockPath);
+
+    await assert.rejects(
+      acquireCodexIndexLease(indexPath, {
+        isProcessAlive: () => false,
+        timeoutMs: 0,
+      }),
+      CodexIndexLeaseBusyError,
+    );
+    assert.equal(await readFile(targetPath, 'utf8'), contents);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
