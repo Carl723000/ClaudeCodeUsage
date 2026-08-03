@@ -18,36 +18,22 @@ export function getCodexViewStyles(): string {
       max-width: 100%;
     }
 
-    [data-codex-root] .codex-header,
-    [data-codex-root] .codex-header-title,
-    [data-codex-root] .codex-header-actions {
+    body.codex-document .codex-header-title,
+    body.codex-document .codex-header-actions {
       display: flex;
       align-items: center;
     }
 
-    [data-codex-root] .codex-header {
-      justify-content: space-between;
-      flex-wrap: wrap;
-      gap: 12px;
-      padding-bottom: 12px;
-      margin-bottom: 12px;
-    }
-
-    [data-codex-root] .codex-header-title {
+    body.codex-document .codex-header-title {
       min-width: 0;
       gap: 8px;
     }
 
-    [data-codex-root] .codex-header-title h1 {
+    body.codex-document .codex-header-title h1 {
       min-width: 0;
     }
 
-    [data-codex-root] .codex-header-actions {
-      gap: 8px;
-      margin-left: auto;
-    }
-
-    [data-codex-root] .codex-beta {
+    body.codex-document .codex-beta {
       flex: 0 0 auto;
       padding: 2px 7px;
       border: 1px solid var(--vscode-panel-border);
@@ -227,6 +213,22 @@ export function getCodexViewStyles(): string {
       opacity: 1;
     }
 
+    [data-codex-root] .codex-recommendation-dimensions > span {
+      align-items: flex-start;
+      gap: 20px;
+    }
+
+    [data-codex-root] .codex-recommendation-dimensions .model-stat-label {
+      flex: 0 0 168px;
+    }
+
+    [data-codex-root] .codex-recommendation-dimensions > span > strong {
+      flex: 1 1 0;
+      min-width: 0;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
     [data-codex-root] .codex-thread-filters input,
     [data-codex-root] .codex-thread-filters select {
       min-height: 30px;
@@ -292,8 +294,8 @@ export function getCodexViewStyles(): string {
     }
 
     @media (max-width: 480px) {
-      [data-codex-root] .codex-header,
-      [data-codex-root] .codex-header-actions,
+      body.codex-document .codex-header,
+      body.codex-document .codex-header-actions,
       [data-codex-root] .codex-thread-filters,
       [data-codex-root] .chart-tabs,
       .provider-tabs {
@@ -304,7 +306,7 @@ export function getCodexViewStyles(): string {
         grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
       }
 
-      [data-codex-root] .codex-header-actions {
+      body.codex-document .codex-header-actions {
         margin-left: 0;
       }
 
@@ -322,6 +324,19 @@ export function getCodexViewStyles(): string {
         min-width: 0;
         text-align: right;
         overflow-wrap: anywhere;
+      }
+
+      [data-codex-root] .codex-recommendation-dimensions > span {
+        flex-direction: column;
+        gap: 4px;
+      }
+
+      [data-codex-root] .codex-recommendation-dimensions .model-stat-label {
+        flex-basis: auto;
+      }
+
+      [data-codex-root] .codex-recommendation-dimensions > span > strong {
+        text-align: left;
       }
     }
 

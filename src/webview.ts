@@ -19,6 +19,7 @@ import { formatUsageDate, shortUsageDate } from './usageDateLabels';
 import {
   defaultDashboardProvider,
   getCodexDocumentIdentity,
+  renderCodexHeader,
   renderCodexView,
   renderProviderCompare,
 } from './codexView';
@@ -804,7 +805,7 @@ export class UsageWebviewProvider {
           : `<p>${this.escapeHtml(codexCopy.noRecentTask)}</p>`;
     const alternateHeader = alternateProvider === 'compare'
       ? `<header class="provider-compare-header"><h1>${this.escapeHtml(documentIdentity.title)}</h1><div class="actions"><button onclick="refresh()" class="btn-secondary">${this.escapeHtml(I18n.t.popup.refresh)}</button></div></header>`
-      : '';
+      : renderCodexHeader(codexCopy);
     return `
       <!DOCTYPE html>
       <html lang="${this.escapeHtml(documentIdentity.lang)}">
@@ -816,9 +817,9 @@ export class UsageWebviewProvider {
       </head>
       <body class="codex-document${this.setting<boolean>('dashboardAutoRefresh', true) ? '' : ' auto-off'}">
         <div class="container">
+          ${alternateHeader}
           ${this.renderProviderTabs()}
           <div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">
-            ${alternateHeader}
             ${content}
           </div>
         </div>

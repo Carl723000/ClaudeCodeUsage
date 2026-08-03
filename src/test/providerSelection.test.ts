@@ -119,6 +119,8 @@ test('provider-aware document shell localizes navigation and keeps Codex actions
   assert.match(source, /<nav class="provider-tabs" role="tablist" aria-label="\$\{this\.escapeHtml\(I18n\.t\.popup\.settingsGroupProviders\)\}">/);
   assert.match(source, /id="provider-tab-\$\{provider\}"[^\n]+role="tab"[^\n]+data-provider-target="\$\{provider\}"[^\n]+aria-controls="provider-panel"[^\n]+aria-selected="\$\{selected\}"[^\n]+tabindex="\$\{selected \? '0' : '-1'\}"/);
   assert.match(source, /id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-\$\{this\.currentProvider\}"/);
+  assert.match(source, /\$\{alternateHeader\}[\s\S]*\$\{this\.renderProviderTabs\(\)\}[\s\S]*id="provider-panel"/);
+  assert.match(source, /renderCodexHeader\(codexCopy\)/);
   assert.doesNotMatch(source, /class="provider-tab[^\n]+onclick="showProvider/);
 });
 

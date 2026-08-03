@@ -647,10 +647,10 @@ function renderLimitsSection(ctx: CodexRenderContext): string {
       ? `<div class="model-details">${escapeHtml(copy.lastObserved)}: ${escapeHtml(ctx.formatters.dateTime(limit.observedAt))} · ${escapeHtml(limitSourceLabel(limit, copy))}</div>`
       : '';
     if (limit.state === 'missing') {
-      return `<article class="model-item codex-limit-card" data-codex-limit-state="missing"><h3>${escapeHtml(copy.limitMissing)}</h3></article>`;
+      return `<article class="summary-item codex-limit-card" data-codex-limit-state="missing"><div class="label">${escapeHtml(copy.usageLimits)}</div><div class="value">${escapeHtml(copy.limitMissing)}</div></article>`;
     }
     if (limit.state === 'unlimited') {
-      return `<article class="model-item codex-limit-card" data-codex-limit-state="unlimited"><h3>${escapeHtml(limit.limitName ?? copy.usageLimits)}</h3><strong>${escapeHtml(copy.unlimited)}</strong>${observed}</article>`;
+      return `<article class="summary-item codex-limit-card" data-codex-limit-state="unlimited"><div class="label">${escapeHtml(limit.limitName ?? copy.usageLimits)}</div><div class="value">${escapeHtml(copy.unlimited)}</div>${observed}</article>`;
     }
     const used = limit.usedPercent ?? 0;
     const remaining = limit.remainingPercent ?? 100;
@@ -661,9 +661,9 @@ function renderLimitsSection(ctx: CodexRenderContext): string {
     const reset = limit.resetsAt && limit.state === 'current'
       ? `<div class="model-details">${escapeHtml(copy.resets)}: ${escapeHtml(ctx.formatters.dateTime(limit.resetsAt))} · ${escapeHtml(ctx.formatters.relativeTime(limit.resetsAt, ctx.now))}</div>`
       : `<div class="model-details">${escapeHtml(copy.limitExpired)}</div>`;
-    return `<article class="model-item codex-limit-card" data-codex-limit-state="${limit.state}"><h3>${escapeHtml(title)}</h3><div class="codex-limit-window"><div class="cost-comp-head"><strong>${formatted(ctx.formatters.number, used)}% ${escapeHtml(copy.used)} · ${formatted(ctx.formatters.number, remaining)}% ${escapeHtml(copy.remaining)}</strong></div><div class="cost-comp-bar"><div class="cost-comp-seg seg-input" style="width:${used.toFixed(2)}%"></div></div>${reset}${observed}</div></article>`;
+    return `<article class="summary-item codex-limit-card" data-codex-limit-state="${limit.state}"><div class="label">${escapeHtml(title)}</div><div class="value">${formatted(ctx.formatters.number, used)}% ${escapeHtml(copy.used)}</div><div class="codex-limit-window"><div class="model-details">${formatted(ctx.formatters.number, remaining)}% ${escapeHtml(copy.remaining)}</div><div class="cost-comp-bar"><div class="cost-comp-seg seg-input" style="width:${used.toFixed(2)}%"></div></div>${reset}${observed}</div></article>`;
   }).join('');
-  return `<section class="codex-limits" data-codex-section="limits"><h3>${escapeHtml(copy.usageLimits)}</h3><div class="model-list">${cards}</div></section>`;
+  return `<section class="usage-summary codex-limits" data-codex-section="limits"><h3>${escapeHtml(copy.usageLimits)}</h3><div class="summary-grid">${cards}</div></section>`;
 }
 
 function threadTable(
@@ -1102,25 +1102,24 @@ export function renderCodexPrimaryNav(
 }
 
 export function renderCodexSettingsLauncher(copy: CodexViewCopy): string {
-  return `<button class="btn-secondary" id="codex-open-settings" data-codex-header-action="settings" data-codex-action="open-settings" aria-controls="codex-page-panel-settings">${escapeHtml(copy.settings)}</button>`;
+  return `<button class="btn-secondary" id="codex-open-settings" data-codex-header-action="settings" data-codex-action="open-settings" aria-label="${escapeHtml(copy.settings)}" aria-controls="codex-page-panel-settings">⚙ ${escapeHtml(copy.settings)}</button>`;
 }
 
 export function renderCodexHeader(copy: CodexViewCopy): string {
   return `<header class="codex-header">
     <div class="codex-header-title"><h1>${escapeHtml(copy.title)}</h1><span class="codex-beta">${escapeHtml(copy.beta)}</span></div>
-    <div class="codex-header-actions"><button class="btn-secondary" data-codex-header-action="refresh" data-codex-action="refresh">${escapeHtml(copy.refresh)}</button>${renderCodexSettingsLauncher(copy)}</div>
+    <div class="actions codex-header-actions"><button class="btn-secondary" data-codex-header-action="refresh" data-codex-action="refresh">↻ ${escapeHtml(copy.refresh)}</button>${renderCodexSettingsLauncher(copy)}</div>
   </header>`;
 }
 
 function renderRecentTaskSection(ctx: CodexRenderContext): string {
   const { view, copy } = ctx;
-  const format = ctx.formatters.number;
   const identity = view.lastTaskIdentity;
   const taskIdentity = identity
     ? `<article class="model-item codex-task-identity" data-codex-task-key="${escapeHtml(identity.taskKey)}" data-codex-project-key="${escapeHtml(identity.projectKey)}"><h3>${escapeHtml(identity.title ?? copy.unnamedSession)}</h3><div class="model-details-stacked"><span><span class="model-stat-label">${escapeHtml(copy.projectLabel)}</span><strong>${escapeHtml(identity.projectName ?? copy.unidentifiedProject)}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.lastObserved)}</span><strong>${escapeHtml(ctx.formatters.dateTime(identity.lastActiveAt))} · ${escapeHtml(ctx.formatters.relativeTime(identity.lastActiveAt, ctx.now))}</strong></span>${identity.projectDirectoryName && identity.projectDirectoryName !== identity.projectName ? `<span><span class="model-stat-label">${escapeHtml(copy.localDirectory)}</span><strong>${escapeHtml(identity.projectDirectoryName)}</strong></span>` : ''}</div><button class="btn-secondary" data-codex-action="view-task" data-codex-task-key="${escapeHtml(identity.taskKey)}" data-codex-project-key="${escapeHtml(identity.projectKey)}">${escapeHtml(copy.explore)}</button></article>`
     : '';
   const recent = view.lastTask
-    ? taskIdentity + scopePanel(view.lastTask, copy, format, ctx.formatters.duration)
+    ? taskIdentity
     : `<p>${escapeHtml(copy.noRecentTask)}</p>`;
   return `<section data-codex-section="recent-task"><h3>${escapeHtml(copy.lastTask)}</h3>${recent}</section>`;
 }
@@ -1348,7 +1347,7 @@ function recommendationComposition(
     `${escapeHtml(copy.postPatchToolCallsPerPatchCall)}: ${formatted(format, structural.patchCalls > 0 ? structural.postPatchToolCalls / structural.patchCalls : 0)}`,
     `${escapeHtml(copy.compactions)}: ${formatted(format, structural.compactCount)}`,
   ].join(' · ');
-  return `<section class="model-item codex-recommendation-composition"><h4>${escapeHtml(copy.recommendationComposition)}</h4><p>${roles}</p><p>${escapeHtml(copy.models)}: ${models} · ${escapeHtml(copy.efforts)}: ${efforts}</p><p class="insight-note"><strong>${escapeHtml(copy.recommendationProxyKpi)}:</strong> ${proxyKpi}</p></section>`;
+  return `<section class="model-item codex-recommendation-composition"><h4>${escapeHtml(copy.recommendationComposition)}</h4><div class="model-details model-details-stacked codex-recommendation-dimensions"><span><span class="model-stat-label">${escapeHtml(copy.threadRoleComposition)}</span><strong>${roles}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.models)}</span><strong>${models}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.efforts)}</span><strong>${efforts}</strong></span></div><p class="insight-note"><strong>${escapeHtml(copy.recommendationProxyKpi)}:</strong> ${proxyKpi}</p></section>`;
 }
 
 export function renderCodexSettings(ctx: CodexRenderContext): string {

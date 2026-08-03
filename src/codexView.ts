@@ -6,7 +6,6 @@ import {
   CodexViewCopy,
   createCodexRenderContext,
   renderCodexExplore,
-  renderCodexHeader,
   renderCodexOverview,
   renderCodexPrimaryNav,
   renderCodexRecommendations,
@@ -65,7 +64,6 @@ export function renderCodexView(
     : insights;
   const ctx = createCodexRenderContext(view, scopedInsights, copy, options);
   return `<section class="codex-view" data-provider="codex" data-codex-root>
-    ${renderCodexHeader(copy)}
     ${renderCodexPrimaryNav(copy, ctx.optimizationEnabled)}
     <section class="codex-page active" id="codex-page-panel-overview" role="tabpanel" data-codex-page="overview" aria-labelledby="codex-page-tab-overview">${renderCodexOverview(ctx)}</section>
     <section class="codex-page" id="codex-page-panel-explore" role="tabpanel" data-codex-page="explore" aria-labelledby="codex-page-tab-explore" hidden>${renderCodexExplore(ctx)}</section>

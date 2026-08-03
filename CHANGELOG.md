@@ -43,6 +43,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   baselines for wide, narrow, light, and dark states.
 
 ### Changed
+- **Unified Claude/Codex dashboard shell** — Codex Beta now uses the same
+  header/action order, navigation rhythm, summary cards, detail rows, token
+  composition, tables, spacing, and responsive behavior as the existing Claude
+  dashboard. Usage limits are compact summary cards, recent-task identity is no
+  longer followed by a duplicate statistics block, and recommendation
+  composition uses the established model-detail layout.
 - **Exact-version release announcements** — the default-on notification can be
   disabled, stays quiet on a fresh install, and shows only the content for the
   complete installed version instead of falling back to stale v2.2 notes.
