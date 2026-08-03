@@ -8,6 +8,7 @@ export function getCodexClientScript(): string {
   'use strict';
   var root = document.querySelector('[data-codex-root]');
   if (!root) { return; }
+  var shell = root.closest ? (root.closest('.container') || root) : root;
 
   var pages = ['overview', 'explore', 'recommendations', 'settings'];
   var returnPages = ['overview', 'explore', 'recommendations'];
@@ -784,7 +785,7 @@ export function getCodexClientScript(): string {
     performAction(actionElement, event);
   }
 
-  root.addEventListener('click', route);
+  shell.addEventListener('click', route);
   root.addEventListener('input', route);
   root.addEventListener('change', route);
   root.addEventListener('keydown', function(event) {

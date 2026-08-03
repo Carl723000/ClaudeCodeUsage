@@ -6,6 +6,10 @@ playwright-report/
 *.vsix
 .DS_Store
 
+# Linux Chromium images are the canonical CI baselines. Playwright creates
+# host-specific bootstrap images during local macOS visual review.
+tests/ui/codex-visual.spec.mjs-snapshots/*-chromium-darwin.png
+
 # Secrets — belt-and-braces. Source never reads these,
 # but keep accidental drops out of git.
 .env

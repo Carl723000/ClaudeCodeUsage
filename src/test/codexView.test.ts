@@ -5,6 +5,7 @@ import {
   CODEX_COPY_EN,
   CodexScopedInsights,
   getCodexDocumentIdentity,
+  renderCodexHeader,
   renderCodexView,
   renderProviderCompare,
 } from '../codexView';
@@ -218,6 +219,8 @@ test('recommendation composition shows comparable fresh totals and shares for ro
   });
   const panel = htmlBetween(html, 'data-codex-recommendation-panel="recent"', 'data-codex-recommendation-panel="7d"');
 
+  assert.match(panel, /class="model-details model-details-stacked codex-recommendation-dimensions"/);
+  assert.match(panel, /class="model-stat-label">Thread-role composition<\/span>/);
   assert.match(panel, /Root \/ Unknown[^<]*N:200[^<]*50%/);
   assert.doesNotMatch(panel, /(?:>|·\s*)Root:\s*N:200[^<]*50%/);
   assert.match(panel, /Subagent[^<]*N:200[^<]*50%/);
@@ -226,15 +229,18 @@ test('recommendation composition shows comparable fresh totals and shares for ro
   assert.doesNotMatch(panel, /\$/);
 });
 
-test('Codex renderer exposes three product destinations and auxiliary settings', () => {
+test('Codex renderer exposes three product destinations inside the shared provider shell', () => {
   const html = renderFixture();
+  const header = renderCodexHeader(CODEX_COPY_EN);
   const primaryNav = html.match(/<nav class="tabs codex-tabs"[\s\S]*?<\/nav>/)?.[0] ?? '';
   const root = html.match(/<section[^>]*data-codex-root(?:="")?[^>]*>[\s\S]*<\/section>/)?.[0] ?? '';
 
   assert.equal((html.match(/data-codex-root(?=[\s>])/g) ?? []).length, 1);
-  assert.match(root, /<header class="codex-header">[\s\S]*?<h1>Codex usage<\/h1>[\s\S]*?class="codex-beta">Beta<\/span>/);
-  assert.match(root, /data-codex-header-action="refresh"[^>]*data-codex-action="refresh"/);
-  assert.match(root, /data-codex-header-action="settings"[^>]*data-codex-action="open-settings"/);
+  assert.doesNotMatch(root, /<header\b|class="codex-header"/);
+  assert.match(header, /<header class="codex-header">[\s\S]*?<h1>Codex usage<\/h1>[\s\S]*?class="codex-beta">Beta<\/span>/);
+  assert.match(header, /class="actions codex-header-actions"/);
+  assert.match(header, /data-codex-header-action="refresh"[^>]*data-codex-action="refresh"[^>]*>↻ Refresh<\/button>/);
+  assert.match(header, /data-codex-header-action="settings"[^>]*data-codex-action="open-settings"[^>]*>⚙ Settings<\/button>/);
   assert.equal(primaryNav.match(/<nav\b[^>]*role="tablist"[^>]*>/g)?.length, 1);
   assert.equal(primaryNav.match(/\brole="tab"/g)?.length, 3);
   assert.equal(html.match(/id="codex-page-panel-[^"]+"/g)?.length, 4);
@@ -249,7 +255,6 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /data-codex-page-button="overview"[^>]*aria-selected="true"[^>]*tabindex="0"/);
   assert.match(html, /data-codex-page-button="explore"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
   assert.match(html, /data-codex-page-button="recommendations"[^>]*aria-selected="false"[^>]*tabindex="-1"/);
-  assert.match(html, /data-codex-action="open-settings"/);
   assert.match(html, /data-codex-page="settings"/);
   assert.match(html, /id="codex-page-panel-settings"/);
   assert.match(html, /aria-labelledby="codex-open-settings"/);
@@ -290,7 +295,7 @@ test('Codex renderer exposes three product destinations and auxiliary settings',
   assert.match(html, /data-codex-action="set-recommendation-scope"[^>]*data-codex-recommendation-scope="recent"/);
   assert.doesNotMatch(html, /\sonclick=/);
   assert.doesNotMatch(html, /codex-metric-card|project:a|session:|Thread 1|Project 1/);
-  assert.equal((html.match(/class="codex-header"/g) ?? []).length, 1);
+  assert.equal((html.match(/class="codex-header"/g) ?? []).length, 0);
   assert.doesNotMatch(html, /\$|raw-session|\/Users\/|https?:\/\//);
 });
 
@@ -854,13 +859,12 @@ test('Codex renderer shows every current named last-observed limit with human wi
   const view = buildCodexUsageView(snapshot, NOW);
   const html = renderCodexView(view, [], CODEX_COPY_EN);
 
-  assert.match(html, /<h3>Codex main · 5-hour window<\/h3>/);
-  assert.match(html, /<h3>Codex main · Weekly window<\/h3>/);
-  assert.match(html, /<h3>GPT-5\.3-Codex-Spark · Weekly window<\/h3>/);
-  assert.match(html, /<div class="cost-comp-head"><strong>31% used · 69% remaining<\/strong><\/div>/);
-  assert.match(html, /<div class="cost-comp-head"><strong>47% used · 53% remaining<\/strong><\/div>/);
-  assert.match(html, /<div class="cost-comp-head"><strong>4% used · 96% remaining<\/strong><\/div>/);
-  assert.doesNotMatch(html, /<div class="cost-comp-head"><span>(?:5-hour window|Weekly window)<\/span>/);
+  assert.match(html, /<div class="label">Codex main · 5-hour window<\/div>/);
+  assert.match(html, /<div class="label">Codex main · Weekly window<\/div>/);
+  assert.match(html, /<div class="label">GPT-5\.3-Codex-Spark · Weekly window<\/div>/);
+  assert.match(html, /<div class="value">31% used<\/div>[\s\S]*?<div class="model-details">69% remaining<\/div>/);
+  assert.match(html, /<div class="value">47% used<\/div>[\s\S]*?<div class="model-details">53% remaining<\/div>/);
+  assert.match(html, /<div class="value">4% used<\/div>[\s\S]*?<div class="model-details">96% remaining<\/div>/);
   assert.match(html, /31%/);
   assert.match(html, /47%/);
   assert.match(html, /Last observed/);
@@ -977,10 +981,25 @@ test('Overview orders limits, recent task, and one cohesive trend without intern
 
   assert.ok(html.indexOf('data-codex-section="limits"') < html.indexOf('data-codex-section="recent-task"'));
   assert.ok(html.indexOf('data-codex-section="recent-task"') < html.indexOf('data-codex-section="trend"'));
+  const limits = htmlBetween(
+    html,
+    'data-codex-section="limits"',
+    'data-codex-section="recent-task"',
+  );
+  assert.match(limits, /class="summary-grid"/);
+  assert.match(limits, /class="summary-item codex-limit-card"/);
+  assert.doesNotMatch(limits, /class="model-list"|class="model-item codex-limit-card"/);
   assert.match(html, /5-hour window/);
   assert.match(html, /31% used.*69% remaining/s);
   assert.match(html, /Local log.*not live/s);
   assert.match(html, /data-codex-action="view-task"/);
+  const recentTask = htmlBetween(
+    html,
+    'data-codex-section="recent-task"',
+    'data-codex-section="trend"',
+  );
+  assert.match(recentTask, /class="model-item codex-task-identity"/);
+  assert.doesNotMatch(recentTask, /class="codex-scope-panel"|class="summary-grid"|class="cost-composition/);
   assert.match(html, /Reasoning is included within output/);
   assert.match(html, /Observed session duration total \(proxy\)/);
   assert.match(html, /data-codex-action="set-overview-scope"/);
@@ -1312,7 +1331,7 @@ test('all dynamic renderer values are escaped', () => {
 });
 
 test('production Codex action inventory is explicit and controller-ready', () => {
-  const base = renderCodexView(
+  const base = renderCodexHeader(CODEX_COPY_EN) + renderCodexView(
     buildCodexUsageView(snapshotFixture(), NOW),
     [],
     CODEX_COPY_EN,

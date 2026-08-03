@@ -376,11 +376,13 @@ function stateSnapshot(fixture: ReturnType<typeof controllerFixture>): string {
   return JSON.stringify(fixture.vscode.state.codexUi);
 }
 
-test('Codex client installs one root-scoped delegated controller', () => {
+test('Codex client delegates header clicks from the shared shell and keeps field events root-scoped', () => {
   const script = getCodexClientScript();
   assert.match(script, /^\(function\(\) \{/);
   assert.match(script, /\[data-codex-root\]/);
-  for (const event of ['click', 'input', 'change', 'keydown']) {
+  assert.match(script, /var shell = root\.closest \? \(root\.closest\('\.container'\) \|\| root\) : root/);
+  assert.match(script, /shell\.addEventListener\('click'/);
+  for (const event of ['input', 'change', 'keydown']) {
     assert.match(script, new RegExp(`root\\.addEventListener\\('${event}'`));
   }
   assert.match(script, /closest\('\[data-codex-action\]'\)/);

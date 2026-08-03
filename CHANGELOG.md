@@ -76,6 +76,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Quota warns at the same points as the official Claude app.**
   The quota indicator and every bar in its tooltip now turn amber at 75% and red at 90%, instead of 80% and 95%.
   The context-window indicator keeps the earlier 80% and 95% steps.
+- **Unified Claude/Codex dashboard shell** — Codex Beta now uses the same
+  header/action order, navigation rhythm, summary cards, detail rows, token
+  composition, tables, spacing, and responsive behavior as the existing Claude
+  dashboard. Usage limits are compact summary cards, recent-task identity is no
+  longer followed by a duplicate statistics block, and recommendation
+  composition uses the established model-detail layout.
 - **Exact-version release announcements** — the default-on notification can be
   disabled, stays quiet on a fresh install, and shows only the content for the
   complete installed version instead of falling back to stale v2.2 notes.
