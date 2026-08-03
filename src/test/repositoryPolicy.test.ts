@@ -1391,7 +1391,6 @@ test('Marketplace metadata presents Claude and Codex local usage support', () =>
   assert.ok(packageJson.keywords.includes('openai'));
   assert.ok(packageJson.keywords.includes('local-usage'));
 });
-
 test('pull request checklist names the actual eight UI locales', () => {
   const packageJson = JSON.parse(repoFile('package.json')) as {
     contributes: { configuration: { properties: Record<string, { enum?: string[] }> } };
@@ -1405,10 +1404,13 @@ test('pull request checklist names the actual eight UI locales', () => {
   assert.match(template, /all seven README editions/);
 });
 
-test('changelog records the v2.3.0 candidate and released v2.2.1 baseline', () => {
+test('changelog records the v2.3.0 candidate and released v2.2.2 baseline', () => {
   const changelog = repoFile('CHANGELOG.md');
   assert.match(changelog, /^## \[2\.3\.0\] — Unreleased$/m);
+  assert.match(changelog, /^## \[2\.2\.2\] — 2026-08-02$/m);
   assert.match(changelog, /^## \[2\.2\.1\] — 2026-07-18$/m);
+  assert.match(changelog, /Suspend polling and file watchers in\s+unfocused VS Code windows/);
+  assert.match(changelog, /Back off repeated quota authentication failures/);
   assert.match(changelog, /^## \[2\.2\.0\] — 2026-07-07$/m);
   assert.match(changelog, /OpenAI Codex/);
   assert.doesNotMatch(changelog, /^## \[2\.2\.[01]\] — Unreleased$/m);

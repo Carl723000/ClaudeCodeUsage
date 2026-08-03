@@ -187,7 +187,6 @@ test('Claude watcher is not created when the window loses focus during directory
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
-
 test('credentials change clears quota failure backoff before refreshing', async () => {
   const extension = bareExtension();
   const calls: string[] = [];

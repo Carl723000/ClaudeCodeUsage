@@ -1193,7 +1193,8 @@ export class ClaudeCodeUsageExtension {
 
   /** Keep recurring work only in the active VS Code window. Each window owns a
    * separate Extension Host, so leaving timers and both provider watchers active
-   * in every background window multiplies the same local scans. */
+   * in every background window multiplies the same local scans. A focused window
+   * catches up immediately; a background window stays idle until then. */
   private startWindowFocusRefresh(): void {
     this.context.subscriptions.push(
       vscode.window.onDidChangeWindowState((state) => {

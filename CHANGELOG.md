@@ -106,6 +106,22 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   effort, role, time, and quality metadata. It never persists raw IDs, full
   paths or repository URLs, thread titles, or conversation bodies.
 
+## [2.2.2] — 2026-08-02
+
+### Fixed
+- **Lower multi-window energy use** — Suspend polling and file watchers in
+  unfocused VS Code windows, then refresh immediately when the window regains
+  focus. This avoids repeating the same local scan in every Extension Host.
+- **Quota failure throttling** — Back off repeated quota authentication failures
+  for up to one hour, while retrying immediately after Claude credentials
+  change.
+- **Usage dashboard recovery (#79, fixes #82)** — one oversized non-transcript
+  `.jsonl` can no longer abort the earliest-timestamp probe and blank the whole
+  dashboard. Thanks [@ptweezy](https://github.com/ptweezy).
+- **Opus 5 context window (#81, reported in #84)** — recognise the bare
+  `claude-opus-5` model id as a 1M-context model and remove its spurious
+  unknown-model pricing diagnostic. Thanks [@e7d](https://github.com/e7d).
+
 ## [2.2.1] — 2026-07-18
 
 ### Added

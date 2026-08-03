@@ -46,7 +46,6 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 - Setiap rekomendasi hanya menampilkan pengamatan, bukti yang mudah dibaca, penjelasan proksi struktural, dan tindakan bersyarat bila cakupan terpilih mendukungnya. Tanpa bukti, tidak ada saran umum.
 - Indeks persisten menyimpan kunci pseudonim dengan salt khusus mesin; agregat numerik dan struktural; serta metadata proyek, direktori, agen, model, effort, peran, waktu, dan kualitas yang telah disanitasi. Indeks tidak pernah menyimpan ID mentah, jalur lengkap atau URL repositori, judul thread, maupun isi percakapan.
 - Settings adalah halaman tambahan yang menyesuaikan dengan penyedia dan kembali ke halaman utama sebelumnya, bukan tab utama keempat. Pengumpulan Codex dan rekomendasi Codex lokal dapat dinonaktifkan secara terpisah; jeda watcher latar dapat diatur (default 30 detik, tersedia Off dan interval lebih panjang).
-
 ## Instalasi
 
 Cari **`Claude Code Usage`** di tampilan Extensions (`Ctrl+Shift+X`), atau:
