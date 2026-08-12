@@ -143,6 +143,15 @@ export function getCodexViewStyles(): string {
       display: none;
     }
 
+    [data-codex-root] .codex-compact-session-summary,
+    [data-codex-root] .codex-dimension-mobile {
+      display: none;
+    }
+
+    [data-codex-root] .codex-dimension-composition {
+      margin-bottom: 12px;
+    }
+
     [data-codex-root] .codex-tab-content,
     [data-codex-root] .codex-behavior-scope {
       display: none;
@@ -213,20 +222,16 @@ export function getCodexViewStyles(): string {
       opacity: 1;
     }
 
-    [data-codex-root] .codex-recommendation-dimensions > span {
-      align-items: flex-start;
-      gap: 20px;
+    [data-codex-root] .codex-recommendation-composition {
+      margin-bottom: 16px;
     }
 
-    [data-codex-root] .codex-recommendation-dimensions .model-stat-label {
-      flex: 0 0 168px;
+    [data-codex-root] .codex-recommendation-dimension {
+      margin-top: 12px;
     }
 
-    [data-codex-root] .codex-recommendation-dimensions > span > strong {
-      flex: 1 1 0;
-      min-width: 0;
-      text-align: right;
-      overflow-wrap: anywhere;
+    [data-codex-root] .codex-recommendation-kpi {
+      margin: 12px 0 0;
     }
 
     [data-codex-root] .codex-thread-filters input,
@@ -306,6 +311,14 @@ export function getCodexViewStyles(): string {
         grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
       }
 
+      [data-codex-root] .codex-dimension-table {
+        display: none;
+      }
+
+      [data-codex-root] .codex-dimension-mobile {
+        display: flex;
+      }
+
       body.codex-document .codex-header-actions {
         margin-left: 0;
       }
@@ -326,18 +339,6 @@ export function getCodexViewStyles(): string {
         overflow-wrap: anywhere;
       }
 
-      [data-codex-root] .codex-recommendation-dimensions > span {
-        flex-direction: column;
-        gap: 4px;
-      }
-
-      [data-codex-root] .codex-recommendation-dimensions .model-stat-label {
-        flex-basis: auto;
-      }
-
-      [data-codex-root] .codex-recommendation-dimensions > span > strong {
-        text-align: left;
-      }
     }
 
     @media (max-width: 380px) {
@@ -352,6 +353,56 @@ export function getCodexViewStyles(): string {
       [data-codex-root] .codex-mobile-details {
         display: block;
         margin-top: 6px;
+      }
+
+      [data-codex-root] .codex-desktop-session-title {
+        display: none;
+      }
+
+      [data-codex-root] .codex-compact-session-summary {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+        margin-top: 4px;
+      }
+
+      [data-codex-root] .codex-compact-session-summary strong,
+      [data-codex-root] .codex-compact-session-summary [data-codex-mobile-project] {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      [data-codex-root] .codex-compact-session-meta,
+      [data-codex-root] .codex-compact-session-usage {
+        display: flex;
+        min-width: 0;
+        gap: 5px;
+        color: var(--vscode-descriptionForeground);
+        font-size: 12px;
+      }
+
+      [data-codex-root] .codex-compact-session-meta {
+        flex-wrap: wrap;
+      }
+
+      [data-codex-root] .codex-compact-session-usage {
+        align-items: baseline;
+        flex-wrap: wrap;
+        justify-content: flex-start;
+      }
+
+      [data-codex-root] .codex-compact-session-summary [data-codex-mobile-time] {
+        color: var(--vscode-descriptionForeground);
+        flex: 1 1 100%;
+      }
+
+      [data-codex-root] .codex-compact-session-summary [data-codex-mobile-fresh] {
+        font-variant-numeric: tabular-nums;
+      }
+
+      [data-codex-root] .codex-mobile-details > summary {
+        color: var(--vscode-descriptionForeground);
+        font-size: 12px;
       }
 
       [data-codex-root] .codex-session-table,

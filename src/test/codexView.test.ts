@@ -219,13 +219,20 @@ test('recommendation composition shows comparable fresh totals and shares for ro
   });
   const panel = htmlBetween(html, 'data-codex-recommendation-panel="recent"', 'data-codex-recommendation-panel="7d"');
 
-  assert.match(panel, /class="model-details model-details-stacked codex-recommendation-dimensions"/);
-  assert.match(panel, /class="model-stat-label">Thread-role composition<\/span>/);
+  assert.match(panel, /class="daily-breakdown codex-recommendation-composition"/);
+  assert.doesNotMatch(panel, /class="model-item codex-recommendation-composition"/);
+  for (const dimension of ['roles', 'models', 'effort']) {
+    assert.match(panel, new RegExp(
+      `class="cost-composition codex-recommendation-dimension"[^>]*data-codex-recommendation-dimension="${dimension}"`,
+    ));
+  }
+  assert.match(panel, /class="cost-comp-head">Thread-role composition<\/div>/);
   assert.match(panel, /Root \/ Unknown[^<]*N:200[^<]*50%/);
   assert.doesNotMatch(panel, /(?:>|·\s*)Root:\s*N:200[^<]*50%/);
   assert.match(panel, /Subagent[^<]*N:200[^<]*50%/);
   assert.match(panel, /gpt-5\.6-sol[^<]*N:400[^<]*100%/);
   assert.match(panel, /high[^<]*N:400[^<]*100%/);
+  assert.match(panel, /class="table-hint codex-recommendation-kpi"/);
   assert.doesNotMatch(panel, /\$/);
 });
 
@@ -577,15 +584,52 @@ test('mobile session details preserve every desktop fact with injected formatter
 
   assert.match(mobile, /<summary[^>]*aria-label=/);
   for (const label of [
-    'Date', 'Role', 'Project', 'Parent task', 'Models', 'Effort',
-    'Processed tokens', 'Fresh input \\+ output', 'Input cache share',
+    'Parent task', 'Models', 'Effort', 'Processed tokens', 'Input cache share',
     'Output tokens', 'Reasoning output', 'Observed session duration total \\(proxy\\)',
   ]) {
     assert.match(mobile, new RegExp(`<dt>${label}<\\/dt>`));
   }
-  assert.match(mobile, /DATE\(/);
   assert.match(mobile, /N\(/);
   assert.match(mobile, /DURATION\(/);
+});
+
+test('mobile session summary keeps the essential Claude-style facts visible before disclosure', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, [], CODEX_COPY_EN, {
+    formatNumber: (value) => `N(${value})`,
+    formatDateTime: (value) => `DATE(${value})`,
+  });
+  const row = html.match(/<tr class="sort-row codex-thread-row[\s\S]*?<\/tr>/)?.[0] ?? '';
+  const compact = htmlBetween(row, 'class="codex-compact-session-summary"', '<details class="codex-mobile-details">');
+
+  assert.match(compact, /data-codex-mobile-role/);
+  assert.match(compact, /data-codex-mobile-project/);
+  assert.match(compact, /data-codex-mobile-fresh/);
+  assert.match(compact, /data-codex-mobile-time/);
+  assert.match(compact, /N\(/);
+  assert.match(compact, /DATE\(/);
+  assert.match(row, /<details class="codex-mobile-details"><summary[^>]*>Expand<\/summary>/);
+});
+
+test('model and effort sections include Claude-style headers composition and mobile detail rows', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const html = renderCodexView(view, [], CODEX_COPY_EN);
+  const recent = htmlBetween(
+    html,
+    'data-codex-overview-panel="recent"',
+    'data-codex-overview-panel="7d"',
+  );
+
+  for (const [dimension, title, next] of [
+    ['models', 'Models', 'data-codex-dimension="effort"'],
+    ['effort', 'Effort', undefined],
+  ] as const) {
+    const section = htmlBetween(recent, `data-codex-dimension="${dimension}"`, next);
+    assert.match(section, /class="section-header"/);
+    assert.match(section, /class="cost-composition codex-dimension-composition"/);
+    assert.match(section, /class="daily-table-container codex-scroll-region codex-dimension-table"/);
+    assert.match(section, /class="model-list codex-dimension-mobile"/);
+  }
 });
 
 test('desktop and mobile sessions include an escaped distinct local directory', () => {

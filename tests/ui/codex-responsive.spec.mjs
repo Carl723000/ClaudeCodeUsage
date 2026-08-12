@@ -87,8 +87,15 @@ test('360px Sessions hides wide columns and keeps compact details usable', async
 
   const firstRow = page.locator('[data-codex-thread-row]:visible').first();
   const details = firstRow.locator('.codex-mobile-details');
+  const compact = firstRow.locator('.codex-compact-session-summary');
   await expect(page.locator('.codex-wide-only:visible')).toHaveCount(0);
   await expect(firstRow.locator('.name-cell')).toBeVisible();
+  await expect(firstRow.locator('.codex-desktop-session-title')).toBeHidden();
+  await expect(compact).toBeVisible();
+  await expect(compact.locator('[data-codex-mobile-role]')).not.toHaveText('');
+  await expect(compact.locator('[data-codex-mobile-project]')).not.toHaveText('');
+  await expect(compact.locator('[data-codex-mobile-fresh]')).not.toHaveText('');
+  await expect(compact.locator('[data-codex-mobile-time]')).not.toHaveText('');
   await expect(details).toBeVisible();
   await details.locator('summary').click();
   await expect(details).toHaveAttribute('open', '');
