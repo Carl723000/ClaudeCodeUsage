@@ -1,4 +1,4 @@
-import { test, expect, openCodex } from './support/app.mjs';
+import { test, expect, openClaude, openCodex } from './support/app.mjs';
 
 async function screenshot(page, name) {
   await page.evaluate(() => document.fonts.ready);
@@ -8,6 +8,11 @@ async function screenshot(page, name) {
 test('Overview desktop light', async ({ page }) => {
   await openCodex(page);
   await screenshot(page, 'codex-overview-light-1280.png');
+});
+
+test('Claude Today desktop light parity reference', async ({ page }) => {
+  await openClaude(page);
+  await screenshot(page, 'claude-today-light-1280.png');
 });
 
 test('Explore desktop light', async ({ page }) => {

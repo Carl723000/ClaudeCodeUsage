@@ -31,8 +31,20 @@ export async function openCodex(
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `http://127.0.0.1:4173/?locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}`,
+    `http://127.0.0.1:4173/?provider=codex&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}`,
     { waitUntil: 'load' },
   );
   await page.locator('.codex-view').waitFor();
+}
+
+export async function openClaude(
+  page,
+  { locale = 'en', theme = 'light', width = 1280, height = 900 } = {},
+) {
+  await page.setViewportSize({ width, height });
+  await page.goto(
+    `http://127.0.0.1:4173/?provider=claude&locale=${encodeURIComponent(locale)}&theme=${theme}`,
+    { waitUntil: 'load' },
+  );
+  await page.locator('#today.tab-content.active').waitFor();
 }

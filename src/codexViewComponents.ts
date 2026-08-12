@@ -427,6 +427,7 @@ function metricCard(
 }
 
 function dimensionTable(
+  dimension: 'models' | 'effort',
   title: string,
   rows: Array<{ key: string; totals: CodexMetricTotals }>,
   copy: CodexViewCopy,
@@ -438,7 +439,28 @@ function dimensionTable(
         `<tr><td>${escapeHtml(row.key)}</td><td class="number-cell">${formatted(format, row.totals.processed)}</td><td class="number-cell">${formatted(format, row.totals.fresh)}</td><td class="number-cell">${formatted(format, row.totals.output)}</td></tr>`,
     )
     .join('');
-  return `<section class="model-breakdown"><h3>${escapeHtml(title)}</h3><div class="daily-table-container codex-scroll-region"><table class="daily-table"><thead><tr><th></th><th class="number-cell">${escapeHtml(copy.processed)}</th><th class="number-cell">${escapeHtml(copy.fresh)}</th><th class="number-cell">${escapeHtml(copy.output)}</th></tr></thead><tbody>${body}</tbody></table></div></section>`;
+  const freshTotal = rows.reduce(
+    (sum, row) => sum + Math.max(0, row.totals.fresh),
+    0,
+  );
+  const segmentClasses = [
+    'seg-input',
+    'seg-cache-read',
+    'seg-output',
+    'seg-cache-creation',
+  ];
+  const segments = rows.map((row, index) => {
+    const share = freshTotal > 0 ? Math.max(0, row.totals.fresh) / freshTotal : 0;
+    return `<div class="cost-comp-seg ${segmentClasses[index % segmentClasses.length]}" style="width:${(share * 100).toFixed(2)}%"></div>`;
+  }).join('');
+  const legend = rows.map((row, index) => {
+    const share = freshTotal > 0 ? Math.max(0, row.totals.fresh) / freshTotal : 0;
+    return `<span class="legend-item"><span class="legend-dot ${segmentClasses[index % segmentClasses.length]}"></span>${escapeHtml(row.key)} ${formatted(format, row.totals.fresh)} (${percent(share)})</span>`;
+  }).join('');
+  const mobile = rows.map((row, index) =>
+    `<details class="model-item"${index === 0 ? ' open' : ''}><summary class="model-header"><span class="model-name">${escapeHtml(row.key)}</span><span class="model-cost">${formatted(format, row.totals.fresh)} ${escapeHtml(copy.fresh)}</span></summary><div class="model-details model-details-stacked"><span><span class="model-stat-label">${escapeHtml(copy.processed)}</span><strong>${formatted(format, row.totals.processed)}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.fresh)}</span><strong>${formatted(format, row.totals.fresh)}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.output)}</span><strong>${formatted(format, row.totals.output)}</strong></span></div></details>`,
+  ).join('');
+  return `<section class="model-breakdown codex-dimension" data-codex-dimension="${dimension}"><div class="section-header"><h3>${escapeHtml(title)}</h3></div><div class="cost-composition codex-dimension-composition"><div class="cost-comp-head">${escapeHtml(copy.fresh)}</div><div class="cost-comp-bar">${segments}</div><div class="cost-comp-legend">${legend}</div></div><div class="daily-table-container codex-scroll-region codex-dimension-table"><table class="daily-table"><thead><tr><th></th><th class="number-cell">${escapeHtml(copy.processed)}</th><th class="number-cell">${escapeHtml(copy.fresh)}</th><th class="number-cell">${escapeHtml(copy.output)}</th></tr></thead><tbody>${body}</tbody></table></div><div class="model-list codex-dimension-mobile">${mobile}</div></section>`;
 }
 
 function tokenCompositionBar(
@@ -490,8 +512,8 @@ function scopePanel(
       <span><span class="model-stat-label">${escapeHtml(copy.cacheShare)}</span><strong>${percent(scope.cacheShare)}</strong></span>
       <span><span class="model-stat-label">${escapeHtml(copy.duration)}</span><strong>${escapeHtml(formatDuration(scope.durationMs))}</strong></span>
     </div></div></div>
-    ${dimensionTable(copy.models, scope.models, copy, format)}
-    ${dimensionTable(copy.efforts, scope.efforts, copy, format)}
+    ${dimensionTable('models', copy.models, scope.models, copy, format)}
+    ${dimensionTable('effort', copy.efforts, scope.efforts, copy, format)}
   </div>`;
 }
 
@@ -850,10 +872,8 @@ function threadTable(
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
+      const mobileSummary = `<div class="codex-compact-session-summary"><strong>${escapeHtml(title)}</strong><div class="codex-compact-session-meta"><span data-codex-mobile-role>${escapeHtml(roleLabel(row.role, copy))}</span><span aria-hidden="true">·</span><span data-codex-mobile-project>${escapeHtml(project)}</span></div><div class="codex-compact-session-usage"><span data-codex-mobile-fresh>${escapeHtml(copy.fresh)}: ${formatted(format, row.total.fresh)}</span><span data-codex-mobile-time>${escapeHtml(formatDateTime(row.observedAt))}</span></div></div>`;
       const mobileFacts = [
-        [copy.date, formatDateTime(row.observedAt)],
-        [copy.role, roleLabel(row.role, copy)],
-        [copy.projectLabel, project],
         ...(row.projectDirectoryName && row.projectDirectoryName !== project
           ? [[copy.localDirectory, row.projectDirectoryName]]
           : []),
@@ -861,14 +881,13 @@ function threadTable(
         [copy.models, row.models.join(', ')],
         [copy.efforts, row.efforts.join(', ')],
         [copy.processed, formatted(format, row.total.processed)],
-        [copy.fresh, formatted(format, row.total.fresh)],
         [copy.cacheShare, percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)],
         [copy.output, formatted(format, row.total.output)],
         [copy.reasoning, formatted(format, row.total.reasoning)],
         [copy.duration, formatDuration(row.durationMs)],
       ].map(([label, value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
-      const mobile = `<details class="codex-mobile-details"><summary aria-label="${escapeHtml(`${copy.threadLabel}: ${title}`)}">${escapeHtml(title)}</summary><dl>${mobileFacts}</dl></details>`;
-      return `<tr class="sort-row codex-thread-row${!hasFilters && row.parentViewKey ? ' codex-child-thread' : ''}" tabindex="-1" data-codex-thread-row data-codex-view-key="${escapeHtml(row.viewKey)}" data-codex-root-task-view-key="${escapeHtml(row.rootTaskViewKey)}" data-parent-status="${row.parentStatus}"${row.parentViewKey ? ` data-codex-parent-view-key="${escapeHtml(row.parentViewKey)}"` : ''} data-search="${escapeHtml(search)}" data-role="${escapeHtml(row.role)}" data-project="${escapeHtml(row.projectViewKey)}" data-models="${escapeHtml(row.models.join('|'))}" data-efforts="${escapeHtml(row.efforts.join('|'))}" data-codex-periods="${escapeHtml(row.periodMembership.join('|'))}" data-codex-days="${escapeHtml(row.dayMembership.join('|'))}" data-sort-title="${escapeHtml(title.toLowerCase())}" data-sort-time="${Math.max(0, row.observedAt)}" data-sort-role="${escapeHtml(row.role)}" data-sort-project="${escapeHtml(project.toLowerCase())}" data-sort-model="${escapeHtml(row.models.join(',').toLowerCase())}" data-sort-effort="${escapeHtml(row.efforts.join(',').toLowerCase())}" data-sort-processed="${Math.max(0, row.total.processed)}" data-sort-fresh="${Math.max(0, row.total.fresh)}" data-sort-cache="${row.total.input > 0 ? row.total.cachedInput / row.total.input : 0}" data-sort-output="${Math.max(0, row.total.output)}" data-sort-reasoning="${Math.max(0, row.total.reasoning)}" data-sort-duration="${Math.max(0, row.durationMs)}"><td class="name-cell">${childToggle}<strong>${escapeHtml(title)}</strong>${parent}${mobile}</td><td class="date-cell codex-wide-only">${escapeHtml(formatDateTime(row.observedAt))}</td><td class="codex-wide-only">${escapeHtml(roleLabel(row.role, copy))}</td><td class="codex-wide-only"><strong>${escapeHtml(project)}</strong>${directory}</td><td class="codex-wide-only">${escapeHtml(row.models.join(', '))}</td><td class="codex-wide-only">${escapeHtml(row.efforts.join(', '))}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.processed)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.fresh)}</td><td class="number-cell codex-wide-only">${percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.output)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.reasoning)}</td><td class="number-cell codex-wide-only">${escapeHtml(formatDuration(row.durationMs))}</td></tr>`;
+      const mobile = `<details class="codex-mobile-details"><summary aria-label="${escapeHtml(`${copy.expand}: ${title}`)}">${escapeHtml(copy.expand)}</summary><dl>${mobileFacts}</dl></details>`;
+      return `<tr class="sort-row codex-thread-row${!hasFilters && row.parentViewKey ? ' codex-child-thread' : ''}" tabindex="-1" data-codex-thread-row data-codex-view-key="${escapeHtml(row.viewKey)}" data-codex-root-task-view-key="${escapeHtml(row.rootTaskViewKey)}" data-parent-status="${row.parentStatus}"${row.parentViewKey ? ` data-codex-parent-view-key="${escapeHtml(row.parentViewKey)}"` : ''} data-search="${escapeHtml(search)}" data-role="${escapeHtml(row.role)}" data-project="${escapeHtml(row.projectViewKey)}" data-models="${escapeHtml(row.models.join('|'))}" data-efforts="${escapeHtml(row.efforts.join('|'))}" data-codex-periods="${escapeHtml(row.periodMembership.join('|'))}" data-codex-days="${escapeHtml(row.dayMembership.join('|'))}" data-sort-title="${escapeHtml(title.toLowerCase())}" data-sort-time="${Math.max(0, row.observedAt)}" data-sort-role="${escapeHtml(row.role)}" data-sort-project="${escapeHtml(project.toLowerCase())}" data-sort-model="${escapeHtml(row.models.join(',').toLowerCase())}" data-sort-effort="${escapeHtml(row.efforts.join(',').toLowerCase())}" data-sort-processed="${Math.max(0, row.total.processed)}" data-sort-fresh="${Math.max(0, row.total.fresh)}" data-sort-cache="${row.total.input > 0 ? row.total.cachedInput / row.total.input : 0}" data-sort-output="${Math.max(0, row.total.output)}" data-sort-reasoning="${Math.max(0, row.total.reasoning)}" data-sort-duration="${Math.max(0, row.durationMs)}"><td class="name-cell">${childToggle}<strong class="codex-desktop-session-title">${escapeHtml(title)}</strong>${parent}${mobileSummary}${mobile}</td><td class="date-cell codex-wide-only">${escapeHtml(formatDateTime(row.observedAt))}</td><td class="codex-wide-only">${escapeHtml(roleLabel(row.role, copy))}</td><td class="codex-wide-only"><strong>${escapeHtml(project)}</strong>${directory}</td><td class="codex-wide-only">${escapeHtml(row.models.join(', '))}</td><td class="codex-wide-only">${escapeHtml(row.efforts.join(', '))}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.processed)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.fresh)}</td><td class="number-cell codex-wide-only">${percent(row.total.input > 0 ? row.total.cachedInput / row.total.input : 0)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.output)}</td><td class="number-cell codex-wide-only">${formatted(format, row.total.reasoning)}</td><td class="number-cell codex-wide-only">${escapeHtml(formatDuration(row.durationMs))}</td></tr>`;
     })
     .join('');
   const th = (key: string, label: string, legacyKey = key): string => {
@@ -999,8 +1018,8 @@ function behaviorScopePanel(
         ${roleLegend('seg-cache-creation', copy.approvalReviewerRole, behavior.approvalReviewerFreshShare)}
       </div>
     </section>
-    ${dimensionTable(copy.models, scopeView.models, copy, format)}
-    ${dimensionTable(copy.efforts, scopeView.efforts, copy, format)}
+    ${dimensionTable('models', copy.models, scopeView.models, copy, format)}
+    ${dimensionTable('effort', copy.efforts, scopeView.efforts, copy, format)}
   </section>`;
 }
 
@@ -1329,25 +1348,48 @@ function recommendationComposition(
   const childFresh = totalFresh * Math.max(0, Math.min(1, scope.childFreshShare));
   const reviewerFresh = totalFresh * Math.max(0, Math.min(1, scope.approvalReviewerFreshShare));
   const rootFresh = Math.max(0, totalFresh - childFresh - reviewerFresh);
-  const freshFact = (label: string, fresh: number): string =>
-    `${escapeHtml(label)}: ${formatted(format, fresh)} ${escapeHtml(copy.fresh)} (${percent(totalFresh > 0 ? fresh / totalFresh : 0)})`;
-  const roles = [
-    freshFact(`${copy.rootRole} / ${copy.unknownRole}`, rootFresh),
-    freshFact(copy.childRole, childFresh),
-    freshFact(copy.approvalReviewerRole, reviewerFresh),
-  ].join(' · ');
-  const dimension = (items: CodexUsageScopeView['models']): string => items
-    .map((item) => freshFact(item.key, Math.max(0, item.totals.fresh)))
-    .join(', ') || escapeHtml(copy.unavailable);
-  const models = dimension(scope.models);
-  const efforts = dimension(scope.efforts);
+  const composition = (
+    key: 'roles' | 'models' | 'effort',
+    label: string,
+    entries: Array<{ label: string; fresh: number }>,
+  ): string => {
+    const available = entries.filter((entry) => entry.fresh > 0);
+    if (available.length === 0 || totalFresh <= 0) {
+      return `<section class="cost-composition codex-recommendation-dimension" data-codex-recommendation-dimension="${key}"><div class="cost-comp-head">${escapeHtml(label)}</div><p class="table-hint">${escapeHtml(copy.unavailable)}</p></section>`;
+    }
+    const classes = ['seg-input', 'seg-cache-read', 'seg-output', 'seg-cache-creation'];
+    const bars = available.map((entry, index) => {
+      const share = Math.max(0, Math.min(1, entry.fresh / totalFresh));
+      return `<div class="cost-comp-seg ${classes[index % classes.length]}" style="width:${(share * 100).toFixed(2)}%"></div>`;
+    }).join('');
+    const legend = available.map((entry, index) => {
+      const share = Math.max(0, Math.min(1, entry.fresh / totalFresh));
+      return `<span class="legend-item"><span class="legend-dot ${classes[index % classes.length]}"></span>${escapeHtml(entry.label)}: ${formatted(format, entry.fresh)} ${escapeHtml(copy.fresh)} (${percent(share)})</span>`;
+    }).join('');
+    return `<section class="cost-composition codex-recommendation-dimension" data-codex-recommendation-dimension="${key}"><div class="cost-comp-head">${escapeHtml(label)}</div><div class="cost-comp-bar">${bars}</div><div class="cost-comp-legend">${legend}</div></section>`;
+  };
+  const roles = composition('roles', copy.threadRoleComposition, [
+    { label: `${copy.rootRole} / ${copy.unknownRole}`, fresh: rootFresh },
+    { label: copy.childRole, fresh: childFresh },
+    { label: copy.approvalReviewerRole, fresh: reviewerFresh },
+  ]);
+  const models = composition(
+    'models',
+    copy.models,
+    scope.models.map((item) => ({ label: item.key, fresh: Math.max(0, item.totals.fresh) })),
+  );
+  const efforts = composition(
+    'effort',
+    copy.efforts,
+    scope.efforts.map((item) => ({ label: item.key, fresh: Math.max(0, item.totals.fresh) })),
+  );
   const structural = scope.structural;
   const proxyKpi = [
     `${escapeHtml(copy.patchCalls)}: ${formatted(format, structural.patchCalls)}`,
     `${escapeHtml(copy.postPatchToolCallsPerPatchCall)}: ${formatted(format, structural.patchCalls > 0 ? structural.postPatchToolCalls / structural.patchCalls : 0)}`,
     `${escapeHtml(copy.compactions)}: ${formatted(format, structural.compactCount)}`,
   ].join(' · ');
-  return `<section class="model-item codex-recommendation-composition"><h4>${escapeHtml(copy.recommendationComposition)}</h4><div class="model-details model-details-stacked codex-recommendation-dimensions"><span><span class="model-stat-label">${escapeHtml(copy.threadRoleComposition)}</span><strong>${roles}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.models)}</span><strong>${models}</strong></span><span><span class="model-stat-label">${escapeHtml(copy.efforts)}</span><strong>${efforts}</strong></span></div><p class="insight-note"><strong>${escapeHtml(copy.recommendationProxyKpi)}:</strong> ${proxyKpi}</p></section>`;
+  return `<section class="daily-breakdown codex-recommendation-composition"><div class="section-header"><h3>${escapeHtml(copy.recommendationComposition)}</h3></div>${roles}${models}${efforts}<p class="table-hint codex-recommendation-kpi"><strong>${escapeHtml(copy.recommendationProxyKpi)}:</strong> ${proxyKpi}</p></section>`;
 }
 
 export function renderCodexSettings(ctx: CodexRenderContext): string {

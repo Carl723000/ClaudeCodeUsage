@@ -98,7 +98,60 @@ function settingsStore() {
   };
 }
 
-exports.renderHarness = function renderHarness({ locale = 'en', theme = 'light', fixture = 'default' } = {}) {
+function claudeUsage(multiplier = 1) {
+  const modelBreakdown = {
+    'claude-sonnet-4-5-20250929': {
+      inputTokens: 38200 * multiplier,
+      outputTokens: 6100 * multiplier,
+      cacheCreationTokens: 14800 * multiplier,
+      cacheReadTokens: 236000 * multiplier,
+      cost: 2.74 * multiplier,
+      count: 18 * multiplier,
+    },
+    'claude-haiku-4-5-20251001': {
+      inputTokens: 9400 * multiplier,
+      outputTokens: 2200 * multiplier,
+      cacheCreationTokens: 3100 * multiplier,
+      cacheReadTokens: 52000 * multiplier,
+      cost: 0.31 * multiplier,
+      count: 7 * multiplier,
+    },
+  };
+  return {
+    totalInputTokens: 47600 * multiplier,
+    totalOutputTokens: 8300 * multiplier,
+    totalCacheCreationTokens: 17900 * multiplier,
+    totalCacheReadTokens: 288000 * multiplier,
+    totalCost: 3.05 * multiplier,
+    costBreakdown: {
+      input: 0.44 * multiplier,
+      output: 1.52 * multiplier,
+      cacheWrite: 0.82 * multiplier,
+      cacheRead: 0.27 * multiplier,
+    },
+    messageCount: 25 * multiplier,
+    modelBreakdown,
+  };
+}
+
+function addClaudeData(provider) {
+  const today = claudeUsage();
+  const now = new Date(CODEX_WEBVIEW_NOW);
+  provider.updateData(
+    { ...today, sessionStart: new Date(now.getTime() - 3_600_000), sessionEnd: now },
+    today,
+    claudeUsage(6),
+    claudeUsage(18),
+    [],
+    [],
+    [
+      { hour: '18:00', data: claudeUsage(0.35) },
+      { hour: '19:00', data: claudeUsage(0.65) },
+    ],
+  );
+}
+
+exports.renderHarness = function renderHarness({ provider: selectedProvider = 'codex', locale = 'en', theme = 'light', fixture = 'default' } = {}) {
   I18n.setLanguage(locale);
   I18n.setTimezone('Asia/Hong_Kong');
   vscodeHost.window.activeColorTheme.kind = theme === 'dark' ? 2 : 1;
@@ -113,14 +166,15 @@ exports.renderHarness = function renderHarness({ locale = 'en', theme = 'light',
     const view = buildCodexUsageView(snapshot, CODEX_WEBVIEW_NOW);
     const provider = new UsageWebviewProvider({});
     provider.settings = settingsStore();
+    addClaudeData(provider);
     provider.updateProviderData(
       view,
       buildScopedCodexInsights(view),
       { claude: true, codex: true },
     );
-    provider.currentProvider = 'codex';
+    provider.currentProvider = selectedProvider;
 
-    const html = provider.getAlternateProviderContent();
+    const html = provider.getWebviewContent();
     const bodyClass = theme === 'dark' ? 'vscode-dark ' : 'vscode-light ';
     return html
       .replace('</head>', `<style id="test-vscode-theme">${THEMES[theme]}</style></head>`)
