@@ -22,6 +22,10 @@
 
 ![쿼터 툴팁](images/v2-quota-en.png)
 
+툴팁에는 각 기간의 사용률, 남은 시간, 실제 초기화 시각이 표시됩니다. 요금제가
+측정하는 각 주간 한도는 Anthropic이 동적으로 이름을 제공하는 모델별 한도와
+활성화된 사용 크레딧을 포함해 각각 별도의 행으로 표시됩니다.
+
 ### 대시보드
 
 ![대시보드](images/v2-dashboard-en.png)
@@ -64,6 +68,8 @@ Cursor / Windsurf용으로 [Open VSX Registry](https://open-vsx.org/extension/Gr
 - `language` — UI 언어(`auto` / `en` / `de-DE` / `zh-TW` / `zh-CN` / `ja` / `ko` / `pt-BR` / `id`).
 - `timezone` — 날짜 표시용 IANA 시간대(예: `Asia/Seoul`).
 - `usageLimitTracking` — 실제 5시간 / 주간 쿼터 표시.
+- `showScopedWeekly` — Anthropic이 현재 실제로 명명한 모델별 주간 한도를 상태
+  표시줄에 선택적으로 추가합니다.
 - `showCost` / `showContext` — 상태 표시줄의 비용 항목과 컨텍스트 윈도우 사용률(`/context` 유사) 표시 전환.
 - 위 상태 표시줄 항목들은 개별적으로 끌 수 있습니다. `usageLimitTracking` / `showCost` / `showContext` 를 `false`로 설정하면 해당 항목만 숨겨집니다.
 - `advice.apiKey` — AI 조언 기능용 API 키(OpenAI 호환).

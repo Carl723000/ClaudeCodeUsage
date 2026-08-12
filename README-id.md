@@ -22,6 +22,11 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 
 ![Quota tooltip](images/v2-quota-en.png)
 
+Tooltip menampilkan persentase pemakaian, waktu tersisa, dan waktu reset aktual
+untuk setiap jendela. Setiap batas mingguan yang diukur oleh paket Anda mendapat
+baris tersendiri, termasuk batas khusus model yang namanya diberikan secara
+dinamis oleh Anthropic serta kredit penggunaan jika diaktifkan.
+
 ### Dashboard
 
 ![Dashboard](images/v2-dashboard-en.png)
@@ -63,6 +68,8 @@ Buka Settings (`Ctrl+,`) dan cari **`Claude Code Usage`**. Semua pengaturan bers
 - `language` — bahasa UI (`auto` / `en` / `de-DE` / `zh-TW` / `zh-CN` / `ja` / `ko` / `pt-BR` / `id`).
 - `timezone` — zona waktu IANA untuk tampilan tanggal (mis. `Asia/Jakarta`).
 - `usageLimitTracking` — tampilkan indikator kuota 5 jam / mingguan yang sebenarnya.
+- `showScopedWeekly` — secara opsional tambahkan batas mingguan khusus model yang
+  saat ini benar-benar dinamai oleh Anthropic ke status bar.
 - `showCost` / `showContext` — nyalakan/matikan item biaya dan indikator pengisian jendela konteks (seperti `/context`) di status bar.
 - Setiap item status bar ini bisa dimatikan sendiri — atur `usageLimitTracking`, `showCost`, atau `showContext` ke `false` untuk menyembunyikan salah satunya saja.
 - `advice.apiKey` — API key untuk fitur saran AI (kompatibel dengan OpenAI).

@@ -7,6 +7,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ## [2.3.0] — Unreleased
 
 ### Added
+- **Complete Claude quota details** — the tooltip now shows every active
+  all-model and model-scoped weekly cap reported by Anthropic, plus used monthly
+  credits when available. Model-scoped status-bar display remains opt-in and is
+  named dynamically instead of assuming Opus.
 - **Codex Beta** — local-only Codex usage views for processed, fresh input +
   output, cached input, output, reasoning, model, effort, thread structure,
   index coverage, quality flags, and last-observed limit snapshots.
@@ -43,6 +47,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   baselines for wide, narrow, light, and dark states.
 
 ### Changed
+- **Generic model-scoped weekly setting** — the earlier `showOpusWeekly` choice
+  migrates to `showScopedWeekly`, follows the model name supplied by Anthropic,
+  and nests a shared-reset cap into the weekly status-bar segment.
 - **Unified Claude/Codex dashboard shell** — Codex Beta now uses the same
   header/action order, navigation rhythm, summary cards, detail rows, token
   composition, tables, spacing, and responsive behavior as the existing Claude
@@ -76,6 +83,13 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   being presented as complete data.
 
 ### Fixed
+- **Responsive first-pass automation** — when both configured model tiers fail
+  or return no usable text, the Issue/PR workflow posts a deterministic,
+  provider-neutral fallback instead of exiting without a comment; reruns avoid
+  duplicate first-pass replies.
+- **Consistent Claude quota reset detail** — tooltip countdowns follow the
+  selected format and pair it with the wall-clock reset, while zero-use scoped
+  caps stay out of the compact status bar.
 - **Codex idle energy and multi-window contention** — Unfocused VS Code windows
   suspend Claude and Codex polling/watchers until focus returns. Complete,
   unchanged Codex indexes now skip aggregate recomputation and disk writes;
@@ -91,10 +105,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   index path or contents; unrelated filesystem errors still fail closed.
 
 ### Removed
-- **Weekly Opus setting retired** — removed the obsolete model-specific
-  `showOpusWeekly` surface while retaining the generic 5-hour and weekly quota
-  windows. PR #38 and [@wheelbarrel00](https://github.com/wheelbarrel00) remain
-  credited for the original contribution.
+- **Weekly Opus naming retired** — the fixed Opus-specific surface is replaced
+  by the generic, API-named `showScopedWeekly` setting. PR #38 and
+  [@wheelbarrel00](https://github.com/wheelbarrel00) remain credited for the
+  original contribution.
 
 ### Privacy
 - Codex usage-record discovery is restricted to `sessions/**/*.jsonl` and

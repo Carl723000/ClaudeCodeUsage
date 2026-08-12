@@ -24,6 +24,7 @@ import { buildAdviceSummary } from './adviceSummary';
 import { getDemoBody } from './adviceDemoSample';
 import { ClaudeApiUsageResponse, ContentAnalysis, ExtensionConfig } from './types';
 import { SettingsStore } from './settings';
+import { normalizeQuotaWindows } from './quotaWindows';
 import {
   diffUsageManifests,
   scanUsageManifest,
@@ -155,6 +156,9 @@ export class ClaudeCodeUsageExtension {
     // V2.2: convert the old pauseDashboardRefresh to the positive
     // dashboardAutoRefresh (inverted). Runs once.
     void this.settings.migrateDashboardAutoRefresh();
+    // Preserve the earlier fixed-model preference under the generic API-named
+    // setting. Runs once.
+    void this.settings.migrateScopedWeekly();
     // Usage Optimizer (Phase 9c): the webview posts a draft prompt; we run it
     // through the same model backend as the advice feature and post back a
     // tightened prompt + a settings recommendation. Consent gate lives here.
@@ -728,7 +732,7 @@ export class ClaudeCodeUsageExtension {
     I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
     I18n.setCompactNumbers(config.compactNumbers);
     I18n.setTimezone(config.timezone);
-    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
+    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
 
     // Listen for configuration changes
     vscode.workspace.onDidChangeConfiguration(e => {
@@ -777,6 +781,7 @@ export class ClaudeCodeUsageExtension {
       showContext: s.get<boolean>('showContext'),
       contextWindowOverride: s.get<number>('contextWindowOverride'),
       statusBarMetric: s.get<'cost' | 'monthly-cost' | 'tokens'>('statusBarMetric'),
+      showScopedWeekly: s.get<boolean>('showScopedWeekly'),
       showResetInStatusBar: s.get<boolean>('showResetInStatusBar'),
       quotaFiveHourOnly: s.get<boolean>('quotaFiveHourOnly'),
       resetCountdownFormat: s.get<'decimal' | 'units' | 'clock'>('resetCountdownFormat'),
@@ -930,7 +935,7 @@ export class ClaudeCodeUsageExtension {
     // /usage fetch (the full reload path), else the quota stays empty until the
     // next tick.
     'showCost', 'showContext', 'statusBarMetric',
-    'statusBarProvider', 'codex.statusMetric',
+    'statusBarProvider', 'codex.statusMetric', 'showScopedWeekly',
     'quotaFiveHourOnly', 'showResetInStatusBar', 'resetCountdownFormat',
   ]);
 
@@ -938,7 +943,7 @@ export class ClaudeCodeUsageExtension {
   private onSettingsChangedFromPanel(key?: string): void {
     if (key && ClaudeCodeUsageExtension.STATUS_BAR_ONLY_SETTINGS.has(key)) {
       const config = this.getConfiguration();
-      this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
+      this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
       this.statusBar.updateQuota(this.cache.usageLimits ?? null);
       this.syncProviderUi();
       return;
@@ -953,7 +958,7 @@ export class ClaudeCodeUsageExtension {
     I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
     I18n.setCompactNumbers(config.compactNumbers);
     I18n.setTimezone(config.timezone);
-    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
+    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
 
     // Restart auto-refresh with new interval
     this.startAutoRefresh();
@@ -1308,14 +1313,12 @@ export class ClaudeCodeUsageExtension {
    * utilisation is stale and a refetch is warranted). */
   private hasExpiredWindow(u: ClaudeApiUsageResponse): boolean {
     const now = Date.now();
-    const expired = (w?: { resets_at: string }): boolean => {
-      if (!w) {
-        return false;
-      }
-      const t = Date.parse(w.resets_at);
+    // Via the normalizer so scoped weekly caps count too: those live only in the
+    // generic `limits` array, and a stale one is just as much a reason to refetch.
+    return normalizeQuotaWindows(u).some((w) => {
+      const t = Date.parse(w.resetsAt);
       return !isNaN(t) && t <= now;
-    };
-    return expired(u.five_hour) || expired(u.seven_day) || expired(u.seven_day_opus);
+    });
   }
 
   private async refreshData(

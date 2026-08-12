@@ -63,6 +63,11 @@ const MIGRATION_FLAG = 'ccu.settingsMigrated.v1';
 // the positive dashboardAutoRefresh. Its own flag so it runs even for users who
 // already passed the v1 migration.
 const AUTOREFRESH_MIGRATION_FLAG = 'ccu.migrated.dashboardAutoRefresh';
+// One-shot rename of the earlier fixed-model preference to showScopedWeekly. The
+// usage API stopped populating its per-model Opus field and now scopes weekly
+// caps itself, so a setting naming one model could no longer describe the thing
+// it controls. Own flag so it runs regardless of the earlier migrations.
+const SCOPED_WEEKLY_MIGRATION_FLAG = 'ccu.migrated.showScopedWeekly';
 
 // Timezone dropdown ('' = system default). A dropdown (not free text) means an
 // invalid value can never be entered (#51). Rather than dump all ~400 IANA
@@ -424,14 +429,26 @@ export const SETTINGS: SettingDef[] = [
     label: 'Show 5h / weekly quota',
   },
   {
-    // Show only the 5-hour quota window; drop weekly from the status bar.
+    // Opt-in model-scoped weekly caps in the status bar. Supersedes the fixed
+    // model naming from PR #38 (@wheelbarrel00).
+    key: 'showScopedWeekly',
+    type: 'boolean',
+    default: false,
+    storage: 'state',
+    group: 'statusBar',
+    label: 'Show per-model weekly limit',
+    help: 'Add any model-specific weekly cap your plan meters to the weekly figure, e.g. "wk 9% (fable 17%)", once it has usage against it. Anthropic supplies the name, so it follows whichever model is capped. Leaving this off does not hide it from the tooltip.',
+    providers: ['claude'],
+  },
+  {
+    // Show only the 5-hour quota window; drop every weekly figure from the bar.
     key: 'quotaFiveHourOnly',
     type: 'boolean',
     default: false,
     storage: 'state',
     group: 'statusBar',
     label: 'Quota: 5-hour window only',
-    help: 'Show only the 5-hour quota in the status bar, hiding the weekly figure (reset details stay in the tooltip).',
+    help: 'Show only the 5-hour quota in the status bar, hiding the weekly figures (reset details stay in the tooltip).',
   },
   {
     // Append the 5h / weekly reset countdown to the status-bar quota item.
@@ -763,5 +780,34 @@ export class SettingsStore {
       }
     }
     await this.context.globalState.update(AUTOREFRESH_MIGRATION_FLAG, true);
+  }
+
+  /**
+   * One-shot rename: `showOpusWeekly` → `showScopedWeekly`, same meaning, no
+   * inversion. Anyone who opted into the weekly Opus figure wanted the scoped
+   * weekly cap, whatever model it now names, so the old value carries straight
+   * over. Reads from globalState (2.1+) or settings.json (pre-2.1).
+   */
+  async migrateScopedWeekly(): Promise<void> {
+    if (this.context.globalState.get<boolean>(SCOPED_WEEKLY_MIGRATION_FLAG, false)) {
+      return;
+    }
+    const newKey = STATE_PREFIX + 'showScopedWeekly';
+    if (this.context.globalState.get(newKey) === undefined) {
+      let old = this.context.globalState.get<boolean>(STATE_PREFIX + 'showOpusWeekly');
+      if (old === undefined) {
+        const info = this.cfg().inspect('showOpusWeekly');
+        const v = info?.globalValue ?? info?.workspaceFolderValue ?? info?.workspaceValue;
+        if (typeof v === 'boolean') {
+          old = v;
+        }
+      }
+      // Only write when the old flag was actually set; otherwise leave
+      // showScopedWeekly at its catalog default (false).
+      if (old !== undefined) {
+        await this.context.globalState.update(newKey, old);
+      }
+    }
+    await this.context.globalState.update(SCOPED_WEEKLY_MIGRATION_FLAG, true);
   }
 }

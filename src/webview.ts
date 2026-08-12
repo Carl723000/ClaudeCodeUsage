@@ -32,6 +32,7 @@ import { createCodexLocalizedFormatters } from './codexFormat';
 import { getCodexClientScript } from './codexViewClient';
 import { getCodexViewStyles } from './codexViewStyles';
 import { getProviderNavClientScript } from './providerNavClient';
+import { normalizeQuotaWindows } from './quotaWindows';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -574,16 +575,18 @@ export class UsageWebviewProvider {
       return '';
     }
     const warnPercent = this.setting<number>('workflowQuotaWarnPercent', 50);
-    const fiveHour = this.usageLimits?.five_hour;
-    if (!warnPercent || warnPercent <= 0 || !fiveHour || typeof fiveHour.utilization !== 'number') {
+    const session = normalizeQuotaWindows(this.usageLimits).find(
+      (window) => window.kind === 'session',
+    );
+    if (!warnPercent || warnPercent <= 0 || !session) {
       return '';
     }
     // An already-reset window means a fresh quota — never warn on stale data.
-    const resetsAt = Date.parse(fiveHour.resets_at);
+    const resetsAt = Date.parse(session.resetsAt);
     if (!isNaN(resetsAt) && resetsAt <= Date.now()) {
       return '';
     }
-    const remaining = Math.max(0, Math.round(100 - fiveHour.utilization));
+    const remaining = Math.max(0, Math.round(100 - session.utilization));
     if (remaining >= warnPercent) {
       return '';
     }

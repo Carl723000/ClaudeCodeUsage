@@ -22,6 +22,10 @@
 
 ![クォータツールチップ](images/v2-quota-en.png)
 
+ツールチップには各ウィンドウの使用率、残り時間、実際のリセット時刻が表示
+されます。プランで計測される週間上限は、Anthropic が動的に命名するモデル別
+上限や、有効時の使用クレジットも含め、それぞれ独立した行になります。
+
 ### ダッシュボード
 
 ![ダッシュボード](images/v2-dashboard-en.png)
@@ -64,6 +68,8 @@ Cursor / Windsurf 向けに [Open VSX Registry](https://open-vsx.org/extension/G
 - `language` — UI 言語（`auto` / `en` / `de-DE` / `zh-TW` / `zh-CN` / `ja` / `ko` / `pt-BR` / `id`）。
 - `timezone` — 日付表示用の IANA タイムゾーン（例 `Asia/Tokyo`）。
 - `usageLimitTracking` — 実際の 5 時間 / 週間クォータ表示。
+- `showScopedWeekly` — Anthropic が現在実際に命名しているモデル別週間上限を
+  ステータスバーへ任意で追加します。
 - `showCost` / `showContext` — ステータスバーのコスト表示と、コンテキストウィンドウ使用率（`/context` 風）の切り替え。
 - これらのステータスバー項目は個別に非表示にできます。`usageLimitTracking` / `showCost` / `showContext` を `false` にすると、その項目だけ消えます。
 - `advice.apiKey` — AI アドバイス機能の API キー（OpenAI 互換）。

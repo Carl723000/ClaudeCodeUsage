@@ -22,6 +22,11 @@ Hover the quota indicator for a breakdown:
 
 ![Quota tooltip](images/v2-quota-en.png)
 
+The tooltip shows utilisation, time left, and the wall-clock reset for every
+window. Every weekly cap metered by your plan gets its own row, including
+model-scoped limits named dynamically by Anthropic and usage credits when
+enabled.
+
 ### Dashboard
 
 ![Dashboard](images/v2-dashboard-en.png)
@@ -64,6 +69,8 @@ Open Settings (`Ctrl+,`) and search for **`Claude Code Usage`**. All settings ar
 - `language` — UI language (`auto` / `en` / `de-DE` / `zh-TW` / `zh-CN` / `ja` / `ko` / `pt-BR` / `id`).
 - `timezone` — IANA timezone for date display (e.g. `Asia/Hong_Kong`).
 - `usageLimitTracking` — show the real 5h / weekly quota indicator.
+- `showScopedWeekly` — optionally add the weekly model-scoped cap currently
+  named by Anthropic to the status bar.
 - `showCost` / `showContext` — toggle the cost item and the context-window fill indicator (like `/context`) in the status bar.
 - Each of these status-bar items is opt-out — set `usageLimitTracking`, `showCost`, or `showContext` to `false` to hide just that one.
 - `advice.apiKey` — API key for the AI advice feature (OpenAI-compatible).

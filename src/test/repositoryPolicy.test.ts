@@ -1426,9 +1426,8 @@ test('release announcements are exact-version and user-disableable', () => {
   assert.match(settings, /default:\s*true/);
 });
 
-test('retired showOpusWeekly is absent from active product code', () => {
+test('retired showOpusWeekly is migration-only and absent from active product surfaces', () => {
   for (const file of [
-    'src/settings.ts',
     'src/types.ts',
     'src/extension.ts',
     'src/statusBar.ts',
@@ -1436,6 +1435,12 @@ test('retired showOpusWeekly is absent from active product code', () => {
   ]) {
     assert.doesNotMatch(repoFile(file), /showOpusWeekly/, `${file} still exposes showOpusWeekly`);
   }
+  const settings = repoFile('src/settings.ts');
+  assert.doesNotMatch(settings, /key:\s*['"]showOpusWeekly['"]/, 'retired key returned to the settings catalog');
+  const legacyReads = settings.match(/['"]showOpusWeekly['"]/g) ?? [];
+  assert.equal(legacyReads.length, 2, 'legacy key must remain limited to the two one-shot migration reads');
+  assert.match(settings, /async migrateScopedWeekly\(\): Promise<void>/);
+  assert.match(settings, /SCOPED_WEEKLY_MIGRATION_FLAG/);
 });
 
 test('Codex beta settings use safe provider-aware defaults', () => {

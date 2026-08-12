@@ -22,6 +22,10 @@
 
 ![配額提示](images/v2-quota-en.png)
 
+提示會列出每個視窗的使用率、剩餘時間與實際重置時刻。方案計量的每一項每週
+上限都會各占一列，包括由 Anthropic 動態命名的模型專屬上限，以及啟用時的
+使用額度。
+
 ### 儀表板
 
 ![儀表板](images/v2-dashboard-en.png)
@@ -64,6 +68,8 @@ ext install GrowthJack.claude-code-usage
 - `language` — 介面語言（`auto` / `en` / `de-DE` / `zh-TW` / `zh-CN` / `ja` / `ko` / `pt-BR` / `id`）。
 - `timezone` — 日期顯示用的 IANA 時區（如 `Asia/Hong_Kong`）。
 - `usageLimitTracking` — 顯示真實的 5 小時 / 每週配額指示器。
+- `showScopedWeekly` — 可選擇在狀態列加入 Anthropic 目前實際命名的模型專屬
+  每週上限。
 - `showCost` / `showContext` — 切換狀態列的成本項目與上下文視窗佔用指示器（類似 `/context`）。
 - 上述狀態列項目皆可個別隱藏：將 `usageLimitTracking` / `showCost` / `showContext` 設為 `false` 即可只隱藏該項。
 - `advice.apiKey` — AI 建議功能的 API key（OpenAI 相容）。

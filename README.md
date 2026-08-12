@@ -50,8 +50,8 @@ Hover the quota indicator for a breakdown:
 
 ![Quota tooltip](images/v2-quota-en.png)
 
-*Real `/usage` data — utilisation percent, reset countdown, and the
-weekly reset weekday and time.*
+*Real `/usage` data: utilisation percent, plus time left and the wall-clock reset for every window.*
+*Every weekly cap your plan meters gets its own row, per-model ones included (Anthropic supplies the name, so the row follows whichever model is capped), plus usage credits when you have them enabled.*
 
 ### Dashboard
 
@@ -227,10 +227,10 @@ consent prompt.
   icon as a way back into the dashboard.
 - **Status-bar metric** (`statusBarMetric`) — keep showing today's cost, or
   switch the first item to today's total **token** count (compact k/M).
-- **Original model-specific weekly-limit contribution** — PR #38 by
-  [@wheelbarrel00](https://github.com/wheelbarrel00) added the earlier status-bar
-  option. The obsolete model-specific surface is retired in v2.3; generic
-  5-hour and weekly quota windows remain.
+- **Model-scoped weekly limit** (`showScopedWeekly`, opt-in) — adds the weekly
+  cap actually named by Anthropic, such as `fable 17%`; migrated from the
+  original model-specific contribution in PR #38 by
+  [@wheelbarrel00](https://github.com/wheelbarrel00).
 - **AI advice 2.0** — bring your own key: **Anthropic** (`/v1/messages`) by
   default, or any OpenAI-compatible endpoint (`advice.apiFormat`). Fed with the
   new signals (runs, cache hit rates, attribution, thinking share); optional
@@ -480,8 +480,8 @@ Contributors whose upstream PRs / issues are incorporated here:
   original status-bar context-window indicator and the `showCost` toggle.
 - [@wheelbarrel00](https://github.com/wheelbarrel00) —
   [PR #38](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/38), the opt-in
-  model-specific weekly-limit option in the status bar (retired in v2.3 while
-  preserving credit for the original contribution).
+  weekly Opus limit in the status bar, which grew into today's API-named
+  `showScopedWeekly`.
 - [@brenoneill](https://github.com/brenoneill) —
   [PR #14](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/14), custom
   data directory (merged into upstream 1.0.8).
