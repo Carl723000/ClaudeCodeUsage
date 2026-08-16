@@ -5867,11 +5867,29 @@ export class UsageWebviewProvider {
 
   private getScript(): string {
     return `
-console.log("[DEBUG] === JAVASCRIPT INITIALIZATION START ===");
-
 // Get VSCode API
 const vscode = acquireVsCodeApi();
-console.log("[DEBUG] VSCode API acquired");
+
+function ccuReadUiState() {
+  try { return vscode.getState() || {}; } catch (e) { return {}; }
+}
+function ccuWriteUiState(key, value) {
+  try {
+    var st = ccuReadUiState();
+    st[key] = value;
+    vscode.setState(st);
+  } catch (e) {}
+}
+function ccuProviderName() {
+  var selected = document.querySelector('.provider-tab[aria-selected="true"]');
+  return selected ? (selected.getAttribute('data-provider') || selected.id.replace('provider-tab-', '')) : 'claude';
+}
+function ccuElementStateKey(element, kind) {
+  var tab = element && element.closest ? element.closest('.tab-content') : null;
+  var root = tab || document;
+  var elements = Array.prototype.slice.call(root.querySelectorAll(kind === 'table' ? 'table' : '.daily-breakdown, .hourly-breakdown'));
+  return ccuProviderName() + ':' + (tab ? tab.id : 'page') + ':' + kind + ':' + Math.max(0, elements.indexOf(element));
+}
 
 // Keep expanded <details data-persist> open across auto-refresh re-renders — a
 // data refresh shouldn't collapse something you're reading. Only a tab switch
@@ -5882,14 +5900,14 @@ function savePersistedDetails() {
     document.querySelectorAll('details[data-persist]').forEach(function(d){
       if (d.open) { open.push(d.getAttribute('data-persist')); }
     });
-    var st = vscode.getState() || {};
+    var st = ccuReadUiState();
     st.openDetails = open;
     vscode.setState(st);
   } catch (e) {}
 }
 function restorePersistedDetails() {
   try {
-    var st = vscode.getState() || {};
+    var st = ccuReadUiState();
     var open = st.openDetails || [];
     if (!open.length) { return; }
     document.querySelectorAll('details[data-persist]').forEach(function(d){
@@ -5898,7 +5916,7 @@ function restorePersistedDetails() {
   } catch (e) {}
 }
 function clearPersistedDetails() {
-  try { var st = vscode.getState() || {}; st.openDetails = []; vscode.setState(st); } catch (e) {}
+  try { var st = ccuReadUiState(); st.openDetails = []; vscode.setState(st); } catch (e) {}
 }
 // 'toggle' doesn't bubble — listen in the capture phase.
 document.addEventListener('toggle', function(e){
@@ -5910,11 +5928,49 @@ function restoreActiveTab() {
   try {
     var t = localStorage.getItem('ccu.activeTab');
     if (t && document.getElementById('tab-' + t) && document.getElementById(t)) {
-      showTab(t);
+      showTab(t, true);
     }
   } catch (e) {}
 }
-function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); }
+var __ccuUiReady = false;
+function restoreUi() {
+  restoreActiveTab();
+  restoreSessionFilter();
+  restorePersistedDetails();
+  restoreSessionDetails();
+  restoreTableSorts();
+  restoreChartMetrics();
+  restoreScrollPosition();
+}
+function ccuScrollStateKey() {
+  var active = document.querySelector('.tab.active');
+  return ccuProviderName() + ':' + (active ? active.id.replace('tab-', '') : 'today');
+}
+function saveScrollPosition() {
+  if (!__ccuUiReady) { return; }
+  var positions = ccuReadUiState().scrollPositions || {};
+  positions[ccuScrollStateKey()] = window.scrollY;
+  ccuWriteUiState('scrollPositions', positions);
+}
+function restoreScrollPosition() {
+  var positions = ccuReadUiState().scrollPositions || {};
+  var y = positions[ccuScrollStateKey()];
+  if (typeof y !== 'number') { __ccuUiReady = true; return; }
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+      window.scrollTo(0, y);
+      __ccuUiReady = true;
+    });
+  });
+}
+var __ccuScrollFrame = 0;
+window.addEventListener('scroll', function() {
+  if (!__ccuUiReady || __ccuScrollFrame) { return; }
+  __ccuScrollFrame = requestAnimationFrame(function() {
+    __ccuScrollFrame = 0;
+    saveScrollPosition();
+  });
+}, { passive: true });
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreUi);
 } else {
@@ -6167,6 +6223,38 @@ function ccuSessState() {
     model: ms ? ms.value : 'all'
   };
 }
+function toggleSessionDetails(btn) {
+  if (!btn) { return; }
+  var row = btn.closest('tr');
+  var detail = row ? row.nextElementSibling : null;
+  if (!detail || !detail.hasAttribute('data-session-detail')) { return; }
+  var expanded = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+  btn.textContent = expanded ? '▶' : '▼';
+  detail.setAttribute('data-expanded', expanded ? 'false' : 'true');
+  detail.style.display = expanded ? 'none' : 'table-row';
+  saveSessionDetails();
+}
+function saveSessionDetails() {
+  var all = ccuReadUiState().sessionDetails || {};
+  all[ccuProviderName()] = Array.prototype.slice.call(document.querySelectorAll('[data-session-detail][data-expanded="true"]'))
+    .map(function(row) { return row.id; }).filter(Boolean);
+  ccuWriteUiState('sessionDetails', all);
+}
+function restoreSessionDetails() {
+  var all = ccuReadUiState().sessionDetails || {};
+  var open = all[ccuProviderName()] || [];
+  open.forEach(function(id) {
+    var detail = document.getElementById(id);
+    var btn = document.querySelector('[data-session-detail-toggle][aria-controls="' + id + '"]');
+    var row = btn ? btn.closest('tr') : null;
+    if (!detail || !btn) { return; }
+    btn.setAttribute('aria-expanded', 'true');
+    btn.textContent = '▼';
+    detail.setAttribute('data-expanded', 'true');
+    detail.style.display = row && row.style.display === 'none' ? 'none' : 'table-row';
+  });
+}
 function applySessionFilters() {
   var list = document.getElementById('sessionList');
   if (!list) { return; }
@@ -6180,7 +6268,12 @@ function applySessionFilters() {
     var okProject = st.project === 'all' || !tr.classList.contains('session-foreign');
     var okTime = st.range === 'all' || Number(tr.getAttribute('data-sort-time')) >= threshold;
     var okModel = st.model === 'all' || (tr.getAttribute('data-models') || '').split('|').indexOf(st.model) !== -1;
-    tr.style.display = (okProject && okTime && okModel) ? '' : 'none';
+    var visible = okProject && okTime && okModel;
+    tr.style.display = visible ? '' : 'none';
+    var detail = tr.nextElementSibling;
+    if (detail && detail.hasAttribute('data-session-detail')) {
+      detail.style.display = visible && detail.getAttribute('data-expanded') === 'true' ? 'table-row' : 'none';
+    }
   });
 }
 // One handler per filter group; all persist and re-apply the combined filter.
@@ -6294,7 +6387,7 @@ function toggleProjectGroup(groupId) {
 
 // Sort a table by a column key. Rows with class "sort-child" travel with the
 // preceding "sort-row" (used for expandable project groups).
-function sortTable(table, key, th) {
+function sortTable(table, key, th, restoring) {
   var tbody = table.querySelector('tbody');
   if (!tbody) { return; }
   var allRows = Array.prototype.slice.call(tbody.children);
@@ -6302,7 +6395,7 @@ function sortTable(table, key, th) {
   var units = [];
   var current = null;
   allRows.forEach(function(row) {
-    if (row.classList.contains('sort-child') && current) {
+    if ((row.classList.contains('sort-child') || row.hasAttribute('data-sort-child')) && current) {
       current.rows.push(row);
     } else {
       current = { lead: row, rows: [row] };
@@ -6339,11 +6432,27 @@ function sortTable(table, key, th) {
   units.forEach(function(u) {
     u.rows.forEach(function(r) { tbody.appendChild(r); });
   });
+
+  if (!restoring) {
+    var sorts = ccuReadUiState().tableSorts || {};
+    sorts[ccuElementStateKey(table, 'table')] = { key: key, direction: ascending ? 'asc' : 'desc' };
+    ccuWriteUiState('tableSorts', sorts);
+  }
+}
+function restoreTableSorts(root) {
+  var scope = root || document;
+  var sorts = ccuReadUiState().tableSorts || {};
+  scope.querySelectorAll('table').forEach(function(table) {
+    var saved = sorts[ccuElementStateKey(table, 'table')];
+    if (!saved) { return; }
+    var th = table.querySelector('th.sortable[data-sortkey="' + saved.key + '"]');
+    if (!th) { return; }
+    th.setAttribute('data-sortdir', saved.direction === 'asc' ? 'desc' : 'asc');
+    sortTable(table, saved.key, th, true);
+  });
 }
 
-function showTab(tabName) {
-  console.log("[DEBUG] showTab called:", tabName);
-
+function showTab(tabName, restoring) {
   try {
     // Remove active from all tabs and contents
     document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
@@ -6356,36 +6465,28 @@ function showTab(tabName) {
     if (selectedTab && selectedContent) {
       selectedTab.classList.add('active');
       selectedContent.classList.add('active');
-      console.log("[DEBUG] Tab switched successfully to:", tabName);
 
-      vscode.postMessage({ command: 'tabChanged', tab: tabName });
-      // Switching tabs resets expanded rows to their default (Carl's rule).
-      clearPersistedDetails();
-      // Persist in localStorage too — survives the reload, restored before paint.
-      try { localStorage.setItem('ccu.activeTab', tabName); } catch (e) {}
+      if (!restoring) {
+        vscode.postMessage({ command: 'tabChanged', tab: tabName });
+        // Switching tabs resets expanded rows to their default (Carl's rule).
+        clearPersistedDetails();
+        // Persist in localStorage too — survives the reload, restored before paint.
+        try { localStorage.setItem('ccu.activeTab', tabName); } catch (e) {}
+      }
     } else {
-      console.error("[DEBUG] Tab or content not found:", tabName);
+      console.error("Tab or content not found:", tabName);
     }
   } catch (error) {
-    console.error("[DEBUG] Error switching tabs:", error);
+    console.error("Error switching tabs:", error);
   }
 }
 
 function toggleHourlyDetail(date) {
-  console.log("[DEBUG] toggleHourlyDetail called for date:", date);
-
   try {
     const detailRow = document.querySelector('.hourly-detail-row[data-date="' + date + '"]');
     const button = document.querySelector('.daily-row[data-date="' + date + '"] .detail-button');
     const container = document.getElementById('hourly-detail-' + date);
     const chartBar = document.querySelector('.chart-bar-container[data-date="' + date + '"] .chart-bar');
-
-    console.log("[DEBUG] Found elements:", {
-      detailRow: !!detailRow,
-      button: !!button,
-      container: !!container,
-      chartBar: !!chartBar
-    });
 
     if (detailRow && button && container) {
       const isExpanded = detailRow.style.display !== 'none' && detailRow.style.display !== '';
@@ -6597,6 +6698,7 @@ window.getAdvice = getAdvice;
 window.toggleProjectGroup = toggleProjectGroup;
 window.sortTable = sortTable;
 window.dismissQuotaWarn = dismissQuotaWarn;
+window.toggleSessionDetails = toggleSessionDetails;
 window.attrSetScope = attrSetScope;
 window.requestAttribution = requestAttribution;
 window.showTab = showTab;
@@ -6623,22 +6725,22 @@ window.addEventListener('message', function(event) {
   if (message.command === 'hourlyDataResponse') {
     const container = document.getElementById('hourly-detail-' + message.date);
     if (container && message.data) {
-      console.log("[DEBUG] Rendering hourly data for date:", message.date);
       container.innerHTML = renderHourlyData(message.data, message.date);
 
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
+      restoreChartMetrics(container);
     }
   }
 
   if (message.command === 'dailyDataResponse') {
     const container = document.getElementById('monthly-detail-' + message.month);
     if (container && message.data) {
-      console.log("[DEBUG] Rendering daily data for month:", message.month);
       container.innerHTML = renderDailyData(message.data, message.month);
 
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
+      restoreChartMetrics(container);
     }
   }
 
@@ -6657,9 +6759,42 @@ window.addEventListener('message', function(event) {
 // Format any optimiser settings restored into the DOM by a re-render.
 formatOptSettings();
 
+function ccuChartStateKey(container) {
+  var content = container.querySelector('.chart-content[id]');
+  return ccuProviderName() + ':chart:' + (content ? content.id : ccuElementStateKey(container, 'chart'));
+}
+function saveChartMetric(container, metric) {
+  var metrics = ccuReadUiState().chartMetrics || {};
+  metrics[ccuChartStateKey(container)] = metric;
+  ccuWriteUiState('chartMetrics', metrics);
+}
+function applyChartMetric(container, metric, persist) {
+  var tab = container.querySelector('.chart-tab[data-metric="' + metric + '"]');
+  if (!tab) { return; }
+  container.querySelectorAll('.chart-tab').forEach(function(item) { item.classList.remove('active'); });
+  tab.classList.add('active');
+  if (container.classList.contains('hourly-breakdown')) {
+    var chartContent = container.querySelector('[id^="hourly-chart-"]');
+    if (chartContent) { updateHourlyChart(chartContent.id.replace('hourly-chart-', ''), metric); }
+  } else {
+    updateMainChart(metric, container);
+  }
+  if (persist) { saveChartMetric(container, metric); }
+}
+function restoreChartMetrics(root) {
+  var scope = root || document;
+  var containers = [];
+  if (scope.matches && scope.matches('.daily-breakdown, .hourly-breakdown')) { containers.push(scope); }
+  scope.querySelectorAll('.daily-breakdown, .hourly-breakdown').forEach(function(item) { containers.push(item); });
+  var metrics = ccuReadUiState().chartMetrics || {};
+  containers.forEach(function(container) {
+    var metric = metrics[ccuChartStateKey(container)];
+    if (metric) { applyChartMetric(container, metric, false); }
+  });
+}
+
 // Global event delegation for chart tabs and chart bars
 document.addEventListener('click', function(event) {
-  if (event.target.closest && event.target.closest('[data-codex-root]')) { return; }
   // Handle sortable table header clicks
   var sortableTh = event.target.closest ? event.target.closest('th.sortable') : null;
   if (sortableTh) {
@@ -6674,45 +6809,19 @@ document.addEventListener('click', function(event) {
   // Handle chart tab clicks
   var chartTab = event.target.closest ? event.target.closest('.chart-tab[data-metric]') : null;
   if (chartTab) {
-    console.log("[DEBUG] Chart tab clicked:", chartTab);
-
     event.preventDefault();
     const metric = chartTab.dataset.metric;
-    console.log("[DEBUG] Chart tab metric:", metric);
 
     // Find the container and determine the context
     const container = chartTab.closest('.daily-breakdown') || chartTab.closest('.hourly-breakdown');
-    console.log("[DEBUG] Chart tab container:", container);
 
     if (container) {
-      // Update active tab
-      const tabs = container.querySelectorAll('.chart-tab');
-      tabs.forEach(function(tab) {
-        tab.classList.remove('active');
-      });
-      chartTab.classList.add('active');
-
-      // Determine chart type and update accordingly
-      if (container.classList.contains('hourly-breakdown')) {
-        // This is an hourly detail chart - extract date from the chart content ID
-        const chartContent = container.querySelector('[id^="hourly-chart-"]');
-        if (chartContent) {
-          const date = chartContent.id.replace('hourly-chart-', '');
-          console.log("[DEBUG] Updating hourly chart for date:", date, "metric:", metric);
-          updateHourlyChart(date, metric);
-        }
-      } else {
-        // This is a main chart (daily/monthly)
-        console.log("[DEBUG] Updating main chart with metric:", metric);
-        updateMainChart(metric, container);
-      }
+      applyChartMetric(container, metric, true);
     }
   }
 
   // Handle chart bar clicks - only for clickable charts
   if (event.target.classList.contains('chart-bar') && event.target.classList.contains('clickable')) {
-    console.log("[DEBUG] Clickable chart bar clicked:", event.target);
-
     event.preventDefault();
     // Daily/monthly charts now use .hc-col; the JS-rendered drill-downs still
     // use .chart-bar-container — support both.
@@ -6720,8 +6829,6 @@ document.addEventListener('click', function(event) {
     if (container) {
       const date = container.dataset.date;
       if (date) {
-        console.log("[DEBUG] Chart bar clicked for date:", date);
-
         // Determine if this is a monthly chart or daily chart based on current tab
         const activeTab = document.querySelector('.tab.active');
         if (activeTab && activeTab.id === 'tab-all') {
@@ -6737,15 +6844,9 @@ document.addEventListener('click', function(event) {
 });
 
 function bindChartTabEvents(container) {
-  if (container.closest && container.closest('[data-codex-root]')) { return; }
-  console.log("[DEBUG] Binding chart tab events for container:", container);
-
   const chartTabs = container.querySelectorAll('.chart-tab[data-metric]');
-  console.log("[DEBUG] Found chart tabs:", chartTabs.length);
 
-  chartTabs.forEach(function(tab, index) {
-    console.log("[DEBUG] Processing chart tab", index, ":", tab.dataset.metric);
-
+  chartTabs.forEach(function(tab) {
     // Remove existing event listeners to prevent duplicates
     tab.removeEventListener('click', handleChartTabClick);
 
@@ -6755,8 +6856,6 @@ function bindChartTabEvents(container) {
 }
 
 function handleChartTabClick(event) {
-  if (event.target.closest && event.target.closest('[data-codex-root]')) { return; }
-  console.log("[DEBUG] handleChartTabClick called");
   event.preventDefault();
 
   const metric = this.dataset.metric;
@@ -6764,23 +6863,7 @@ function handleChartTabClick(event) {
   const container = this.closest('.daily-breakdown') || this.closest('.hourly-breakdown');
 
   if (container) {
-    // Update active tab
-    const tabs = container.querySelectorAll('.chart-tab');
-    tabs.forEach(function(tab) {
-      tab.classList.remove('active');
-    });
-    this.classList.add('active');
-
-    // Update chart based on context
-    if (container.classList.contains('hourly-breakdown')) {
-      const chartContent = container.querySelector('[id^="hourly-chart-"]');
-      if (chartContent) {
-        const date = chartContent.id.replace('hourly-chart-', '');
-        updateHourlyChart(date, metric);
-      }
-    } else {
-      updateMainChart(metric, null);
-    }
+    applyChartMetric(container, metric, true);
   }
 }
 
