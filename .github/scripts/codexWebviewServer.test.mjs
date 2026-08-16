@@ -8,10 +8,11 @@ const repositoryRoot = fileURLToPath(new URL('../../', import.meta.url));
 const serverPath = fileURLToPath(
   new URL('../../tests/ui/support/server.mjs', import.meta.url),
 );
+const uiTestPort = Number(process.env.CCU_UI_TEST_PORT ?? 4173);
 
 function request(path) {
   return new Promise((resolve, reject) => {
-    const call = get({ hostname: '127.0.0.1', port: 4173, path }, (response) => {
+    const call = get({ hostname: '127.0.0.1', port: uiTestPort, path }, (response) => {
       response.setEncoding('utf8');
       let body = '';
       response.on('data', (chunk) => { body += chunk; });
@@ -61,13 +62,13 @@ test('UI harness returns a generic 500 body without stack or local path disclosu
     const response = await request('/?theme=dark');
     assert.equal(response.status, 200);
     assert.match(response.body, /<body class="vscode-dark\b/);
-    assert.match(response.body, /--vscode-foreground:#f2f2f2/);
+    assert.match(response.body, /--vscode-foreground:#CCCCCC/);
   });
   await t.test('light rendering exposes the VS Code foreground token', async () => {
     const response = await request('/?theme=light');
     assert.equal(response.status, 200);
     assert.match(response.body, /<body class="vscode-light\b/);
-    assert.match(response.body, /--vscode-foreground:#24292f/);
+    assert.match(response.body, /--vscode-foreground:#616161/);
   });
   const response = await request('//[');
   assert.equal(response.status, 500);
