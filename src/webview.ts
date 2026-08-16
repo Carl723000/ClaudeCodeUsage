@@ -4570,8 +4570,10 @@ export class UsageWebviewProvider {
       }
 
       .tab.active {
+        background: transparent;
         border-bottom-color: var(--vscode-focusBorder);
-        color: var(--vscode-focusBorder);
+        color: var(--vscode-foreground);
+        font-weight: 600;
       }
 
       .tab-content {
@@ -4706,7 +4708,7 @@ export class UsageWebviewProvider {
 
       .model-stat-label {
         color: var(--vscode-descriptionForeground);
-        opacity: 0.85;
+        opacity: 1;
       }
 
       .chart-tabs {
@@ -4806,7 +4808,7 @@ export class UsageWebviewProvider {
       }
 
       .output-bar {
-        background: linear-gradient(to top, var(--vscode-charts-orange), var(--vscode-charts-red));
+        background: linear-gradient(to top, var(--vscode-charts-yellow), var(--vscode-charts-red));
       }
 
       .cache-creation-bar {
@@ -4816,11 +4818,11 @@ export class UsageWebviewProvider {
       }
 
       .cache-read-bar {
-        background: linear-gradient(to top, var(--vscode-charts-yellow), var(--vscode-charts-orange));
+        background: linear-gradient(to top, var(--vscode-charts-yellow), var(--vscode-charts-green));
       }
 
       .messages-bar {
-        background: linear-gradient(to top, var(--vscode-charts-foreground), var(--vscode-charts-lines));
+        background: var(--vscode-charts-foreground);
       }
 
       .chart-label {
@@ -5185,7 +5187,7 @@ export class UsageWebviewProvider {
         font-weight: 800;
         line-height: 1.1;
         margin: 8px 0 2px;
-        color: var(--vscode-charts-orange, var(--vscode-foreground));
+        color: var(--vscode-charts-yellow, var(--vscode-foreground));
       }
       .insight-sub { font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 10px; }
       .insight-split { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
@@ -5214,7 +5216,7 @@ export class UsageWebviewProvider {
       .hr-spark { display: flex; align-items: flex-end; gap: 2px; height: 64px; margin: 10px 0 2px; }
       .hr-col { flex: 1 1 0; display: flex; flex-direction: column; align-items: stretch; height: 100%; justify-content: flex-end; }
       .hr-bar { width: 100%; border-radius: 2px 2px 0 0; background: var(--vscode-panel-border); min-height: 2px; }
-      .hr-bar.pk { background: var(--vscode-charts-orange, var(--vscode-badge-background)); }
+      .hr-bar.pk { background: var(--vscode-charts-yellow, var(--vscode-badge-background)); }
       .hr-lab { font-size: 8px; line-height: 10px; text-align: center; color: var(--vscode-descriptionForeground); height: 10px; }
       .cbm-list { margin: 6px 0 4px; }
       .cbm-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
@@ -5235,7 +5237,7 @@ export class UsageWebviewProvider {
         background: var(--vscode-panel-border);
         overflow: hidden;
       }
-      .cbm-fill { height: 100%; background: var(--vscode-charts-orange, var(--vscode-badge-background)); }
+      .cbm-fill { height: 100%; background: var(--vscode-charts-yellow, var(--vscode-badge-background)); }
       .cbm-sub { font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 3px; }
       .cbm-pct { flex: 0 0 72px; text-align: right; font-size: 12px; font-weight: 700; color: var(--vscode-foreground); }
       .cbm-unit { font-size: 10px; font-weight: 400; color: var(--vscode-descriptionForeground); margin-left: 1px; }
@@ -5467,7 +5469,7 @@ export class UsageWebviewProvider {
       }
 
       .seg-output {
-        background: var(--vscode-charts-orange);
+        background: var(--vscode-charts-yellow);
       }
 
       .seg-cache-creation {
@@ -5596,7 +5598,8 @@ export class UsageWebviewProvider {
       }
 
       th.sortable:hover {
-        color: var(--vscode-focusBorder);
+        color: var(--vscode-foreground);
+        text-decoration: underline;
       }
 
       th.sortable.sorted-asc::after {
@@ -5816,7 +5819,7 @@ export class UsageWebviewProvider {
       }
 
       .cf-2 {
-        background: var(--vscode-charts-orange);
+        background: var(--vscode-charts-yellow);
       }
 
       .cf-3 {
@@ -6034,22 +6037,18 @@ function publishHeatmap() {
   vscode.postMessage({ command: 'publishHeatmap' });
 }
 function refresh() {
-  console.log("[DEBUG] refresh called");
   vscode.postMessage({ command: 'refresh' });
 }
 
 function openSettings() {
-  console.log("[DEBUG] openSettings called");
   vscode.postMessage({ command: 'openSettings' });
 }
 
 function refreshPricing() {
-  console.log("[DEBUG] refreshPricing called");
   vscode.postMessage({ command: 'refreshPricing' });
 }
 
 function getAdvice() {
-  console.log("[DEBUG] getAdvice called");
   vscode.postMessage({ command: 'getAdvice' });
 }
 
@@ -6502,14 +6501,10 @@ function toggleHourlyDetail(date) {
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.add('selected');
-          console.log("[DEBUG] Chart bar selected for date:", date);
         }
-
-        console.log("[DEBUG] Showing hourly detail for date:", date);
 
         // Request hourly data if not loaded
         if (!container.dataset.loaded) {
-          console.log("[DEBUG] Requesting hourly data for date:", date);
           vscode.postMessage({ command: 'getHourlyData', date: date });
           container.dataset.loaded = 'true';
         }
@@ -6526,23 +6521,18 @@ function toggleHourlyDetail(date) {
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.remove('selected');
-          console.log("[DEBUG] Chart bar deselected for date:", date);
         }
-
-        console.log("[DEBUG] Hiding hourly detail for date:", date);
       }
 
     } else {
-      console.error("[DEBUG] Could not find required elements for date:", date);
+      console.error("Could not find required elements for date:", date);
     }
   } catch (error) {
-    console.error("[DEBUG] Error in toggleHourlyDetail:", error);
+    console.error("Error in toggleHourlyDetail:", error);
   }
 }
 
 function closeAllHourlyDetails() {
-  console.log("[DEBUG] closeAllHourlyDetails called");
-
   // Close all expanded detail rows
   const allDetailRows = document.querySelectorAll('.hourly-detail-row');
   const allButtons = document.querySelectorAll('.detail-button.expanded');
@@ -6560,24 +6550,14 @@ function closeAllHourlyDetails() {
     bar.classList.remove('selected');
   });
 
-  console.log("[DEBUG] Closed all detail rows");
 }
 
 function toggleMonthlyDetail(monthDate) {
-  console.log("[DEBUG] toggleMonthlyDetail called for month:", monthDate);
-
   try {
     const detailRow = document.querySelector('.monthly-detail-row[data-date="' + monthDate + '"]');
     const button = document.querySelector('.daily-row[data-date="' + monthDate + '"] .detail-button');
     const container = document.getElementById('monthly-detail-' + monthDate);
     const chartBar = document.querySelector('.chart-bar-container[data-date="' + monthDate + '"] .chart-bar');
-
-    console.log("[DEBUG] Found elements:", {
-      detailRow: !!detailRow,
-      button: !!button,
-      container: !!container,
-      chartBar: !!chartBar
-    });
 
     if (detailRow && button && container) {
       const isExpanded = detailRow.style.display !== 'none' && detailRow.style.display !== '';
@@ -6593,14 +6573,10 @@ function toggleMonthlyDetail(monthDate) {
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.add('selected');
-          console.log("[DEBUG] Chart bar selected for month:", monthDate);
         }
-
-        console.log("[DEBUG] Showing monthly detail for month:", monthDate);
 
         // Request monthly data if not loaded
         if (!container.dataset.loaded) {
-          console.log("[DEBUG] Requesting daily data for month:", monthDate);
           vscode.postMessage({ command: 'getDailyData', month: monthDate });
           container.dataset.loaded = 'true';
         }
@@ -6615,23 +6591,18 @@ function toggleMonthlyDetail(monthDate) {
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.remove('selected');
-          console.log("[DEBUG] Chart bar deselected for month:", monthDate);
         }
-
-        console.log("[DEBUG] Hiding monthly detail for month:", monthDate);
       }
 
     } else {
-      console.error("[DEBUG] Could not find required elements for month:", monthDate);
+      console.error("Could not find required elements for month:", monthDate);
     }
   } catch (error) {
-    console.error("[DEBUG] Error in toggleMonthlyDetail:", error);
+    console.error("Error in toggleMonthlyDetail:", error);
   }
 }
 
 function closeAllMonthlyDetails() {
-  console.log("[DEBUG] closeAllMonthlyDetails called");
-
   // Close all expanded monthly detail rows
   const allDetailRows = document.querySelectorAll('.monthly-detail-row');
   const allButtons = document.querySelectorAll('.detail-button.expanded');
@@ -6649,12 +6620,9 @@ function closeAllMonthlyDetails() {
     bar.classList.remove('selected');
   });
 
-  console.log("[DEBUG] Closed all monthly detail rows");
 }
 
 function updateHourlyChart(date, metric) {
-  console.log("[DEBUG] updateHourlyChart called with date:", date, "metric:", metric);
-
   const container = document.getElementById('hourly-detail-' + date);
   if (!container) return;
 
@@ -6678,8 +6646,6 @@ function updateHourlyChart(date, metric) {
 
 // Sync chart bar selection state
 function syncChartBarSelection(date, isSelected) {
-  console.log("[DEBUG] syncChartBarSelection called for date:", date, "selected:", isSelected);
-
   const chartBar = document.querySelector('.chart-bar-container[data-date="' + date + '"] .chart-bar');
   if (chartBar) {
     if (isSelected) {
@@ -6872,14 +6838,12 @@ function updateMainChart(metric, container) {
       ['cost', 'inputTokens', 'outputTokens', 'cacheCreation', 'cacheRead', 'messages'].indexOf(metric) === -1) {
     return;
   }
-  console.log("[DEBUG] updateMainChart called with metric:", metric, "container:", container);
-
   // If container is provided, use it; otherwise find the active tab content
   let targetContainer = container;
   if (!targetContainer) {
     targetContainer = document.querySelector('.tab-content.active');
     if (!targetContainer) {
-      console.error("[DEBUG] No active tab content found");
+      console.error("No active tab content found");
       return;
     }
   }
@@ -6887,11 +6851,8 @@ function updateMainChart(metric, container) {
   // Update chart in the target container
   const chartBars = targetContainer.querySelectorAll('.chart-bar');
   if (chartBars.length === 0) {
-    console.log("[DEBUG] No chart bars found in target container");
     return;
   }
-
-  console.log("[DEBUG] Updating", chartBars.length, "chart bars with metric:", metric);
 
   // Calculate max values for the metric
   const values = Array.from(chartBars).map(function(bar) {
@@ -6901,8 +6862,6 @@ function updateMainChart(metric, container) {
 
   const maxValue = Math.max(...values);
   const maxHeight = 120;
-
-  console.log("[DEBUG] Max value for metric", metric, ":", maxValue);
 
   // Update each bar
   chartBars.forEach(function(bar, index) {
@@ -7279,7 +7238,7 @@ function renderHourlyChart(hourlyData, metric) {
   });
 }
 
-console.log("[DEBUG] All functions defined and ready");`;
+`;
   }
 
   dispose(): void {
