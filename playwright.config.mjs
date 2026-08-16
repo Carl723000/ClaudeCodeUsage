@@ -1,5 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const uiTestPort = process.env.CCU_UI_TEST_PORT ?? '4173';
+
 export default defineConfig({
   testDir: './tests/ui',
   fullyParallel: false,
@@ -30,7 +32,7 @@ export default defineConfig({
   },
   webServer: {
     command: 'node tests/ui/support/server.mjs',
-    url: 'http://127.0.0.1:4173/health',
+    url: `http://127.0.0.1:${uiTestPort}/health`,
     reuseExistingServer: !process.env.CI,
     timeout: 15_000,
   },

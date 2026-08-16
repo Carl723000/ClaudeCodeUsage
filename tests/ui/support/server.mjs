@@ -4,10 +4,11 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { renderHarness } = require('./render-harness.cjs');
 const locales = new Set(['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id']);
+const uiTestPort = Number(process.env.CCU_UI_TEST_PORT ?? 4173);
 
 const server = createServer((request, response) => {
   try {
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1:4173');
+    const url = new URL(request.url ?? '/', `http://127.0.0.1:${uiTestPort}`);
     if (url.pathname === '/health') {
       response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('ok');
@@ -24,7 +25,7 @@ const server = createServer((request, response) => {
     const provider = url.searchParams.get('provider') === 'claude' ? 'claude' : 'codex';
     const theme = url.searchParams.get('theme') === 'dark' ? 'dark' : 'light';
     const requestedFixture = url.searchParams.get('fixture') ?? 'default';
-    const fixture = ['default', 'rootless-cycle', 'root-over-limit'].includes(requestedFixture)
+    const fixture = ['default', 'rootless-cycle', 'root-over-limit', 'persisted-details'].includes(requestedFixture)
       ? requestedFixture
       : 'default';
     const html = renderHarness({ provider, locale, theme, fixture });
@@ -39,7 +40,7 @@ const server = createServer((request, response) => {
   }
 });
 
-server.listen(4173, '127.0.0.1');
+server.listen(uiTestPort, '127.0.0.1');
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => server.close(() => process.exit(0)));
 }
