@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import * as ts from 'typescript';
@@ -819,7 +819,9 @@ function projectSourceFiles(prefix: string): Record<string, string> {
   const paths = execFileSync('git', ['ls-files', prefix], {
     cwd: REPO_ROOT,
     encoding: 'utf8',
-  }).trim().split('\n').filter((path) => path.endsWith('.ts'));
+  }).trim().split('\n').filter((path) =>
+    path.endsWith('.ts') && existsSync(resolve(REPO_ROOT, path))
+  );
   return Object.fromEntries(paths.map((path) => [path, repoFile(path)]));
 }
 
@@ -1219,7 +1221,7 @@ test('semantic Codex policy validators reject nested DTO leaks, comment-only san
   assert.deepEqual(hardcodedCodexRenderCopyViolations(otherProductionFile), []);
 });
 
-test('Codex production render paths use localized formatter options and no hardcoded visible units', () => {
+test('Codex production rendering is owned by the provider-aware webview functions', () => {
   const components = ts.createSourceFile(
     'src/codexViewComponents.ts',
     repoFile('src/codexViewComponents.ts'),
@@ -1227,24 +1229,29 @@ test('Codex production render paths use localized formatter options and no hardc
     true,
   );
   assert.deepEqual(hardcodedCodexRenderCopyViolations(components), []);
+  const componentFunctions = components.statements
+    .filter(ts.isFunctionDeclaration)
+    .map((statement) => statement.name?.text)
+    .filter(Boolean);
+  assert.deepEqual(
+    componentFunctions.filter((name) => name?.startsWith('renderCodex')),
+    [],
+  );
 
-  const webview = ts.createSourceFile(
-    'src/webview.ts',
-    repoFile('src/webview.ts'),
-    ts.ScriptTarget.ES2020,
-    true,
-  );
-  assert.deepEqual(
-    callOptionKeys(webview, 'getAlternateProviderContent', 'renderCodexView', 3),
-    [
-      'formatBytes', 'formatDateTime', 'formatDuration', 'formatNumber',
-      'formatRelativeTime', 'now', 'optimizationEnabled', 'settingsHtml',
-    ],
-  );
-  assert.deepEqual(
-    callOptionKeys(webview, 'renderCodexCompare', 'renderProviderCompare', 2),
-    ['formatDateTime', 'formatNumber'],
-  );
+  const webview = repoFile('src/webview.ts');
+  for (const renderer of [
+    'renderTodayData',
+    'renderMonthData',
+    'renderAllTimeData',
+    'renderSessionData',
+    'renderProjectData',
+    'renderContentData',
+    'renderCompositionChart',
+  ]) {
+    assert.match(webview, new RegExp(`private ${renderer}\\([\\s\\S]*?provider: SettingProvider`));
+  }
+  assert.match(webview, /renderSettingsPanel\(provider: SettingProvider\)/);
+  assert.doesNotMatch(webview, /renderCodexView|getCodexViewStyles|getCodexClientScript/);
 });
 
 test('Codex schema 2 persistence uses semantic AST gates across the complete DTO graph', () => {
@@ -1363,13 +1370,13 @@ test('all seven README files credit both development tools', () => {
 
 test('all seven README editions explain Codex Beta in their own language', () => {
   const expectations: Record<string, RegExp[]> = {
-    'README.md': [/Codex Beta/, /processed/i, /fresh/i, /cached/i, /last-observed/i],
-    'README-en.md': [/Codex Beta/, /processed/i, /fresh/i, /cached/i, /last-observed/i],
-    'README-zh-CN.md': [/Codex Beta/, /已处理/, /新鲜/, /缓存/, /最后观测/],
-    'README-zh-TW.md': [/Codex Beta/, /已處理/, /新鮮/, /快取/, /最後觀測/],
-    'README-ja.md': [/Codex Beta/, /処理済み/, /新規入力/, /キャッシュ/, /最終観測/],
-    'README-ko.md': [/Codex Beta/, /처리된/, /새 입력/, /캐시/, /마지막 관측/],
-    'README-id.md': [/Codex Beta/, /diproses/i, /baru/i, /cache/i, /terakhir diamati/i],
+    'README.md': [/Codex Beta/, /processed/i, /uncached usage/i, /cached/i, /last-observed/i],
+    'README-en.md': [/Codex Beta/, /processed/i, /uncached usage/i, /cached/i, /last-observed/i],
+    'README-zh-CN.md': [/Codex Beta/, /已处理/, /未缓存用量/, /缓存/, /最后观测/],
+    'README-zh-TW.md': [/Codex Beta/, /已處理/, /未快取用量/, /快取/, /最後觀測/],
+    'README-ja.md': [/Codex Beta/, /処理済み/, /非キャッシュ使用量/, /キャッシュ/, /最終観測/],
+    'README-ko.md': [/Codex Beta/, /처리된/, /캐시되지 않은 사용량/, /캐시/, /마지막 관측/],
+    'README-id.md': [/Codex Beta/, /diproses/i, /penggunaan tanpa cache/i, /cache/i, /terakhir diamati/i],
   };
 
   for (const [readme, patterns] of Object.entries(expectations)) {

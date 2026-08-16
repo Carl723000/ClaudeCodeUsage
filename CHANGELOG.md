@@ -11,28 +11,25 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   all-model and model-scoped weekly cap reported by Anthropic, plus used monthly
   credits when available. Model-scoped status-bar display remains opt-in and is
   named dynamically instead of assuming Opus.
-- **Codex Beta** — local-only Codex usage views for processed, fresh input +
+- **Codex Beta** — local-only Codex usage views for processed, uncached input +
   output, cached input, output, reasoning, model, effort, thread structure,
   index coverage, quality flags, and last-observed limit snapshots.
 - **Provider-aware dashboard** — Claude, Codex Beta, and side-by-side Compare
   modes preserve provider-specific semantics; Compare does not sum cost or quota.
-- **Three-page Codex dashboard** — **Overview** combines Recent / 7 Days /
-  30 Days / All Time summaries, trends, token composition, last-observed limits,
-  and the recent task; **Explore** provides Projects, Sessions, and Models &
-  effort views; **Recommendations** turns selected-scope evidence into
-  observations, readable evidence, proxy explanations, and conditional actions.
-  Provider-aware Settings is an auxiliary page that returns to the previous
-  destination rather than appearing as a fourth main tab.
+- **Provider-aware Codex dashboard** — the existing Today / Month / All time /
+  Sessions / Projects / Content / Settings render functions now accept a
+  provider and present the corresponding Codex Recent task / Last 30 days /
+  All time / Sessions / Projects / Recommendations / Settings data.
 - **Truthful Codex identities** — root tasks use the latest path-redacted local
   thread title; child rows prefer their own real thread title, then fall back to
   their reported nickname while displaying the parent/root title. If those are
   also missing, localized neutral fallbacks are used. Projects use the Git
   repository name (or a non-Git folder basename). Raw session IDs, repository
   URLs, and full paths remain excluded.
-- **Codex exploration and limits** — session search, role/project/model/effort
-  filters, sortable tables, parent-child collapsing, project drill-downs, and
-  all unexpired named primary/secondary limit windows make high usage traceable
-  without inventing Branches, Workflows, or real-time subscription state.
+- **Codex detail tables and limits** — source-derived task/project names,
+  provider-native token columns, model/range filtering, sortable session and
+  project tables, and unexpired named limit windows make high usage traceable
+  without inventing Branches, Workflows, cost, or real-time subscription state.
 - **Local Codex optimization guidance** — structural signals explain unusually
   high subagent, effort, approval-reviewer, tool-call, and cache overhead without
   inspecting or retaining prompt, response, command, or tool-argument content.
@@ -41,21 +38,29 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   resume, and zero unchanged usage-record/rollout JSONL body rereads on warm
   refreshes. This does not include the exact `$CODEX_HOME/session_index.jsonl`
   title stream performed on every refresh.
-- **Codex UI release gate** — production-rendered Chromium coverage exercises
-  navigation, drill-downs, filtering, sorting, and state restoration, alongside
-  Axe checks, eight-locale responsive overflow checks, and six stable visual
-  baselines for wide, narrow, light, and dark states.
+- **Codex UI release gate** — production-rendered coverage checks shared-tab
+  navigation, settings, charts, sorting, accessibility, responsive overflow,
+  stylesheet identity, and the invariant that Codex-rendered classes are a
+  subset of classes already emitted by the Claude dashboard.
 
 ### Changed
+- **Consistent Codex terminology** — user-facing metrics now use Processed,
+  Input, Uncached input, Cached input, Output, Reasoning, and Uncached usage
+  consistently across all eight supported locales; internal field names and
+  persisted setting values remain compatible.
+- **Readable Codex Sessions table** — the collapsed view keeps eight useful
+  columns at 1280 px, prioritizes Thread and Project, and moves secondary token
+  details into an expandable row without duplicating Role.
+- **Stable dashboard UI state** — the selected provider, active tab, chart
+  metric, table sort, expanded rows, recommendation filters, and page scroll
+  position survive a webview reload when still applicable.
 - **Generic model-scoped weekly setting** — the earlier `showOpusWeekly` choice
   migrates to `showScopedWeekly`, follows the model name supplied by Anthropic,
   and nests a shared-reset cap into the weekly status-bar segment.
-- **Unified Claude/Codex dashboard shell** — Codex Beta now uses the same
-  header/action order, navigation rhythm, summary cards, detail rows, token
-  composition, tables, spacing, and responsive behavior as the existing Claude
-  dashboard. Usage limits are compact summary cards, recent-task identity is no
-  longer followed by a duplicate statistics block, and recommendation
-  composition uses the established model-detail layout.
+- **One Claude/Codex dashboard render stack** — Codex Beta is now a provider
+  switch inside `webview.ts`. It uses the same render functions, HTML shell,
+  class names, stylesheet, header/action order, tabs, summary cards, detail
+  rows, charts, tables, spacing, and responsive behavior as Claude.
 - **Exact-version release announcements** — the default-on notification can be
   disabled, stays quiet on a fresh install, and shows only the content for the
   complete installed version instead of falling back to stale v2.2 notes.
@@ -65,11 +70,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - Codex indexing follows observed rollout semantics: child counters start from
   their own zero, repeated metadata preserves lineage, `guardian` sessions are
   approval reviewers, and known non-usage envelopes are not quality failures.
-- Codex Settings now shows only shared and Codex-effective controls; its reset
-  action is scoped to those visible settings. Codex and its local optimization
-  signals can be disabled independently. Recommendation ranges now follow the
-  selected Recent / 7 Days / 30 Days / All Time scope, withholding incomplete
-  rolling ranges and generic advice when there is no supporting evidence.
+- The shared Settings renderer shows only shared and Codex-effective controls
+  when Codex is selected. Codex and its local optimization signals can be
+  disabled independently; recommendations remain grounded in the indexed
+  30-day structural aggregates and disclose partial coverage.
 - Codex period charts now reuse the existing dashboard's Y axis, grid, theme
   colors, horizontal scrolling, and metric-switching behavior.
 - **Schema-2 period indexing** — the compatible `codex-index-v1.json` path now
@@ -83,6 +87,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   being presented as complete data.
 
 ### Fixed
+- **Shared-dashboard readability** — active tabs remain distinguishable in
+  Light+ and Dark+, sortable headers expose their interaction without changing
+  the established alignment, and the output segment in composition charts uses
+  a fully opaque registered VS Code theme color.
 - **Responsive first-pass automation** — when both configured model tiers fail
   or return no usable text, the Issue/PR workflow posts a deterministic,
   provider-neutral fallback instead of exiting without a comment; reruns avoid

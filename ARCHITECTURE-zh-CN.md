@@ -33,10 +33,10 @@ Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做�
 | `providers/codex/codexProvider.ts` | 面向 extension 的 Codex snapshot facade 与 partial/unavailable/error outcome。 |
 | `providers/codex/codexUsage.ts` | Codex-specific 最近 task/7 天/30 天/项目 view model 聚合。 |
 | `providers/codex/codexInsights.ts` | 确定性的结构用量建议，不读 prompt/body。 |
-| `codexView.ts` | 无依赖 Codex 与 Compare HTML renderer。 |
+| `codexView.ts` / `codexViewComponents.ts` | Codex 本地化文案与默认 provider contract；不负责 HTML renderer、client script 或 CSS。 |
 | `settings.ts` | 权威 `SETTINGS` catalog 和 `SettingsStore`；不得散落直接读取。 |
 | `statusBar.ts` / `codexStatus.ts` | Provider-specific 状态展示和通用 Claude 配额格式化。 |
-| `webview.ts` | 既有 Claude dashboard、provider tab 和隔离的 Codex/Compare render slot。 |
+| `webview.ts` | Claude/Codex 唯一一套 provider-aware dashboard shell、共享 render function、共享 client 行为、provider tab 与 Compare 展示。 |
 | `i18n.ts` | 八个 UI locale 的全部用户可见文案。 |
 | `types.ts` | 共享 extension 和 Claude contract。 |
 
@@ -55,9 +55,10 @@ Claude JSONL ──> ClaudeDataLoader ──> Claude adapter ──> Claude 状�
   ──> per-file 数字聚合索引
   ──> CodexProviderSnapshot
   ──> Codex scope + insight
-  ──> Codex 状态栏/dashboard
+  ──> Codex 状态栏 + provider-aware dashboard render input
 
-Claude view + Codex view ──> 并列 Compare（不跨 provider 求和）
+Claude aggregate + Codex scope ──> 同一套 `webview.ts` dashboard render stack
+Claude aggregate + Codex scope ──> 并列 Compare（不跨 provider 求和）
 ```
 
 任一 provider unavailable 或 partial 时，不清空另一 provider 最近验证的 snapshot。

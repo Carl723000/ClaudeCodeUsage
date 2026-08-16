@@ -6,7 +6,10 @@ faithful maintainer review copy is `AGENTS.zh-CN.md`.
 
 Claude-specific compatibility notes:
 
-- The product remains Claude-only in v2.2.1; Codex is a development tool.
+- From v2.3.0 the product monitors more than one provider: Claude is the
+  primary provider; Codex ships as a beta provider (local logs only, no cost
+  figures). Codex is also a development tool for this repository — do not
+  conflate the two roles.
 - Claude conversation JSONL is read-only. OAuth credential refresh is a
   separate, existing security-sensitive behavior; do not broaden it casually.
 - JSONL activity may tune the quota-cache TTL, but polling always follows
