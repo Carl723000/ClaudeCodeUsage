@@ -21,48 +21,40 @@ const REGISTERED_VSCODE_VARIABLES = new Set([
   '--vscode-textCodeBlock-background', '--vscode-textLink-foreground', '--vscode-toolbar-hoverBackground',
 ]);
 
-async function screenshot(page, name) {
-  await page.evaluate(() => document.fonts.ready);
-  await expect(page.locator('.container')).toHaveScreenshot(name);
-}
-
-test('Overview desktop light', async ({ page }) => {
+test('Codex uses the shared dashboard shell and tab vocabulary', async ({ page }) => {
   await openCodex(page);
-  await screenshot(page, 'codex-overview-light-1280.png');
+
+  await expect(page.locator('.container > header')).toBeVisible();
+  await expect(page.locator('.tabs > .tab')).toHaveText([
+    'Recent task',
+    'Last 30 days',
+    'All time',
+    'Sessions',
+    'Projects',
+    'Recommendations',
+    'Settings',
+  ]);
+  await expect(page.locator('.tab-content.active')).toHaveAttribute('id', 'today');
+  await expect(page.locator('[class*="codex-"]')).toHaveCount(0);
 });
 
-test('Claude Today desktop light parity reference', async ({ page }) => {
+test('Codex header matches Claude with only Refresh and Settings actions', async ({ page }) => {
+  await openCodex(page);
+
+  await expect(page.locator('.container > header .actions > button')).toHaveText([
+    '↻ Refresh',
+    '⚙ Settings',
+  ]);
+});
+
+test('Claude and Codex receive the exact same production stylesheet', async ({ page }) => {
   await openClaude(page);
-  await screenshot(page, 'claude-today-light-1280.png');
-});
+  const claudeStyles = await page.locator('head style').first().textContent();
 
-test('Explore desktop light', async ({ page }) => {
   await openCodex(page);
-  await page.getByRole('tab', { name: 'Explore' }).click();
-  await screenshot(page, 'codex-explore-light-1280.png');
-});
+  const codexStyles = await page.locator('head style').first().textContent();
 
-test('Recommendations desktop light', async ({ page }) => {
-  await openCodex(page);
-  await page.getByRole('tab', { name: 'Recommendations' }).click();
-  await screenshot(page, 'codex-recommendations-light-1280.png');
-});
-
-test('Overview desktop dark', async ({ page }) => {
-  await openCodex(page, { theme: 'dark' });
-  await screenshot(page, 'codex-overview-dark-1280.png');
-});
-
-test('Overview mobile light', async ({ page }) => {
-  await openCodex(page, { width: 360, height: 800 });
-  await screenshot(page, 'codex-overview-light-360.png');
-});
-
-test('Sessions mobile light', async ({ page }) => {
-  await openCodex(page, { width: 360, height: 800 });
-  await page.getByRole('tab', { name: 'Explore' }).click();
-  await page.getByRole('tab', { name: 'Sessions' }).click();
-  await screenshot(page, 'codex-sessions-light-360.png');
+  expect(codexStyles).toBe(claudeStyles);
 });
 
 for (const theme of ['light', 'dark']) {
@@ -121,4 +113,34 @@ for (const theme of ['light', 'dark']) {
       failureMessage,
     ).toEqual({ missingWithoutFallback: [], definedDespiteFallback: [] });
   });
+
+  test(`${theme} composition fills are fully opaque`, async ({ page }) => {
+    await openClaude(page, { theme });
+
+    const fills = page.locator('.cost-comp-seg, .cost-comp-legend .legend-dot');
+    expect(await fills.count()).toBeGreaterThan(0);
+    const translucent = await fills.evaluateAll((elements) => elements.map((element) => {
+      const background = getComputedStyle(element).backgroundColor;
+      const rgba = background.match(/^rgba\([^,]+,[^,]+,[^,]+,\s*([\d.]+)\)$/);
+      return {
+        className: element.className,
+        background,
+        alpha: rgba ? Number(rgba[1]) : background === 'transparent' ? 0 : 1,
+      };
+    }).filter(({ alpha }) => alpha !== 1));
+
+    expect(translucent).toEqual([]);
+  });
 }
+
+test('Codex month chart reuses the shared chart controls and bars', async ({ page }) => {
+  await openCodex(page);
+  await page.locator('#tab-month').click();
+
+  const chart = page.locator('#month .daily-breakdown');
+  await expect(chart).toBeVisible();
+  await expect(chart.locator('.chart-tab')).toHaveCount(5);
+  await expect(chart.locator('.chart-bar').first()).toBeVisible();
+  await chart.locator('.chart-tab[data-metric="outputTokens"]').click();
+  await expect(chart.locator('.chart-tab[data-metric="outputTokens"]')).toHaveClass(/active/);
+});

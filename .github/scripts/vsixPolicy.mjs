@@ -21,11 +21,11 @@ const FORBIDDEN_ENTRY_PATTERNS = [
 ];
 
 const REQUIRED_BUNDLE_MARKERS = [
-  { label: 'data-codex-page="overview"', present: (bundle) => bundle.includes('data-codex-page="overview"') },
-  { label: 'data-codex-page="explore"', present: (bundle) => bundle.includes('data-codex-page="explore"') },
-  { label: 'data-codex-page="recommendations"', present: (bundle) => bundle.includes('data-codex-page="recommendations"') },
-  { label: 'data-codex-action', present: (bundle) => bundle.includes('data-codex-action') },
-  { label: 'hostState.codexUi = nextState', present: (bundle) => /hostState\.codexUi\s*=\s*nextState/.test(bundle) },
+  { label: "provider === 'codex'", present: (bundle) => bundle.includes("provider === 'codex'") },
+  { label: 'renderTodayData(provider)', present: (bundle) => bundle.includes('renderTodayData(provider)') },
+  { label: 'renderSessionData(provider)', present: (bundle) => bundle.includes('renderSessionData(provider)') },
+  { label: 'renderSettingsPanel(provider)', present: (bundle) => bundle.includes('renderSettingsPanel(provider)') },
+  { label: 'data-provider-target', present: (bundle) => bundle.includes('data-provider-target') },
 ];
 
 const RETIRED_BUNDLE_MARKERS = [
@@ -38,6 +38,11 @@ const RETIRED_BUNDLE_MARKERS = [
   'data-codex-tab-button="projects"',
   'data-codex-tab-button="behavior"',
   'data-codex-tab-button="settings"',
+  'data-codex-page="overview"',
+  'data-codex-page="explore"',
+  'data-codex-page="recommendations"',
+  'data-codex-action',
+  'hostState.codexUi = nextState',
 ];
 
 function assertCanonicalEntry(entry) {

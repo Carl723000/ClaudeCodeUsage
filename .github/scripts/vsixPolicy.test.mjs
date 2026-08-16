@@ -17,11 +17,11 @@ const minimalEntries = [
 ];
 
 const validBundle = [
-  'data-codex-page="overview"',
-  'data-codex-page="explore"',
-  'data-codex-page="recommendations"',
-  'data-codex-action',
-  'hostState.codexUi = nextState',
+  "provider === 'codex'",
+  'renderTodayData(provider)',
+  'renderSessionData(provider)',
+  'renderSettingsPanel(provider)',
+  'data-provider-target',
 ].join('\n');
 
 const sourceMain = './out/extension.js';
@@ -139,11 +139,11 @@ test('VSIX policy requires the manifest and basic runtime bundles', () => {
 test('bundle policy requires current Codex product and host-state markers', () => {
   assert.doesNotThrow(() => assertCodexBundleMarkers(validBundle));
   for (const marker of [
-    'data-codex-page="overview"',
-    'data-codex-page="explore"',
-    'data-codex-page="recommendations"',
-    'data-codex-action',
-    'hostState.codexUi = nextState',
+    "provider === 'codex'",
+    'renderTodayData(provider)',
+    'renderSessionData(provider)',
+    'renderSettingsPanel(provider)',
+    'data-provider-target',
   ]) {
     assert.throws(
       () => assertCodexBundleMarkers(validBundle.replace(marker, '')),
@@ -164,6 +164,11 @@ test('bundle policy rejects retired flat tabs and legacy Codex storage', () => {
     'data-codex-tab-button="projects"',
     'data-codex-tab-button="behavior"',
     'data-codex-tab-button="settings"',
+    'data-codex-page="overview"',
+    'data-codex-page="explore"',
+    'data-codex-page="recommendations"',
+    'data-codex-action',
+    'hostState.codexUi = nextState',
   ]) {
     assert.throws(
       () => assertCodexBundleMarkers(`${validBundle}\n${marker}`),

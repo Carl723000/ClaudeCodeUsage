@@ -1,5 +1,7 @@
 import { test as base, expect } from '@playwright/test';
 
+const uiBaseUrl = `http://127.0.0.1:${process.env.CCU_UI_TEST_PORT ?? 4173}`;
+
 export const test = base.extend({
   page: async ({ page }, use) => {
     await page.addInitScript(() => {
@@ -31,20 +33,21 @@ export async function openCodex(
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `http://127.0.0.1:4173/?provider=codex&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}`,
+    `${uiBaseUrl}/?provider=codex&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}`,
     { waitUntil: 'load' },
   );
-  await page.locator('.codex-view').waitFor();
+  await page.locator('.tab-content.active').waitFor();
+  await expect(page.locator('#provider-tab-codex')).toHaveAttribute('aria-selected', 'true');
 }
 
 export async function openClaude(
   page,
-  { locale = 'en', theme = 'light', width = 1280, height = 900 } = {},
+  { locale = 'en', theme = 'light', fixture = 'default', width = 1280, height = 900 } = {},
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `http://127.0.0.1:4173/?provider=claude&locale=${encodeURIComponent(locale)}&theme=${theme}`,
+    `${uiBaseUrl}/?provider=claude&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}`,
     { waitUntil: 'load' },
   );
-  await page.locator('#today.tab-content.active').waitFor();
+  await page.locator('.tab-content.active').waitFor();
 }
