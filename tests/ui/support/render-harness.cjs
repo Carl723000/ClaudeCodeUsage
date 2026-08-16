@@ -43,44 +43,101 @@ const {
 
 Module._load = originalLoad;
 
+// Resolve Light+/Dark+ overrides against VS Code's registered color defaults.
+// Font variables use VS Code's macOS defaults. input.border is registered with
+// a null theme value, so `initial` preserves the real webview fallback path.
 const THEMES = {
   light: ':root{' +
-    '--vscode-font-family:Arial,sans-serif;' +
-    '--vscode-editor-font-family:Menlo,monospace;' +
+    '--vscode-font-family:-apple-system,BlinkMacSystemFont,sans-serif;' +
+    '--vscode-font-size:13px;' +
+    '--vscode-editor-font-family:Menlo,Monaco,"Courier New",monospace;' +
     '--vscode-editor-background:#ffffff;' +
-    '--vscode-editor-foreground:#24292f;' +
-    '--vscode-foreground:#24292f;' +
-    '--vscode-descriptionForeground:#57606a;' +
-    '--vscode-panel-border:#d0d7de;' +
+    '--vscode-editor-foreground:#000000;' +
+    '--vscode-foreground:#616161;' +
+    '--vscode-descriptionForeground:#717171;' +
+    '--vscode-errorForeground:#A1260D;' +
+    '--vscode-textLink-foreground:#006AB1;' +
+    '--vscode-textCodeBlock-background:#dcdcdc66;' +
+    '--vscode-textBlockQuote-background:#f2f2f2;' +
+    '--vscode-textBlockQuote-border:#007acc80;' +
+    '--vscode-panel-border:rgba(128,128,128,0.35);' +
+    '--vscode-toolbar-hoverBackground:#b8b8b850;' +
     '--vscode-input-background:#ffffff;' +
-    '--vscode-input-foreground:#24292f;' +
-    '--vscode-input-border:#8c959f;' +
-    '--vscode-button-background:#0969da;' +
+    '--vscode-input-foreground:#616161;' +
+    '--vscode-input-border:initial;' +
+    '--vscode-inputValidation-warningBackground:#F6F5D2;' +
+    '--vscode-inputValidation-warningBorder:#B89500;' +
+    '--vscode-dropdown-background:#FFFFFF;' +
+    '--vscode-dropdown-foreground:#616161;' +
+    '--vscode-dropdown-border:#CECECE;' +
+    '--vscode-button-background:#007ACC;' +
     '--vscode-button-foreground:#ffffff;' +
-    '--vscode-focusBorder:#0969da;' +
-    '--vscode-charts-blue:#0969da;' +
-    '--vscode-charts-orange:#9a6700;' +
-    '--vscode-charts-red:#cf222e;' +
-    '--vscode-charts-green:#1a7f37;' +
+    '--vscode-button-hoverBackground:#0062A3;' +
+    '--vscode-button-secondaryBackground:#E8E8E8;' +
+    '--vscode-button-secondaryForeground:#616161;' +
+    '--vscode-button-secondaryHoverBackground:#FFFFFF;' +
+    '--vscode-badge-background:#C4C4C4;' +
+    '--vscode-badge-foreground:#333333;' +
+    '--vscode-focusBorder:#0090F1;' +
+    '--vscode-list-hoverBackground:#E8E8E8;' +
+    '--vscode-progressBar-background:#0E70C0;' +
+    '--vscode-editorWidget-background:#F3F3F3;' +
+    '--vscode-testing-iconPassed:#73c991;' +
+    '--vscode-symbolIcon-functionForeground:#652D90;' +
+    '--vscode-charts-foreground:#616161;' +
+    '--vscode-charts-lines:rgba(97,97,97,0.5);' +
+    '--vscode-charts-blue:#0063D3;' +
+    '--vscode-charts-orange:#EA5C0055;' +
+    '--vscode-charts-red:#E51400;' +
+    '--vscode-charts-green:#388A34;' +
+    '--vscode-charts-purple:#652D90;' +
+    '--vscode-charts-yellow:#BF8803;' +
     '}*,*::before,*::after{animation:none!important;transition:none!important}',
   dark: ':root{' +
-    '--vscode-font-family:Arial,sans-serif;' +
-    '--vscode-editor-font-family:Menlo,monospace;' +
+    '--vscode-font-family:-apple-system,BlinkMacSystemFont,sans-serif;' +
+    '--vscode-font-size:13px;' +
+    '--vscode-editor-font-family:Menlo,Monaco,"Courier New",monospace;' +
     '--vscode-editor-background:#1e1e1e;' +
-    '--vscode-editor-foreground:#f2f2f2;' +
-    '--vscode-foreground:#f2f2f2;' +
-    '--vscode-descriptionForeground:#c4c4c4;' +
-    '--vscode-panel-border:#555555;' +
-    '--vscode-input-background:#2b2b2b;' +
-    '--vscode-input-foreground:#ffffff;' +
-    '--vscode-input-border:#777777;' +
+    '--vscode-editor-foreground:#D4D4D4;' +
+    '--vscode-foreground:#CCCCCC;' +
+    '--vscode-descriptionForeground:rgba(204,204,204,0.7);' +
+    '--vscode-errorForeground:#F48771;' +
+    '--vscode-textLink-foreground:#3794FF;' +
+    '--vscode-textCodeBlock-background:#0a0a0a66;' +
+    '--vscode-textBlockQuote-background:#222222;' +
+    '--vscode-textBlockQuote-border:#007acc80;' +
+    '--vscode-panel-border:rgba(128,128,128,0.35);' +
+    '--vscode-toolbar-hoverBackground:#5a5d5e50;' +
+    '--vscode-input-background:#3C3C3C;' +
+    '--vscode-input-foreground:#CCCCCC;' +
+    '--vscode-input-border:initial;' +
+    '--vscode-inputValidation-warningBackground:#352A05;' +
+    '--vscode-inputValidation-warningBorder:#B89500;' +
+    '--vscode-dropdown-background:#3C3C3C;' +
+    '--vscode-dropdown-foreground:#F0F0F0;' +
+    '--vscode-dropdown-border:#3C3C3C;' +
     '--vscode-button-background:#0e639c;' +
     '--vscode-button-foreground:#ffffff;' +
-    '--vscode-focusBorder:#75beff;' +
-    '--vscode-charts-blue:#4daafc;' +
-    '--vscode-charts-orange:#d18616;' +
-    '--vscode-charts-red:#f14c4c;' +
-    '--vscode-charts-green:#89d185;' +
+    '--vscode-button-hoverBackground:#1177BB;' +
+    '--vscode-button-secondaryBackground:#2A2D2E;' +
+    '--vscode-button-secondaryForeground:#CCCCCC;' +
+    '--vscode-button-secondaryHoverBackground:#333637;' +
+    '--vscode-badge-background:#4D4D4D;' +
+    '--vscode-badge-foreground:#FFFFFF;' +
+    '--vscode-focusBorder:#007FD4;' +
+    '--vscode-list-hoverBackground:#2A2D2E;' +
+    '--vscode-progressBar-background:#0E70C0;' +
+    '--vscode-editorWidget-background:#252526;' +
+    '--vscode-testing-iconPassed:#73c991;' +
+    '--vscode-symbolIcon-functionForeground:#B180D7;' +
+    '--vscode-charts-foreground:#CCCCCC;' +
+    '--vscode-charts-lines:rgba(204,204,204,0.5);' +
+    '--vscode-charts-blue:#59A4F9;' +
+    '--vscode-charts-orange:#EA5C0055;' +
+    '--vscode-charts-red:#F14C4C;' +
+    '--vscode-charts-green:#89D185;' +
+    '--vscode-charts-purple:#B180D7;' +
+    '--vscode-charts-yellow:#CCA700;' +
     '}*,*::before,*::after{animation:none!important;transition:none!important}',
 };
 
@@ -165,6 +222,7 @@ exports.renderHarness = function renderHarness({ provider: selectedProvider = 'c
         : codexWebviewFixture();
     const view = buildCodexUsageView(snapshot, CODEX_WEBVIEW_NOW);
     const provider = new UsageWebviewProvider({});
+    const persistedDetailsFixture = fixture === 'persisted-details';
     provider.settings = settingsStore();
     addClaudeData(provider);
     provider.updateProviderData(
@@ -175,8 +233,11 @@ exports.renderHarness = function renderHarness({ provider: selectedProvider = 'c
     provider.currentProvider = selectedProvider;
 
     const html = provider.getWebviewContent();
+    const fixtureHtml = persistedDetailsFixture
+      ? html.replace('<details class="model-item"', '<details class="model-item" data-persist="test-model"')
+      : html;
     const bodyClass = theme === 'dark' ? 'vscode-dark ' : 'vscode-light ';
-    return html
+    return fixtureHtml
       .replace('</head>', `<style id="test-vscode-theme">${THEMES[theme]}</style></head>`)
       .replace('<body class="', `<body class="${bodyClass}`);
   } finally {
