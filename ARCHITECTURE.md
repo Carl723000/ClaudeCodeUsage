@@ -39,10 +39,10 @@ aggregate sync are deferred to v2.4.x after a separate privacy review.
 | `providers/codex/codexProvider.ts` | Extension-facing Codex snapshot facade and partial/unavailable/error outcomes. |
 | `providers/codex/codexUsage.ts` | Codex-specific task/7-day/30-day/project view-model aggregation. |
 | `providers/codex/codexInsights.ts` | Deterministic structural usage guidance; no prompt/body inspection. |
-| `codexView.ts` | Dependency-free Codex and Compare HTML renderers. |
+| `codexView.ts` / `codexViewComponents.ts` | Codex localized-copy and default-provider contracts; no HTML renderer, client script, or CSS ownership. |
 | `settings.ts` | Canonical `SETTINGS` catalog and `SettingsStore`; do not scatter direct reads. |
 | `statusBar.ts` / `codexStatus.ts` | Provider-specific status presentation and generic Claude quota formatting. |
-| `webview.ts` | Existing Claude dashboard plus provider tabs and isolated Codex/Compare render slots. |
+| `webview.ts` | Single provider-aware Claude/Codex dashboard shell, shared render functions, shared client behavior, provider tabs, and Compare presentation. |
 | `i18n.ts` | All user-facing copy for all eight UI locales. |
 | `types.ts` | Shared extension and Claude contracts. |
 
@@ -62,9 +62,10 @@ allowlisted Codex JSONL
   ──> per-file numeric aggregate index
   ──> CodexProviderSnapshot
   ──> Codex scopes + insights
-  ──> Codex status/dashboard
+  ──> Codex status + provider-aware dashboard render inputs
 
-Claude view + Codex view ──> side-by-side Compare (no cross-provider totals)
+Claude aggregates + Codex scopes ──> one `webview.ts` dashboard render stack
+Claude aggregates + Codex scopes ──> side-by-side Compare (no cross-provider totals)
 ```
 
 One provider may be unavailable or partial without clearing the other

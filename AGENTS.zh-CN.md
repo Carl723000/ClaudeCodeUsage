@@ -9,8 +9,8 @@
   VS Code 扩展。Claude 保留精确 token 总量、成本估算与 OAuth 配额；
   v2.3.0 直接包含 Codex Beta，提供 provider-specific 的本地用量与优化视图，
   不假定其指标与 Claude 账单等价。
-- 保留既有产品身份与 Claude 工作流，同时增加 provider-neutral contract
-  和 provider-specific 展示。
+- 保留既有产品身份与 Claude 工作流，同时增加 provider-neutral contract。
+  Claude 与 Codex 仪表盘必须复用同一组 provider-aware render function 和同一份 CSS contract。
 - 优先保证 token 归因准确，不追求账单级精度。精确总量、明确标注的估算、
   某一时点的配额观测必须保持为不同概念。
 - 扩展保持 local-first、轻量和 read-mostly。绝不修改 Claude 或 Codex 对话 JSONL；
@@ -25,11 +25,12 @@
   coverage、confidence 与 limit contract；不得抹平 provider 语义。
 - `src/providers/codex/`：允许目录发现、schema guard、cumulative high-water 解析、
   per-file 聚合索引、worker protocol 和 Codex facade。
-- `src/codexView.ts`：无依赖的 Codex/Compare 渲染；Compare 绝不跨 provider
-  求和成本或配额。
+- `src/codexView.ts` / `src/codexViewComponents.ts`：只保存 Codex 文案与默认
+  provider contract，不负责 HTML、client code 或样式。
 - `src/settings.ts`：`SETTINGS` catalog 与 `SettingsStore`；不要散落直接配置读取。
 - `src/statusBar.ts`：状态栏 token、成本、配额和 context 展示。
-- `src/webview.ts`：dashboard HTML 与客户端行为。
+- `src/webview.ts`：Claude/Codex 唯一一套 provider-aware dashboard HTML 与客户端行为；
+  Compare 绝不跨 provider 求和成本或配额。
 - `src/i18n.ts`：八个 UI locale 的全部用户可见文案。
 - `src/types.ts`：共享 contract。
 - 改变模块职责或数据流前先读 `ARCHITECTURE.md`；若该变化需要维护者审阅，
@@ -86,6 +87,19 @@ npx @vscode/vsce package
 - 用户可见变更需要更新 `CHANGELOG.md` 和对应文档。
 - UI 变更还要用 F5 Extension Development Host smoke test；候选版本在条件允许时
   需要在 macOS 和 Linux 安装 VSIX 做 smoke test。
+
+### UI 渲染环境保真度
+
+任何 UI 改动，渲染环境必须先证明与真实 VS Code webview 等价：生产样式表中所有
+被引用的 `--vscode-*` 变量必须在测试 harness 中有真实取值，且有守卫测试强制
+这一点。在此之前产生的视觉快照一律不作为验收依据。
+变量的取值必须来自 VS Code 内置主题的注册值，不得混用其他配色体系。
+
+### 交互状态验收
+
+webview 刷新为整页替换。任何新增的用户可交互状态（展开/折叠、排序、筛选、
+选中），必须接入现有持久化机制，并附带一条“操作 → reload → 状态仍在”的测试。
+只验证首次渲染的静态断言不构成验收。
 
 ## 本地化与审阅文档
 

@@ -10,7 +10,8 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
   OAuth quota; Codex Beta in v2.3.0 has provider-specific local usage and
   optimization views without pretending its metrics equal Claude billing.
 - Preserve the established product identity and Claude workflows while adding
-  provider-neutral contracts and provider-specific presentation.
+  provider-neutral contracts. Claude and Codex dashboard presentation must use
+  the same provider-aware render functions and the same CSS contract.
 - Prefer token-attribution accuracy over billing precision. Keep exact totals,
   labelled estimates, and point-in-time quota observations as separate concepts.
 - Keep the extension local-first, lightweight, and read-mostly. Never modify
@@ -28,12 +29,13 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
   coverage, confidence, and limit contracts. Do not erase provider semantics.
 - `src/providers/codex/`: allowed-root discovery, schema guards, cumulative
   high-water parsing, per-file aggregate index, worker protocol, and Codex facade.
-- `src/codexView.ts`: dependency-free Codex and Compare rendering; Compare never
-  sums cost or quota across providers.
+- `src/codexView.ts` / `src/codexViewComponents.ts`: Codex copy and default-provider
+  contracts only; they do not own HTML, client code, or styles.
 - `src/settings.ts`: the `SETTINGS` catalog and `SettingsStore`; do not scatter
   direct configuration reads.
 - `src/statusBar.ts`: status-bar token/cost/quota/context presentation.
-- `src/webview.ts`: dashboard HTML and client behavior.
+- `src/webview.ts`: the single provider-aware Claude/Codex dashboard HTML and
+  client behavior. Compare never sums cost or quota across providers.
 - `src/i18n.ts`: all user-facing copy for all eight UI locales.
 - `src/types.ts`: shared contracts.
 - Read `ARCHITECTURE.md` before changing module ownership or the data flow. If
@@ -99,6 +101,23 @@ npx @vscode/vsce package
 - User-facing changes require a `CHANGELOG.md` entry and matching documentation.
 - UI changes also require an F5 Extension Development Host smoke test; release
   candidates require an installed-VSIX smoke test on macOS and Linux when available.
+
+### UI rendering-environment fidelity
+
+For any UI change, first prove that the rendering environment is equivalent to
+a real VS Code webview: every referenced `--vscode-*` variable in the production
+stylesheet must have a real value in the test harness, with a guard test enforcing
+that invariant. Visual snapshots produced before this is true are not acceptance
+evidence.
+Variable values must come from the registered values of VS Code's built-in themes;
+do not mix in another color system.
+
+### Interaction-state acceptance
+
+Webview refresh is a full-page replacement. Every new user-interactive state
+(expand/collapse, sorting, filtering, or selection) must use the existing
+persistence mechanism and include an operation → reload → state-remains test.
+A static assertion of the first render is not acceptance evidence.
 
 ## Localization and review documents
 

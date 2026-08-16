@@ -6,9 +6,9 @@
 
 **The local Claude Code and Codex usage coach in your status bar.** Not a
 billing tool. Claude keeps its cost and quota views; the v2.3 Codex Beta adds
-provider-specific token and behaviour insights in a coherent **Overview /
-Explore / Recommendations** dashboard instead of pretending both providers
-expose the same data.
+provider-specific token and behaviour insights through the same dashboard tabs,
+render functions, and visual system without pretending both providers expose
+the same data.
 
 > **What this is:** A VS Code status-bar monitor that reads your local
 > Claude Code and Codex logs and shows provider-appropriate usage views — plus
@@ -22,8 +22,8 @@ expose the same data.
 >
 > **简介**：一个 VS Code 状态栏小工具。Claude 保留成本与配额视图；
 > v2.3 的 Codex Beta 则按 Codex 自身的数据语义展示 token、effort、任务结构
-> 和本地优化建议，并统一组织为**概览 / 探索 / 优化建议**三页，而不是强行
-> 套用 Claude 的统计方式。
+> 和本地优化建议，同时复用 Claude 仪表盘的标签页、渲染函数和视觉体系，
+> 而不是另做一套页面或强行套用 Claude 的统计口径。
 >
 > **它不是什么**：账单工具。Claude 金额为估算值；Codex 不估算美元成本。
 > 实际费用请以相应供应商的官方账单为准。
@@ -115,16 +115,14 @@ consent prompt.
   tool-argument fields are not inspected or used for analysis, and are never
   retained or persisted.
   Disable Codex at any time in **Settings → Providers**.
-- **Codex-native metrics** — **processed** = input + output; **fresh** =
+- **Codex-native metrics** — **processed** = input + output; **uncached usage** =
   uncached input + output; **cached input** is a subset of input; **reasoning**
   is a subset of output. No artificial Codex cost estimate is shown.
-- **Three focused pages, one visual language** — **Overview** provides Recent /
-  7 Days / 30 Days / All Time scopes with summaries, trends, composition,
-  last-observed limits, and the recent task. **Explore** contains Projects,
-  Sessions, and Models & effort, with search, filters, sorting, drill-downs, and
-  parent/child lineage. **Recommendations** follows the selected scope and shows
-  an observation, readable evidence, a structural-proxy explanation, and a
-  conditional action only when evidence supports it.
+- **One dashboard render stack** — switching to Codex keeps the established
+  Today / Month / All time / Sessions / Projects / Content / Settings structure,
+  relabelled where Codex semantics differ. The same render functions, HTML
+  classes, charts, tables, spacing, and responsive rules are used for both
+  providers; Codex recommendations use indexed 30-day structural evidence.
 - **Truthful names, no invented concepts** — root tasks use the latest real
   thread title after path redaction. Child rows prefer their own real thread
   title; when it is missing, they use the reported nickname and display the
@@ -145,9 +143,9 @@ consent prompt.
   full paths or repository URLs, thread titles, or conversation bodies. A
   background worker scans large histories with a default 30-second watcher delay
   (Off / 10 / 30 / 60 / 120 / 300 seconds).
-- **Provider-aware controls** — Settings opens as an auxiliary page and returns
-  to the previous main page, rather than becoming a fourth destination. Codex
-  collection and local Codex recommendations can each be disabled.
+- **Provider-aware controls** — the shared Settings tab shows only common and
+  Codex-effective controls when Codex is selected. Codex collection and local
+  Codex recommendations can each be disabled.
 - **Exact-version release notice** — the upgrade message only describes the
   installed release. It is on by default and can be disabled in Settings.
 
