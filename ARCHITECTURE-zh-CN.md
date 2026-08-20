@@ -100,12 +100,21 @@ raw line 或 raw path。
 Machine salt 存在 VS Code `globalState`，不写入索引。Worker progress/result/error 与 diagnostics
 只含匿名计数与时间，不含 path 或 ID。
 
-### Schema 2 索引契约
+### Schema 3 索引契约
 
-内部 schema 2 继续使用既有的 `globalStorage` 文件名 `codex-index-v1.json`；文件名是兼容路径，
+内部 schema 3 继续使用既有的 `globalStorage` 文件名 `codex-index-v1.json`；文件名是兼容路径，
 不是 JSON schema 版本声明。持久化 DTO 使用明确的 allowlist：只能写入数字 aggregate、enum、
-伪名 key 与清洗后的 label。v2 不保存未完成原始行，也不保存 carry buffer。旧字段只在明确命名的
-schema-1 legacy migration 边界被读取；该迁移会先丢弃 carry，之后才保存 v2 索引。
+伪名 key、清洗后的 label，以及仅由数字 token 计数向量生成的不透明指纹。v3 不保存未完成原始行，
+也不保存 carry buffer。旧字段只在明确命名的 schema-1 legacy migration 边界被读取；该迁移会先
+丢弃 carry，之后才保存 v3 索引。schema 1 与 schema 2 索引都会被标记为需要执行有界 lineage 重扫；
+旧总量不会保留后再叠加到重建结果。
+
+每个物理 rollout 锁定首个可靠的 session 与 tree 身份。随后用有序的数字事件指纹，在已验证父节点
+中定位 child 复制的前缀，同时保留每个独立 sibling 的后缀。多层 fork 与不同 fork epoch 各自只扣除
+一次复制前缀。若声明的 parent 缺失，child 会保守地按全量计入，并在 UI 显示 `missing-parent` 质量警告，
+不会静默扣除。计数器回退使用按 component 的 high-water containment，不产生负 delta，也不会重复计入
+reset gap。同一伪名 session 的 active/archive 副本若存在已验证的有序重叠，该段也只计一次；若身份元数据
+互相冲突，identity coverage 仍保持 incomplete。
 
 这里有两个相互独立的可信度层。all-time 视图来自 canonical file contribution 的已验证的
 aggregate；按日的期间切片则独立晋升，因此 partial migration 不能覆盖、放大或替代 all-time 的
@@ -136,7 +145,7 @@ Codex 按 2.4-GB-class 本地历史设计：
 - unchanged warm refresh 不读 JSONL body；
 - 每次 refresh 最多 16 次文件遍历、32 MiB；安全下限为 1 MiB + 1 byte，读取 chunk 为 256 KiB，
   单条 JSONL line 上限为 1 MiB；
-- append refresh 只读新 tail；未完成行只留在 scanner 的短期内存，从 safe cursor 重试，绝不写入 v2；
+- append refresh 只读新 tail；未完成行只留在 scanner 的短期内存，从 safe cursor 重试，绝不写入 v3；
 - truncate/replacement 只重解析受影响文件；
 - cancel checkpoint 会原子保存 per-file contribution 与 migration progress，下一轮从已验证 cursor resume；
 - 并发 refresh 共享同一 worker run。

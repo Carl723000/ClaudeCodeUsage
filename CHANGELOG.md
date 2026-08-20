@@ -122,6 +122,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - Rolling 7-day and 30-day views now use exact event-day slices in the configured
   timezone. Period migration and coverage gaps stay visibly partial instead of
   being presented as complete data.
+- **Schema-3 lineage reconciliation** — ordered fingerprints of numeric token
+  counters remove only copied parent prefixes across direct, nested, and
+  multi-epoch forks and verified active/archive overlaps while preserving
+  independent sibling work. Missing parents remain conservatively counted and
+  surface a visible quality warning. Legacy indexes rebuild in bounded passes
+  instead of retaining inflated totals.
 
 ### Fixed
 - **Shared-dashboard readability** — active tabs remain distinguishable in
@@ -148,6 +154,20 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   then rebuilt from local usage records instead of leaving Codex Beta stuck in
   an error state. Diagnostics expose only a safe recovery reason, never the
   index path or contents; unrelated filesystem errors still fail closed.
+- **Codex fork overcounting** — copied token histories replayed into child
+  rollouts no longer inflate provider totals. Counter regressions use
+  component-wise high-water containment rather than adding reset gaps again.
+- **Visible Codex backfill state** — while bounded indexing is still converging,
+  Coverage · Quality now warns that current totals are incomplete, shows the
+  real indexed-files/total-files progress, and clears the warning automatically
+  once base and period coverage are complete.
+
+### Removed
+- **Weekly Opus naming retired** — the fixed Opus-specific surface is replaced
+  by the generic, API-named `showScopedWeekly` setting. PR #38 and
+  [@wheelbarrel00](https://github.com/wheelbarrel00) remain credited for the
+  original contribution.
+
 ### Privacy
 - Codex usage-record discovery is restricted to `sessions/**/*.jsonl` and
   `archived_sessions/**/*.jsonl`. Separately, the extension streams exactly

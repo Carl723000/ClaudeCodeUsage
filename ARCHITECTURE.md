@@ -113,15 +113,29 @@ The machine salt lives in VS Code `globalState`, not in the index file. Worker
 progress/results/errors and diagnostics contain anonymous counts and timings,
 not paths or identifiers.
 
-### Schema 2 index contract
+### Schema 3 index contract
 
-Schema 2 deliberately keeps the established `globalStorage` filename
+Schema 3 deliberately keeps the established `globalStorage` filename
 `codex-index-v1.json`; the filename is a compatibility path, not a statement
 about the JSON schema. Its persisted DTO is an explicit allowlist of numeric
-aggregates, enum values, pseudonymous keys, and cleaned labels. A v2 file never
+aggregates, enum values, pseudonymous keys, cleaned labels, and opaque
+fingerprints derived only from numeric token-counter vectors. A v3 file never
 stores a raw incomplete line or a carry buffer. The only reader for those old
 fields is the explicitly named legacy schema-1 migration boundary; it discards
-the carry before the v2 index is saved.
+the carry before the v3 index is saved. Schema-1 and schema-2 indexes are marked
+for a bounded lineage rescan; their prior totals are not retained and added to
+the rebuilt result.
+
+Each physical rollout locks its first reliable session and tree identity. An
+ordered numeric-event fingerprint trace then finds the copied prefix of a child
+inside its verified parent while retaining every independent sibling suffix.
+Nested forks and separate fork epochs apply their own prefix once. If the
+reported parent is absent, the child stays conservatively counted in full and a
+visible `missing-parent` quality warning replaces silent subtraction. Counter
+regressions use component high-water containment; they never create negative
+deltas or count a reset gap again. A verified ordered overlap for the same
+pseudonymous session across active/archive copies is likewise counted once,
+while conflicting identity metadata still keeps identity coverage incomplete.
 
 There are two separate truth layers. The all-time view is built from the
 verified aggregate of canonical file contributions. Time-bucketed period slices
@@ -162,7 +176,7 @@ Codex history is designed for 2.4-GB-class local corpora:
 - each refresh has a 16 file passes / 32 MiB budget; the safe minimum is
   1 MiB + 1 byte, reads use 256 KiB chunks, and a JSONL line is capped at 1 MiB;
 - append refresh reads only the new tail; an incomplete line stays only in the
-  scanner's short-lived memory and is retried from the safe cursor, never in v2;
+  scanner's short-lived memory and is retried from the safe cursor, never in v3;
 - truncation/replacement reparses only the affected file;
 - cancellation checkpoints atomically save per-file contributions and migration
   progress, so the next run resumes from the verified cursor;
