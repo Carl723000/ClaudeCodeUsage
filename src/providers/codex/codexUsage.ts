@@ -873,6 +873,17 @@ export function buildCodexUsageView(
   const recentProjectFiles = recent.filter((file) =>
     projectIdentityKey(file) === recentProjectIdentityKey
   );
+  const qualityFlags = { ...snapshot.qualityFlags };
+  const indexBackfillIncomplete =
+    !snapshot.coverage.complete ||
+    !periodCoverage.last7Days.complete ||
+    !periodCoverage.last30Days.complete ||
+    !periodCoverage.allTime.complete;
+  if (indexBackfillIncomplete) {
+    qualityFlags['index-backfill-incomplete'] = 1;
+  } else {
+    delete qualityFlags['index-backfill-incomplete'];
+  }
 
   return {
     lastTask: recentScope,
@@ -938,7 +949,7 @@ export function buildCodexUsageView(
     behavior: behaviorView(allTime),
     periodCoverage,
     coverage: snapshot.coverage,
-    qualityFlags: Object.entries(snapshot.qualityFlags)
+    qualityFlags: Object.entries(qualityFlags)
       .map(([flag, count]) => ({ flag, count }))
       .sort((left, right) => left.flag.localeCompare(right.flag)),
     limits,

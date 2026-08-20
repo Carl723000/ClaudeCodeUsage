@@ -54,7 +54,7 @@ test('corrupt index trailing data is preserved and rebuilt from an empty index',
       (event: { reason: string }) => recoveries.push(event),
     );
 
-    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.schemaVersion, 3);
     assert.equal(loaded.coverage.period.timeZone, 'Asia/Hong_Kong');
     assert.deepEqual(recoveries, [{ reason: 'invalid-json' }]);
     await assert.rejects(readFile(indexPath, 'utf8'), { code: 'ENOENT' });
@@ -80,7 +80,7 @@ test('unsupported index schema is quarantined with its distinct recovery reason'
       (event: { reason: string }) => recoveries.push(event),
     );
 
-    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.schemaVersion, 3);
     assert.deepEqual(recoveries, [{ reason: 'unsupported-schema' }]);
     const backups = await corruptIndexBackups(root);
     assert.equal(backups.length, 1);
@@ -1599,7 +1599,7 @@ test('the persisted v1 loader migrates legacy structural proxy keys', async () =
 
     const loaded = await loadCodexIndex(indexPath, 'Asia/Hong_Kong');
 
-    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.schemaVersion, 3);
     assert.equal(loaded.files.a.offset, 100);
     assert.equal(loaded.files.a.discardingOversizedLine, false);
     assert.equal(loaded.aggregate.total.inputTotal, 123);
@@ -1831,7 +1831,7 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
     const loaded = await loadCodexIndex(indexPath, 'Asia/Hong_Kong');
     const loadedJson = JSON.stringify(loaded);
     assert.doesNotMatch(loadedJson, /v2-secret/);
-    assert.equal(loaded.schemaVersion, 2);
+    assert.equal(loaded.schemaVersion, 3);
     assert.equal(loaded.files.a.offset, 100);
     assert.equal(loaded.files.a.aggregate.total.inputTotal, 123);
     assert.equal(loaded.files.a.parserState.highWater?.inputTokens, 123);
@@ -1861,7 +1861,10 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
     assert.equal(loaded.files.a.limit?.windows[0].usedPercent, 25);
     assert.equal(loaded.files.a.limit?.credits?.balance, '42');
     assert.equal(loaded.files.a.limits?.primary.observedAt, 31);
-    assert.deepEqual(loaded.files.a.qualityFlags, ['legacy-quality']);
+    assert.deepEqual(loaded.files.a.qualityFlags, [
+      'legacy-quality',
+      'stale-reset-required',
+    ]);
     assert.equal(loaded.aggregate.total.inputTotal, 123);
     assert.equal(loaded.coverage.indexedBytes, 100);
     assert.equal(loaded.files.a.sourceArea, 'sessions');
@@ -1958,7 +1961,7 @@ test('legacy period coverage without an as-of day cannot remain complete', async
     assert.match(period.asOfDay, /^\d{4}-\d{2}-\d{2}$/);
     assert.equal(period.last7Days.complete, false);
     assert.equal(period.last30Days.complete, false);
-    assert.equal(period.allTime.complete, true);
+    assert.equal(period.allTime.complete, false);
 
     await saveCodexIndexAtomic(indexPath, loaded);
     const persisted = JSON.parse(await readFile(indexPath, 'utf8')) as {
@@ -1974,12 +1977,12 @@ test('legacy period coverage without an as-of day cannot remain complete', async
     assert.equal(persisted.coverage.period.asOfDay, period.asOfDay);
     assert.equal(persisted.coverage.period.last7Days.complete, false);
     assert.equal(persisted.coverage.period.last30Days.complete, false);
-    assert.equal(persisted.coverage.period.allTime.complete, true);
+    assert.equal(persisted.coverage.period.allTime.complete, false);
 
     const reloaded = await loadCodexIndex(indexPath, 'Asia/Hong_Kong');
     assert.equal(reloaded.coverage.period.last7Days.complete, false);
     assert.equal(reloaded.coverage.period.last30Days.complete, false);
-    assert.equal(reloaded.coverage.period.allTime.complete, true);
+    assert.equal(reloaded.coverage.period.allTime.complete, false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

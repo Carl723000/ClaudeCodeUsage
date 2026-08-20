@@ -111,17 +111,47 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
     provider.projectBreakdown = [project];
     provider.contentAnalysis = content;
     provider.providerAvailability = { claude: true, codex: true };
-    const codexView = buildCodexUsageView(codexWebviewFixture(), CODEX_WEBVIEW_NOW);
+    const codexSnapshot = codexWebviewFixture();
+    codexSnapshot.qualityFlags = { 'missing-parent': 1 };
+    const codexView = buildCodexUsageView(codexSnapshot, CODEX_WEBVIEW_NOW);
     provider.codexView = codexView;
     provider.codexInsights = buildScopedCodexInsights(codexView);
 
     provider.currentProvider = 'claude';
     const claudeClasses = renderedClasses(provider.getMainContent());
     provider.currentProvider = 'codex';
-    const codexClasses = renderedClasses(provider.getMainContent());
+    const codexHtml = provider.getMainContent();
+    const codexClasses = renderedClasses(codexHtml);
     const codexOnly = [...codexClasses].filter((className) => !claudeClasses.has(className)).sort();
 
     assert.deepEqual(codexOnly, []);
+    assert.match(
+      codexHtml,
+      /Parent session log missing; conservative usage retained[^<]*1/,
+    );
+    assert.match(
+      codexHtml,
+      /Usage index is still being built; current totals are incomplete and indexing will continue automatically[^<]*24\/30/,
+    );
+
+    codexSnapshot.coverage.indexedFiles = codexSnapshot.coverage.totalFiles;
+    codexSnapshot.coverage.indexedBytes = codexSnapshot.coverage.totalBytes;
+    codexSnapshot.coverage.complete = true;
+    for (const range of [
+      codexSnapshot.coverage.period.last7Days,
+      codexSnapshot.coverage.period.last30Days,
+      codexSnapshot.coverage.period.allTime,
+    ]) {
+      range.migratedFiles = range.totalFiles;
+      range.migratedBytes = range.totalBytes;
+      range.complete = true;
+    }
+    provider.codexView = buildCodexUsageView(codexSnapshot, CODEX_WEBVIEW_NOW);
+    provider.codexInsights = buildScopedCodexInsights(provider.codexView);
+    assert.doesNotMatch(
+      provider.getMainContent(),
+      /Usage index is still being built/,
+    );
   } finally {
     (Module as any)._load = originalLoad;
   }
@@ -251,7 +281,7 @@ test('provider and Codex view copy is complete in every UI locale', () => {
         if (typeof value === 'string') {
           assert.notEqual(value.trim(), '', `${language} has empty Codex copy`);
         } else {
-          assert.ok([5, 15].includes(Object.keys(value).length));
+          assert.ok([5, 15, 16, 17].includes(Object.keys(value).length));
         }
       }
       assert.deepEqual(

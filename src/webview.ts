@@ -1158,7 +1158,7 @@ export class UsageWebviewProvider {
     if (provider === 'codex') {
       const view = this.codexView;
       const copy = I18n.t.providers.codex;
-      if (!view || !view.lastTask) {
+      if (!view) {
         return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>';
       }
       const formatters = createCodexLocalizedFormatters(I18n.getLocale(), I18n.getTimezone());
@@ -1199,13 +1199,29 @@ export class UsageWebviewProvider {
               '</div><div class="value">' + this.escapeHtml(value) + '</div>' + reset + '</div>';
           }).join('') + '</div></div>'
         : '';
+      const qualityFlags = view.qualityFlags.length > 0
+        ? '<ul class="model-details">' + view.qualityFlags.map(({ flag, count }) => {
+            const label = copy.qualityFlagLabels[flag as keyof typeof copy.qualityFlagLabels] ??
+              copy.qualityFlagUnknown;
+            const detail = flag === 'index-backfill-incomplete'
+              ? I18n.formatNumber(view.coverage.indexedFiles) + '/' +
+                I18n.formatNumber(view.coverage.totalFiles)
+              : I18n.formatNumber(count);
+            return '<li>' + this.escapeHtml(label) + ' · ' + detail + '</li>';
+          }).join('') + '</ul>'
+        : '';
       const coverage = '<details class="model-item"><summary>' + this.escapeHtml(copy.coverage) +
         ' · ' + this.escapeHtml(copy.quality) + '</summary><p class="model-details">' +
         this.escapeHtml(copy.indexedLogEntries) + ': ' + I18n.formatNumber(view.coverage.indexedFiles) + '/' +
         I18n.formatNumber(view.coverage.totalFiles) + ' · ' + this.escapeHtml(copy.indexedStorage) + ': ' +
         this.escapeHtml(formatters.formatBytes(view.coverage.indexedBytes)) + '/' +
         this.escapeHtml(formatters.formatBytes(view.coverage.totalBytes)) + ' · ' +
-        this.escapeHtml(view.coverage.complete ? copy.complete : copy.partial) + '</p></details>';
+        this.escapeHtml(view.coverage.complete ? copy.complete : copy.partial) + '</p>' +
+        qualityFlags + '</details>';
+      if (!view.lastTask) {
+        return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>' +
+          coverage;
+      }
       return this.renderUsageData(null, provider, view.lastTask) + identity + limits + coverage;
     }
     if (!this.todayData) {

@@ -84,6 +84,30 @@ test('partial period coverage disables unreliable session membership ranges', ()
   });
 });
 
+test('index backfill quality warning follows index convergence', () => {
+  const snapshot = snapshotFixture();
+  const incomplete = buildCodexUsageView(snapshot, NOW);
+
+  assert.deepEqual(
+    incomplete.qualityFlags.find(
+      ({ flag }) => flag === 'index-backfill-incomplete',
+    ),
+    { flag: 'index-backfill-incomplete', count: 1 },
+  );
+
+  snapshot.coverage.indexedFiles = snapshot.coverage.totalFiles;
+  snapshot.coverage.indexedBytes = snapshot.coverage.totalBytes;
+  snapshot.coverage.complete = true;
+  const converged = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(
+    converged.qualityFlags.some(
+      ({ flag }) => flag === 'index-backfill-incomplete',
+    ),
+    false,
+  );
+});
+
 test('Explore lineage uses stable view keys for three levels and safely degrades cycles and orphans', () => {
   const snapshot = snapshotFixture();
   const [root, child] = snapshot.files;
@@ -599,7 +623,10 @@ test('usage view exposes classified limits and a safe recent task identity', () 
       },
     },
   });
-  assert.deepEqual(view.qualityFlags, [{ flag: 'unknown-event', count: 1 }]);
+  assert.deepEqual(view.qualityFlags, [
+    { flag: 'index-backfill-incomplete', count: 1 },
+    { flag: 'unknown-event', count: 1 },
+  ]);
 });
 
 test('an empty snapshot has no recent task and safe zero scopes', () => {

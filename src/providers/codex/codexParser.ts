@@ -23,9 +23,11 @@ export interface CodexRawTokenCounts {
 }
 
 export interface CodexParserState {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   fileKey: string;
   sessionKey: string;
+  treeKey?: string;
+  identityLocked?: boolean;
   parentSessionKey?: string;
   projectKey?: string;
   projectName?: string;
@@ -51,15 +53,18 @@ export interface CodexLineOutput {
   events: NormalizedUsageEvent[];
   limit?: ProviderLimitSnapshot;
   structural?: CodexStructuralEvent;
+  lineageBoundary?: boolean;
+  lineageTokenKey?: string;
 }
 
 export function createCodexParserState(
   fileKey: string,
 ): CodexParserState {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     fileKey,
     sessionKey: fileKey,
+    identityLocked: false,
     role: 'root',
     qualityFlags: [],
   };
@@ -101,6 +106,25 @@ function componentDelta(
     reasoningOutput:
       current.reasoningOutputTokens - previous.reasoningOutputTokens,
     sourceTotal: current.totalTokens - previous.totalTokens,
+  };
+}
+
+function containedHighWater(
+  current: CodexRawTokenCounts,
+  previous: CodexRawTokenCounts,
+): CodexRawTokenCounts {
+  return {
+    inputTokens: Math.max(current.inputTokens, previous.inputTokens),
+    cachedInputTokens: Math.max(
+      current.cachedInputTokens,
+      previous.cachedInputTokens,
+    ),
+    outputTokens: Math.max(current.outputTokens, previous.outputTokens),
+    reasoningOutputTokens: Math.max(
+      current.reasoningOutputTokens,
+      previous.reasoningOutputTokens,
+    ),
+    totalTokens: Math.max(current.totalTokens, previous.totalTokens),
   };
 }
 
@@ -285,6 +309,8 @@ function parseSessionMetadata(
   const subagent = nestedObject(payload, 'source', 'subagent');
   const spawn = nestedObject(payload, 'source', 'subagent', 'thread_spawn');
   const rawSession = stringField(payload, 'id');
+  const rawTree =
+    stringField(payload, 'session_id') ?? stringField(payload, 'sessionId');
   const rawParent =
     stringField(payload, 'parent_thread_id') ??
     stringField(payload, 'forked_from_id') ??
@@ -316,15 +342,32 @@ function parseSessionMetadata(
   let nextState = state;
   if (
     !pseudonymize &&
-    (rawSession || rawParent || projectIdentity.keySource)
+    (rawSession || rawTree || rawParent || projectIdentity.keySource)
   ) {
     nextState = withFlag(nextState, 'missing-pseudonymizer');
   }
+  const sessionKey = rawSession && pseudonymize
+    ? pseudonymize(rawSession)
+    : undefined;
+  if (
+    state.identityLocked &&
+    sessionKey &&
+    sessionKey !== state.sessionKey
+  ) {
+    return { state: nextState, events: [] };
+  }
+  const locksIdentity = !state.identityLocked && sessionKey !== undefined;
   nextState = {
     ...nextState,
-    sessionKey:
-      rawSession && pseudonymize ? pseudonymize(rawSession) : state.sessionKey,
-    parentSessionKey,
+    sessionKey: sessionKey ?? state.sessionKey,
+    treeKey:
+      locksIdentity && rawTree && pseudonymize
+        ? pseudonymize(rawTree)
+        : state.treeKey,
+    identityLocked: state.identityLocked || locksIdentity,
+    parentSessionKey: locksIdentity || sessionKey === state.sessionKey
+      ? parentSessionKey
+      : state.parentSessionKey,
     projectKey: projectIdentity.keySource && pseudonymize
       ? pseudonymize(projectIdentity.keySource)
       : state.projectKey,
@@ -389,18 +432,32 @@ function parseTokenCount(
   const observedAt = timestampOf(entry);
   const limit = parsePrimaryLimit(payload, info, observedAt);
   const previous = state.highWater ?? zeroCounts();
-  if (hasRegression(current, previous)) {
-    return {
-      state: { ...withFlag(state, 'counter-regression'), highWater: current },
-      events: [],
-      limit,
-    };
-  }
-
-  const tokens = componentDelta(current, previous);
-  const nextState = { ...state, highWater: current };
+  const regressed = hasRegression(current, previous);
+  const nextHighWater = containedHighWater(current, previous);
+  const tokens = componentDelta(nextHighWater, previous);
+  const nextState = {
+    ...(regressed ? withFlag(state, 'counter-regression') : state),
+    highWater: nextHighWater,
+  };
+  const last = rawTokenCounts(info.last_token_usage);
+  const lineageTokenKey = [
+    current.inputTokens,
+    current.cachedInputTokens,
+    current.outputTokens,
+    current.reasoningOutputTokens,
+    current.totalTokens,
+    ...(last
+      ? [
+          last.inputTokens,
+          last.cachedInputTokens,
+          last.outputTokens,
+          last.reasoningOutputTokens,
+          last.totalTokens,
+        ]
+      : []),
+  ].join(':');
   if (!hasUsage(tokens)) {
-    return { state: nextState, events: [], limit };
+    return { state: nextState, events: [], limit, lineageTokenKey };
   }
 
   const event: NormalizedUsageEvent = {
@@ -418,7 +475,7 @@ function parseTokenCount(
     confidence: state.qualityFlags.length > 0 ? 'partial' : 'exact',
     qualityFlags: [...state.qualityFlags],
   };
-  return { state: nextState, events: [event], limit };
+  return { state: nextState, events: [event], limit, lineageTokenKey };
 }
 
 export function parseCodexLine(
@@ -443,6 +500,9 @@ export function parseCodexLine(
     }
     if (stringField(entry.payload, 'type') === 'token_count') {
       return parseTokenCount(entry, entry.payload, state);
+    }
+    if (stringField(entry.payload, 'type') === 'task_started') {
+      return { state, events: [], lineageBoundary: true };
     }
     return {
       state,

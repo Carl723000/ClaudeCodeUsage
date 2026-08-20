@@ -887,17 +887,17 @@ test('line endings and tracked file modes are repository-safe', () => {
 test('semantic Codex policy validators reject nested DTO leaks, comment-only sanitizers, and misleading legacy fixtures', () => {
   const nestedLeak = projectFromSources({
     'fixture.ts': [
-      'interface CodexIndexV2 { files: Record<string, CodexFileContribution>; }',
+      'interface CodexIndexV3 { files: Record<string, CodexFileContribution>; }',
       'interface CodexFileContribution { migration: CodexPeriodMigrationState; }',
       'interface CodexPeriodMigrationState { days: Record<string, CodexDailySlice>; }',
       'interface CodexDailySlice { rawLine: string; carry: string; }',
     ].join('\n'),
   });
   assert.deepEqual(
-    persistedPropertyViolations(nestedLeak, 'CodexIndexV2'),
+    persistedPropertyViolations(nestedLeak, 'CodexIndexV3'),
     [
-      'CodexIndexV2.files.CodexFileContribution.migration.CodexPeriodMigrationState.days.CodexDailySlice.rawLine',
-      'CodexIndexV2.files.CodexFileContribution.migration.CodexPeriodMigrationState.days.CodexDailySlice.carry',
+      'CodexIndexV3.files.CodexFileContribution.migration.CodexPeriodMigrationState.days.CodexDailySlice.rawLine',
+      'CodexIndexV3.files.CodexFileContribution.migration.CodexPeriodMigrationState.days.CodexDailySlice.carry',
     ],
   );
 
@@ -1254,13 +1254,13 @@ test('Codex production rendering is owned by the provider-aware webview function
   assert.doesNotMatch(webview, /renderCodexView|getCodexViewStyles|getCodexClientScript/);
 });
 
-test('Codex schema 2 persistence uses semantic AST gates across the complete DTO graph', () => {
+test('Codex schema 3 persistence uses semantic AST gates across the complete DTO graph', () => {
   const sources = projectSourceFiles('src');
   const project = projectFromSources(sources);
   const index = project.files.find((file) => file.fileName === 'src/providers/codex/codexIndex.ts');
   assert.ok(index, 'missing codexIndex source');
 
-  assert.deepEqual(persistedPropertyViolations(project, 'CodexIndexV2'), []);
+  assert.deepEqual(persistedPropertyViolations(project, 'CodexIndexV3'), []);
   assert.deepEqual(sanitizedDtoViolations(index), []);
 
   const codexFiles = project.files.filter((file) =>
@@ -1276,7 +1276,7 @@ test('Codex schema 2 persistence uses semantic AST gates across the complete DTO
   );
 });
 
-test('Codex schema 2 production files are regular files and the architecture records its persisted contract', () => {
+test('Codex schema 3 production files are regular files and the architecture records its persisted contract', () => {
   const productionFiles = [
     'src/providers/codex/codexDedup.ts',
     'src/providers/codex/codexIdentity.ts',
@@ -1285,6 +1285,7 @@ test('Codex schema 2 production files are regular files and the architecture rec
     'src/providers/codex/codexIndexWorker.ts',
     'src/providers/codex/codexInsights.ts',
     'src/providers/codex/codexJsonlScanner.ts',
+    'src/providers/codex/codexLineage.ts',
     'src/providers/codex/codexManifest.ts',
     'src/providers/codex/codexParser.ts',
     'src/providers/codex/codexPeriodIndex.ts',
@@ -1311,7 +1312,7 @@ test('Codex schema 2 production files are regular files and the architecture rec
   const chinese = repoFile('ARCHITECTURE-zh-CN.md');
   for (const [document, patterns] of [
     [english, [
-      /schema 2[\s\S]*codex-index-v1\.json/i,
+      /schema 3[\s\S]*codex-index-v1\.json/i,
       /all-time[\s\S]*verified aggregate[\s\S]*period slices/i,
       /asOfDay[\s\S]*7[\s\S]*30[\s\S]*all-time/i,
       /16 file passes[\s\S]*32 MiB[\s\S]*1 MiB \+ 1[\s\S]*256 KiB[\s\S]*1 MiB/i,
@@ -1319,17 +1320,19 @@ test('Codex schema 2 production files are regular files and the architecture rec
       /strictly exact[\s\S]*active\/archive[\s\S]*ambiguous/i,
       /five structural call proxies[\s\S]*not file, command, or review counts/i,
       /never[\s\S]*stores a raw incomplete line or a carry buffer/i,
+      /ordered numeric-event fingerprint[\s\S]*missing-parent/i,
       /cancellation checkpoints[\s\S]*resumes/i,
     ]],
     [chinese, [
-      /内部 schema 2[\s\S]*codex-index-v1\.json/,
+      /内部 schema 3[\s\S]*codex-index-v1\.json/,
       /已验证的[\s\S]*aggregate[\s\S]*期间切片/,
       /asOfDay[\s\S]*7 天[\s\S]*30 天[\s\S]*all-time/,
       /16 次文件遍历[\s\S]*32 MiB[\s\S]*1 MiB \+ 1[\s\S]*256 KiB[\s\S]*1 MiB/,
       /SSH[\s\S]*HTTPS[\s\S]*规范化/,
       /active\/archive[\s\S]*严格精确[\s\S]*歧义/,
       /五个结构调用代理量[\s\S]*不是文件、命令或审阅次数/,
-      /v2 不保存未完成原始行，也不保存 carry buffer/,
+      /v3 不保存未完成原始行，[\s\S]*也不保存 carry buffer/,
+      /有序的数字事件指纹[\s\S]*missing-parent/,
       /cancel checkpoint[\s\S]*resume/,
     ]],
   ] as Array<[string, RegExp[]]>) {

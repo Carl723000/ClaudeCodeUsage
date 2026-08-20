@@ -5,7 +5,7 @@ import {
   rename,
   unlink,
 } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as path from 'node:path';
 
 import {
@@ -57,6 +57,11 @@ import {
   pseudonymousIdentityKey,
 } from './codexIdentity';
 import { sanitizeCodexMetadataLabel } from './codexMetadataLabel';
+import {
+  CODEX_LINEAGE_FINGERPRINT_BYTES,
+  CODEX_LINEAGE_FINGERPRINTS_PER_BLOCK,
+  CodexLineageTrace,
+} from './codexLineage';
 
 export {
   CodexPeriodMigrationState,
@@ -94,12 +99,22 @@ export interface CodexFileContribution {
   offset: number;
   discardingOversizedLine: boolean;
   parserState: CodexParserState;
+  lineage?: CodexLineageTrace;
+  lineageReconciliation?: CodexLineageReconciliationState;
   aggregate: CodexFileAggregate;
   limit?: ProviderLimitSnapshot;
   limits?: Record<string, ProviderLimitSnapshot>;
   qualityFlags: string[];
   identityChecked?: boolean;
   periodMigration?: CodexPeriodMigrationState;
+}
+
+export interface CodexLineageReconciliationState extends CodexJsonlCursor {
+  prefixEvents: number;
+  tokenEventsSeen: number;
+  parserState: CodexParserState;
+  aggregate: CodexFileAggregate;
+  qualityFlags: string[];
 }
 
 export const CODEX_REFRESH_MAX_FILE_PASSES = 16;
@@ -150,15 +165,15 @@ export interface CodexProviderAggregate {
   byEffort: Record<string, ProviderTokenCounts>;
 }
 
-export interface CodexIndexV2 {
-  schemaVersion: 2;
+export interface CodexIndexV3 {
+  schemaVersion: 3;
   files: Record<string, CodexFileContribution>;
   aggregate: CodexProviderAggregate;
   coverage: CodexIndexCoverage;
 }
 
 /** @deprecated Compatibility name until the remaining v2 consumers are rewired. */
-export type CodexIndexV1 = CodexIndexV2;
+export type CodexIndexV1 = CodexIndexV3;
 
 export interface CodexIndexIo extends CodexJsonlReader {}
 
@@ -178,11 +193,11 @@ export interface CodexIndexUpdateOptions {
   budget?: CodexIndexWorkBudget;
   shouldCancel?: () => boolean;
   onProgress?: (progress: CodexIndexProgress) => void;
-  onCheckpoint?: (index: CodexIndexV2) => Promise<void>;
+  onCheckpoint?: (index: CodexIndexV3) => Promise<void>;
 }
 
 export interface CodexIndexUpdateResult {
-  index: CodexIndexV2;
+  index: CodexIndexV3;
   indexChanged: boolean;
   bodyReads: number;
   failedFiles: number;
@@ -252,7 +267,70 @@ function emptyFileAggregate(
   };
 }
 
-export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV2 {
+function createLineageTrace(): CodexLineageTrace {
+  return {
+    fingerprintBlocks: [],
+    pendingFingerprints: [],
+    tokenEvents: 0,
+    desiredPrefixEvents: 0,
+    appliedPrefixEvents: 0,
+  };
+}
+
+function unpackTrailingLineageBlock(lineage: CodexLineageTrace): void {
+  if (lineage.pendingFingerprints.length > 0) {
+    return;
+  }
+  const trailing = lineage.fingerprintBlocks[
+    lineage.fingerprintBlocks.length - 1
+  ];
+  if (!trailing) {
+    return;
+  }
+  const bytes = Buffer.from(trailing, 'base64');
+  const fingerprints = bytes.length / CODEX_LINEAGE_FINGERPRINT_BYTES;
+  if (fingerprints >= CODEX_LINEAGE_FINGERPRINTS_PER_BLOCK) {
+    return;
+  }
+  lineage.fingerprintBlocks.pop();
+  for (let offset = 0; offset < bytes.length; offset += CODEX_LINEAGE_FINGERPRINT_BYTES) {
+    lineage.pendingFingerprints.push(
+      bytes.subarray(offset, offset + CODEX_LINEAGE_FINGERPRINT_BYTES).toString('hex'),
+    );
+  }
+}
+
+function packPendingLineageFingerprints(lineage: CodexLineageTrace): void {
+  if (lineage.pendingFingerprints.length === 0) {
+    return;
+  }
+  lineage.fingerprintBlocks.push(
+    Buffer.from(lineage.pendingFingerprints.join(''), 'hex').toString('base64'),
+  );
+  lineage.pendingFingerprints = [];
+}
+
+function addLineageToken(
+  lineage: CodexLineageTrace,
+  tokenKey: string,
+): void {
+  unpackTrailingLineageBlock(lineage);
+  const fingerprint = createHash('sha256')
+    .update('\0')
+    .update(tokenKey)
+    .digest('hex')
+    .slice(0, CODEX_LINEAGE_FINGERPRINT_BYTES * 2);
+  lineage.pendingFingerprints.push(fingerprint);
+  lineage.tokenEvents += 1;
+  if (
+    lineage.pendingFingerprints.length ===
+    CODEX_LINEAGE_FINGERPRINTS_PER_BLOCK
+  ) {
+    packPendingLineageFingerprints(lineage);
+  }
+}
+
+export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV3 {
   const resolvedTimeZone = resolveTimeZone(timeZone);
   const asOfDay = dayKeyInZone(new Date(Date.now()), resolvedTimeZone);
   const emptyRange = (): CodexRangeCoverage => ({
@@ -263,7 +341,7 @@ export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV2 {
     complete: true,
   });
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     files: {},
     aggregate: emptyAggregate(),
     coverage: {
@@ -288,7 +366,7 @@ export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV2 {
   };
 }
 
-function cloneIndex(index: CodexIndexV2): CodexIndexV2 {
+function cloneIndex(index: CodexIndexV3): CodexIndexV3 {
   return sanitizeIndexV2(index);
 }
 
@@ -379,11 +457,15 @@ function syncSession(
   aggregate.session = {
     ...aggregate.session,
     sessionKey: state.sessionKey,
-    parentSessionKey: state.parentSessionKey,
-    projectKey: state.projectKey,
-    projectName: state.projectName,
-    projectDirectoryName: state.projectDirectoryName,
-    agentNickname: state.agentNickname,
+    ...(state.parentSessionKey
+      ? { parentSessionKey: state.parentSessionKey }
+      : {}),
+    ...(state.projectKey ? { projectKey: state.projectKey } : {}),
+    ...(state.projectName ? { projectName: state.projectName } : {}),
+    ...(state.projectDirectoryName
+      ? { projectDirectoryName: state.projectDirectoryName }
+      : {}),
+    ...(state.agentNickname ? { agentNickname: state.agentNickname } : {}),
     role: state.role,
   };
 }
@@ -424,7 +506,7 @@ function defaultIo(): CodexIndexIo {
   return defaultCodexJsonlReader;
 }
 
-function previousManifest(index: CodexIndexV2): CodexPersistedManifest {
+function previousManifest(index: CodexIndexV3): CodexPersistedManifest {
   return Object.fromEntries(
     Object.values(index.files).flatMap((file) =>
       file.sourceArea
@@ -460,6 +542,7 @@ function contributionFor(
     offset: 0,
     discardingOversizedLine: false,
     parserState,
+    lineage: createLineageTrace(),
     aggregate: {
       ...emptyFileAggregate(entry.fileKey, parserState.role),
       period: { timeZone, indexedThrough: 0, days: {} },
@@ -488,6 +571,7 @@ async function updateContribution(
 ): Promise<CodexFilePassResult> {
   let parserState = contribution.parserState;
   const aggregate = contribution.aggregate;
+  const lineage = contribution.lineage ?? createLineageTrace();
   const pseudonymize = pseudonymizer(options.salt);
   let limit = contribution.limit;
   const limits = { ...(contribution.limits ?? {}) };
@@ -510,6 +594,7 @@ async function updateContribution(
       offset: cursor.offset,
       discardingOversizedLine: cursor.discardingOversizedLine,
       parserState,
+      lineage,
       aggregate,
       limit,
       limits,
@@ -534,6 +619,9 @@ async function updateContribution(
       if (line.trim() !== '') {
         const parsed = parseCodexLine(line, parserState, pseudonymize);
         parserState = parsed.state;
+        if (parsed.lineageTokenKey) {
+          addLineageToken(lineage, parsed.lineageTokenKey);
+        }
         for (const event of parsed.events) {
           reduceUsage(aggregate, event);
           if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
@@ -585,11 +673,156 @@ async function updateContribution(
   if (advancePeriod && aggregate.period) {
     aggregate.period.indexedThrough = scan.cursor.offset;
   }
+  if (
+    scan.cursor.offset >= entry.size &&
+    !scan.cursor.discardingOversizedLine
+  ) {
+    packPendingLineageFingerprints(lineage);
+  }
   const updated = snapshot(scan.cursor);
   updated.qualityFlags = uniqueFlags(
     updated.qualityFlags,
     scan.oversizedLines > 0 ? ['oversized-jsonl-line'] : [],
   );
+  return { contribution: updated, bytesRead: scan.bytesRead };
+}
+
+function promoteCaughtUpLineage(
+  contribution: CodexFileContribution,
+): void {
+  const reconciliation = contribution.lineageReconciliation;
+  const lineage = contribution.lineage;
+  if (
+    !reconciliation ||
+    !lineage ||
+    reconciliation.prefixEvents !== lineage.desiredPrefixEvents ||
+    reconciliation.offset < contribution.offset ||
+    reconciliation.discardingOversizedLine
+  ) {
+    return;
+  }
+  contribution.aggregate = reconciliation.aggregate;
+  lineage.appliedPrefixEvents = reconciliation.prefixEvents;
+  contribution.qualityFlags = uniqueFlags(
+    contribution.qualityFlags,
+    reconciliation.qualityFlags,
+  );
+  delete contribution.lineageReconciliation;
+}
+
+async function reconcileContributionLineage(
+  contribution: CodexFileContribution,
+  entry: CodexRuntimeManifestEntry,
+  options: CodexIndexUpdateOptions,
+  io: CodexIndexIo,
+  endExclusive: number,
+  onChunk: ContributionChunkHandler,
+): Promise<CodexFilePassResult> {
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+  const timeZone = resolveTimeZone(options.timeZone);
+  const initial = contribution.lineageReconciliation?.prefixEvents ===
+      prefixEvents
+    ? contribution.lineageReconciliation
+    : {
+        prefixEvents,
+        tokenEventsSeen: 0,
+        offset: 0,
+        discardingOversizedLine: false,
+        parserState: createCodexParserState(entry.fileKey),
+        aggregate: {
+          ...emptyFileAggregate(entry.fileKey, 'root'),
+          period: { timeZone, indexedThrough: 0, days: {} },
+        },
+        qualityFlags: [],
+      };
+  let parserState = initial.parserState;
+  let tokenEventsSeen = initial.tokenEventsSeen;
+  const aggregate = initial.aggregate;
+  let invalidEventTimestamp = false;
+  const pseudonymize = pseudonymizer(options.salt);
+
+  const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => {
+    syncSession(aggregate, parserState);
+    if (aggregate.period) {
+      aggregate.period.indexedThrough = cursor.offset;
+    }
+    return {
+      ...contribution,
+      lineageReconciliation: {
+        prefixEvents,
+        tokenEventsSeen,
+        offset: cursor.offset,
+        discardingOversizedLine: cursor.discardingOversizedLine,
+        parserState,
+        aggregate,
+        qualityFlags: uniqueFlags(
+          initial.qualityFlags,
+          parserState.qualityFlags,
+          invalidEventTimestamp ? ['invalid-event-timestamp'] : [],
+        ),
+      },
+    };
+  };
+
+  const scan = await scanCodexJsonlLines(
+    entry,
+    io,
+    {
+      offset: initial.offset,
+      discardingOversizedLine: initial.discardingOversizedLine,
+    },
+    endExclusive,
+    (line) => {
+      if (line.trim() === '') {
+        return;
+      }
+      const parsed = parseCodexLine(line, parserState, pseudonymize);
+      parserState = parsed.state;
+      if (parsed.lineageTokenKey) {
+        tokenEventsSeen += 1;
+      }
+      const includeUsage = tokenEventsSeen > prefixEvents;
+      if (includeUsage) {
+        for (const event of parsed.events) {
+          reduceUsage(aggregate, event);
+          if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
+            invalidEventTimestamp = true;
+          } else if (aggregate.period) {
+            reduceCodexUsageSlice(aggregate.period.days, event, timeZone);
+          }
+        }
+      }
+      if (parsed.structural && tokenEventsSeen >= prefixEvents) {
+        reduceStructural(aggregate, parsed.structural);
+        if (
+          !Number.isFinite(parsed.structural.timestamp) ||
+          parsed.structural.timestamp <= 0
+        ) {
+          invalidEventTimestamp = true;
+        } else if (aggregate.period) {
+          reduceCodexStructuralSlice(
+            aggregate.period.days,
+            parsed.structural,
+            timeZone,
+          );
+        }
+      }
+    },
+    async (progress) => {
+      await onChunk(snapshot(progress.cursor), progress.bytesRead);
+    },
+  );
+  if (!scan.reachedEnd) {
+    throw new Error('Codex log changed during lineage reconciliation');
+  }
+  const updated = snapshot(scan.cursor);
+  if (updated.lineageReconciliation && scan.oversizedLines > 0) {
+    updated.lineageReconciliation.qualityFlags = uniqueFlags(
+      updated.lineageReconciliation.qualityFlags,
+      ['oversized-jsonl-line'],
+    );
+  }
+  promoteCaughtUpLineage(updated);
   return { contribution: updated, bytesRead: scan.bytesRead };
 }
 
@@ -748,6 +981,252 @@ async function backfillIdentity(
   return result ?? { ...contribution, identityChecked: true };
 }
 
+function lineageFingerprintBuffer(lineage: CodexLineageTrace): Buffer {
+  return Buffer.concat([
+    ...lineage.fingerprintBlocks.map((block) => Buffer.from(block, 'base64')),
+    Buffer.from(lineage.pendingFingerprints.join(''), 'hex'),
+  ]);
+}
+
+function commonLineagePrefix(
+  child: Buffer,
+  parent: Buffer,
+): number {
+  const events = Math.floor(
+    Math.min(child.length, parent.length) / CODEX_LINEAGE_FINGERPRINT_BYTES,
+  );
+  let event = 0;
+  for (; event < events; event += 1) {
+    const offset = event * CODEX_LINEAGE_FINGERPRINT_BYTES;
+    if (!child.subarray(
+      offset,
+      offset + CODEX_LINEAGE_FINGERPRINT_BYTES,
+    ).equals(parent.subarray(
+      offset,
+      offset + CODEX_LINEAGE_FINGERPRINT_BYTES,
+    ))) {
+      break;
+    }
+  }
+  return event;
+}
+
+function longestLineagePrefix(
+  child: Buffer,
+  parent: Buffer,
+): number {
+  if (child.length < CODEX_LINEAGE_FINGERPRINT_BYTES) {
+    return 0;
+  }
+  const first = child.subarray(0, CODEX_LINEAGE_FINGERPRINT_BYTES);
+  let best = 0;
+  let searchFrom = 0;
+  while (searchFrom < parent.length) {
+    const offset = parent.indexOf(first, searchFrom);
+    if (offset < 0) {
+      break;
+    }
+    searchFrom = offset + CODEX_LINEAGE_FINGERPRINT_BYTES;
+    if (offset % CODEX_LINEAGE_FINGERPRINT_BYTES !== 0) {
+      continue;
+    }
+    const events = Math.floor(
+      Math.min(child.length, parent.length - offset) /
+        CODEX_LINEAGE_FINGERPRINT_BYTES,
+    );
+    let event = 0;
+    for (; event < events; event += 1) {
+      const childOffset = event * CODEX_LINEAGE_FINGERPRINT_BYTES;
+      const parentOffset = offset + childOffset;
+      if (!child.subarray(
+        childOffset,
+        childOffset + CODEX_LINEAGE_FINGERPRINT_BYTES,
+      ).equals(parent.subarray(
+        parentOffset,
+        parentOffset + CODEX_LINEAGE_FINGERPRINT_BYTES,
+      ))) {
+        break;
+      }
+    }
+    best = Math.max(best, event);
+    if (best * CODEX_LINEAGE_FINGERPRINT_BYTES === child.length) {
+      break;
+    }
+  }
+  return best;
+}
+
+function reconcileLineageContributions(
+  files: Record<string, CodexFileContribution>,
+  canonicalFileKeys: Set<string>,
+): void {
+  const parentCandidates = new Map<string, CodexFileContribution[]>();
+  const treeCandidates = new Map<string, CodexFileContribution[]>();
+  const fingerprints = new Map<CodexFileContribution, Buffer>();
+  const traceFor = (contribution: CodexFileContribution): Buffer => {
+    let trace = fingerprints.get(contribution);
+    if (!trace) {
+      trace = lineageFingerprintBuffer(contribution.lineage!);
+      fingerprints.set(contribution, trace);
+    }
+    return trace;
+  };
+  for (const fileKey of canonicalFileKeys) {
+    const contribution = files[fileKey];
+    if (!contribution?.lineage) {
+      continue;
+    }
+    const key = contribution.aggregate.session.sessionKey;
+    const group = parentCandidates.get(key) ?? [];
+    group.push(contribution);
+    parentCandidates.set(key, group);
+    const treeKey = contribution.parserState.treeKey;
+    if (treeKey) {
+      const tree = treeCandidates.get(treeKey) ?? [];
+      tree.push(contribution);
+      treeCandidates.set(treeKey, tree);
+    }
+  }
+
+  for (const contribution of Object.values(files)) {
+    if (!contribution.lineage) {
+      continue;
+    }
+    const childTrace = traceFor(contribution);
+    const parentKey = contribution.aggregate.session.parentSessionKey;
+    const candidates = parentKey
+      ? (parentCandidates.get(parentKey) ?? []).filter((parent) =>
+          !contribution.parserState.treeKey ||
+          !parent.parserState.treeKey ||
+          contribution.parserState.treeKey === parent.parserState.treeKey,
+        )
+      : [];
+    let prefixEvents = 0;
+    for (const parent of candidates) {
+      prefixEvents = Math.max(
+        prefixEvents,
+        longestLineagePrefix(childTrace, traceFor(parent)),
+      );
+    }
+    contribution.lineage.desiredPrefixEvents = prefixEvents;
+    contribution.qualityFlags = uniqueFlags(
+      contribution.qualityFlags.filter((flag) => flag !== 'missing-parent'),
+      parentKey && candidates.length === 0 ? ['missing-parent'] : [],
+    );
+  }
+
+  for (const sameSession of parentCandidates.values()) {
+    for (const contribution of sameSession) {
+      const lineage = contribution.lineage;
+      if (!lineage || !contribution.sourceArea) {
+        continue;
+      }
+      const trace = traceFor(contribution);
+      for (const candidate of sameSession) {
+        if (
+          candidate === contribution ||
+          !candidate.lineage ||
+          !candidate.sourceArea ||
+          candidate.sourceArea === contribution.sourceArea ||
+          candidate.lineage.tokenEvents > lineage.tokenEvents
+        ) {
+          continue;
+        }
+        const candidateEvents = candidate.lineage.tokenEvents;
+        if (
+          commonLineagePrefix(trace, traceFor(candidate)) !== candidateEvents ||
+          candidateEvents === lineage.tokenEvents &&
+            contribution.sourceArea !== 'archive'
+        ) {
+          continue;
+        }
+        lineage.desiredPrefixEvents = Math.max(
+          lineage.desiredPrefixEvents,
+          candidateEvents,
+        );
+      }
+    }
+  }
+
+  const depthMemo = new Map<CodexFileContribution, number>();
+  const depthFor = (
+    contribution: CodexFileContribution,
+    visiting = new Set<CodexFileContribution>(),
+  ): number => {
+    const cached = depthMemo.get(contribution);
+    if (cached !== undefined) {
+      return cached;
+    }
+    if (visiting.has(contribution)) {
+      return 0;
+    }
+    const parentKey = contribution.aggregate.session.parentSessionKey;
+    if (!parentKey) {
+      depthMemo.set(contribution, 0);
+      return 0;
+    }
+    const nextVisiting = new Set(visiting).add(contribution);
+    const parents = (parentCandidates.get(parentKey) ?? []).filter((parent) =>
+      !contribution.parserState.treeKey ||
+      !parent.parserState.treeKey ||
+      contribution.parserState.treeKey === parent.parserState.treeKey,
+    );
+    const depth = parents.length > 0
+      ? 1 + Math.min(...parents.map((parent) => depthFor(parent, nextVisiting)))
+      : 1;
+    depthMemo.set(contribution, depth);
+    return depth;
+  };
+
+  for (const tree of treeCandidates.values()) {
+    const ordered = [...tree].sort((left, right) =>
+      depthFor(left) - depthFor(right) ||
+      (left.aggregate.session.endedAt ?? Number.MAX_SAFE_INTEGER) -
+        (right.aggregate.session.endedAt ?? Number.MAX_SAFE_INTEGER) ||
+      left.fileKey.localeCompare(right.fileKey),
+    );
+    const seen: Array<{
+      contribution: CodexFileContribution;
+      trace: Buffer;
+    }> = [];
+    for (const contribution of ordered) {
+      const trace = traceFor(contribution);
+      let insertion = 0;
+      let high = seen.length;
+      while (insertion < high) {
+        const middle = Math.floor((insertion + high) / 2);
+        if (Buffer.compare(seen[middle].trace, trace) <= 0) {
+          insertion = middle + 1;
+        } else {
+          high = middle;
+        }
+      }
+      const parentKey = contribution.aggregate.session.parentSessionKey;
+      const missingParent = contribution.qualityFlags.includes('missing-parent');
+      if (parentKey && !missingParent && contribution.lineage) {
+        let left = insertion - 1;
+        while (left >= 0 && seen[left].trace.equals(trace)) {
+          left -= 1;
+        }
+        let right = insertion;
+        while (right < seen.length && seen[right].trace.equals(trace)) {
+          right += 1;
+        }
+        for (const candidate of [seen[left], seen[right]]) {
+          if (!candidate) {
+            continue;
+          }
+          contribution.lineage.desiredPrefixEvents = Math.max(
+            contribution.lineage.desiredPrefixEvents,
+            commonLineagePrefix(trace, candidate.trace),
+          );
+        }
+      }
+      seen.splice(insertion, 0, { contribution, trace });
+    }
+  }
+}
+
 function recomputeAggregate(
   files: Record<string, CodexFileContribution>,
   deduplication = classifyCodexSessionDuplicates(files),
@@ -796,7 +1275,10 @@ function coverageFor(
     if (
       !flags.has('stale-file') &&
       contribution.offset >= entry.size &&
-      !contribution.discardingOversizedLine
+      !contribution.discardingOversizedLine &&
+      contribution.lineage?.appliedPrefixEvents ===
+        contribution.lineage?.desiredPrefixEvents &&
+      !contribution.lineageReconciliation
     ) {
       indexedFiles += 1;
     }
@@ -817,6 +1299,9 @@ function coverageFor(
         contribution &&
         contribution.offset === entry.size &&
         !contribution.discardingOversizedLine &&
+        contribution.lineage?.appliedPrefixEvents ===
+          contribution.lineage?.desiredPrefixEvents &&
+        !contribution.lineageReconciliation &&
         !flags.has('stale-file') &&
         !flags.has('stale-reset-required'),
       );
@@ -888,11 +1373,19 @@ function coverageFor(
 }
 
 function recomputeDerivedIndex(
-  index: CodexIndexV2,
+  index: CodexIndexV3,
   manifest: CodexManifest,
   timeZone: string,
   asOfDay: string,
+  reconcileLineage = true,
 ): void {
+  const initialDeduplication = classifyCodexSessionDuplicates(index.files);
+  if (reconcileLineage) {
+    reconcileLineageContributions(
+      index.files,
+      initialDeduplication.canonicalFileKeys,
+    );
+  }
   const deduplication = classifyCodexSessionDuplicates(index.files);
   index.aggregate = recomputeAggregate(index.files, deduplication);
   index.coverage = coverageFor(
@@ -904,7 +1397,7 @@ function recomputeDerivedIndex(
   );
 }
 
-function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgress {
+function progressFor(index: CodexIndexV3, scannedFiles: number): CodexIndexProgress {
   return {
     scannedFiles,
     totalFiles: index.coverage.totalFiles,
@@ -915,7 +1408,7 @@ function progressFor(index: CodexIndexV2, scannedFiles: number): CodexIndexProgr
 }
 
 function isWarmNoOp(
-  previous: CodexIndexV2,
+  previous: CodexIndexV3,
   manifest: CodexManifest,
   diff: ReturnType<typeof diffCodexManifest>,
   timeZone: string,
@@ -947,6 +1440,9 @@ function isWarmNoOp(
       contribution.offset === entry.size &&
       !contribution.discardingOversizedLine &&
       contribution.identityChecked === true &&
+      contribution.lineage?.appliedPrefixEvents ===
+        contribution.lineage?.desiredPrefixEvents &&
+      !contribution.lineageReconciliation &&
       contribution.aggregate.period?.timeZone === timeZone &&
       contribution.aggregate.period.indexedThrough >= contribution.offset &&
       !contribution.qualityFlags.includes('stale-file') &&
@@ -956,7 +1452,7 @@ function isWarmNoOp(
 }
 
 export async function updateCodexIndex(
-  previous: CodexIndexV2,
+  previous: CodexIndexV3,
   manifest: CodexManifest,
   options: CodexIndexUpdateOptions,
 ): Promise<CodexIndexUpdateResult> {
@@ -1010,6 +1506,10 @@ export async function updateCodexIndex(
   let filePasses = 0;
   let bytesRead = 0;
   let cancellationCheckpointed = false;
+  const observesIntermediateState =
+    options.onProgress !== undefined ||
+    options.onCheckpoint !== undefined ||
+    options.shouldCancel !== undefined;
 
   for (const move of diff.moved) {
     const contribution = index.files[move.fromKey];
@@ -1025,6 +1525,9 @@ export async function updateCodexIndex(
     contribution.dev = entry.dev;
     contribution.ino = entry.ino;
     contribution.parserState.fileKey = move.toKey;
+    if (contribution.lineageReconciliation) {
+      contribution.lineageReconciliation.parserState.fileKey = move.toKey;
+    }
     if (contribution.periodMigration) {
       contribution.periodMigration.parserState.fileKey = move.toKey;
     }
@@ -1034,6 +1537,7 @@ export async function updateCodexIndex(
     delete index.files[key];
   }
   for (const contribution of Object.values(index.files)) {
+    promoteCaughtUpLineage(contribution);
     if (contribution.aggregate.period?.timeZone !== timeZone) {
       delete contribution.aggregate.period;
     }
@@ -1062,7 +1566,8 @@ export async function updateCodexIndex(
       contribution &&
       (contribution.offset < entry.size ||
         contribution.discardingOversizedLine ||
-        contribution.qualityFlags.includes('stale-file'))
+        contribution.qualityFlags.includes('stale-file') ||
+        contribution.qualityFlags.includes('stale-reset-required'))
     ) {
       changedKeys.add(entry.fileKey);
     }
@@ -1096,11 +1601,13 @@ export async function updateCodexIndex(
   ): ContributionChunkHandler => async (contribution, passBytesRead) => {
     bytesRead = passStartingBytes + passBytesRead;
     index.files[entry.fileKey] = contribution;
-    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
+    if (observesIntermediateState) {
+      recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
+    }
     options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
     if (options.shouldCancel?.()) {
       if (!cancellationCheckpointed) {
-        await options.onCheckpoint?.(cloneIndex(index));
+        await checkpoint();
         cancellationCheckpointed = true;
       }
       throw new CodexIndexCancelledError();
@@ -1116,7 +1623,8 @@ export async function updateCodexIndex(
     await cancelBeforePass();
     const resetFlag = resetFlags.get(entry.fileKey);
     const prior = index.files[entry.fileKey];
-    const base = resetFlag || !prior
+    const base = resetFlag || !prior ||
+        prior.qualityFlags.includes('stale-reset-required')
       ? contributionFor(entry, timeZone, resetFlag ? [resetFlag] : [])
       : {
           ...cloneContribution(prior),
@@ -1159,13 +1667,91 @@ export async function updateCodexIndex(
         };
       }
     }
-    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
+    if (observesIntermediateState) {
+      recomputeDerivedIndex(
+        index,
+        manifest,
+        timeZone,
+        asOfDay,
+        options.onCheckpoint !== undefined,
+      );
+    }
     options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
     await options.onCheckpoint?.(cloneIndex(index));
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
   recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
+  const lineageWork = manifest.files
+    .filter((entry) => {
+      const contribution = index.files[entry.fileKey];
+      return Boolean(
+        contribution?.lineage &&
+        (
+          contribution.lineage.appliedPrefixEvents !==
+            contribution.lineage.desiredPrefixEvents ||
+          contribution.lineageReconciliation
+        ),
+      );
+    })
+    .sort(recentFirst);
+
+  for (const entry of lineageWork) {
+    if (!hasBudget()) {
+      break;
+    }
+    await cancelBeforePass();
+    const prior = index.files[entry.fileKey];
+    if (!prior) {
+      continue;
+    }
+    const base = cloneContribution(prior);
+    const reconciliation = base.lineageReconciliation;
+    const start = reconciliation &&
+        reconciliation.prefixEvents === base.lineage?.desiredPrefixEvents
+      ? reconciliation.offset
+      : 0;
+    const endExclusive = Math.min(
+      entry.size,
+      start + (budget.maxBytes - bytesRead),
+    );
+    if (endExclusive <= start) {
+      promoteCaughtUpLineage(base);
+      index.files[entry.fileKey] = base;
+      continue;
+    }
+    bodyReads += 1;
+    filePasses += 1;
+    const passStartingBytes = bytesRead;
+    try {
+      const pass = await reconcileContributionLineage(
+        base,
+        entry,
+        normalizedOptions,
+        io,
+        endExclusive,
+        onChunk(entry, passStartingBytes),
+      );
+      bytesRead = passStartingBytes + pass.bytesRead;
+      index.files[entry.fileKey] = pass.contribution;
+    } catch (error) {
+      if (error instanceof CodexIndexCancelledError) {
+        throw error;
+      }
+      failedFiles += 1;
+      index.files[entry.fileKey] = prior;
+    }
+    if (observesIntermediateState) {
+      recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
+    }
+    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
+    await options.onCheckpoint?.(cloneIndex(index));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+  }
+
+  if (observesIntermediateState) {
+    recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
+  }
   const canonical = classifyCodexSessionDuplicates(index.files).canonicalFileKeys;
   const periodWork = manifest.files
     .filter((entry) => {
@@ -1175,6 +1761,9 @@ export async function updateCodexIndex(
       const contribution = index.files[entry.fileKey];
       return Boolean(
         contribution &&
+        !contribution.lineageReconciliation &&
+        contribution.lineage?.appliedPrefixEvents ===
+          contribution.lineage?.desiredPrefixEvents &&
         contribution.offset > 0 &&
         contribution.offset >= entry.size &&
         !contribution.discardingOversizedLine &&
@@ -1227,7 +1816,9 @@ export async function updateCodexIndex(
       failedFiles += 1;
       index.files[entry.fileKey] = prior;
     }
-    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
+    if (observesIntermediateState) {
+      recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
+    }
     options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
     await options.onCheckpoint?.(cloneIndex(index));
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1330,10 +1921,25 @@ function isIndexV1(value: unknown): value is LegacyCodexIndexV1 {
   );
 }
 
-function isIndexV2(value: unknown): value is CodexIndexV2 {
+interface LegacyCodexIndexV2 {
+  readonly schemaVersion: 2;
+  readonly files: Readonly<Record<string, unknown>>;
+  readonly aggregate?: unknown;
+  readonly coverage?: unknown;
+}
+
+function isLegacyIndexV2(value: unknown): value is LegacyCodexIndexV2 {
   return (
     isRecord(value) &&
     value.schemaVersion === 2 &&
+    isRecord(value.files)
+  );
+}
+
+function isIndexV3(value: unknown): value is CodexIndexV3 {
+  return (
+    isRecord(value) &&
+    value.schemaVersion === 3 &&
     isRecord(value.files) &&
     isRecord(value.aggregate) &&
     isRecord(value.coverage)
@@ -1449,6 +2055,7 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
   const parentSessionKey = sanitizePseudonymousIdentityKey(
     record.parentSessionKey,
   );
+  const treeKey = sanitizePseudonymousIdentityKey(record.treeKey);
   const projectKey = sanitizePseudonymousIdentityKey(record.projectKey);
   const agentNickname = sanitizeCodexMetadataLabel(record.agentNickname);
   const model = sanitizeCodexMetadataLabel(record.model);
@@ -1463,9 +2070,11 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
       }
     : undefined;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     fileKey,
     sessionKey,
+    ...(treeKey ? { treeKey } : {}),
+    identityLocked: record.identityLocked === true,
     ...(parentSessionKey ? { parentSessionKey } : {}),
     ...(projectKey ? { projectKey } : {}),
     ...(optionalString(record.projectName)
@@ -1544,6 +2153,63 @@ function sanitizePeriod(value: unknown): CodexFilePeriodIndex | undefined {
     timeZone: resolveTimeZone(value.timeZone),
     indexedThrough: Math.max(0, finiteNumber(value.indexedThrough)),
     days,
+  };
+}
+
+function sanitizeLineage(value: unknown): CodexLineageTrace | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const fingerprintBlocks = Array.isArray(value.fingerprintBlocks)
+    ? value.fingerprintBlocks.filter((block): block is string => {
+        const encodedLength = typeof block === 'string' ? block.length : 0;
+        const padding = typeof block === 'string'
+          ? (block[encodedLength - 1] === '=' ? 1 : 0) +
+            (block[encodedLength - 2] === '=' ? 1 : 0)
+          : 0;
+        const decodedBytes = encodedLength / 4 * 3 - padding;
+        return (
+          typeof block === 'string' &&
+          encodedLength > 0 &&
+          encodedLength <= Math.ceil(
+            CODEX_LINEAGE_FINGERPRINT_BYTES *
+              CODEX_LINEAGE_FINGERPRINTS_PER_BLOCK / 3,
+          ) * 4 &&
+          /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(block) &&
+          decodedBytes % CODEX_LINEAGE_FINGERPRINT_BYTES === 0
+        );
+      })
+    : [];
+  const pendingFingerprints = Array.isArray(value.pendingFingerprints)
+    ? value.pendingFingerprints.filter(
+        (fingerprint, index): fingerprint is string =>
+          index < CODEX_LINEAGE_FINGERPRINTS_PER_BLOCK - 1 &&
+          typeof fingerprint === 'string' &&
+          /^[a-f0-9]{32}$/.test(fingerprint),
+      )
+    : [];
+  let packedTokenEvents = 0;
+  for (const block of fingerprintBlocks) {
+    const padding = (block[block.length - 1] === '=' ? 1 : 0) +
+      (block[block.length - 2] === '=' ? 1 : 0);
+    packedTokenEvents += (block.length / 4 * 3 - padding) /
+      CODEX_LINEAGE_FINGERPRINT_BYTES;
+  }
+  const tokenEvents = packedTokenEvents + pendingFingerprints.length;
+  const desiredPrefixEvents = Math.min(
+    tokenEvents,
+    Math.max(0, Math.floor(finiteNumber(value.desiredPrefixEvents))),
+  );
+  const appliedPrefixEvents = Math.min(
+    tokenEvents,
+    Math.max(0, Math.floor(finiteNumber(value.appliedPrefixEvents))),
+  );
+  return {
+    fingerprintBlocks,
+    pendingFingerprints,
+    tokenEvents,
+    desiredPrefixEvents,
+    appliedPrefixEvents,
   };
 }
 
@@ -1687,6 +2353,28 @@ function sanitizeFileAggregate(
   };
 }
 
+function sanitizeLineageReconciliation(
+  value: unknown,
+  fileKey: string,
+): CodexLineageReconciliationState | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const parserState = sanitizeParserState(value.parserState, fileKey);
+  return {
+    prefixEvents: Math.max(0, Math.floor(finiteNumber(value.prefixEvents))),
+    tokenEventsSeen: Math.max(
+      0,
+      Math.floor(finiteNumber(value.tokenEventsSeen)),
+    ),
+    offset: Math.max(0, finiteNumber(value.offset)),
+    discardingOversizedLine: value.discardingOversizedLine === true,
+    parserState,
+    aggregate: sanitizeFileAggregate(value.aggregate, parserState),
+    qualityFlags: sanitizeQualityFlags(value.qualityFlags),
+  };
+}
+
 function sanitizeCoverage(value: unknown): CodexIndexCoverage {
   const coverage = isRecord(value) ? value : {};
   const identity = isRecord(coverage.identity) ? coverage.identity : {};
@@ -1749,7 +2437,25 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
   };
 }
 
-function migrateIndexV1(index: LegacyCodexIndexV1): CodexIndexV2 {
+function markLineageRescanRequired(index: CodexIndexV3): CodexIndexV3 {
+  for (const contribution of Object.values(index.files)) {
+    delete contribution.lineage;
+    delete contribution.lineageReconciliation;
+    contribution.qualityFlags = uniqueFlags(
+      contribution.qualityFlags,
+      ['stale-reset-required'],
+    );
+    contribution.identityChecked = false;
+  }
+  index.coverage.complete = false;
+  index.coverage.identity.complete = false;
+  index.coverage.period.last7Days.complete = false;
+  index.coverage.period.last30Days.complete = false;
+  index.coverage.period.allTime.complete = false;
+  return index;
+}
+
+function migrateIndexV1(index: LegacyCodexIndexV1): CodexIndexV3 {
   const files: Record<string, CodexFileContribution> = {};
   for (const [key, old] of Object.entries(index.files)) {
     const offset = Math.max(0, finiteNumber(old.offset));
@@ -1764,11 +2470,18 @@ function migrateIndexV1(index: LegacyCodexIndexV1): CodexIndexV2 {
     );
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     files,
     aggregate: sanitizeProviderAggregate(index.aggregate),
     coverage: sanitizeCoverage(index.coverage),
   };
+}
+
+function migrateIndexV2(index: LegacyCodexIndexV2): CodexIndexV3 {
+  return markLineageRescanRequired(sanitizeIndexV2({
+    ...index,
+    schemaVersion: 3,
+  }));
 }
 
 function sanitizeFileContribution(
@@ -1783,6 +2496,25 @@ function sanitizeFileContribution(
   const safeOffset = offsetOverride ?? Math.max(0, finiteNumber(contribution.offset));
   const limit = sanitizeLimit(contribution.limit);
   const limits = sanitizeLimits(contribution.limits);
+  const lineage = sanitizeLineage(contribution.lineage);
+  const lineageReconciliation = sanitizeLineageReconciliation(
+    contribution.lineageReconciliation,
+    fileKey,
+  );
+  if (lineageReconciliation) {
+    lineageReconciliation.offset = Math.min(
+      lineageReconciliation.offset,
+      safeOffset,
+    );
+    lineageReconciliation.prefixEvents = Math.min(
+      lineageReconciliation.prefixEvents,
+      lineage?.tokenEvents ?? 0,
+    );
+    lineageReconciliation.tokenEventsSeen = Math.min(
+      lineageReconciliation.tokenEventsSeen,
+      lineage?.tokenEvents ?? 0,
+    );
+  }
   const periodMigration = sanitizePeriodMigration(
     contribution.periodMigration,
     fileKey,
@@ -1807,6 +2539,8 @@ function sanitizeFileContribution(
     discardingOversizedLine: discardingOverride ??
       contribution.discardingOversizedLine === true,
     parserState,
+    ...(lineage ? { lineage } : {}),
+    ...(lineageReconciliation ? { lineageReconciliation } : {}),
     aggregate: sanitizeFileAggregate(contribution.aggregate, parserState),
     ...(limit ? { limit } : {}),
     ...(limits ? { limits } : {}),
@@ -1818,11 +2552,11 @@ function sanitizeFileContribution(
   };
 }
 
-function sanitizeIndexV2(value: unknown): CodexIndexV2 {
+function sanitizeIndexV2(value: unknown): CodexIndexV3 {
   const index = isRecord(value) ? value : {};
   const rawFiles = isRecord(index.files) ? index.files : {};
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     files: Object.fromEntries(
       Object.entries(rawFiles).map(([key, contribution]) => [
         key,
@@ -1855,7 +2589,7 @@ export async function loadCodexIndex(
   indexPath: string,
   timeZone = 'UTC',
   onRecovery?: (recovery: CodexIndexRecovery) => void,
-): Promise<CodexIndexV2> {
+): Promise<CodexIndexV3> {
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(indexPath, 'utf8'));
@@ -1876,9 +2610,12 @@ export async function loadCodexIndex(
     throw error;
   }
   if (isIndexV1(parsed)) {
-    return migrateIndexV1(parsed);
+    return markLineageRescanRequired(migrateIndexV1(parsed));
   }
-  if (isIndexV2(parsed)) {
+  if (isLegacyIndexV2(parsed)) {
+    return migrateIndexV2(parsed);
+  }
+  if (isIndexV3(parsed)) {
     return sanitizeIndexV2(parsed);
   }
   await quarantineCorruptCodexIndex(indexPath);
@@ -1888,7 +2625,7 @@ export async function loadCodexIndex(
 
 export async function saveCodexIndexAtomic(
   indexPath: string,
-  index: CodexIndexV2,
+  index: CodexIndexV3,
 ): Promise<void> {
   await mkdir(path.dirname(indexPath), { recursive: true });
   const temporaryPath = `${indexPath}.tmp-${process.pid}-${randomUUID()}`;
