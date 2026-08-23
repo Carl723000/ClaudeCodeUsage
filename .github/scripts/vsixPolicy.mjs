@@ -16,6 +16,8 @@ const FORBIDDEN_ENTRY_PATTERNS = [
   /^extension\/out\/test(?:\/|$)/i,
   /^extension\/AGENTS(?:\.zh-CN)?\.md$/i,
   /^extension\/node_modules(?:\/|$)/i,
+  /^extension\/issue87-.*\.cjs$/i,
+  /^extension\/out\/claudeIncrementalPrototype\.js$/i,
   /(?:^|\/)\.env(?:\.|$)/i,
   /\.(?:pem|key|p12|pfx)$/i,
 ];
