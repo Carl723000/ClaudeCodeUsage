@@ -536,13 +536,14 @@ export class ClaudeDataLoader {
       const sorted = await sortUsageFilesByEarliestTimestamp([...manifest.entries.values()]);
       bytesRead += sorted.bytesRead;
       const sortedFiles = sorted.files;
-      // hash → records[] index. Some proxies (mimo / CC Switch) write two
-      // records per message: a tokens=0 placeholder when streaming starts,
-      // and the real values when the response finishes. Both records share
-      // the same messageId, so they hash identically. We keep whichever
-      // record has the higher total token sum (issue #18).
-      const processedHashes = new Map<string, number>();
-      const records: ClaudeUsageRecord[] = [];
+      // Usage identities are resolved after every file has been read. Claude
+      // normally writes both messageId and requestId, but some transcript rows
+      // omit requestId. Waiting until the full load is known lets a missing ID
+      // join the sole request for that message without merging genuinely
+      // distinct requests that happen to reuse a messageId.
+      const usageRecordIndexes: number[] = [];
+      const requestIdsByMessage = new Map<string, Set<string>>();
+      let records: ClaudeUsageRecord[] = [];
       // sessionId → conversation title. Current Claude Code writes
       // `custom-title` (user-set) and `ai-title` (auto) lines; older versions
       // wrote `summary`. A custom title always wins over an AI one.
@@ -726,7 +727,6 @@ export class ClaudeDataLoader {
               }
 
               const data = parsed;
-              const uniqueHash = this.createUniqueHash(data);
 
               // Tag the record with the session/project it came from.
               // Prefer the real working directory (`cwd`) recorded in the log line
@@ -759,31 +759,18 @@ export class ClaudeDataLoader {
                 record._agentTask = agentInfo.task;
               }
 
-              if (uniqueHash && processedHashes.has(uniqueHash)) {
-                // Duplicate — keep whichever record has more tokens. This
-                // resolves the proxy "placeholder + real value" pair from
-                // issue #18 without needing to detect the proxy.
-                const existingIndex = processedHashes.get(uniqueHash)!;
-                if (this.tokenSum(record) > this.tokenSum(records[existingIndex])) {
-                  records[existingIndex] = record;
-                  stats.replacedByDedup += 1;
-                } else {
-                  stats.skippedByDedup += 1;
-                }
-                continue;
-              }
-
               records.push(record);
-              stats.kept += 1;
-              const modelName =
-                typeof record.message?.model === 'string' ? record.message.model : '<no-model>';
-              if (!stats.models[modelName]) {
-                stats.models[modelName] = { count: 0, tokens: 0 };
-              }
-              stats.models[modelName].count += 1;
-              stats.models[modelName].tokens += this.tokenSum(record);
-              if (uniqueHash) {
-                processedHashes.set(uniqueHash, records.length - 1);
+              usageRecordIndexes.push(records.length - 1);
+              const messageId = record.message?.id;
+              const requestId = record.requestId;
+              if (messageId && requestId) {
+                const messageKey = String(messageId);
+                let requestIds = requestIdsByMessage.get(messageKey);
+                if (!requestIds) {
+                  requestIds = new Set<string>();
+                  requestIdsByMessage.set(messageKey, requestIds);
+                }
+                requestIds.add(String(requestId));
               }
             } catch (parseError) {
               stats.parseErrors += 1;
@@ -800,6 +787,49 @@ export class ClaudeDataLoader {
         if (++fileIndex % 25 === 0) {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
+      }
+
+      // One Claude response can appear as separate thinking and text rows,
+      // monotonic partial/final snapshots, or a cross-file transcript clone.
+      // Keep the largest complete token vector for each resolved response
+      // identity. This is the established issue #18 behavior; the post-pass
+      // only makes requestId omission within one message order-independent.
+      const processedHashes = new Map<string, number>();
+      const removedUsageIndexes = new Set<number>();
+      for (const recordIndex of usageRecordIndexes) {
+        const record = records[recordIndex];
+        const uniqueHash = this.createUniqueHash(record, requestIdsByMessage);
+        if (!uniqueHash) {
+          continue;
+        }
+        const existingIndex = processedHashes.get(uniqueHash);
+        if (existingIndex === undefined) {
+          processedHashes.set(uniqueHash, recordIndex);
+          continue;
+        }
+        if (this.tokenSum(record) > this.tokenSum(records[existingIndex])) {
+          records[existingIndex] = record;
+          stats.replacedByDedup += 1;
+        } else {
+          stats.skippedByDedup += 1;
+        }
+        removedUsageIndexes.add(recordIndex);
+      }
+      if (removedUsageIndexes.size > 0) {
+        records = records.filter((_record, index) => !removedUsageIndexes.has(index));
+      }
+      stats.kept = usageRecordIndexes.length - removedUsageIndexes.size;
+      for (const record of records) {
+        if (record._isUserPrompt) {
+          continue;
+        }
+        const modelName =
+          typeof record.message?.model === 'string' ? record.message.model : '<no-model>';
+        if (!stats.models[modelName]) {
+          stats.models[modelName] = { count: 0, tokens: 0 };
+        }
+        stats.models[modelName].count += 1;
+        stats.models[modelName].tokens += this.tokenSum(record);
       }
 
       // Attach harvested conversation titles (custom beats AI). A post-pass
@@ -873,12 +903,22 @@ export class ClaudeDataLoader {
     }
   }
 
-  private static createUniqueHash(data: any): string | null {
+  private static createUniqueHash(
+    data: any,
+    requestIdsByMessage?: ReadonlyMap<string, ReadonlySet<string>>,
+  ): string | null {
     const messageId = data.message?.id;
-    const requestId = data.requestId;
+    let requestId = data.requestId;
 
     if (!messageId && !requestId) {
       return null;
+    }
+
+    if (messageId && !requestId) {
+      const knownRequestIds = requestIdsByMessage?.get(String(messageId));
+      if (knownRequestIds?.size === 1) {
+        requestId = knownRequestIds.values().next().value;
+      }
     }
 
     return `${messageId || 'no-msg'}-${requestId || 'no-req'}`;

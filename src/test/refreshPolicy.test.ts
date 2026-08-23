@@ -10,7 +10,6 @@ import {
   QuietDebounce,
   RefreshSingleFlight,
   reportColdRefreshFailure,
-  quotaFailureBackoffMs,
   shouldCommitUsageLoad,
   shouldReloadUsage,
   WindowActivityGate,
