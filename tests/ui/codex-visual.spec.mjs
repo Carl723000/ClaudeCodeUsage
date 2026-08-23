@@ -47,6 +47,66 @@ test('Codex header matches Claude with only Refresh and Settings actions', async
   ]);
 });
 
+test('manual Refresh remains visible while dashboard auto-refresh is enabled', async ({ page }) => {
+  await openCodex(page, { autoRefresh: true });
+
+  await expect(page.locator('#refreshNowBtn')).toBeVisible();
+});
+
+test('Codex labels incomplete usage as an indexed subtotal', async ({ page }) => {
+  await openCodex(page);
+
+  await expect(page.locator('#today .usage-summary').first()).toContainText('Indexed subtotal');
+  await page.locator('#tab-all').click();
+  await expect(page.locator('#all .usage-summary').first()).toContainText('Indexed subtotal');
+});
+
+test('Codex summary leads with a clearly qualified API-equivalent cost', async ({ page }) => {
+  await openCodex(page);
+
+  const cards = page.locator('#today .usage-summary').first().locator('.summary-grid .summary-item');
+  await expect(cards).toHaveCount(7);
+  await expect(cards.first().locator('.label')).toHaveText('API-equivalent cost');
+  await expect(cards.first().locator('.value')).toHaveText(/^≈ \$[\d,.]+$/);
+  await expect(cards.first()).toHaveAttribute(
+    'title',
+    /not a bill or subscription charge.*Priced model coverage: \d+%/,
+  );
+  await expect(cards.nth(1).locator('.label')).toHaveText('Processed');
+});
+
+test('Codex shows an unpriced marker without hiding unknown-model token totals', async ({ page }) => {
+  await openCodex(page, { fixture: 'unknown-models' });
+
+  const cards = page.locator('#today .usage-summary').first().locator('.summary-grid .summary-item');
+  const costCard = cards.first();
+  const costValue = costCard.locator('.value');
+  await expect(cards).toHaveCount(7);
+  await expect(costValue).toHaveText('—');
+  const costText = await costValue.textContent();
+  expect(costText).not.toContain('$');
+  expect(costText).not.toContain('≈');
+  await expect(costCard).toHaveAttribute('title', /Priced model coverage: 0%/);
+  await expect(cards.locator('.value')).toHaveText([
+    '—',
+    '61,920',
+    '33,720',
+    '51,600',
+    '28,200',
+    '10,320',
+    '3,300',
+  ]);
+});
+
+test('Codex explains multi-sign-in usage and last-observed limits', async ({ page }) => {
+  await openCodex(page);
+
+  const limits = page.locator('#today .usage-summary').filter({ hasText: 'Usage limits' });
+  await expect(limits).toContainText(
+    'Usage combines sign-ins in this Codex home · limits are last observed, not combined',
+  );
+});
+
 test('Claude and Codex receive the exact same production stylesheet', async ({ page }) => {
   await openClaude(page);
   const claudeStyles = await page.locator('head style').first().textContent();
@@ -143,4 +203,60 @@ test('Codex month chart reuses the shared chart controls and bars', async ({ pag
   await expect(chart.locator('.chart-bar').first()).toBeVisible();
   await chart.locator('.chart-tab[data-metric="outputTokens"]').click();
   await expect(chart.locator('.chart-tab[data-metric="outputTokens"]')).toHaveClass(/active/);
+});
+
+test('weekly allowance value uses the shared all-time chart and exposes uncertainty', async ({ page }) => {
+  await openCodex(page);
+  await page.locator('#tab-all').click();
+
+  const panel = page.locator('#all .daily-breakdown').filter({
+    hasText: 'Weekly allowance value · Codex Beta',
+  });
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText('Estimate, not a bill');
+  await expect(panel).toContainText('Historical used equivalents come directly from local token logs');
+  await expect(panel).toContainText('Quota-derived total and unused estimates stay tied to the observed reset series');
+  await expect(panel).toContainText('no account split is invented');
+  await expect(panel.locator('.hc-col')).toHaveCount(2);
+  await expect(panel.locator('tbody tr')).toHaveCount(2);
+  await expect(panel.locator('thead')).toContainText('Full allowance est.');
+  await expect(panel.locator('thead')).toContainText('Priced coverage');
+});
+
+test('weekly allowance table fits at 1280px in the longest locale', async ({ page }) => {
+  await openCodex(page, { locale: 'de-DE', width: 1280 });
+  await page.locator('#tab-all').click();
+  const panel = page.locator('#all .daily-breakdown').filter({
+    hasText: 'Wöchentlicher Gegenwert · Codex Beta',
+  });
+  const container = panel.locator('.daily-table-container');
+  await expect(container).toBeVisible();
+  const dimensions = await container.evaluate((element) => ({
+    scrollWidth: element.scrollWidth,
+    clientWidth: element.clientWidth,
+  }));
+  expect(dimensions.scrollWidth).toBeLessThanOrEqual(dimensions.clientWidth);
+  const clippedHeaders = await panel.locator('th').evaluateAll((headers) =>
+    headers.filter((header) => header.scrollWidth > header.clientWidth).map((header) => header.textContent),
+  );
+  expect(clippedHeaders).toEqual([]);
+});
+
+test('weekly used-value history remains visible without historical quota samples', async ({ page }) => {
+  await openCodex(page, { fixture: 'weekly-usage-only' });
+  await page.locator('#tab-all').click();
+
+  const panel = page.locator('#all .daily-breakdown').filter({
+    hasText: 'Weekly allowance value · Codex Beta',
+  });
+  await expect(panel).toContainText('Monday-to-Monday UTC calendar weeks');
+  await expect(panel.locator('tbody tr')).toHaveCount(2);
+  await expect(panel.locator('tbody')).toContainText('Usage only');
+  await expect(panel.locator('tbody')).toContainText('$12.00');
+  await expect(panel.locator('tbody')).toContainText('$8.00');
+  for (const row of await panel.locator('tbody tr').all()) {
+    await expect(row.locator('td').nth(2)).toHaveText('—');
+    await expect(row.locator('td').nth(3)).toHaveText('—');
+    await expect(row.locator('td').nth(4)).toHaveText('—');
+  }
 });

@@ -35,6 +35,7 @@ const { buildScopedCodexInsights } = require('../../../out/providers/codex/codex
 const {
   CODEX_WEBVIEW_NOW,
   codexWebviewFixture,
+  unknownModelCodexWebviewFixture,
 } = require('../../../out/test/codexWebviewFixtures.js');
 const {
   rootedTaskBeyondRecentRowCapFixture,
@@ -141,10 +142,10 @@ const THEMES = {
     '}*,*::before,*::after{animation:none!important;transition:none!important}',
 };
 
-function settingsStore() {
+function settingsStore(autoRefresh = false) {
   const values = new Map(SETTINGS.map((definition) => [definition.key, definition.default]));
   values.set('codex.optimization.enabled', true);
-  values.set('dashboardAutoRefresh', false);
+  values.set('dashboardAutoRefresh', autoRefresh);
   return {
     get: (key) => values.get(key),
     snapshot: () => SETTINGS.map((definition) => ({
@@ -208,22 +209,36 @@ function addClaudeData(provider) {
   );
 }
 
-exports.renderHarness = function renderHarness({ provider: selectedProvider = 'codex', locale = 'en', theme = 'light', fixture = 'default' } = {}) {
+exports.renderHarness = function renderHarness({ provider: selectedProvider = 'codex', locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false } = {}) {
   I18n.setLanguage(locale);
   I18n.setTimezone('Asia/Hong_Kong');
   vscodeHost.window.activeColorTheme.kind = theme === 'dark' ? 2 : 1;
   const originalNow = Date.now;
   try {
     Date.now = () => CODEX_WEBVIEW_NOW;
-    const snapshot = fixture === 'rootless-cycle'
+    const baseSnapshot = fixture === 'rootless-cycle'
       ? rootlessCrossProjectCycleFixture()
       : fixture === 'root-over-limit'
         ? rootedTaskBeyondRecentRowCapFixture()
-        : codexWebviewFixture();
+        : fixture === 'unknown-models'
+          ? unknownModelCodexWebviewFixture()
+          : codexWebviewFixture();
+    const snapshot = fixture === 'weekly-usage-only'
+      ? {
+          ...baseSnapshot,
+          weeklyValueInputs: {
+            observations: [],
+            usage: [
+              { timestamp: CODEX_WEBVIEW_NOW - 2 * 24 * 60 * 60_000, equivalentUsd: 12, pricedTokens: 1_000, totalTokens: 1_000 },
+              { timestamp: CODEX_WEBVIEW_NOW - 9 * 24 * 60 * 60_000, equivalentUsd: 8, pricedTokens: 1_000, totalTokens: 1_000 },
+            ],
+          },
+        }
+      : baseSnapshot;
     const view = buildCodexUsageView(snapshot, CODEX_WEBVIEW_NOW);
     const provider = new UsageWebviewProvider({});
     const persistedDetailsFixture = fixture === 'persisted-details';
-    provider.settings = settingsStore();
+    provider.settings = settingsStore(autoRefresh);
     addClaudeData(provider);
     provider.updateProviderData(
       view,

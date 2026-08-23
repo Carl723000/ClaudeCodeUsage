@@ -25,10 +25,11 @@ const server = createServer((request, response) => {
     const provider = url.searchParams.get('provider') === 'claude' ? 'claude' : 'codex';
     const theme = url.searchParams.get('theme') === 'dark' ? 'dark' : 'light';
     const requestedFixture = url.searchParams.get('fixture') ?? 'default';
-    const fixture = ['default', 'rootless-cycle', 'root-over-limit', 'persisted-details'].includes(requestedFixture)
+    const fixture = ['default', 'rootless-cycle', 'root-over-limit', 'persisted-details', 'weekly-usage-only', 'unknown-models'].includes(requestedFixture)
       ? requestedFixture
       : 'default';
-    const html = renderHarness({ provider, locale, theme, fixture });
+    const autoRefresh = url.searchParams.get('autoRefresh') === 'true';
+    const html = renderHarness({ provider, locale, theme, fixture, autoRefresh });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',
