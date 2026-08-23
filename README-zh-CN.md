@@ -64,13 +64,14 @@ AI 建议生成的是一份 **Markdown 文档**，用文字展示比截图更直
 ## 2.3 Codex Beta
 
 - Codex 用量记录只会从 `sessions/**/*.jsonl` 与 `archived_sessions/**/*.jsonl` 中发现；凭据、数据库和未知文件仍明确排除。此外，插件会精确流式读取 `$CODEX_HOME/session_index.jsonl`，仅将 `id` 映射为 `thread_name`，用于真实线程标题。标题中的绝对路径会先脱敏，标题只保留在内存。用量 JSONL 会逐行流式、临时解析，以提取白名单内的用量与结构元数据；提示词、回复、命令和工具参数字段不会被检查或用于分析，也不会被保留或持久化。
-- **已处理** = 输入 + 输出；**未缓存用量** = 未缓存输入 + 输出；**缓存输入**仍是输入的子集，reasoning 仍是输出的子集。Codex 不估算美元成本；Claude / Codex / Compare 会保持各供应商的统计口径独立。
+- **已处理** = 输入 + 输出；**未缓存用量** = 未缓存输入 + 输出；**缓存输入**仍是输入的子集，reasoning 仍是输出的子集。Codex 不显示账单成本；首张汇总卡会针对当前范围显示明确标注的 API 等效成本估算，「全部时间」则按同一定价口径展示每周趋势。Claude / Codex / Compare 仍保持各供应商口径独立。
+- Claude 与 Codex 的「全部时间」/「对比」会直接根据本地 Token 日志计算历史已用等价值。有真实每周重置观测时按该节奏对齐；没有时，仅已用历史按 UTC 周一至周一的自然周分组。只有某个窗口存在真实用量比例观测时，才显示总额度和未用额度估算。历史统一套用当前官方 API 单价；这是代理估算，不是账单或官方订阅价格。Codex 的仅已用历史会合并所选 home 中的登录，总额度估算仍绑定实际观测的重置序列，不会虚构账号拆分。Claude 从此版本开始按本地 profile 记录额度观测。
 - 切换到 Codex 后仍沿用既有的今天 / 本月 / 全部时间 / 会话 / 项目 / 内容 / 设置结构，并按 Codex 语义调整标签。两个供应商复用同一组渲染函数、HTML class、图表、表格、间距和响应式规则；Codex 建议使用已索引的 30 天结构化证据。
 - 根任务使用经过路径脱敏的最新真实线程标题；子任务优先使用自己的真实线程标题，缺失时使用其上报的昵称并显示父级 / 根任务标题；这些信息仍缺失时采用本地化的中性回退名称。项目名称使用 Git 仓库名，非 Git 目录则使用文件夹的末级名称。插件不会虚构无法可靠统计的 Branches 或 Workflows。
-- 最近 7 天与 30 天按配置时区中的事件发生日精确切片。迁移或覆盖不完整时会明确显示为**部分**。额度是本地日志中**最后观测**到的快照，不是实时订阅或账单数据。
+- 最近 7 天与 30 天按配置时区中的事件发生日精确切片。迁移或重建未完成时，Codex 的卡片、表格、项目、会话、建议与状态栏都会明确标为**已索引小计**，并排除未经验证的旧版总量。检测到 Codex home 后会立即显示供应商标签；首次建立索引期间在页面内实时显示精确的已索引文件数、百分比与容量进度，「对比」则等到两个供应商都有真实数据后才出现。生成首个原子检查点后，完整的小计仪表盘会在索引继续期间保持可用；进度提示不会替代卡片和表格。所选 Codex home 不区分账号，因此同一目录中多个登录账号留下的日志会合并统计；本地日志没有可靠的账号身份字段，额度卡只能保留**最后观测**，不会相加。
 - 每条建议仅在已索引的 30 天结构聚合有证据时展示观测、易读证据和条件式行动；没有证据就不会生成泛化建议。
 - 持久索引保存使用本机盐值生成的假名化键、数值与结构聚合，以及经过脱敏的项目、目录、agent、模型、effort、角色、时间和质量元数据；绝不保存原始 ID、完整路径或仓库 URL、线程标题或对话正文。
-- 共享设置标签页在 Codex 下只显示通用和对 Codex 有效的选项。Codex 数据收集和本地 Codex 建议可分别关闭；后台监听延迟可配置（默认 30 秒，也可关闭或选更长间隔）。
+- 共享设置标签页在 Codex 下只显示通用和对 Codex 有效的选项。Codex 数据收集和本地 Codex 建议可分别关闭；后台监听延迟可配置（默认 30 秒，也可关闭或选更长间隔）。首次建立索引或旧索引迁移尚未收敛时，会获得一次受限的 64 GiB / 16,384 文件轮次流式上限；这不会预先占用等量内存，并且仍可取消、可续传。收敛后，后台任务恢复为 128 MiB / 64 文件轮次，始终可见的「刷新」使用 2 GiB / 512 文件轮次。未变化的常规刷新仍不会读取用量 JSONL 正文。
 
 ## 2.2 新功能
 
@@ -97,14 +98,17 @@ AI 建议生成的是一份 **Markdown 文档**，用文字展示比截图更直
 - **工作流配额护栏**：当 5 小时窗口剩余不足以完成一次运行时，仪表板显示可关闭的警告横幅（`claudeCodeUsage.workflowQuotaWarnPercent`）。
 - **设置搬进仪表板**：新增 ⚙ 设置标签页，就地管理所有选项；VS Code 原生设置只保留三个适合同步的（`language`、`dataDirectory`、`advice.apiKey`）。右上角按钮精简为 ✨ AI 建议 和 ⚙ 设置（都跳到对应标签）；自动刷新开关挪进设置（暂停时右上角才出现手动 ↻）。如果你把成本、配额、上下文三项**全部隐藏**，状态栏会保留一个小图标作为回到仪表板的入口。
 - **状态栏指标**（`statusBarMetric`）：默认显示今日成本，也可切换为今日**总 token** 消耗（紧凑 k/M）。
-- **每周 Opus 上限**（`showOpusWeekly`，可选开启）：在配额项后追加 `opus:NN%`，方便重度 Opus 用户一眼看到每周 Opus 额度。（PR #38，[@wheelbarrel00](https://github.com/wheelbarrel00)。）*该项后已更名为 `showScopedWeekly`，并会显示你的方案实际限制的模型名称。*
+- **模型专属每周上限**（`showScopedWeekly`，可选开启）：显示 Anthropic
+  实际返回的受限模型名称，例如 `fable 17%`；由 PR #38
+  （[@wheelbarrel00](https://github.com/wheelbarrel00)）最初的
+  模型专属额度功能演进而来。
 - **AI 建议 2.0**：自备 key：默认 **Anthropic**（`/v1/messages`），也支持任意 OpenAI 兼容端点（`advice.apiFormat`）。引入新信号（运行、缓存命中率、归因、思考占比）；可选 `advice.userContext` 会附上"针对本项目的个性化"一节；`advice.promptWindowDays`（默认 30）设定采样窗口。传输层加强了：超时、重试、curl 兜底。*（一个免 key 的"订阅"后端做过原型，但本版未上线 —— Anthropic 封禁用 Claude Code 的 OAuth token 直连 API；若日后放开会再启用。）*
 - **用量优化器**（实验性，`advice.optimizer.enabled`，默认关闭）：Content 标签页的一张卡，粘贴进粗略需求，返回一条精炼提示词，以**纯文本**形式（可直接粘贴、无 Markdown），并附推荐的 effort / thinking / 模型。三个可选微调项（标出含糊指代 · 压缩长粘贴内容 · 建议风格方向）。**只发送你粘贴的文字**，且首次有一次性同意确认。
 - **上下文窗口指示器**（实验性，默认关闭）：在设置里开启后，状态栏显示当前 session 的上下文占用。`~` 表示窗口大小是猜测；代理 / 自定义模型可用 `contextWindowOverride` 手填真实窗口。
 
 ## 2.0 新功能
 
-- **真实的 5 小时和每周配额** 显示在状态栏：读取 Claude Code 现有的 OAuth 会话（`~/.claude/.credentials.json` 或 macOS 钥匙串），无需配置。借鉴上游 [PR #9](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/9)（[@Dobidop](https://github.com/Dobidop)）。
+- **真实的 5 小时和每周配额** 显示在状态栏：OAuth 会话跟随当前窗口所选的 Claude profile，优先级为显式 `dataDirectory`、首个有效 `CLAUDE_CONFIG_DIR`、最后 `~/.claude`；macOS 钥匙串仅用于默认 profile。借鉴上游 [PR #9](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/9)（[@Dobidop](https://github.com/Dobidop)）。
 - **四个新标签页**：Sessions、Projects、Content、Branches，均可排序。
 - **堆叠 token 构成图**，含 Y 轴和参考线。
 - **AI 建议命令**（默认 DeepSeek V4 Pro，`reasoning_effort=max`），未配置 key 时提供 demo 演示。
@@ -187,7 +191,7 @@ ext install GrowthJack.claude-code-usage
 - 检查 `dataDirectory` 设置；自动检测会查 `~/.claude/projects` 和 `~/.config/claude/projects`。
 
 **配额行显示 `5h:--% wk:--%`**
-- Claude Code 的 OAuth token 缺失或过期。登录一次 Claude Code；扩展会读取 `~/.claude/.credentials.json`（或 macOS 钥匙串里 Claude Code 用的条目）并在需要时刷新 bearer。
+- Claude Code 的 OAuth token 缺失或过期。请登录一次当前 Claude profile。凭证按显式 `dataDirectory`、首个有效 `CLAUDE_CONFIG_DIR`、最后 `~/.claude` 的顺序选择；全局 macOS 钥匙串条目不会替代已选中的自定义 profile。
 
 **切换 workspace 后配额消失**
 - 已修复：在同一个窗口里切换打开的文件夹时，配额会自动重新拉取，无需新开窗口。
@@ -214,6 +218,12 @@ ext install GrowthJack.claude-code-usage
   ```
   此设置仅对之后生成的日志有效。感谢 [@nickearnshaw](https://github.com/nickearnshaw) 记录此项。
 
+**Token 总数低于 Claude Code 的 `stats-cache`**
+- 一次响应会在转录中产生 `thinking` 和 `text` 两条记录；它们带有相同的
+  `messageId`、`requestId` 与完整 `usage` 向量。插件按响应身份只计一次，
+  并保留该身份最大的向量；Claude Code 的 `stats-cache` 则按行累加。
+  因此两者可能不同，插件不会用倍率去贴合缓存读数。
+
 ---
 
 ## 致谢
@@ -227,7 +237,7 @@ ext install GrowthJack.claude-code-usage
 - [@Dobidop](https://github.com/Dobidop) —— [PR #9](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/9)，读取真实 `/usage` 数据的 OAuth 方案；配额指示器据此改编。
 - [@nickearnshaw](https://github.com/nickearnshaw) —— [PR #8](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/8) 本地化数字 / 日期；[PR #20](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/20) 修复 webview / 状态栏卡在 "Loading…"；[PR #21](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/21) `cleanupPeriodDays` 文档；[PR #24](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/24) 配额窗口滚动处理。
 - [@ScherbakovAl](https://github.com/ScherbakovAl) —— [PR #31](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/31)，状态栏上下文窗口指示器与 `showCost` 开关的原始实现。
-- [@wheelbarrel00](https://github.com/wheelbarrel00) —— [PR #38](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/38)，状态栏可选显示每周 Opus 上限，即如今 `showScopedWeekly` 的前身。
+- [@wheelbarrel00](https://github.com/wheelbarrel00) —— [PR #38](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/38)，状态栏可选显示每周 Opus 上限，即如今由 API 动态命名的 `showScopedWeekly` 前身。
 - [@brenoneill](https://github.com/brenoneill) —— [PR #14](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/14)，自定义数据目录（已并入上游 1.0.8）。
 - [@mxzinke](https://github.com/mxzinke) —— Opus 4.5 / Haiku 4.5 价格 + 德语翻译（上游 1.0.8）。
 

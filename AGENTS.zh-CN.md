@@ -44,6 +44,9 @@
 - Codex 只发现 `$CODEX_HOME/sessions/**/*.jsonl` 与
   `$CODEX_HOME/archived_sessions/**/*.jsonl`（默认 `~/.codex`）。不得为用量
   读取 `auth.json`、SQLite、config secret、keychain、浏览器状态或未知文件。
+- 另允许流式读取 `$CODEX_HOME/session_index.jsonl`，但仅用于恢复真实线程标题所需的
+  `id` → `thread_name` 映射。标题中的绝对路径必须遮蔽，标题仅驻留内存且绝不持久化；
+  符号链接与非普通文件必须拒绝，并且不读取该文件的任何其他字段。
 - Codex raw path/session/parent ID 只允许存在于本地 worker 的短期内存；
   持久化只保留 machine-salted 伪名 key 与数字聚合。
 - Advice 和 optimizer 的网络调用必须由用户明确触发，只能发送文档约定的摘要

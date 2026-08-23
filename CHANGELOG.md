@@ -7,6 +7,19 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ## [2.3.0] — Unreleased
 
 ### Fixed
+- **Conservative Codex rebuild totals** — schema and lineage migrations no
+  longer expose retained legacy aggregates as current usage. Cards, tables,
+  projects, sessions, recommendations, and the status bar now use only freshly
+  indexed contributions and show an indexed-subtotal notice until coverage
+  converges. Stale files remain visible in data-quality reporting. Account
+  limits remain last-observed snapshots and are never summed.
+- **Profile-scoped Claude quota credentials (#89)** — quota reads and token
+  refresh writes now follow explicit `dataDirectory`, then the first valid
+  `CLAUDE_CONFIG_DIR`, then `~/.claude`. A selected custom profile without a
+  credentials file shows quota as unavailable instead of silently using the
+  single global macOS Keychain account, and persisted quota snapshots are
+  isolated by profile. Thanks to [@HoangJN](https://github.com/HoangJN) for the
+  precise report.
 - **Per-model weekly limits are read again** — Anthropic's usage API stopped
   filling in its per-model quota fields, so the weekly Opus figure had silently
   gone blank. The extension now reads whichever per-model weekly cap your plan
@@ -20,6 +33,21 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   Indonesian entry showed English text in the settings panel.
 
 ### Added
+- **Codex API-equivalent cost summary** — every Codex usage scope now begins
+  with a clearly labelled approximate dollar value calculated from currently
+  indexed tokens and exact known-model API prices. Unknown models stay unpriced,
+  the hover text reports priced-model coverage, and the value is explicitly not
+  presented as a bill or subscription charge.
+- **Historical weekly allowance value** — Claude and Codex All-time and Compare
+  views now calculate historical used API-equivalent value directly from local
+  token logs. Real observed weekly resets align the buckets; without one,
+  usage-only rows use Monday-to-Monday UTC calendar weeks. Full and unused
+  allowance estimates remain limited to windows with a real utilization
+  observation and include confidence and model-price coverage. Current official
+  API prices are applied consistently; this remains an estimate, not a bill or
+  an official subscription price. Codex usage-only history combines local
+  sign-ins, while quota estimates stay tied to their observed reset series; no
+  account split is invented.
 - **Complete Claude quota details** — the tooltip now shows every active
   all-model and model-scoped weekly cap reported by Anthropic, plus used monthly
   credits when available. Model-scoped status-bar display remains opt-in and is
@@ -29,6 +57,14 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   index coverage, quality flags, and last-observed limit snapshots.
 - **Provider-aware dashboard** — Claude, Codex Beta, and side-by-side Compare
   modes preserve provider-specific semantics; Compare does not sum cost or quota.
+- **Immediate Codex entry during backfill** — once an allowed Codex home is
+  detected, its provider tab appears before the first index finishes and shows
+  exact indexed-file, percentage, and byte progress inside the page. The last
+  atomic checkpoint is hydrated before the worker starts, so its full indexed-
+  subtotal dashboard remains usable while reconciliation continues; a brand-new
+  index adopts its first checkpoint without waiting for the whole pass. Progress
+  renders are coalesced so the indicator does not turn backfill into a Webview
+  redraw loop. Compare still waits until both providers have real data.
 - **Provider-aware Codex dashboard** — the existing Today / Month / All time /
   Sessions / Projects / Content / Settings render functions now accept a
   provider and present the corresponding Codex Recent task / Last 30 days /
@@ -51,6 +87,13 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   resume, and zero unchanged usage-record/rollout JSONL body rereads on warm
   refreshes. This does not include the exact `$CODEX_HOME/session_index.jsonl`
   title stream performed on every refresh.
+- **One-pass initial Codex backfill** — the first non-empty index or an
+  incomplete legacy migration receives a bounded 64 GiB / 16,384-file-pass
+  streaming ceiling, with cancellation and atomic resume checkpoints. The
+  ceiling is not an up-front memory allocation. After convergence, automatic
+  work returns to 128 MiB / 64 file passes and the always-visible Refresh action
+  uses 2 GiB / 512 file passes. Unchanged warm refreshes still read zero
+  usage-record JSONL bodies.
 - **Codex UI release gate** — production-rendered coverage checks shared-tab
   navigation, settings, charts, sorting, accessibility, responsive overflow,
   stylesheet identity, and the invariant that Codex-rendered classes are a
@@ -130,6 +173,13 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   instead of retaining inflated totals.
 
 ### Fixed
+- **Claude response-level token counting** — regression fixtures now lock the
+  observed transcript behavior: one response may emit separate `thinking` and
+  `text` rows with the same `messageId`, `requestId`, and complete `usage`
+  vector, so the extension counts that response once and keeps its largest
+  vector rather than summing rows like Claude Code's `stats-cache`. Identity
+  degradation is also covered: a matching row that omits `requestId` still
+  joins the sole known request, while distinct request IDs stay separate.
 - **Shared-dashboard readability** — active tabs remain distinguishable in
   Light+ and Dark+, sortable headers expose their interaction without changing
   the established alignment, and the output segment in composition charts uses

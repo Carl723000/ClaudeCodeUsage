@@ -63,6 +63,12 @@ Claude aggregate + Codex scope ──> 并列 Compare（不跨 provider 求和�
 
 任一 provider unavailable 或 partial 时，不清空另一 provider 最近验证的 snapshot。
 Claude-only 保持 v2.2.1 行为；Codex-only 默认显示 Codex；两者都有时 dashboard 默认 Claude。
+Codex 数据源可用性与已索引数据可用性分开判断：只要检测到允许的本地 home，Codex 标签
+就立即出现，首次建立索引期间由页面实时显示精确文件数、百分比与已处理容量；只有两个
+provider 都已有真实数据时才显示「对比」。worker 启动前先装载最近一次原子检查点；全新
+索引生成第一个检查点后也会在 worker 继续运行时立即采用。因此，进度只是完整「已索引小计」
+仪表盘上的状态说明，不会替代卡片和表格。worker 进度最多每 250 ms 触发一次重绘，且只有
+选中 Codex 时才重绘 Webview；refresh 返回后仍会用已验证 snapshot 做最后一次渲染。
 
 ## Token 与 limit 语义
 
@@ -138,17 +144,27 @@ coverage 保持 incomplete，而不是猜测。
 Claude polling 始终遵守 `refreshInterval`，file watcher 使用配置的 quiet debounce。
 Codex 使用独立 quiet debounce（默认 30 秒，可选 Off/10/30/60/120/300）。
 
-Codex 按 2.4-GB-class 本地历史设计：
+Codex 按多 GiB 本地历史设计：
 
 - 发现与解析在 Extension Host 之外的 worker 中执行；
 - recent-first 索引，支持 progress 与 cancel；
 - unchanged warm refresh 不读 JSONL body；
-- 每次 refresh 最多 16 次文件遍历、32 MiB；安全下限为 1 MiB + 1 byte，读取 chunk 为 256 KiB，
-  单条 JSONL line 上限为 1 MiB；
+- 首次非空索引或尚未完成的旧索引迁移会获得一次受限的 16,384 次文件遍历 / 64 GiB
+  流式上限；这不是预先分配的内存，并保留取消与原子续传 checkpoint。收敛后，自动任务使用
+  64 次文件遍历 / 128 MiB，始终可见的手动「刷新」使用 512 次文件遍历 / 2 GiB。
+  安全下限为 1 MiB + 1 byte，读取 chunk 为 256 KiB，单条 JSONL line 上限为 1 MiB；
 - append refresh 只读新 tail；未完成行只留在 scanner 的短期内存，从 safe cursor 重试，绝不写入 v3；
 - truncate/replacement 只重解析受影响文件；
 - cancel checkpoint 会原子保存 per-file contribution 与 migration progress，下一轮从已验证 cursor resume；
 - 并发 refresh 共享同一 worker run。
+
+每周 API 等效价值历史只从已经聚合的 Token 用量生成。有真实每周重置观测时，七天窗口按该重置
+对齐；没有时，仅已用历史按 UTC 周一至周一的自然周分组。Token 日志能够证明已用价值，但不能证明
+历史订阅总额度，因此总额度与未用额度仅在存在真实额度用量比例观测时生成。Codex 的仅已用历史可能
+合并同一 home 中的多个登录，而额度推算行仍绑定其实际观测的重置序列。
+
+v2.3.0 不推断 20、100 或 200 美元的订阅档位。本地 Codex 日志没有可靠的账号与套餐身份，
+后续比较必须采用用户明确选择的 opt-in 账号映射，不能猜测后绑定价格。
 
 ## 发布不变量
 

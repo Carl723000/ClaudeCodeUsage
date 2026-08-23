@@ -15,7 +15,9 @@ the same data.
 > optional guidance that helps reduce avoidable token and workflow overhead.
 >
 > **What this is _not_:** a billing tool. Claude dollar amounts are estimates
-> based on public per-million-token rates; Codex dollar cost is not estimated.
+> based on public per-million-token rates. Codex has no billing-cost card; its
+> first summary card is an explicitly labelled API-equivalent cost estimate,
+> and its weekly allowance panel uses the same proxy rather than billing data.
 > Refer to the provider account for billing truth.
 
 > **看清 Claude Code 与 Codex 的本地用量，让 AI 帮你用得更好。**
@@ -25,7 +27,8 @@ the same data.
 > 和本地优化建议，同时复用 Claude 仪表盘的标签页、渲染函数和视觉体系，
 > 而不是另做一套页面或强行套用 Claude 的统计口径。
 >
-> **它不是什么**：账单工具。Claude 金额为估算值；Codex 不估算美元成本。
+> **它不是什么**：账单工具。Claude 金额为估算值；Codex 首张汇总卡仅显示
+> 明确标注的 API 等效成本估算，每周额度面板也使用同一代理口径，而非账单数据。
 > 实际费用请以相应供应商的官方账单为准。
 
 🌐 **Multi-language documentation**:
@@ -117,7 +120,18 @@ consent prompt.
   Disable Codex at any time in **Settings → Providers**.
 - **Codex-native metrics** — **processed** = input + output; **uncached usage** =
   uncached input + output; **cached input** is a subset of input; **reasoning**
-  is a subset of output. No artificial Codex cost estimate is shown.
+  is a subset of output. No Codex billing cost is shown. The first Codex summary
+  card is a clearly labelled API-equivalent cost estimate for the selected scope;
+  the All-time view also shows the weekly trend using the same pricing basis.
+- **Weekly allowance-value trend** — Claude and Codex All-time / Compare views
+  calculate historical used equivalents directly from local token logs. Where a
+  real weekly reset is observed, history follows that cadence; otherwise
+  usage-only rows use Monday-to-Monday UTC calendar weeks. Full and unused
+  allowance estimates appear only for windows with a real utilization sample.
+  Current official API rates are applied consistently across history. This is a
+  proxy, not a bill or an official subscription price. Codex usage-only history
+  combines sign-ins in the selected home, while quota-derived estimates stay
+  tied to the observed reset series; no account split is invented.
 - **One dashboard render stack** — switching to Codex keeps the established
   Today / Month / All time / Sessions / Projects / Content / Settings structure,
   relabelled where Codex semantics differ. The same render functions, HTML
@@ -134,15 +148,29 @@ consent prompt.
   Compare shows input, output, and cache side by side; it never adds unrelated
   costs or quota windows together.
 - **Auditable time and coverage** — rolling 7-day and 30-day totals use exact
-  event-day slices in your configured timezone. Incomplete migration or index
-  coverage is visibly **partial**. Limits are **last-observed local-log**
-  snapshots, not live subscription or billing queries.
+  event-day slices in your configured timezone. During an incomplete migration
+  or rebuild, every Codex card, table, project, session, recommendation, and
+  status value is visibly an **indexed subtotal**; unverified legacy totals are
+  excluded. Once a Codex home is detected, its provider tab appears immediately;
+  the page shows exact indexed-file, percentage, and byte progress during the
+  first build, while Compare waits until both providers have real data. After
+  the first atomic checkpoint, the complete subtotal dashboard stays usable
+  while indexing continues; progress never replaces its cards or tables. A selected Codex home is account-agnostic,
+  so logs left by multiple
+  sign-ins in that same home are combined. Local logs expose no reliable account
+  identity, so limit cards remain **last-observed** and are never summed.
 - **Private, scalable local index** — stores machine-salted pseudonymous keys;
   numeric and structural aggregates; and sanitized project, directory, agent,
   model, effort, role, time, and quality metadata. It never persists raw IDs,
   full paths or repository URLs, thread titles, or conversation bodies. A
   background worker scans large histories with a default 30-second watcher delay
   (Off / 10 / 30 / 60 / 120 / 300 seconds).
+  A first-time index or incomplete legacy migration gets one bounded 64 GiB /
+  16,384-file-pass streaming ceiling; it does not reserve that amount of memory
+  and remains cancellable and resumable. After convergence, background work
+  returns to 128 MiB / 64 file passes and the always-visible Refresh action uses
+  2 GiB / 512 file passes. Unchanged warm refreshes still read zero usage-record
+  JSONL body bytes.
 - **Provider-aware controls** — the shared Settings tab shows only common and
   Codex-effective controls when Codex is selected. Codex collection and local
   Codex recommendations can each be disabled.
@@ -225,9 +253,10 @@ consent prompt.
   icon as a way back into the dashboard.
 - **Status-bar metric** (`statusBarMetric`) — keep showing today's cost, or
   switch the first item to today's total **token** count (compact k/M).
-- **Weekly Opus limit** (`showOpusWeekly`, opt-in) — append `opus:NN%` to the
-  quota item for heavy Opus users. (PR #38, [@wheelbarrel00](https://github.com/wheelbarrel00).)
-  *Since renamed `showScopedWeekly`, and it now names whichever model your plan caps.*
+- **Model-scoped weekly limit** (`showScopedWeekly`, opt-in) — adds the weekly
+  cap actually named by Anthropic, such as `fable 17%`; migrated from the
+  original model-specific contribution in PR #38 by
+  [@wheelbarrel00](https://github.com/wheelbarrel00).
 - **AI advice 2.0** — bring your own key: **Anthropic** (`/v1/messages`) by
   default, or any OpenAI-compatible endpoint (`advice.apiFormat`). Fed with the
   new signals (runs, cache hit rates, attribution, thinking share); optional
@@ -248,9 +277,10 @@ consent prompt.
 
 ## What's new in 2.0
 
-- **Real 5-hour and weekly quota** in the status bar — reads Claude Code's
-  existing OAuth session from `~/.claude/.credentials.json` or the macOS
-  Keychain, zero config.
+- **Real 5-hour and weekly quota** in the status bar — reads the OAuth session
+  from the same Claude profile as the window: explicit `dataDirectory`, then
+  the first valid `CLAUDE_CONFIG_DIR`, then `~/.claude`. The macOS Keychain is
+  used only for the default profile.
   Adapted from upstream [PR #9](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/9)
   by [@Dobidop](https://github.com/Dobidop).
 - **Four new tabs**: Sessions, Projects, Content, Branches — all sortable.
@@ -340,6 +370,12 @@ output, cache-write and cache-read, summed by model.
   their detected family (Opus / Sonnet / Haiku / GPT / Gemini /
   DeepSeek / Kimi / GLM / Qwen) instead of falling back blindly.
 
+Claude transcript totals are counted by **response identity**, not by JSONL
+row. One response can produce both a `thinking` row and a `text` row carrying
+the same `messageId`, `requestId`, and complete `usage` vector. The extension
+keeps the largest vector for that response once; Claude Code's `stats-cache`
+adds the rows. The two totals can therefore differ.
+
 What the status bar does **not** know:
 - Your actual Anthropic invoice (discounts, free credits, plan caps).
 - Whether your proxy provider charges different rates.
@@ -390,10 +426,10 @@ authoritative.
   `~/.claude/projects` and `~/.config/claude/projects`.
 
 **Quota row shows `5h:--% wk:--%`**
-- Claude Code's OAuth token is missing or expired. Log in to Claude Code
-  once; the extension reads `~/.claude/.credentials.json` where present, or
-  the macOS Keychain entry used by Claude Code, and refreshes the bearer if
-  needed.
+- Claude Code's OAuth token is missing or expired. Log in to the active Claude
+  profile once. Credentials follow explicit `dataDirectory`, then the first
+  valid `CLAUDE_CONFIG_DIR`, then `~/.claude`; the single global macOS Keychain
+  item is never substituted for a selected custom profile.
 
 **`Get AI Usage Advice` returns 404**
 - DeepSeek's current endpoint does **not** use a `/v1` prefix. Use
@@ -426,6 +462,13 @@ authoritative.
   This only affects logs kept from now on; already-deleted logs cannot be
   restored. Thanks to [@nickearnshaw](https://github.com/nickearnshaw) for
   documenting this ([PR #21](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/21)).
+
+**Token counts are lower than Claude Code's `stats-cache`**
+- A single response can be written as separate `thinking` and `text` transcript
+  rows with the same `messageId`, `requestId`, and complete `usage` vector. The
+  extension counts that response identity once and keeps its largest vector;
+  Claude Code's `stats-cache` sums the rows. The extension does not apply a
+  multiplier to make these different mechanisms agree.
 
 **Token counts appear lower than the model provider's own dashboard**
 - If you use Claude Code with a third-party proxy that routes requests
@@ -477,7 +520,7 @@ Contributors whose upstream PRs / issues are incorporated here:
   original status-bar context-window indicator and the `showCost` toggle.
 - [@wheelbarrel00](https://github.com/wheelbarrel00) —
   [PR #38](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/38), the opt-in
-  weekly Opus limit in the status bar, which grew into today's
+  weekly Opus limit in the status bar, which grew into today's API-named
   `showScopedWeekly`.
 - [@brenoneill](https://github.com/brenoneill) —
   [PR #14](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/14), custom

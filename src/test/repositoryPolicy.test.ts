@@ -846,6 +846,30 @@ test('AGENTS links a faithful Simplified-Chinese review copy', () => {
   assert.match(chinese, /推送、创建 PR、合并或发布 Release/);
 });
 
+test('AGENTS allow only the guarded Codex session-index title lookup', () => {
+  const agents = repoFile('AGENTS.md');
+  const chinese = repoFile('AGENTS.zh-CN.md');
+
+  for (const pattern of [
+    /\$CODEX_HOME\/session_index\.jsonl[\s\S]*solely[\s\S]*`id`[\s\S]*`thread_name`/i,
+    /absolute paths[\s\S]*masked/i,
+    /titles[\s\S]*stay in memory[\s\S]*never persisted/i,
+    /symlinks[\s\S]*non-regular files[\s\S]*rejected/i,
+    /no other field[\s\S]*read/i,
+  ]) {
+    assert.match(agents, pattern);
+  }
+  for (const pattern of [
+    /\$CODEX_HOME\/session_index\.jsonl[\s\S]*仅[\s\S]*`id`[\s\S]*`thread_name`/,
+    /标题中的绝对路径[\s\S]*遮蔽/,
+    /标题[\s\S]*仅驻留内存[\s\S]*绝不持久化/,
+    /符号链接[\s\S]*非普通文件[\s\S]*拒绝/,
+    /不读取[\s\S]*其他字段/,
+  ]) {
+    assert.match(chinese, pattern);
+  }
+});
+
 test('contributor pull requests retain their merged attribution', () => {
   const agents = repoFile('AGENTS.md');
   const chinese = repoFile('AGENTS.zh-CN.md');
@@ -1315,7 +1339,7 @@ test('Codex schema 3 production files are regular files and the architecture rec
       /schema 3[\s\S]*codex-index-v1\.json/i,
       /all-time[\s\S]*verified aggregate[\s\S]*period slices/i,
       /asOfDay[\s\S]*7[\s\S]*30[\s\S]*all-time/i,
-      /16 file passes[\s\S]*32 MiB[\s\S]*1 MiB \+ 1[\s\S]*256 KiB[\s\S]*1 MiB/i,
+      /16,384 file passes[\s\S]*64 GiB[\s\S]*64 file passes[\s\S]*128 MiB[\s\S]*512 file passes[\s\S]*2 GiB[\s\S]*1 MiB \+ 1[\s\S]*256 KiB[\s\S]*1 MiB/i,
       /SSH[\s\S]*HTTPS[\s\S]*canonical/i,
       /strictly exact[\s\S]*active\/archive[\s\S]*ambiguous/i,
       /five structural call proxies[\s\S]*not file, command, or review counts/i,
@@ -1327,7 +1351,7 @@ test('Codex schema 3 production files are regular files and the architecture rec
       /内部 schema 3[\s\S]*codex-index-v1\.json/,
       /已验证的[\s\S]*aggregate[\s\S]*期间切片/,
       /asOfDay[\s\S]*7 天[\s\S]*30 天[\s\S]*all-time/,
-      /16 次文件遍历[\s\S]*32 MiB[\s\S]*1 MiB \+ 1[\s\S]*256 KiB[\s\S]*1 MiB/,
+      /16,384 次文件遍历[\s\S]*64 GiB[\s\S]*64 次文件遍历[\s\S]*128 MiB[\s\S]*512 次文件遍历[\s\S]*2 GiB[\s\S]*1 MiB \+ 1[\s\S]*256 KiB[\s\S]*1 MiB/,
       /SSH[\s\S]*HTTPS[\s\S]*规范化/,
       /active\/archive[\s\S]*严格精确[\s\S]*歧义/,
       /五个结构调用代理量[\s\S]*不是文件、命令或审阅次数/,

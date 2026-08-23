@@ -71,6 +71,16 @@ Claude aggregates + Codex scopes ──> side-by-side Compare (no cross-provider
 One provider may be unavailable or partial without clearing the other
 provider's last verified snapshot. Claude-only remains the v2.2.1 behavior;
 Codex-only defaults to Codex; when both exist, the dashboard defaults to Claude.
+Codex source availability is detected separately from indexed-data availability:
+the Codex tab appears as soon as an allowed local home exists, an in-page state
+covers the initial index with exact file, percentage, and byte counts, and
+Compare remains hidden until both providers have real data. Before the worker
+starts, the extension hydrates the last atomic checkpoint; a brand-new index
+adopts its first checkpoint while the worker continues. Thus progress is an
+annotation on the full indexed-subtotal dashboard rather than a replacement for
+its cards and tables. Worker progress is coalesced to at most one Webview render
+every 250 ms and repaints only while Codex is selected; the verified snapshot
+still gets a final render when the refresh returns.
 
 ## Token and limit semantics
 
@@ -168,19 +178,36 @@ Claude polling always honors `refreshInterval`; its file watcher uses the
 configured quiet debounce. Codex uses its own quiet debounce (default 30
 seconds, configurable to Off/10/30/60/120/300).
 
-Codex history is designed for 2.4-GB-class local corpora:
+Codex history is designed for multi-gigabyte local corpora:
 
 - discovery and parsing run outside the Extension Host in a worker;
 - files are indexed recent-first with progress and cancellation;
 - unchanged warm refresh reads no JSONL body;
-- each refresh has a 16 file passes / 32 MiB budget; the safe minimum is
-  1 MiB + 1 byte, reads use 256 KiB chunks, and a JSONL line is capped at 1 MiB;
+- a first non-empty index or incomplete legacy migration gets one bounded
+  16,384 file passes / 64 GiB streaming ceiling; this is not an up-front memory
+  allocation and retains cancellation and atomic resume checkpoints. After
+  convergence, automatic work uses 64 file passes / 128 MiB and the
+  always-visible manual Refresh uses 512 file passes / 2 GiB. The safe minimum
+  is 1 MiB + 1 byte, reads use 256 KiB chunks, and a JSONL line is capped at
+  1 MiB;
 - append refresh reads only the new tail; an incomplete line stays only in the
   scanner's short-lived memory and is retried from the safe cursor, never in v3;
 - truncation/replacement reparses only the affected file;
 - cancellation checkpoints atomically save per-file contributions and migration
   progress, so the next run resumes from the verified cursor;
 - concurrent refresh requests share one worker run.
+
+Weekly API-equivalent history is derived from already-aggregated token usage.
+Observed weekly resets align seven-day buckets; otherwise usage-only history
+uses Monday-to-Monday UTC calendar weeks. A token log can prove used value, but
+not an historical subscription capacity: full and unused estimates are emitted
+only where a real quota-utilization sample exists. Codex usage-only history may
+combine multiple sign-ins in one home, while quota-derived rows remain bound to
+their observed reset series.
+
+v2.3.0 does not infer a $20, $100, or $200 subscription tier. Local Codex logs
+do not expose a reliable account-and-plan identity, so a future comparison must
+use an explicit opt-in account mapping rather than attaching prices by guess.
 
 ## Release invariants
 

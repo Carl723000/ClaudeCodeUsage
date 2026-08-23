@@ -52,6 +52,11 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
   `$CODEX_HOME/archived_sessions/**/*.jsonl` (default `~/.codex`). Never read
   `auth.json`, SQLite databases, config secrets, keychains, browser state, or
   unknown files for Codex usage.
+- Additionally, `$CODEX_HOME/session_index.jsonl` may be streamed solely to
+  recover the `id` → `thread_name` mapping used for real thread titles. Absolute
+  paths inside titles are masked, titles stay in memory and are never persisted,
+  symlinks and non-regular files are rejected, and no other field of that file
+  is read.
 - Raw Codex paths/session/parent IDs may exist only in short-lived local worker
   memory. Persist machine-salted pseudonymous keys and numeric aggregates only.
 - Advice and optimizer network calls remain explicit user actions and may send
