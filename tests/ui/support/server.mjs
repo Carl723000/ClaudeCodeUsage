@@ -6,7 +6,7 @@ const { renderHarness } = require('./render-harness.cjs');
 const locales = new Set(['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id']);
 const uiTestPort = Number(process.env.CCU_UI_TEST_PORT ?? 4173);
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', `http://127.0.0.1:${uiTestPort}`);
     if (url.pathname === '/health') {
@@ -28,12 +28,30 @@ const server = createServer((request, response) => {
       : 'codex';
     const theme = url.searchParams.get('theme') === 'dark' ? 'dark' : 'light';
     const requestedFixture = url.searchParams.get('fixture') ?? 'default';
-    const fixture = ['default', 'rootless-cycle', 'root-over-limit', 'persisted-details', 'weekly-usage-only', 'weekly-claude-completed', 'unknown-models', 'zero-input'].includes(requestedFixture)
+    const fixture = [
+      'default',
+      'rootless-cycle',
+      'root-over-limit',
+      'persisted-details',
+      'weekly-usage-only',
+      'weekly-claude-completed',
+      'unknown-models',
+      'zero-input',
+      'advice-effectiveness',
+      'advice-effectiveness-disabled',
+    ].includes(requestedFixture)
       ? requestedFixture
       : 'default';
     const autoRefresh = url.searchParams.get('autoRefresh') === 'true';
     const weeklyValue = url.searchParams.get('weeklyValue') !== 'false';
-    const html = renderHarness({ provider, locale, theme, fixture, autoRefresh, weeklyValue });
+    const html = await renderHarness({
+      provider,
+      locale,
+      theme,
+      fixture,
+      autoRefresh,
+      weeklyValue,
+    });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',

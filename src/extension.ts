@@ -76,6 +76,12 @@ import {
   latestAnnouncementVersion,
   ReleaseAnnouncementCatalog,
 } from './releaseAnnouncements';
+import {
+  adaptClaudeAdvice,
+  adaptCodexLocalAdvice,
+} from './adviceEffectiveness/adapters';
+import { AdviceEffectivenessProviderStates } from './adviceEffectiveness/integration';
+import { buildAdviceAggregateSnapshot } from './adviceEffectiveness/payload';
 
 interface LocalizedReleaseAnnouncement {
   version: string;
@@ -544,8 +550,8 @@ export class ClaudeCodeUsageExtension {
 
   private async getAdvice(): Promise<void> {
     const config = this.getConfiguration();
-    // The subscription backend needs no API key (it reuses the Claude Code
-    // OAuth session); only the 'api' backend requires a configured key.
+    // Runtime advice is API/BYOK-only. An empty user key opens the local demo;
+    // Claude Code subscription OAuth remains reserved for quota observation.
     const needsKey =
       config.adviceBackend === 'api' && (!config.adviceApiKey || config.adviceApiKey.trim() === '');
     if (needsKey) {
@@ -620,8 +626,6 @@ export class ClaudeCodeUsageExtension {
           const advice = await getUsageAdvice({
             backend: config.adviceBackend,
             apiFormat: config.adviceApiFormat,
-            subscriptionModel: config.adviceSubscriptionModel,
-            getSubscriptionToken: () => this.apiClient.getAccessToken(),
             apiKey: config.adviceApiKey,
             apiUrl: config.adviceApiUrl,
             model: config.adviceModel,
@@ -737,8 +741,6 @@ export class ClaudeCodeUsageExtension {
       const raw = await callModel(systemPrompt, text, {
         backend: config.adviceBackend,
         apiFormat: config.adviceApiFormat,
-        subscriptionModel: config.adviceSubscriptionModel,
-        getSubscriptionToken: () => this.apiClient.getAccessToken(),
         apiKey: config.adviceApiKey,
         apiUrl: config.adviceApiUrl,
         model: config.adviceModel,
@@ -825,7 +827,6 @@ export class ClaudeCodeUsageExtension {
       // subscription transport remains in advisor.ts.
       adviceBackend: 'api',
       adviceApiFormat: s.get<'anthropic' | 'openai'>('advice.apiFormat'),
-      adviceSubscriptionModel: 'claude-haiku-4-5',
       advicePromptWindowDays: s.get<number>('advice.promptWindowDays'),
       enableContentAnalysis: s.get<boolean>('enableContentAnalysis'),
       projectGroupingMode: s.get<'git' | 'folder' | 'flat'>('projectGroupingMode'),
@@ -858,6 +859,9 @@ export class ClaudeCodeUsageExtension {
   private syncProviderUi(): void {
     const config = this.getConfiguration();
     const claudeHasData = this.cache.records.length > 0;
+    this.webviewProvider.updateAdviceEffectivenessData(
+      this.buildAdviceEffectivenessProviderStates(config),
+    );
     this.webviewProvider.updateProviderData(
       this.codexView,
       this.codexInsights,
@@ -897,6 +901,121 @@ export class ClaudeCodeUsageExtension {
     } else {
       this.statusBar.setProvider('claude');
     }
+  }
+
+  /**
+   * Build the default-off experimental evidence view from narrow, numeric
+   * inputs. Raw records are used only here to form a same-window aggregate;
+   * neither provider adapter accepts records, paths, session IDs, or prompts.
+   */
+  private buildAdviceEffectivenessProviderStates(
+    config: ExtensionConfig,
+  ): AdviceEffectivenessProviderStates {
+    if (!this.settings.get<boolean>('advice.effectiveness.enabled')) {
+      return {};
+    }
+    const states: AdviceEffectivenessProviderStates = {};
+    const now = Date.now();
+    const generatedAt = new Date(now).toISOString();
+    const epochDay = Math.floor(now / 86_400_000);
+    const windowDays = Math.max(1, Math.round(config.advicePromptWindowDays));
+    const cutoff = now - windowDays * 86_400_000;
+
+    try {
+      const windowRecords = this.cache.records.filter((record) => {
+        const timestamp = typeof record?.timestamp === 'string' ? Date.parse(record.timestamp) : NaN;
+        return Number.isFinite(timestamp) && timestamp >= cutoff && timestamp <= now;
+      });
+      if (windowRecords.length > 0) {
+        const aggregate = buildAdviceAggregateSnapshot(
+          ClaudeDataLoader.getAllTimeData(windowRecords),
+          'overall',
+          windowDays,
+        );
+        const sessions = ClaudeDataLoader.getSessionBreakdown(windowRecords);
+        const framework = this.cache.contentAnalysis?.frameworkOverhead;
+        const adapted = adaptClaudeAdvice({
+          adviceId: `advice-claude-${windowDays}d-${epochDay}`,
+          generatedAt,
+          locale: I18n.getLocale(),
+          aggregate,
+          sessionSummary: {
+            scope: 'overall',
+            windowDays,
+            totalSessions: sessions.length,
+            longSessionCount: sessions.filter(
+              (session) =>
+                session.endTime.getTime() - session.startTime.getTime() >=
+                8 * 60 * 60 * 1000,
+            ).length,
+            largeContextSessionCount: sessions.filter(
+              (session) => session.peakContextTokens >= 150_000,
+            ).length,
+          },
+          ...(framework
+            ? {
+                frameworkOverhead: {
+                  frameworkEstimatedTokens: framework.frameworkEstimatedTokens,
+                  observedInputEstimatedTokens: framework.observedInputEstimatedTokens,
+                  classifiedEvents: framework.classifiedEvents,
+                },
+              }
+            : {}),
+        });
+        if (adapted.ok) {
+          states.claude = {
+            provider: 'claude',
+            contract: adapted.value.contract,
+            remotePreviewEligible: adapted.value.remoteEvidenceEligible,
+            aggregate: adapted.value.aggregate,
+            promptSamples: (this.cache.contentAnalysis?.recentPrompts ?? []).map((prompt) => ({
+              text: prompt.text,
+            })),
+          };
+        }
+      }
+    } catch {
+      // Conservative degradation: omit the experimental Claude state.
+    }
+
+    try {
+      const view = this.codexView;
+      if (view) {
+        const behavior = view.behaviorScopes.last30Days;
+        const adapted = adaptCodexLocalAdvice({
+          adviceId: `advice-codex-30d-${epochDay}`,
+          generatedAt,
+          locale: I18n.getLocale(),
+          scope: '30d',
+          insights: this.codexInsights.last30Days,
+          behavior: {
+            childFreshShare: behavior.childFreshShare,
+            approvalReviewerFreshShare: behavior.approvalReviewerFreshShare,
+            highEffortFreshShare: behavior.highEffortFreshShare,
+            processedToFreshRatio: behavior.processedToFreshRatio,
+            cacheShare: behavior.cacheShare,
+            postPatchToolCallsPerPatchCall: behavior.postPatchToolCallsPerPatchCall,
+          },
+          quality: {
+            indexComplete: view.coverage.complete,
+            identityComplete: view.coverage.identity.complete,
+            periodComplete: view.periodCoverage.last30Days.complete,
+            qualityFlags: view.qualityFlags.map((flag) => flag.flag),
+          },
+        });
+        if (adapted.ok) {
+          states.codex = {
+            provider: 'codex',
+            contract: adapted.value.contract,
+            remotePreviewEligible: adapted.value.remoteEvidenceEligible,
+            promptSamples: [],
+          };
+        }
+      }
+    } catch {
+      // Existing Codex local recommendations remain authoritative on failure.
+    }
+    return states;
   }
 
   private async refreshCodexData(trigger: RefreshTrigger): Promise<void> {

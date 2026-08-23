@@ -249,9 +249,9 @@ export class ClaudeApiClient {
 
   /**
    * A valid OAuth access token (refreshed if needed), or null when not signed
-   * in. Lets the advice/optimizer features reuse the user's Claude subscription
-   * — `Authorization: Bearer <token>` + `anthropic-beta: oauth-2025-04-20` —
-   * to call the Messages API with no separate API key (verified 2026-06-13).
+   * in. This credential is used for Claude Code account/quota APIs. It is not a
+   * default AI-advice backend; the old keyless Messages prototype is dormant
+   * after 403 responses and production advice remains user-configured BYOK.
    */
   async getAccessToken(): Promise<string | null> {
     const credentials = await this.getValidCredentials();

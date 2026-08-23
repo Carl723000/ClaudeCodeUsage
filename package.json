@@ -73,7 +73,7 @@
         "claudeCodeUsage.advice.apiKey": {
           "type": "string",
           "default": "",
-          "description": "API key for the 'Get AI Advice' feature (used when advice.backend = api). Leave empty to use the subscription backend. Other advice options live in the dashboard's ⚙ Settings tab."
+          "description": "API key for the 'Get AI Advice' feature. Leave empty to open the local demo; Claude Code subscription credentials are never used as an AI backend. Other advice options live in the dashboard's ⚙ Settings tab."
         }
       }
     },

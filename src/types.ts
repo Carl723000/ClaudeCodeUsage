@@ -209,6 +209,14 @@ export interface ContentAnalysis {
   // Recent user prompts (last 30 days), for the AI-advice feature. Each carries
   // its working directory so advice can be scoped to a project.
   recentPrompts: { cwd: string; text: string }[];
+  /**
+   * Numeric-only proxy separating Claude Code framework injection from text
+   * attributed to the user. No source text, path, session ID, or tool ID is
+   * retained. Components may overlap ordinary content buckets (for example a
+   * Skill tool result is both consumed tool output and a framework preamble),
+   * so this is a labelled proxy rather than a billing decomposition.
+   */
+  frameworkOverhead?: FrameworkOverheadAnalysis;
   // Thinking-token share per session id and per local day ("YYYY-MM-DD"),
   // last 30 days (analysis window).
   thinkingBySession: Record<string, ThinkingShare>;
@@ -226,6 +234,30 @@ export interface ContentAnalysis {
     realOutputTokens: number;
     realInputSideTokens: number;
   };
+}
+
+export type FrameworkOverheadKind =
+  | 'meta'
+  | 'sidechain'
+  | 'subagent-dispatch'
+  | 'command-echo'
+  | 'system-reminder'
+  | 'framework-wrapper'
+  | 'tool-result-envelope'
+  | 'skill-preamble';
+
+export interface FrameworkOverheadAnalysis {
+  frameworkEstimatedTokens: number;
+  /** Unique estimated input-side total used as the ratio denominator. */
+  observedInputEstimatedTokens: number;
+  userAuthoredEstimatedTokens: number;
+  toolResultEstimatedTokens: number;
+  classifiedEvents: number;
+  components: Array<{
+    kind: FrameworkOverheadKind;
+    estimatedTokens: number;
+    count: number;
+  }>;
 }
 
 // Scope of the usage-attribution panel. day = today, week = last 7 days,
@@ -313,12 +345,11 @@ export interface ExtensionConfig {
   // Free-text background about the user/project; when set, the advice ends
   // with a "Personalised for this project" section calibrated against it.
   adviceUserContext: string;
-  // Advice/optimizer transport (v2.1 Phase 9). backend: 'subscription' reuses
-  // the Claude Code OAuth session (no key, prefers haiku); 'api' uses a key.
-  // apiFormat: 'anthropic' (default) or 'openai'-compatible.
-  adviceBackend: 'subscription' | 'api';
+  // Production advice/optimizer transport is user-configured API/BYOK only.
+  // The old subscription transport remains isolated inside advisor.ts and has
+  // no ExtensionConfig/runtime call point after its Messages requests returned 403.
+  adviceBackend: 'api';
   adviceApiFormat: 'anthropic' | 'openai';
-  adviceSubscriptionModel: string;
   // How many days of prompts/content the advice analysis samples (default 30).
   advicePromptWindowDays: number;
   // Run the (CPU-heavy) content/prompt-token analysis. When false the Content

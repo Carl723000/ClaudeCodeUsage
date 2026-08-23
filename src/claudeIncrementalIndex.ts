@@ -381,6 +381,12 @@ function cloneAnalysisAcc(value: AnalysisAcc): AnalysisAcc {
     ),
     skillUses: value.skillUses.map((use) => ({ ...use })),
     skillByToolId: { ...value.skillByToolId },
+    frameworkOverhead: Object.fromEntries(
+      Object.entries(value.frameworkOverhead).map(([key, bucket]) => [key, { ...bucket }]),
+    ),
+    observedInputEstimatedTokens: value.observedInputEstimatedTokens,
+    userAuthoredEstimatedTokens: value.userAuthoredEstimatedTokens,
+    toolResultEstimatedTokens: value.toolResultEstimatedTokens,
   };
 }
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { UsageData } from '../types';
 import {
   ADVICE_CONTRACT_VERSION,
@@ -20,6 +21,7 @@ export const REMOTE_ADVICE_METRIC_ALLOWLIST = [
   'cache-read-share',
   'cache-read-tokens',
   'estimated-cost-usd',
+  'framework-overhead-share',
   'high-effort-share',
   'input-tokens',
   'large-context-share',
@@ -80,6 +82,10 @@ export interface PreparedAdvicePayload {
   promptSampleCount: number;
   /** The one canonical serialization used by both preview and transport. */
   serializedBody: string;
+  /** Exact UTF-8 bytes derived once from serializedBody. Future senders use these bytes directly. */
+  canonicalBytes: Uint8Array;
+  /** SHA-256 of canonicalBytes, lowercase hexadecimal. */
+  sha256: string;
 }
 
 export interface AdvicePayloadPreview {
@@ -87,6 +93,8 @@ export interface AdvicePayloadPreview {
   dataMode: PreparedAdvicePayload['dataMode'];
   promptSampleCount: number;
   body: string;
+  utf8Bytes: number;
+  sha256: string;
 }
 
 interface RemoteAdviceRequest {
@@ -207,7 +215,7 @@ export function buildAdviceAggregateSnapshot(
   };
 }
 
-function validateAggregate(aggregate: AdviceAggregateSnapshot): void {
+export function validateAdviceAggregateSnapshot(aggregate: AdviceAggregateSnapshot): void {
   if (aggregate.scope !== 'overall' && aggregate.scope !== 'project') {
     throw new Error('aggregate scope is invalid');
   }
@@ -342,7 +350,7 @@ export function stableAdvicePayloadStringify(value: unknown): string {
 
 /** Build and serialize once. Aggregates-only is the default and has no promptSamples key. */
 export function prepareAdvicePayload(input: PrepareAdvicePayloadInput): PreparedAdvicePayload {
-  validateAggregate(input.aggregate);
+  validateAdviceAggregateSnapshot(input.aggregate);
   validateSignalGraph(input);
   const samples = promptSamples(input.promptSamples);
   const dataMode: PreparedAdvicePayload['dataMode'] =
@@ -412,33 +420,54 @@ export function prepareAdvicePayload(input: PrepareAdvicePayloadInput): Prepared
   };
   if (samples.length > 0) request.promptSamples = samples;
 
+  const serializedBody = stableAdvicePayloadStringify(request);
+  const canonicalBytes = Buffer.from(serializedBody, 'utf8');
+  const sha256 = createHash('sha256').update(canonicalBytes).digest('hex');
   return {
     contentType: 'application/json',
     dataMode,
     promptSampleCount: samples.length,
-    serializedBody: stableAdvicePayloadStringify(request),
+    serializedBody,
+    canonicalBytes,
+    sha256,
   };
 }
 
-/** Preview exposes the exact immutable string that the sender receives. */
+function assertPreparedAdvicePayloadIntegrity(prepared: PreparedAdvicePayload): void {
+  if (!(prepared.canonicalBytes instanceof Uint8Array)) {
+    throw new Error('prepared advice payload bytes are invalid');
+  }
+  const decoded = Buffer.from(prepared.canonicalBytes).toString('utf8');
+  const digest = createHash('sha256').update(prepared.canonicalBytes).digest('hex');
+  if (decoded !== prepared.serializedBody || digest !== prepared.sha256) {
+    throw new Error('prepared advice payload integrity check failed');
+  }
+}
+
+/** Preview decodes the same canonical bytes that a future sender receives. */
 export function previewAdvicePayload(prepared: PreparedAdvicePayload): AdvicePayloadPreview {
+  assertPreparedAdvicePayloadIntegrity(prepared);
   return {
     contentType: prepared.contentType,
     dataMode: prepared.dataMode,
     promptSampleCount: prepared.promptSampleCount,
-    body: prepared.serializedBody,
+    body: Buffer.from(prepared.canonicalBytes).toString('utf8'),
+    utf8Bytes: prepared.canonicalBytes.byteLength,
+    sha256: prepared.sha256,
   };
 }
 
 export type AdvicePayloadSender<T> = (
-  serializedBody: string,
-  contentType: PreparedAdvicePayload['contentType']
+  canonicalBytes: Uint8Array,
+  contentType: PreparedAdvicePayload['contentType'],
+  sha256: string,
 ) => Promise<T>;
 
 /** This boundary deliberately cannot reserialize: it only receives the prepared bytes. */
-export function sendPreparedAdvicePayload<T>(
+export async function sendPreparedAdvicePayload<T>(
   prepared: PreparedAdvicePayload,
   sender: AdvicePayloadSender<T>
 ): Promise<T> {
-  return sender(prepared.serializedBody, prepared.contentType);
+  assertPreparedAdvicePayloadIntegrity(prepared);
+  return sender(prepared.canonicalBytes, prepared.contentType, prepared.sha256);
 }

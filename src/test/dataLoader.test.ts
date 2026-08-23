@@ -218,3 +218,121 @@ test('request ID presence may degrade within one message without double-counting
     assert.equal(records.length, 1, name);
   }
 });
+
+test('content analysis keeps framework injection out of user prompt samples and emits numeric-only overhead', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-loader-framework-'));
+  tempRoots.push(root);
+  const project = path.join(root, 'projects', '-tmp-project');
+  await mkdir(project, { recursive: true });
+  const timestamp = new Date().toISOString();
+  const lines = [
+    {
+      type: 'user',
+      uuid: 'user-1',
+      timestamp,
+      cwd: '/private/project-sentinel',
+      message: { role: 'user', content: 'Please fix the login bug carefully.' },
+    },
+    {
+      type: 'user',
+      uuid: 'user-web-component',
+      timestamp,
+      cwd: '/private/project-sentinel',
+      message: {
+        role: 'user',
+        content: '<my-component data-mode="safe">Please review this component.</my-component>',
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'meta-1',
+      timestamp,
+      isMeta: true,
+      message: { role: 'user', content: 'PRIVATE_META_FRAMEWORK_TEXT' },
+    },
+    {
+      type: 'user',
+      uuid: 'command-1',
+      timestamp,
+      message: { role: 'user', content: '<command-name>/review</command-name>' },
+    },
+    {
+      type: 'user',
+      uuid: 'reminder-1',
+      timestamp,
+      message: {
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: 'User-looking prefix <system-reminder>PRIVATE_REMINDER</system-reminder>',
+        }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'compaction-1',
+      timestamp,
+      message: {
+        role: 'user',
+        content: 'This session is being continued from a previous conversation PRIVATE_COMPACTION_SENTINEL',
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: 'assistant-1',
+      timestamp,
+      message: {
+        role: 'assistant',
+        model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 10, output_tokens: 2 },
+        content: [{ type: 'tool_use', id: 'tool-private-id', name: 'Skill', input: { skill: 'review' } }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'tool-result-1',
+      timestamp,
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tool-private-id', content: 'PRIVATE_SKILL_PREAMBLE' }],
+      },
+    },
+  ];
+  const body = lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+  await writeFile(path.join(project, 'session.jsonl'), body);
+  const manifest = await scanUsageManifest([root]);
+
+  const loaded = await ClaudeDataLoader.loadUsageRecords(root, {
+    analyzeContent: true,
+    windowDays: 30,
+    manifest,
+  });
+  const analysis = loaded.contentAnalysis;
+  assert.ok(analysis);
+  assert.deepEqual(analysis!.recentPrompts.map((prompt) => prompt.text), [
+    'Please fix the login bug carefully.',
+    '<my-component data-mode="safe">Please review this component.</my-component>',
+  ]);
+  assert.ok((analysis!.frameworkOverhead?.frameworkEstimatedTokens ?? 0) > 0);
+  assert.ok(
+    (analysis!.frameworkOverhead?.observedInputEstimatedTokens ?? 0) >=
+      (analysis!.frameworkOverhead?.frameworkEstimatedTokens ?? 0),
+  );
+  assert.ok((analysis!.frameworkOverhead?.userAuthoredEstimatedTokens ?? 0) > 0);
+  assert.ok((analysis!.frameworkOverhead?.toolResultEstimatedTokens ?? 0) > 0);
+  assert.deepEqual(
+    analysis!.frameworkOverhead?.components.map((component) => component.kind),
+    ['command-echo', 'meta', 'skill-preamble', 'system-reminder', 'tool-result-envelope'],
+  );
+  const serialized = JSON.stringify(analysis!.frameworkOverhead);
+  for (const privateText of [
+    'PRIVATE_META_FRAMEWORK_TEXT',
+    'PRIVATE_REMINDER',
+    'PRIVATE_SKILL_PREAMBLE',
+    'PRIVATE_COMPACTION_SENTINEL',
+    '/private/project-sentinel',
+    'tool-private-id',
+  ]) {
+    assert.equal(serialized.includes(privateText), false);
+  }
+});

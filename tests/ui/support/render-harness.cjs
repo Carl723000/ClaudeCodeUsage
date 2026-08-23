@@ -41,6 +41,9 @@ const {
   rootedTaskBeyondRecentRowCapFixture,
   rootlessCrossProjectCycleFixture,
 } = require('../../../out/test/codexFixtures.js');
+const {
+  buildAdviceEffectivenessFixture,
+} = require('./advice-effectiveness-fixture.cjs');
 
 Module._load = originalLoad;
 
@@ -53,7 +56,6 @@ const THEMES = {
     '--vscode-font-size:13px;' +
     '--vscode-editor-font-family:Menlo,Monaco,"Courier New",monospace;' +
     '--vscode-editor-background:#ffffff;' +
-    '--vscode-editor-foreground:#000000;' +
     '--vscode-foreground:#616161;' +
     '--vscode-descriptionForeground:#717171;' +
     '--vscode-errorForeground:#A1260D;' +
@@ -99,7 +101,6 @@ const THEMES = {
     '--vscode-font-size:13px;' +
     '--vscode-editor-font-family:Menlo,Monaco,"Courier New",monospace;' +
     '--vscode-editor-background:#1e1e1e;' +
-    '--vscode-editor-foreground:#D4D4D4;' +
     '--vscode-foreground:#CCCCCC;' +
     '--vscode-descriptionForeground:rgba(204,204,204,0.7);' +
     '--vscode-errorForeground:#F48771;' +
@@ -142,18 +143,33 @@ const THEMES = {
     '}*,*::before,*::after{animation:none!important;transition:none!important}',
 };
 
-function settingsStore(autoRefresh = false, weeklyValue = true) {
+function settingsStore({
+  autoRefresh = false,
+  weeklyValue = true,
+  adviceEffectiveness = false,
+} = {}) {
   const values = new Map(SETTINGS.map((definition) => [definition.key, definition.default]));
   values.set('codex.optimization.enabled', true);
   values.set('dashboardAutoRefresh', autoRefresh);
   values.set('showWeeklyEquivalentValue', weeklyValue);
+  values.set('advice.effectiveness.enabled', adviceEffectiveness);
   return {
     get: (key) => values.get(key),
     snapshot: () => SETTINGS.map((definition) => ({
       ...definition,
       value: values.get(definition.key),
-      isDefault: true,
+      isDefault: values.get(definition.key) === definition.default,
     })),
+  };
+}
+
+function memoryGlobalState() {
+  const values = new Map();
+  return {
+    get: (key) => values.get(key),
+    update: async (key, value) => {
+      values.set(key, structuredClone(value));
+    },
   };
 }
 
@@ -193,7 +209,7 @@ function claudeUsage(multiplier = 1) {
   };
 }
 
-function addClaudeData(provider, fixture = 'default') {
+function addClaudeData(provider, { fixture = 'default', enableContent = false } = {}) {
   const today = claudeUsage();
   const now = new Date(CODEX_WEBVIEW_NOW);
   const completedWeeklyFixture = fixture === 'weekly-claude-completed';
@@ -232,6 +248,19 @@ function addClaudeData(provider, fixture = 'default') {
     undefined,
     undefined,
     weeklyRecords,
+    [],
+    [],
+    enableContent
+      ? {
+          categories: [],
+          toolResultBreakdown: [],
+          totalEstimatedTokens: 0,
+          recentPrompts: [],
+          thinkingBySession: {},
+          thinkingByDay: {},
+          skillUses: [],
+        }
+      : null,
   );
   if (completedWeeklyFixture) {
     provider.updateWeeklyQuotaHistory([{
@@ -293,7 +322,14 @@ function withoutInputSnapshot(snapshot) {
   };
 }
 
-exports.renderHarness = function renderHarness({ provider: selectedProvider = 'codex', locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true } = {}) {
+exports.renderHarness = async function renderHarness({
+  provider: selectedProvider = 'codex',
+  locale = 'en',
+  theme = 'light',
+  fixture = 'default',
+  autoRefresh = false,
+  weeklyValue = true,
+} = {}) {
   I18n.setLanguage(locale);
   I18n.setTimezone('Asia/Hong_Kong');
   vscodeHost.window.activeColorTheme.kind = theme === 'dark' ? 2 : 1;
@@ -322,10 +358,25 @@ exports.renderHarness = function renderHarness({ provider: selectedProvider = 'c
         ? withoutInputSnapshot(baseSnapshot)
         : baseSnapshot;
     const view = buildCodexUsageView(snapshot, CODEX_WEBVIEW_NOW);
-    const provider = new UsageWebviewProvider({});
+    const provider = new UsageWebviewProvider({ globalState: memoryGlobalState() });
+    // The real extension loads globalState asynchronously before enabling any
+    // consent or feedback control. Let that same path settle in the harness.
+    await new Promise((resolve) => setImmediate(resolve));
     const persistedDetailsFixture = fixture === 'persisted-details';
-    provider.settings = settingsStore(autoRefresh, weeklyValue);
-    addClaudeData(provider, fixture);
+    const adviceEffectivenessFixture = fixture === 'advice-effectiveness';
+    const adviceContentFixture = adviceEffectivenessFixture
+      || fixture === 'advice-effectiveness-disabled';
+    provider.settings = settingsStore({
+      autoRefresh,
+      weeklyValue,
+      adviceEffectiveness: adviceEffectivenessFixture,
+    });
+    addClaudeData(provider, { fixture, enableContent: adviceContentFixture });
+    if (adviceEffectivenessFixture) {
+      provider.updateAdviceEffectivenessData(
+        buildAdviceEffectivenessFixture({ locale }).states,
+      );
+    }
     provider.updateProviderData(
       view,
       buildScopedCodexInsights(view),

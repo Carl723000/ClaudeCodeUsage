@@ -2,14 +2,14 @@
 // sample of the developer's own prompts) to a model and returns advice on how
 // to use Claude Code more effectively.
 //
-// Transport (v2.1 Phase 9): three backends behind one entry point —
-//   1. 'subscription' — reuse Claude Code's own OAuth session (the same token
-//      the quota indicator reads) to call Anthropic's Messages API with a cheap
-//      model (haiku) — zero API key, works out of the box. Verified 2026-06-13:
-//      Bearer <oauth> + `anthropic-beta: oauth-2025-04-20` → 200.
-//   2. 'api' + apiFormat 'anthropic' (the default for a configured key) —
+// Transport history (v2.1 Phase 9): the exported entry point still contains a
+// dormant 'subscription' prototype, but production never selects it. Direct
+// Messages calls with Claude Code subscription credentials later returned 403
+// and are not an approved/default AI backend; those credentials remain scoped
+// to the quota API. Supported production paths are user-configured BYOK:
+//   1. 'api' + apiFormat 'anthropic' (the default for a configured key) —
 //      x-api-key against /v1/messages.
-//   3. 'api' + apiFormat 'openai' — the OpenAI chat-completions shape
+//   2. 'api' + apiFormat 'openai' — the OpenAI chat-completions shape
 //      (DeepSeek etc.), kept for compatibility.
 // Anthropic is the default shape across the extension; OpenAI is opt-in.
 

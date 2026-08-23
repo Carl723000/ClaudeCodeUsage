@@ -16,6 +16,7 @@ import {
   UsageManifest,
 } from './claudeUsageFiles';
 import { LoadUsageDiagnostics } from './refreshDiagnostics';
+import { classifyPromptTextOrigin } from './promptOrigin';
 import {
   AttributionEntry,
   AttributionScope,
@@ -24,6 +25,7 @@ import {
   CostlyMessage,
   ContentAnalysis,
   ContextWindowInfo,
+  FrameworkOverheadKind,
   ContentSlice,
   ProjectGroup,
   ProjectUsage,
@@ -110,6 +112,10 @@ export interface AnalysisAcc {
   // so the matching tool result's size can be attributed to the skill.
   skillUses: SkillUse[];
   skillByToolId: Record<string, number>;
+  frameworkOverhead: Partial<Record<FrameworkOverheadKind, { tokens: number; count: number }>>;
+  observedInputEstimatedTokens: number;
+  userAuthoredEstimatedTokens: number;
+  toolResultEstimatedTokens: number;
 }
 
 // cutoffMs: ignore log lines older than this (0 = no cutoff).
@@ -125,6 +131,10 @@ export function newAnalysisAcc(cutoffMs: number): AnalysisAcc {
     thinkingByDay: {},
     skillUses: [],
     skillByToolId: {},
+    frameworkOverhead: {},
+    observedInputEstimatedTokens: 0,
+    userAuthoredEstimatedTokens: 0,
+    toolResultEstimatedTokens: 0,
   };
 }
 
@@ -158,12 +168,9 @@ function collectPrompt(acc: AnalysisAcc, cwd: string, text: string): void {
   if (trimmed.length < 4) {
     return;
   }
-  // Agent-framework scaffolding is not something the user typed: interrupt
-  // notices and kebab-case XML-ish wrappers (<command-name>, <system-reminder>,
-  // <local-command-stdout>, …). Plain HTML a user pastes (<div>, <p>) survives.
-  if (/^\[Request interrupted/i.test(trimmed) || /^<[a-z][a-z0-9]*(-[a-z0-9]+)+[\s>/]/i.test(trimmed)) {
-    return;
-  }
+  // The caller has already applied classifyPromptTextOrigin. Do not repeat a
+  // looser tag heuristic here: unknown custom elements may be user-authored
+  // Web Component examples and must remain eligible for explicit opt-in.
   acc.prompts.push({ cwd, text: trimmed.slice(0, 2500) });
   if (acc.prompts.length > 600) {
     acc.prompts.shift();
@@ -242,6 +249,42 @@ function addToBucket(map: Record<string, AnalysisBucket>, key: string, text: str
   map[key].tokens += estimateTokens(text);
   map[key].chars += text.length;
   map[key].count += 1;
+}
+
+function addFrameworkOverhead(
+  acc: AnalysisAcc,
+  kind: FrameworkOverheadKind,
+  tokens: number,
+): void {
+  if (!Number.isFinite(tokens) || tokens < 0) {
+    return;
+  }
+  const current = acc.frameworkOverhead[kind] || { tokens: 0, count: 0 };
+  current.tokens += tokens;
+  current.count += 1;
+  acc.frameworkOverhead[kind] = current;
+}
+
+function trackPromptTextOrigin(
+  parsed: any,
+  acc: AnalysisAcc,
+  text: string,
+  isSubagentFile: boolean,
+): 'user-authored' | FrameworkOverheadKind {
+  const origin = classifyPromptTextOrigin({
+    text,
+    isMeta: parsed.isMeta === true,
+    isSidechain: parsed.isSidechain === true,
+    isSubagentFile,
+  });
+  const tokens = estimateTokens(text);
+  acc.observedInputEstimatedTokens += tokens;
+  if (origin === 'user-authored') {
+    acc.userAuthoredEstimatedTokens += tokens;
+  } else {
+    addFrameworkOverhead(acc, origin, tokens);
+  }
+  return origin;
 }
 
 // Accumulate one raw log line into the content analysis.
@@ -354,9 +397,13 @@ export function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = fals
     // sub-agent logs, meta lines (command echoes) or sidechain dispatches.
     const allowPromptSample = !isSubagentFile && !parsed.isMeta && !parsed.isSidechain;
     if (typeof content === 'string') {
+      const origin = trackPromptTextOrigin(parsed, acc, content, isSubagentFile);
+      // Keep the legacy content-category shape stable for the current UI and
+      // calibration path. The separate numeric overlay above is the only
+      // source for framework-vs-user advice evidence.
       addToBucket(acc.cat, 'userPrompts', content);
       collectCommandUse(acc, content, sessionId, parsed.timestamp);
-      if (allowPromptSample) {
+      if (allowPromptSample && origin === 'user-authored') {
         collectPrompt(acc, cwd, content);
       }
     } else if (Array.isArray(content)) {
@@ -366,18 +413,28 @@ export function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = fals
         }
         if (block.type === 'tool_result') {
           const text = blockText(block.content);
+          const toolResultTokens = estimateTokens(text);
+          acc.toolResultEstimatedTokens += toolResultTokens;
+          acc.observedInputEstimatedTokens += toolResultTokens + 8;
           addToBucket(acc.cat, 'toolResults', text);
           addToBucket(acc.tools, acc.toolIdToName[block.tool_use_id] || 'unknown', text);
+          // Count only a fixed structural envelope proxy here; the tool-result
+          // body remains in its ordinary consumption bucket and is never
+          // mistaken for user-authored prose.
+          addFrameworkOverhead(acc, 'tool-result-envelope', 8);
           // The injected skill prompt comes back as the Skill tool's result —
           // its size is the best available estimate of the skill's footprint.
           const skillIdx = acc.skillByToolId[block.tool_use_id];
           if (skillIdx !== undefined && acc.skillUses[skillIdx]) {
-            acc.skillUses[skillIdx].estTokens += estimateTokens(text);
+            const skillTokens = estimateTokens(text);
+            acc.skillUses[skillIdx].estTokens += skillTokens;
+            addFrameworkOverhead(acc, 'skill-preamble', skillTokens);
           }
         } else if (block.type === 'text' && typeof block.text === 'string') {
+          const origin = trackPromptTextOrigin(parsed, acc, block.text, isSubagentFile);
           addToBucket(acc.cat, 'userPrompts', block.text);
           collectCommandUse(acc, block.text, sessionId, parsed.timestamp);
-          if (allowPromptSample) {
+          if (allowPromptSample && origin === 'user-authored') {
             collectPrompt(acc, cwd, block.text);
           }
         }
@@ -393,11 +450,27 @@ export function finalizeAnalysis(acc: AnalysisAcc): ContentAnalysis {
       .sort((a, b) => b.estimatedTokens - a.estimatedTokens);
 
   const categories = toSlices(acc.cat);
+  const frameworkComponents = (Object.entries(acc.frameworkOverhead) as Array<
+    [FrameworkOverheadKind, { tokens: number; count: number }]
+  >)
+    .map(([kind, value]) => ({ kind, estimatedTokens: value.tokens, count: value.count }))
+    .sort((a, b) => a.kind.localeCompare(b.kind));
   return {
     categories,
     toolResultBreakdown: toSlices(acc.tools),
     totalEstimatedTokens: categories.reduce((sum, c) => sum + c.estimatedTokens, 0),
     recentPrompts: acc.prompts.slice(-300),
+    frameworkOverhead: {
+      frameworkEstimatedTokens: frameworkComponents.reduce(
+        (sum, component) => sum + component.estimatedTokens,
+        0,
+      ),
+      observedInputEstimatedTokens: acc.observedInputEstimatedTokens,
+      userAuthoredEstimatedTokens: acc.userAuthoredEstimatedTokens,
+      toolResultEstimatedTokens: acc.toolResultEstimatedTokens,
+      classifiedEvents: frameworkComponents.reduce((sum, component) => sum + component.count, 0),
+      components: frameworkComponents,
+    },
     thinkingBySession: acc.thinkingBySession,
     thinkingByDay: acc.thinkingByDay,
     skillUses: acc.skillUses,
@@ -446,6 +519,17 @@ export function mergeAnalysisAcc(target: AnalysisAcc, source: AnalysisAcc): void
     if (target.skillUses.length >= MAX_SKILL_USES) break;
     target.skillUses.push({ ...use });
   }
+  for (const [kind, value] of Object.entries(source.frameworkOverhead) as Array<
+    [FrameworkOverheadKind, { tokens: number; count: number }]
+  >) {
+    const current = target.frameworkOverhead[kind] ?? { tokens: 0, count: 0 };
+    current.tokens += value.tokens;
+    current.count += value.count;
+    target.frameworkOverhead[kind] = current;
+  }
+  target.observedInputEstimatedTokens += source.observedInputEstimatedTokens;
+  target.userAuthoredEstimatedTokens += source.userAuthoredEstimatedTokens;
+  target.toolResultEstimatedTokens += source.toolResultEstimatedTokens;
 }
 
 export function finalizeAnalysisWithCalibration(
@@ -1033,32 +1117,13 @@ export class ClaudeDataLoader {
     return { sessionId, projectName, projectPath };
   }
 
-  /** True if a `user` line's text is a Claude Code system marker rather than
-   * something the user actually typed: an interruption notice, or the echo of
-   * a slash command (`/model`, `/clear`, …) and its output. These otherwise
-   * inflate the "Messages" count (one session showed 106 vs ~80 real prompts:
-   * `[Request interrupted by user]` ×3, `<command-name>/model…` ×8, etc.). */
+  /** True if a `user` line's text carries one of the reviewed Claude Code
+   * framework markers. Unknown XML/custom elements remain user-authored.
+   *
+   * Keep this public for the existing compatibility tests and callers; the
+   * classifier itself remains the single source of marker semantics. */
   static isSyntheticUserText(text: string): boolean {
-    const t = text.trim();
-    if (/^\[Request interrupted/i.test(t)) {
-      return true;
-    }
-    // Compaction continuation: when a session is auto-compacted, Claude Code
-    // injects the summary as a *user* message — the user never typed it, so it
-    // must not count towards "Messages".
-    if (/^This session is being continued from a previous conversation/i.test(t)) {
-      return true;
-    }
-    // Slash-command echo blocks wrap the invocation/output in these tags.
-    if (
-      t.startsWith('<command-name>') ||
-      t.startsWith('<command-message>') ||
-      t.includes('<local-command-stdout>') ||
-      t.includes('<local-command-caveat>')
-    ) {
-      return true;
-    }
-    return false;
+    return classifyPromptTextOrigin({ text }) !== 'user-authored';
   }
 
   /** Last segment of a path, handling both '/' and '\\' separators. */

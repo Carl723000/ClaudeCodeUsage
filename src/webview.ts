@@ -47,6 +47,29 @@ import { getProviderNavClientScript } from './providerNavClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
+import { randomBytes } from 'crypto';
+import {
+  AdviceEffectivenessProvider,
+  AdviceEffectivenessProviderState,
+  AdviceEffectivenessProviderStates,
+  PreparedAdviceSnapshot,
+  prepareAdviceSnapshot,
+} from './adviceEffectiveness/integration';
+import {
+  AdviceLocalState,
+  AdviceLocalStateStorage,
+  createClosedAdviceLocalState,
+  loadAndMigrateAdviceLocalState,
+  saveAdviceLocalState,
+  selectStoredComparablePairLineage,
+  toComparableTaskPairs,
+  upsertAdviceLocalFeedback,
+} from './adviceEffectiveness/versionedPersistence';
+import {
+  AdviceComparisonResult,
+  DEFAULT_ADVICE_COMPARISON_POLICY,
+  compareAdviceEffectiveness,
+} from './adviceEffectiveness/comparison';
 import {
   AttributionScope,
   BranchUsage,
@@ -155,8 +178,38 @@ export class UsageWebviewProvider {
     settings?: string;
     error?: string;
   } | null = null;
+  /**
+   * Experimental v2.3.1 state. Raw prompt samples never enter rendered HTML:
+   * they stay in the provider state until one explicit sealed-snapshot request.
+   */
+  private adviceEffectivenessStates: AdviceEffectivenessProviderStates = {};
+  private preparedAdviceSnapshots = new Map<
+    string,
+    { provider: AdviceEffectivenessProvider; snapshot: PreparedAdviceSnapshot }
+  >();
+  private adviceLocalState: AdviceLocalState = createClosedAdviceLocalState();
+  private adviceLocalStateStatus: 'loading' | 'ready' | 'degraded' = 'loading';
 
-  constructor(private context: vscode.ExtensionContext) {}
+  constructor(private context: vscode.ExtensionContext) {
+    const storage = this.adviceStateStorage();
+    if (!storage) {
+      this.adviceLocalStateStatus = 'degraded';
+      return;
+    }
+    void loadAndMigrateAdviceLocalState(storage).then((loaded) => {
+      this.adviceLocalState = loaded.value;
+      this.adviceLocalStateStatus = loaded.ok ? 'ready' : 'degraded';
+      if (this.panel) {
+        this.updateWebview();
+      }
+    }).catch(() => {
+      this.adviceLocalState = createClosedAdviceLocalState();
+      this.adviceLocalStateStatus = 'degraded';
+      if (this.panel) {
+        this.updateWebview();
+      }
+    });
+  }
 
   /** Read a moved/core setting through the shared store, with a fallback. */
   private setting<T>(key: string, fallback: T): T {
@@ -165,6 +218,189 @@ export class UsageWebviewProvider {
 
   private escapeHtml(text: string): string {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  private adviceStateStorage(): AdviceLocalStateStorage | undefined {
+    const state = (this.context as Partial<vscode.ExtensionContext>).globalState;
+    if (!state || typeof state.get !== 'function' || typeof state.update !== 'function') {
+      return undefined;
+    }
+    return state;
+  }
+
+  private adviceExperimentEnabled(): boolean {
+    return this.setting<boolean>('advice.effectiveness.enabled', false);
+  }
+
+  private adviceProviderState(value: unknown): AdviceEffectivenessProviderState | undefined {
+    if (!this.adviceExperimentEnabled() || (value !== 'claude' && value !== 'codex')) {
+      return undefined;
+    }
+    return this.adviceEffectivenessStates[value];
+  }
+
+  private postAdviceMessage(message: Record<string, unknown>): void {
+    void this.panel?.webview.postMessage(message);
+  }
+
+  private clearPreparedAdviceSnapshots(provider?: AdviceEffectivenessProvider): void {
+    if (!provider) {
+      this.preparedAdviceSnapshots.clear();
+      return;
+    }
+    for (const [snapshotId, value] of this.preparedAdviceSnapshots) {
+      if (value.provider === provider) {
+        this.preparedAdviceSnapshots.delete(snapshotId);
+      }
+    }
+  }
+
+  private async handleAdviceConsentMessage(message: Record<string, unknown>): Promise<void> {
+    const providerState = this.adviceProviderState(message.provider);
+    const aggregateConsent = message.aggregateConsent;
+    const promptSampleConsent = message.promptSampleConsent;
+    const storage = this.adviceStateStorage();
+    if (
+      !providerState ||
+      providerState.provider !== 'claude' ||
+      !providerState.remotePreviewEligible ||
+      !providerState.aggregate ||
+      (aggregateConsent !== 'explicit' && aggregateConsent !== 'not-granted') ||
+      (promptSampleConsent !== 'explicit' && promptSampleConsent !== 'not-granted') ||
+      (promptSampleConsent === 'explicit' && aggregateConsent !== 'explicit') ||
+      (promptSampleConsent === 'explicit' && providerState.promptSamples.length === 0) ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      !storage
+    ) {
+      this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
+      return;
+    }
+    const next: AdviceLocalState = {
+      ...this.adviceLocalState,
+      featureMode: 'enabled',
+      aggregateConsent,
+      promptSampleConsent,
+    };
+    const saved = await saveAdviceLocalState(storage, next);
+    if (!saved.ok) {
+      this.adviceLocalStateStatus = 'degraded';
+      this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
+      return;
+    }
+    this.adviceLocalState = saved.value;
+    this.clearPreparedAdviceSnapshots(providerState.provider);
+    this.postAdviceMessage({
+      command: 'adviceConsentResult',
+      ok: true,
+      provider: providerState.provider,
+      aggregateConsent: saved.value.aggregateConsent,
+      promptSampleConsent: saved.value.promptSampleConsent,
+    });
+  }
+
+  private handlePrepareAdviceSnapshotMessage(message: Record<string, unknown>): void {
+    const providerState = this.adviceProviderState(message.provider);
+    if (!providerState) {
+      this.postAdviceMessage({ command: 'adviceSnapshotResult', ok: false, provider: message.provider });
+      return;
+    }
+    const aggregate = message.aggregateConsent;
+    const promptSamples = message.promptSampleConsent;
+    if (
+      (aggregate !== 'explicit' && aggregate !== 'not-granted') ||
+      (promptSamples !== 'explicit' && promptSamples !== 'not-granted') ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      aggregate !== this.adviceLocalState.aggregateConsent ||
+      (promptSamples === 'explicit' && this.adviceLocalState.promptSampleConsent !== 'explicit')
+    ) {
+      this.postAdviceMessage({ command: 'adviceSnapshotResult', ok: false, provider: providerState.provider });
+      return;
+    }
+    const result = prepareAdviceSnapshot(providerState, {
+      aggregate,
+      promptSamples,
+    });
+    if (!result.ok) {
+      this.postAdviceMessage({
+        command: 'adviceSnapshotResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: result.reason,
+      });
+      return;
+    }
+    this.clearPreparedAdviceSnapshots(providerState.provider);
+    const snapshotId = `snapshot-${randomBytes(12).toString('hex')}`;
+    this.preparedAdviceSnapshots.set(snapshotId, {
+      provider: providerState.provider,
+      snapshot: result.value,
+    });
+    this.postAdviceMessage({
+      command: 'adviceSnapshotResult',
+      ok: true,
+      snapshotId,
+      provider: providerState.provider,
+      contentType: result.value.preview.contentType,
+      dataMode: result.value.preview.dataMode,
+      promptSampleCount: result.value.preview.promptSampleCount,
+      utf8Bytes: result.value.preview.utf8Bytes,
+      sha256: result.value.preview.sha256,
+      body: result.value.preview.body,
+    });
+  }
+
+  private async handleAdviceFeedbackMessage(message: Record<string, unknown>): Promise<void> {
+    const providerState = this.adviceProviderState(message.provider);
+    const storage = this.adviceStateStorage();
+    const adviceId = message.adviceId;
+    const recommendationId = message.recommendationId;
+    const kind = message.kind;
+    const recommendation = providerState?.contract.recommendations.find(
+      (candidate) => candidate.id === recommendationId,
+    );
+    if (
+      !providerState ||
+      providerState.contract.adviceId !== adviceId ||
+      !recommendation ||
+      (kind !== 'helpful' && kind !== 'not-helpful' && kind !== 'applied') ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      !storage
+    ) {
+      this.postAdviceMessage({ command: 'adviceFeedbackResult', ok: false, provider: message.provider });
+      return;
+    }
+    const changed = upsertAdviceLocalFeedback(this.adviceLocalState, {
+      adviceId: providerState.contract.adviceId,
+      recommendationId: recommendation.id,
+      kind,
+      updatedAtEpochMs: Date.now(),
+    });
+    if (!changed.ok) {
+      this.postAdviceMessage({ command: 'adviceFeedbackResult', ok: false, provider: providerState.provider });
+      return;
+    }
+    const saved = await saveAdviceLocalState(storage, {
+      ...changed.value,
+      featureMode: 'enabled',
+    });
+    if (!saved.ok) {
+      this.adviceLocalStateStatus = 'degraded';
+      this.postAdviceMessage({ command: 'adviceFeedbackResult', ok: false, provider: providerState.provider });
+      return;
+    }
+    this.adviceLocalState = saved.value;
+    const feedback = saved.value.feedback.find(
+      (item) => item.adviceId === adviceId && item.recommendationId === recommendationId,
+    );
+    this.postAdviceMessage({
+      command: 'adviceFeedbackResult',
+      ok: true,
+      provider: providerState.provider,
+      adviceId,
+      recommendationId,
+      rating: feedback?.rating ?? 'unrated',
+      applied: feedback?.applied ?? 'not-applied',
+    });
   }
 
   show(): void {
@@ -180,6 +416,7 @@ export class UsageWebviewProvider {
 
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      this.clearPreparedAdviceSnapshots();
       // Force a fresh render into the next panel (the lastHtml guard must not
       // suppress the first paint after the panel was closed and reopened).
       this.lastHtml = '';
@@ -198,6 +435,22 @@ export class UsageWebviewProvider {
           break;
         case 'getAdvice':
           vscode.commands.executeCommand('claudeCodeUsage.getAdvice');
+          break;
+        case 'updateAdviceConsent':
+          await this.handleAdviceConsentMessage(message as Record<string, unknown>);
+          break;
+        case 'prepareAdviceSnapshot':
+          this.handlePrepareAdviceSnapshotMessage(message as Record<string, unknown>);
+          break;
+        case 'discardAdviceSnapshot': {
+          const provider = message.provider;
+          if (provider === 'claude' || provider === 'codex') {
+            this.clearPreparedAdviceSnapshots(provider);
+          }
+          break;
+        }
+        case 'recordAdviceFeedback':
+          await this.handleAdviceFeedbackMessage(message as Record<string, unknown>);
           break;
         case 'exportHeatmap':
           vscode.commands.executeCommand('claudeCodeUsage.exportHeatmap');
@@ -586,6 +839,16 @@ export class UsageWebviewProvider {
     if (this.panel && this.currentProvider === 'codex') {
       this.updateWebview();
     }
+  }
+
+  /**
+   * Receive privacy-reviewed provider contracts from the extension host. This
+   * deliberately does not trigger a render: syncProviderUi immediately follows
+   * it with updateProviderData, so one data refresh still produces one paint.
+   */
+  updateAdviceEffectivenessData(states: AdviceEffectivenessProviderStates): void {
+    this.adviceEffectivenessStates = states;
+    this.clearPreparedAdviceSnapshots();
   }
 
   setLoading(loading: boolean): void {
@@ -3550,6 +3813,202 @@ export class UsageWebviewProvider {
     );
   }
 
+  private adviceComparison(
+    state: AdviceEffectivenessProviderState,
+    recommendationId: string | undefined,
+  ): AdviceComparisonResult {
+    if (!recommendationId) {
+      return {
+        status: 'insufficient-evidence',
+        reasons: ['no evidence-backed recommendation'],
+        comparablePairs: 0,
+      };
+    }
+    const stored = selectStoredComparablePairLineage(
+      this.adviceLocalState.comparablePairs,
+      { provider: state.provider, recommendationId },
+    );
+    return compareAdviceEffectiveness(
+      toComparableTaskPairs(stored),
+      DEFAULT_ADVICE_COMPARISON_POLICY,
+    );
+  }
+
+  /**
+   * Hidden v2.3.1 candidate surface. It extends the existing Advice /
+   * Recommendations cards instead of creating a third experience. Machine
+   * summaries and prompt samples are intentionally never rendered here.
+   */
+  private renderAdviceEffectivenessBody(provider: AdviceEffectivenessProvider): string {
+    if (!this.adviceExperimentEnabled()) {
+      return '';
+    }
+    const t = I18n.t.popup.adviceEffectiveness;
+    const state = this.adviceEffectivenessStates[provider];
+    const html = (value: string): string => this.escapeHtml(value);
+    const replace = (template: string, key: string, value: string): string =>
+      template.replace(`{${key}}`, value);
+    const percent = (value: number): string =>
+      `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+    const contract = state?.contract;
+    const recommendation = contract?.recommendations[0];
+    const observations: string[] = [];
+    let actionText = t.noEvidenceAdvice;
+    let recommendationText = t.noEvidenceAdvice;
+    let limitationText = t.qualityGuardrailPending;
+
+    if (state && provider === 'claude') {
+      const byMetric = new Map(state.contract.observations.map((item) => [item.metric, item]));
+      const longSession = byMetric.get('long-session-share');
+      const largeContext = byMetric.get('large-context-share');
+      const framework = byMetric.get('framework-overhead-share');
+      if (longSession && typeof longSession.value === 'number') {
+        observations.push(replace(t.longSessionSignal, 'share', percent(longSession.value)));
+      }
+      if (largeContext && typeof largeContext.value === 'number') {
+        observations.push(replace(t.largeContextSignal, 'share', percent(largeContext.value)));
+      }
+      if (framework && typeof framework.value === 'number') {
+        observations.push(replace(t.frameworkOverheadSignal, 'share', percent(framework.value)));
+      }
+      limitationText = `${t.elapsedTimeProxy} ${t.qualityGuardrailPending}`;
+      if (recommendation) {
+        recommendationText = t.clearBoundaryRecommendation;
+        actionText = t.clearBoundaryAction;
+      }
+    } else if (state && provider === 'codex') {
+      const copy = I18n.t.providers.codex;
+      const kind = recommendation?.id.replace('recommendation-codex-', '') as
+        | keyof typeof copy.insightObservations
+        | undefined;
+      if (kind && Object.prototype.hasOwnProperty.call(copy.insightObservations, kind)) {
+        observations.push(copy.insightObservations[kind]);
+        recommendationText = t.codexLocalRecommendation;
+        actionText = copy.insightTips[kind];
+      }
+      limitationText = `${copy.structuralProxy} ${t.qualityGuardrailPending}`;
+    }
+    if (observations.length === 0) {
+      observations.push(t.noEvidenceAdvice);
+    }
+
+    const comparison = state
+      ? this.adviceComparison(state, recommendation?.id)
+      : {
+          status: 'insufficient-evidence' as const,
+          reasons: ['provider contract unavailable'],
+          comparablePairs: 0,
+        };
+    const pairCount = comparison.status === 'insufficient-evidence'
+      ? comparison.comparablePairs
+      : comparison.stats.comparablePairs;
+    const resultText = comparison.status === 'quality-guardrail-failed'
+      ? t.qualityGuardrailFailed
+      : comparison.status === 'improved'
+        ? t.improved
+        : comparison.status === 'no-demonstrated-improvement'
+          ? t.noDemonstratedImprovement
+          : t.insufficientEvidence;
+    const pairText = replace(t.comparablePairs, 'count', String(pairCount));
+    const minimumText = replace(
+      t.minimumComparablePairs,
+      'minimum',
+      String(DEFAULT_ADVICE_COMPARISON_POLICY.minComparablePairs),
+    );
+    const evidenceText = state
+      ? `${t.source}: ${provider === 'claude' ? 'Claude' : 'Codex'} · ${t.evidence}: ${state.contract.evidence.length}`
+      : t.noEvidenceAdvice;
+    const bodyId = `advice-effectiveness-${provider}`;
+
+    let feedbackHtml = '';
+    if (state && recommendation) {
+      const feedback = this.adviceLocalState.feedback.find(
+        (item) =>
+          item.adviceId === state.contract.adviceId &&
+          item.recommendationId === recommendation.id,
+      );
+      const disabled = this.adviceLocalStateStatus !== 'ready' ? ' disabled' : '';
+      const button = (
+        kind: 'helpful' | 'not-helpful' | 'applied',
+        label: string,
+        selected: boolean,
+      ): string =>
+        '<button type="button" class="advice-feedback-button' + (selected ? ' is-selected' : '') + '"' +
+        ' data-advice-action="feedback" data-provider="' + provider + '"' +
+        ' data-advice-id="' + html(state.contract.adviceId) + '"' +
+        ' data-recommendation-id="' + html(recommendation.id) + '"' +
+        ' data-feedback-kind="' + kind + '" aria-pressed="' + String(selected) + '"' + disabled + '>' +
+        '<span aria-hidden="true">' + (selected ? '✓' : '○') + '</span> ' + html(label) + '</button>';
+      feedbackHtml =
+        '<div class="advice-feedback-section">' +
+        '<h5>' + html(t.feedbackTitle) + '</h5>' +
+        '<div class="advice-feedback-group" role="group" aria-label="' + html(t.feedbackTitle) + '">' +
+        button('helpful', t.helpful, feedback?.rating === 'helpful') +
+        button('not-helpful', t.notHelpful, feedback?.rating === 'not-helpful') +
+        button('applied', t.applied, feedback?.applied === 'applied') +
+        '</div>' +
+        '<p class="advice-local-note">' + html(t.feedbackLocalOnly) + '</p>' +
+        '<p class="advice-inline-status" data-advice-feedback-status="' + provider + '" aria-live="polite"></p>' +
+        '</div>';
+    }
+
+    let payloadHtml = '<p class="advice-local-note">' + html(t.codexPreviewUnavailable) + '</p>';
+    if (state?.provider === 'claude' && state.remotePreviewEligible && state.aggregate) {
+      const ready = this.adviceLocalStateStatus === 'ready';
+      const aggregateChecked = ready && this.adviceLocalState.aggregateConsent === 'explicit';
+      const promptAvailable = state.promptSamples.length > 0;
+      const promptChecked =
+        aggregateChecked && promptAvailable && this.adviceLocalState.promptSampleConsent === 'explicit';
+      const aggregateDisabled = ready ? '' : ' disabled';
+      const promptDisabled = ready && aggregateChecked && promptAvailable ? '' : ' disabled';
+      const previewDisabled = ready && aggregateChecked ? '' : ' disabled';
+      payloadHtml =
+        '<div class="advice-payload-section">' +
+        '<h5>' + html(t.payloadTitle) + '</h5>' +
+        '<p class="advice-local-note">' + html(t.payloadDescription) + '</p>' +
+        '<fieldset class="advice-consent" data-advice-consent="' + provider + '">' +
+        '<legend>' + html(t.payloadTitle) + '</legend>' +
+        '<label><input type="checkbox" data-advice-consent-kind="aggregate" data-provider="' + provider + '"' +
+        (aggregateChecked ? ' checked' : '') + aggregateDisabled + '> <span><strong>' +
+        html(t.aggregateConsentLabel) + '</strong><small>' + html(t.aggregateConsentHelp) + '</small></span></label>' +
+        '<label><input type="checkbox" data-advice-consent-kind="prompt" data-provider="' + provider + '"' +
+        ' data-prompt-available="' + String(promptAvailable) + '"' +
+        (promptChecked ? ' checked' : '') + promptDisabled + '> <span><strong>' +
+        html(t.promptConsentLabel) + '</strong><small>' + html(t.promptConsentHelp) + '</small></span></label>' +
+        '</fieldset>' +
+        '<div class="advice-payload-actions"><button type="button" class="btn-secondary btn-small"' +
+        ' data-advice-action="preview" data-provider="' + provider + '"' + previewDisabled + '>' +
+        html(t.previewPayload) + '</button><span>' + html(t.noNetworkTransport) + '</span></div>' +
+        '<p class="advice-inline-status" data-advice-consent-status="' + provider + '" aria-live="polite"></p>' +
+        '<details class="advice-payload-preview" data-advice-preview="' + provider + '" hidden>' +
+        '<summary><span>' + html(t.payloadTitle) + '</span><span class="advice-seal-stamp">SHA-256</span></summary>' +
+        '<div class="advice-payload-meta" aria-live="polite">' +
+        '<span data-advice-preview-content-type></span><span data-advice-preview-mode></span><span data-advice-preview-bytes></span>' +
+        '<span data-advice-preview-count></span><code data-advice-preview-digest></code></div>' +
+        '<pre tabindex="0" data-advice-preview-body aria-label="' + html(t.payloadTitle) + '"></pre>' +
+        '</details></div>';
+    }
+
+    const step = (index: number, label: string, content: string): string =>
+      '<li><span class="advice-step-marker" aria-hidden="true">' + index + '</span>' +
+      '<div><strong>' + html(label) + '</strong><p>' + content + '</p></div></li>';
+    return (
+      '<section class="advice-effectiveness-body" data-advice-provider="' + provider + '" aria-labelledby="' + bodyId + '">' +
+      '<div class="advice-effectiveness-heading"><h4 id="' + bodyId + '">' + html(t.title) +
+      ' <span class="exp-pill">v2.3.1</span></h4><p>' + html(t.description) + '</p></div>' +
+      '<p class="advice-candidate-note">' + html(t.candidateNotice) + '</p>' +
+      '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
+      step(1, t.observation, observations.map((item) => html(item)).join('<br>')) +
+      step(2, t.evidence, html(evidenceText) + '<br><span class="advice-step-caveat">' + html(limitationText) + '</span>') +
+      step(3, t.recommendation, html(recommendationText)) +
+      step(4, t.action, html(actionText)) +
+      step(5, t.result, html(resultText) + '<br><span class="advice-step-caveat">' + html(pairText + ' · ' + minimumText) + '</span>') +
+      '</ol>' +
+      feedbackHtml + payloadHtml +
+      '</section>'
+    );
+  }
+
   /**
    * Prominent "AI advice" card at the top of the Content tab (Phase 9a). The
    * advice button used to live in the content-analysis header; this gives it a
@@ -3567,6 +4026,7 @@ export class UsageWebviewProvider {
       '</div>' +
       '<button class="btn-primary" onclick="getAdvice()">' + t.getAdvice + '</button>' +
       '</div>' +
+      this.renderAdviceEffectivenessBody('claude') +
       '</div>'
     );
   }
@@ -4010,7 +4470,8 @@ export class UsageWebviewProvider {
         : '<p class="table-hint">' + this.escapeHtml(copy.recommendationPartial) + '</p>';
       return '<div class="action-card"><div class="action-card-head"><span class="action-icon">✨</span>' +
         '<div class="action-card-titles"><h3>' + this.escapeHtml(copy.optimization) + '</h3>' +
-        '<p class="action-card-desc">' + this.escapeHtml(copy.structuralProxy) + '</p></div></div></div>' +
+        '<p class="action-card-desc">' + this.escapeHtml(copy.structuralProxy) + '</p></div></div>' +
+        this.renderAdviceEffectivenessBody('codex') + '</div>' +
         '<div class="daily-breakdown"><div class="section-header"><h3>' +
         this.escapeHtml(copy.behavior + ' · ' + copy.last30Days) + '</h3></div>' +
         partial + behaviorSummary + insightHtml + '</div>';
@@ -6419,6 +6880,262 @@ export class UsageWebviewProvider {
         color: var(--vscode-button-foreground);
         border-color: var(--vscode-button-background);
       }
+
+      .advice-effectiveness-body {
+        margin-top: 13px;
+        padding-top: 14px;
+        border-top: 1px solid var(--vscode-panel-border);
+        background: var(--vscode-editor-background);
+        min-width: 0;
+      }
+      .advice-effectiveness-heading h4,
+      .advice-feedback-section h5,
+      .advice-payload-section h5 {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .advice-effectiveness-heading h4 {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .advice-effectiveness-heading p,
+      .advice-candidate-note,
+      .advice-local-note,
+      .advice-inline-status {
+        margin: 4px 0 0;
+        color: var(--vscode-descriptionForeground);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .advice-candidate-note {
+        margin-top: 7px;
+      }
+      .advice-spine {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        list-style: none;
+        margin: 14px 0 12px;
+        padding: 0;
+      }
+      .advice-spine::before {
+        content: "";
+        position: absolute;
+        z-index: 0;
+        left: 10%;
+        right: 10%;
+        top: 13px;
+        height: 1px;
+        background: var(--vscode-textLink-foreground);
+      }
+      .advice-spine li {
+        position: relative;
+        z-index: 1;
+        min-width: 0;
+      }
+      .advice-step-marker {
+        display: flex;
+        width: 26px;
+        height: 26px;
+        margin: 0 auto 7px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--vscode-textLink-foreground);
+        border-radius: 999px;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-textLink-foreground);
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .advice-spine li > div {
+        text-align: center;
+      }
+      .advice-spine strong {
+        font-size: 11px;
+      }
+      .advice-spine p {
+        margin: 3px 0 0;
+        color: var(--vscode-descriptionForeground);
+        font-size: 10.5px;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+      .advice-step-caveat {
+        font-size: 10px;
+      }
+      .advice-feedback-section,
+      .advice-payload-section {
+        margin-top: 12px;
+        padding-top: 11px;
+        border-top: 1px solid var(--vscode-panel-border);
+      }
+      .advice-feedback-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 7px;
+      }
+      .advice-feedback-button {
+        padding: 4px 9px;
+        border: 1px solid var(--vscode-button-secondaryBackground, var(--vscode-panel-border));
+        border-radius: 999px;
+        background: transparent;
+        color: var(--vscode-foreground);
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .advice-feedback-button.is-selected {
+        border-width: 2px;
+        border-color: var(--vscode-focusBorder);
+        font-weight: 600;
+      }
+      .advice-feedback-button:disabled,
+      .advice-consent input:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .advice-feedback-button:focus-visible,
+      .advice-consent input:focus-visible,
+      .advice-payload-actions button:focus-visible,
+      .advice-payload-preview summary:focus-visible,
+      .advice-payload-preview pre:focus-visible {
+        outline: 2px solid var(--vscode-focusBorder);
+        outline-offset: 2px;
+      }
+      .advice-consent {
+        display: grid;
+        gap: 8px;
+        margin: 9px 0 0;
+        padding: 10px;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 6px;
+      }
+      .advice-consent legend {
+        padding: 0 5px;
+        color: var(--vscode-descriptionForeground);
+        font-size: 10px;
+      }
+      .advice-consent label {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        cursor: pointer;
+      }
+      .advice-consent input {
+        flex: 0 0 auto;
+        margin-top: 2px;
+      }
+      .advice-consent label span {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+      .advice-consent label strong,
+      .advice-consent label small {
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      .advice-consent label small {
+        color: var(--vscode-descriptionForeground);
+      }
+      .advice-payload-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 9px;
+      }
+      .advice-payload-actions span {
+        color: var(--vscode-descriptionForeground);
+        font-size: 10.5px;
+      }
+      .advice-payload-preview {
+        margin-top: 9px;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .advice-payload-preview summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 7px 9px;
+        cursor: pointer;
+        background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .advice-seal-stamp {
+        flex: 0 0 auto;
+        padding: 1px 5px;
+        border: 1px solid var(--vscode-textLink-foreground);
+        border-radius: 3px;
+        color: var(--vscode-textLink-foreground);
+        font-family: var(--vscode-editor-font-family, monospace);
+        font-size: 9px;
+        letter-spacing: 0.4px;
+      }
+      .advice-payload-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px 10px;
+        padding: 8px 9px 0;
+        color: var(--vscode-descriptionForeground);
+        font-size: 10px;
+      }
+      .advice-payload-meta code {
+        flex-basis: 100%;
+        color: var(--vscode-foreground);
+        overflow-wrap: anywhere;
+      }
+      .advice-payload-preview pre {
+        max-height: 280px;
+        margin: 8px 9px 9px;
+        padding: 9px;
+        overflow: auto;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 4px;
+        background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+        color: var(--vscode-editor-foreground, var(--vscode-foreground));
+        font-family: var(--vscode-editor-font-family, monospace);
+        font-size: 10px;
+        line-height: 1.45;
+        white-space: pre;
+      }
+      @media (max-width: 800px) {
+        .action-card-head {
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+        .advice-spine {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 9px;
+          padding-left: 0;
+        }
+        .advice-spine::before {
+          left: 13px;
+          right: auto;
+          top: 13px;
+          bottom: 13px;
+          width: 1px;
+          height: auto;
+        }
+        .advice-spine li {
+          display: grid;
+          grid-template-columns: 26px minmax(0, 1fr);
+          gap: 9px;
+        }
+        .advice-step-marker {
+          margin: 0;
+        }
+        .advice-spine li > div {
+          text-align: left;
+        }
+      }
       .sr-only {
         position: absolute;
         width: 1px;
@@ -6437,6 +7154,7 @@ export class UsageWebviewProvider {
     return `
 // Get VSCode API
 const vscode = acquireVsCodeApi();
+const __adviceCopy = ${JSON.stringify(I18n.t.popup.adviceEffectiveness)};
 
 function ccuReadUiState() {
   try { return vscode.getState() || {}; } catch (e) { return {}; }
@@ -6457,6 +7175,63 @@ function ccuElementStateKey(element, kind) {
   var root = tab || document;
   var elements = Array.prototype.slice.call(root.querySelectorAll(kind === 'table' ? 'table' : '.daily-breakdown, .hourly-breakdown'));
   return ccuProviderName() + ':' + (tab ? tab.id : 'page') + ':' + kind + ':' + Math.max(0, elements.indexOf(element));
+}
+
+function adviceRoot(provider) {
+  return document.querySelector('.advice-effectiveness-body[data-advice-provider="' + provider + '"]');
+}
+function adviceConsentElements(provider) {
+  var root = adviceRoot(provider);
+  return {
+    root: root,
+    aggregate: root ? root.querySelector('[data-advice-consent-kind="aggregate"]') : null,
+    prompt: root ? root.querySelector('[data-advice-consent-kind="prompt"]') : null,
+    previewButton: root ? root.querySelector('[data-advice-action="preview"]') : null,
+    preview: root ? root.querySelector('[data-advice-preview]') : null,
+    consentStatus: root ? root.querySelector('[data-advice-consent-status]') : null,
+  };
+}
+function adviceSyncConsentControls(provider) {
+  var elements = adviceConsentElements(provider);
+  if (!elements.root || !elements.aggregate || !elements.prompt) { return; }
+  var promptAvailable = elements.prompt.getAttribute('data-prompt-available') === 'true';
+  elements.prompt.disabled = elements.aggregate.disabled || !elements.aggregate.checked || !promptAvailable;
+  if (elements.prompt.disabled) { elements.prompt.checked = false; }
+  if (elements.previewButton) {
+    elements.previewButton.disabled = elements.aggregate.disabled || !elements.aggregate.checked;
+  }
+}
+function adviceClearPreview(provider) {
+  var elements = adviceConsentElements(provider);
+  if (!elements.preview) { return; }
+  elements.preview.hidden = true;
+  elements.preview.open = false;
+  elements.preview.removeAttribute('data-snapshot-id');
+  var body = elements.preview.querySelector('[data-advice-preview-body]');
+  var digest = elements.preview.querySelector('[data-advice-preview-digest]');
+  var mode = elements.preview.querySelector('[data-advice-preview-mode]');
+  var contentType = elements.preview.querySelector('[data-advice-preview-content-type]');
+  var bytes = elements.preview.querySelector('[data-advice-preview-bytes]');
+  var count = elements.preview.querySelector('[data-advice-preview-count]');
+  if (body) { body.textContent = ''; }
+  if (digest) { digest.textContent = ''; }
+  if (mode) { mode.textContent = ''; }
+  if (contentType) { contentType.textContent = ''; }
+  if (bytes) { bytes.textContent = ''; }
+  if (count) { count.textContent = ''; }
+}
+function adviceSetConsentPending(provider, pending) {
+  var elements = adviceConsentElements(provider);
+  if (elements.aggregate) { elements.aggregate.disabled = !!pending; }
+  if (elements.prompt) { elements.prompt.disabled = !!pending; }
+  if (elements.previewButton) { elements.previewButton.disabled = true; }
+  if (!pending) { adviceSyncConsentControls(provider); }
+}
+function restoreAdviceEffectivenessState() {
+  document.querySelectorAll('.advice-effectiveness-body[data-advice-provider]').forEach(function(root) {
+    var provider = root.getAttribute('data-advice-provider');
+    if (provider) { adviceSyncConsentControls(provider); }
+  });
 }
 
 // Keep expanded <details data-persist> open across auto-refresh re-renders — a
@@ -6505,6 +7280,7 @@ function restoreUi() {
   restoreActiveTab();
   restoreSessionFilter();
   restorePersistedDetails();
+  restoreAdviceEffectivenessState();
   restoreSessionDetails();
   restoreTableSorts();
   restoreChartMetrics();
@@ -7240,9 +8016,172 @@ window.syncChartBarSelection = syncChartBarSelection;
 window.closeAllHourlyDetails = closeAllHourlyDetails;
 window.closeAllMonthlyDetails = closeAllMonthlyDetails;
 
+document.addEventListener('change', function(event) {
+  var input = event.target && event.target.closest
+    ? event.target.closest('[data-advice-consent-kind][data-provider]')
+    : null;
+  if (!input) { return; }
+  var provider = input.getAttribute('data-provider');
+  if (provider !== 'claude' && provider !== 'codex') { return; }
+  var elements = adviceConsentElements(provider);
+  if (!elements.aggregate || !elements.prompt) { return; }
+  if (!elements.aggregate.checked) { elements.prompt.checked = false; }
+  adviceSyncConsentControls(provider);
+  adviceClearPreview(provider);
+  vscode.postMessage({ command: 'discardAdviceSnapshot', provider: provider });
+  adviceSetConsentPending(provider, true);
+  vscode.postMessage({
+    command: 'updateAdviceConsent',
+    provider: provider,
+    aggregateConsent: elements.aggregate.checked ? 'explicit' : 'not-granted',
+    promptSampleConsent: elements.prompt.checked ? 'explicit' : 'not-granted',
+  });
+});
+
+document.addEventListener('click', function(event) {
+  var action = event.target && event.target.closest
+    ? event.target.closest('[data-advice-action][data-provider]')
+    : null;
+  if (!action) { return; }
+  var provider = action.getAttribute('data-provider');
+  if (provider !== 'claude' && provider !== 'codex') { return; }
+  if (action.getAttribute('data-advice-action') === 'preview') {
+    event.preventDefault();
+    var elements = adviceConsentElements(provider);
+    if (!elements.aggregate || !elements.prompt || !elements.aggregate.checked) { return; }
+    action.disabled = true;
+    if (elements.consentStatus) { elements.consentStatus.textContent = ''; }
+    vscode.postMessage({
+      command: 'prepareAdviceSnapshot',
+      provider: provider,
+      aggregateConsent: 'explicit',
+      promptSampleConsent: elements.prompt.checked ? 'explicit' : 'not-granted',
+    });
+    return;
+  }
+  if (action.getAttribute('data-advice-action') === 'feedback') {
+    event.preventDefault();
+    var root = adviceRoot(provider);
+    if (!root) { return; }
+    root.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+      button.disabled = true;
+    });
+    var status = root.querySelector('[data-advice-feedback-status]');
+    if (status) { status.textContent = ''; }
+    vscode.postMessage({
+      command: 'recordAdviceFeedback',
+      provider: provider,
+      adviceId: action.getAttribute('data-advice-id'),
+      recommendationId: action.getAttribute('data-recommendation-id'),
+      kind: action.getAttribute('data-feedback-kind'),
+    });
+  }
+});
+
 // Handle messages from extension
 window.addEventListener('message', function(event) {
   const message = event.data;
+
+  if (message.command === 'adviceConsentResult') {
+    var consentProvider = message.provider;
+    var consentElements = adviceConsentElements(consentProvider);
+    if (consentElements.aggregate && consentElements.prompt) {
+      if (message.ok === true) {
+        consentElements.aggregate.checked = message.aggregateConsent === 'explicit';
+        consentElements.prompt.checked =
+          consentElements.aggregate.checked && message.promptSampleConsent === 'explicit';
+        adviceSetConsentPending(consentProvider, false);
+        if (consentElements.consentStatus) { consentElements.consentStatus.textContent = ''; }
+      } else {
+        consentElements.aggregate.checked = false;
+        consentElements.prompt.checked = false;
+        consentElements.aggregate.disabled = true;
+        consentElements.prompt.disabled = true;
+        if (consentElements.previewButton) { consentElements.previewButton.disabled = true; }
+        if (consentElements.consentStatus) {
+          consentElements.consentStatus.textContent = __adviceCopy.feedbackSaveFailed;
+        }
+      }
+    }
+  }
+
+  if (message.command === 'adviceSnapshotResult') {
+    var snapshotProvider = message.provider;
+    var snapshotElements = adviceConsentElements(snapshotProvider);
+    if (snapshotElements.previewButton) { snapshotElements.previewButton.disabled = false; }
+    var validSnapshot =
+      message.ok === true &&
+      typeof message.snapshotId === 'string' && /^snapshot-[a-f0-9]{24}$/.test(message.snapshotId) &&
+      typeof message.body === 'string' &&
+      typeof message.sha256 === 'string' && /^[a-f0-9]{64}$/.test(message.sha256) &&
+      Number.isInteger(message.utf8Bytes) && message.utf8Bytes >= 0 &&
+      Number.isInteger(message.promptSampleCount) && message.promptSampleCount >= 0 &&
+      message.contentType === 'application/json' &&
+      (message.dataMode === 'aggregates-only' || message.dataMode === 'aggregates-with-prompt-samples');
+    if (!validSnapshot || !snapshotElements.preview) {
+      adviceClearPreview(snapshotProvider);
+      if (snapshotElements.consentStatus) {
+        snapshotElements.consentStatus.textContent = __adviceCopy.strictOutputRejected;
+      }
+    } else {
+      var preview = snapshotElements.preview;
+      var previewBody = preview.querySelector('[data-advice-preview-body]');
+      var previewDigest = preview.querySelector('[data-advice-preview-digest]');
+      var previewMode = preview.querySelector('[data-advice-preview-mode]');
+      var previewContentType = preview.querySelector('[data-advice-preview-content-type]');
+      var previewBytes = preview.querySelector('[data-advice-preview-bytes]');
+      var previewCount = preview.querySelector('[data-advice-preview-count]');
+      if (previewBody) { previewBody.textContent = message.body; }
+      if (previewDigest) { previewDigest.textContent = 'SHA-256 ' + message.sha256; }
+      if (previewContentType) { previewContentType.textContent = message.contentType; }
+      if (previewMode) {
+        previewMode.textContent = message.dataMode === 'aggregates-only'
+          ? __adviceCopy.aggregatesOnly
+          : __adviceCopy.aggregatesWithPromptSamples;
+      }
+      if (previewBytes) {
+        previewBytes.textContent = __adviceCopy.payloadBytes.replace('{bytes}', String(message.utf8Bytes));
+      }
+      if (previewCount) {
+        previewCount.textContent = __adviceCopy.promptSamplesIncluded.replace(
+          '{count}',
+          String(message.promptSampleCount),
+        );
+      }
+      preview.setAttribute('data-snapshot-id', message.snapshotId);
+      preview.hidden = false;
+      preview.open = true;
+      if (snapshotElements.consentStatus) {
+        snapshotElements.consentStatus.textContent = __adviceCopy.noNetworkTransport;
+      }
+    }
+    adviceSyncConsentControls(snapshotProvider);
+  }
+
+  if (message.command === 'adviceFeedbackResult') {
+    var feedbackProvider = message.provider;
+    var feedbackRoot = adviceRoot(feedbackProvider);
+    if (feedbackRoot) {
+      var feedbackStatus = feedbackRoot.querySelector('[data-advice-feedback-status]');
+      if (message.ok === true) {
+        feedbackRoot.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+          var kind = button.getAttribute('data-feedback-kind');
+          var selected =
+            (kind === 'helpful' && message.rating === 'helpful') ||
+            (kind === 'not-helpful' && message.rating === 'not-helpful') ||
+            (kind === 'applied' && message.applied === 'applied');
+          button.disabled = false;
+          button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+          button.classList.toggle('is-selected', selected);
+          var marker = button.querySelector('[aria-hidden="true"]');
+          if (marker) { marker.textContent = selected ? '✓' : '○'; }
+        });
+        if (feedbackStatus) { feedbackStatus.textContent = __adviceCopy.feedbackLocalOnly; }
+      } else {
+        if (feedbackStatus) { feedbackStatus.textContent = __adviceCopy.feedbackSaveFailed; }
+      }
+    }
+  }
 
   if (message.command === 'shareCardResult') {
     const prev = document.getElementById('scPreview');

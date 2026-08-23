@@ -35,6 +35,7 @@ export type AdviceMetricUnit =
   | 'count'
   | 'tokens'
   | 'ratio'
+  | 'multiple'
   | 'percent'
   | 'milliseconds'
   | 'usd-estimate'
