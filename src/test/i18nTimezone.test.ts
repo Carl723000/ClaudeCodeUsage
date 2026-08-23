@@ -32,7 +32,7 @@ test('every locale implements complete non-English Codex product copy', () => {
     'coverage', 'usageLimits', 'fiveHourWindow', 'weeklyWindow', 'used',
     'remaining', 'localLogNotLive', 'observedSessionDuration', 'indexedLogEntries',
     'indexedStorage', 'indexedAllTime', 'updatedAt', 'claudeTokenAccounting',
-    'codexTokenAccounting',
+    'codexTokenAccounting', 'apiEquivalentCost', 'apiEquivalentCostHelp',
   ] as const;
   const previous = I18n.getCurrentLanguage();
   try {

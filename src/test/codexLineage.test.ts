@@ -550,7 +550,21 @@ test('schema v2 reload rebuilds lineage without retaining or doubling old totals
     assert.ok(Object.values(loaded.files).every((file) =>
       file.qualityFlags.includes('stale-reset-required'),
     ));
-    const rebuilt = await updateCodexIndex(loaded, manifest, {
+    assert.equal(loaded.aggregate.total.inputTotal, 0);
+    assert.equal(loaded.coverage.indexedFiles, 0);
+    assert.equal(loaded.coverage.indexedBytes, 0);
+    assert.equal(loaded.coverage.period.allTime.migratedFiles, 0);
+    assert.equal(loaded.coverage.period.allTime.migratedBytes, 0);
+    const pending = await updateCodexIndex(loaded, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => NOW,
+      budget: { maxFilePasses: 0, maxBytes: 32 * 1024 * 1024 },
+    });
+    assert.equal(pending.index.aggregate.total.inputTotal, 0);
+    assert.equal(pending.index.coverage.indexedFiles, 0);
+    assert.equal(pending.index.coverage.indexedBytes, 0);
+    const rebuilt = await updateCodexIndex(pending.index, manifest, {
       salt: SALT,
       timeZone: 'UTC',
       now: () => NOW,

@@ -1,8 +1,12 @@
 import { parentPort } from 'node:worker_threads';
 
 import {
-  CODEX_REFRESH_MAX_BYTES,
-  CODEX_REFRESH_MAX_FILE_PASSES,
+  CODEX_REFRESH_BACKFILL_MAX_BYTES,
+  CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES,
+  CODEX_REFRESH_BACKGROUND_MAX_BYTES,
+  CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES,
+  CODEX_REFRESH_FOREGROUND_MAX_BYTES,
+  CODEX_REFRESH_FOREGROUND_MAX_FILE_PASSES,
   CodexIndexCancelledError,
   CodexIndexRecovery,
   loadCodexIndex,
@@ -23,6 +27,17 @@ import {
 
 const cancelled = new Set<string>();
 let activeRequestId: string | null = null;
+
+function needsExpeditedBackfill(
+  previous: Awaited<ReturnType<typeof loadCodexIndex>>,
+  manifestFiles: number,
+): boolean {
+  const firstNonEmptyIndex =
+    manifestFiles > 0 && Object.keys(previous.files).length === 0;
+  return firstNonEmptyIndex ||
+    !previous.coverage.complete ||
+    !previous.coverage.period.allTime.complete;
+}
 
 function post(message: CodexWorkerMessage): void {
   parentPort?.postMessage(message);
@@ -94,13 +109,26 @@ export async function runCodexWorkerRefresh(
       ]);
       const metadataMs = now() - metadataStarted;
       const parseStarted = now();
+      const foreground = request.profile === 'foreground';
+      const expeditedBackfill = needsExpeditedBackfill(
+        previous,
+        manifest.files.length,
+      );
       const updated = await runtime.updateCodexIndex(previous, manifest, {
         salt: request.salt,
         timeZone: request.timeZone,
         now,
         budget: {
-          maxFilePasses: CODEX_REFRESH_MAX_FILE_PASSES,
-          maxBytes: CODEX_REFRESH_MAX_BYTES,
+          maxFilePasses: expeditedBackfill
+            ? CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES
+            : foreground
+            ? CODEX_REFRESH_FOREGROUND_MAX_FILE_PASSES
+            : CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES,
+          maxBytes: expeditedBackfill
+            ? CODEX_REFRESH_BACKFILL_MAX_BYTES
+            : foreground
+            ? CODEX_REFRESH_FOREGROUND_MAX_BYTES
+            : CODEX_REFRESH_BACKGROUND_MAX_BYTES,
         },
         shouldCancel: runtime.isCancelled,
         onCheckpoint: (index) =>

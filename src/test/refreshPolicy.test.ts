@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   commitRefreshSnapshot,
+  codexRefreshProfileForTrigger,
   CODEX_LIVE_REFRESH_SECONDS,
   LIVE_REFRESH_SECONDS,
   mergeRefreshTrigger,
@@ -45,6 +46,15 @@ test('live refresh keeps the 2-second default choices and adds long quiet delays
 
 test('Codex watcher defaults to quiet low-CPU delay choices', () => {
   assert.deepEqual(CODEX_LIVE_REFRESH_SECONDS, ['0', '10', '30', '60', '120', '300']);
+});
+
+test('only explicit foreground actions use the accelerated Codex index profile', () => {
+  assert.equal(codexRefreshProfileForTrigger('manual'), 'foreground');
+  for (const trigger of [
+    'startup', 'poll', 'credentials', 'watch', 'focus', 'workspace', 'settings', 'pricing',
+  ] as const) {
+    assert.equal(codexRefreshProfileForTrigger(trigger), 'background', trigger);
+  }
 });
 
 test('window activity emits one suspend and one resume transition', () => {

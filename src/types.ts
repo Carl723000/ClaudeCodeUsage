@@ -411,8 +411,8 @@ export interface ContextWindowInfo {
   cacheCreationTokens: number;
 }
 
-// OAuth credentials stored by Claude Code at ~/.claude/.credentials.json or in
-// the macOS Keychain.
+// OAuth credentials stored in the selected Claude profile's .credentials.json,
+// or in the macOS Keychain for the default profile.
 export interface ClaudeCredentials {
   claudeAiOauth: {
     accessToken: string;

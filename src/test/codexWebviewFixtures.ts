@@ -104,6 +104,44 @@ export function codexWebviewFixture(): CodexProviderSnapshot {
     ...base,
     files,
     total: sumTotals(files),
+    weeklyValueInputs: {
+      observations: [
+        {
+          provider: 'codex',
+          seriesKey: 'codex',
+          observedAt: CODEX_WEBVIEW_NOW - 26 * 60 * 60_000,
+          resetAt: CODEX_WEBVIEW_NOW - 24 * 60 * 60_000,
+          usedPercent: 75,
+        },
+        {
+          provider: 'codex',
+          seriesKey: 'codex',
+          observedAt: CODEX_WEBVIEW_NOW - 60_000,
+          resetAt: CODEX_WEBVIEW_NOW + 6 * 24 * 60 * 60_000,
+          usedPercent: 20,
+        },
+      ],
+      usage: [
+        {
+          timestamp: CODEX_WEBVIEW_NOW - 27 * 60 * 60_000,
+          equivalentUsd: 45,
+          pricedTokens: 1_000,
+          totalTokens: 1_000,
+        },
+        {
+          timestamp: CODEX_WEBVIEW_NOW - 25 * 60 * 60_000,
+          equivalentUsd: 5,
+          pricedTokens: 1_000,
+          totalTokens: 1_000,
+        },
+        {
+          timestamp: CODEX_WEBVIEW_NOW - 60 * 60_000,
+          equivalentUsd: 10,
+          pricedTokens: 1_000,
+          totalTokens: 1_000,
+        },
+      ],
+    },
     coverage: {
       ...base.coverage,
       indexedFiles: 24,
@@ -134,5 +172,30 @@ export function codexWebviewFixture(): CodexProviderSnapshot {
         ],
       },
     ],
+  };
+}
+
+export function unknownModelCodexWebviewFixture(): CodexProviderSnapshot {
+  const snapshot = codexWebviewFixture();
+  return {
+    ...snapshot,
+    files: snapshot.files.map((file) => ({
+      ...file,
+      byModel: { 'unknown-model-fixture': { ...file.total } },
+      period: file.period
+        ? {
+            ...file.period,
+            days: Object.fromEntries(
+              Object.entries(file.period.days).map(([dayKey, day]) => [
+                dayKey,
+                {
+                  ...day,
+                  byModel: { 'unknown-model-fixture': { ...day.total } },
+                },
+              ]),
+            ),
+          }
+        : undefined,
+    })),
   };
 }

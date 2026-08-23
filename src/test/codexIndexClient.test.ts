@@ -11,6 +11,12 @@ import {
   CodexWorkerLike,
 } from '../providers/codex/codexIndexClient';
 import {
+  CODEX_REFRESH_BACKFILL_MAX_BYTES,
+  CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES,
+  CODEX_REFRESH_BACKGROUND_MAX_BYTES,
+  CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES,
+  CODEX_REFRESH_FOREGROUND_MAX_BYTES,
+  CODEX_REFRESH_FOREGROUND_MAX_FILE_PASSES,
   CodexIndexProgress,
   CodexIndexV1,
   createEmptyCodexIndex,
@@ -109,6 +115,30 @@ test('concurrent refreshes share one worker run and report progress', async () =
   assert.equal(seen.length, 2);
   assert.strictEqual(seen[0], seen[1]);
   assert.deepEqual(seen[0].period, expectedPeriodCoverage);
+});
+
+test('a foreground refresh arriving during background work queues one accelerated follow-up', async () => {
+  const worker = new FakeWorker();
+  const client = new CodexIndexClient(() => worker);
+  const background = client.refresh({ ...request, profile: 'background' });
+  const foreground = client.refresh({ ...request, profile: 'foreground' });
+  assert.equal(worker.requests.length, 1);
+
+  const first = worker.requests[0];
+  assert.equal(first.type, 'refresh');
+  if (first.type !== 'refresh') throw new Error('expected refresh');
+  worker.emitMessage({ type: 'result', requestId: first.requestId, result: result() });
+  await background;
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(worker.requests.length, 2);
+  const second = worker.requests[1];
+  assert.equal(second.type, 'refresh');
+  if (second.type !== 'refresh') throw new Error('expected refresh');
+  assert.equal(second.profile, 'foreground');
+  worker.emitMessage({ type: 'result', requestId: second.requestId, result: result() });
+  await foreground;
+  client.dispose();
 });
 
 test('cancel sends exactly one message for the active request', async () => {
@@ -353,6 +383,111 @@ test('unchanged worker refresh skips the final atomic index write', async () => 
   const resultMessage = messages.find((message) => message.type === 'result');
   assert.ok(resultMessage && resultMessage.type === 'result');
   assert.equal((resultMessage.result as any).indexChanged, false);
+});
+
+test('worker keeps background refresh bounded and accelerates only the foreground profile', async () => {
+  const savedIndex = createEmptyCodexIndex(request.timeZone);
+  const budgets: Array<{ maxFilePasses: number; maxBytes: number }> = [];
+  for (const profile of ['background', 'foreground'] as const) {
+    await runCodexWorkerRefresh(
+      { type: 'refresh', requestId: `budget-${profile}`, ...request, profile },
+      {
+        isCancelled: () => false,
+        post: () => undefined,
+        acquireCodexIndexLease: async () => ({ release: async () => undefined }),
+        loadCodexIndex: async () => savedIndex,
+        scanCodexManifest: async () => ({ files: [], persistable: {} }),
+        updateCodexIndex: async (_previous, _manifest, options) => {
+          budgets.push(options.budget!);
+          return {
+            index: savedIndex,
+            indexChanged: false,
+            bodyReads: 0,
+            failedFiles: 0,
+            migration: { filePasses: 0, bytesRead: 0, pending: false },
+          };
+        },
+        saveCodexIndexAtomic: async () => undefined,
+      },
+    );
+  }
+  assert.deepEqual(budgets, [
+    {
+      maxFilePasses: CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES,
+      maxBytes: CODEX_REFRESH_BACKGROUND_MAX_BYTES,
+    },
+    {
+      maxFilePasses: CODEX_REFRESH_FOREGROUND_MAX_FILE_PASSES,
+      maxBytes: CODEX_REFRESH_FOREGROUND_MAX_BYTES,
+    },
+  ]);
+  assert.ok(CODEX_REFRESH_FOREGROUND_MAX_BYTES > CODEX_REFRESH_BACKGROUND_MAX_BYTES);
+  assert.equal(CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES, 64);
+  assert.equal(CODEX_REFRESH_BACKGROUND_MAX_BYTES, 128 * 1024 * 1024);
+  assert.equal(CODEX_REFRESH_FOREGROUND_MAX_FILE_PASSES, 512);
+  assert.equal(CODEX_REFRESH_FOREGROUND_MAX_BYTES, 2 * 1024 * 1024 * 1024);
+});
+
+test('worker gives first-time and incomplete backfills one streaming pass before returning to steady budgets', async () => {
+  const firstIndex = createEmptyCodexIndex(request.timeZone);
+  const incompleteIndex = createEmptyCodexIndex(request.timeZone);
+  incompleteIndex.coverage.complete = false;
+  incompleteIndex.coverage.period.allTime.complete = false;
+  const manifest = {
+    files: [{
+      fileKey: 'first-log',
+      absolutePath: '/private/runtime-only-codex-home/sessions/first.jsonl',
+      nonPersisted: true as const,
+      sourceArea: 'sessions' as const,
+      size: 14 * 1024 * 1024 * 1024,
+      mtimeMs: 1,
+    }],
+    persistable: {
+      'first-log': {
+        fileKey: 'first-log',
+        sourceArea: 'sessions' as const,
+        size: 14 * 1024 * 1024 * 1024,
+        mtimeMs: 1,
+      },
+    },
+  };
+  const budgets: Array<{ maxFilePasses: number; maxBytes: number }> = [];
+  for (const previous of [firstIndex, incompleteIndex]) {
+    await runCodexWorkerRefresh(
+      { type: 'refresh', requestId: `backfill-${budgets.length}`, ...request },
+      {
+        isCancelled: () => false,
+        post: () => undefined,
+        acquireCodexIndexLease: async () => ({ release: async () => undefined }),
+        loadCodexIndex: async () => previous,
+        scanCodexManifest: async () => manifest,
+        updateCodexIndex: async (_previous, _manifest, options) => {
+          budgets.push(options.budget!);
+          return {
+            index: previous,
+            indexChanged: false,
+            bodyReads: 0,
+            failedFiles: 0,
+            migration: { filePasses: 0, bytesRead: 0, pending: true },
+          };
+        },
+        saveCodexIndexAtomic: async () => undefined,
+      },
+    );
+  }
+
+  assert.deepEqual(budgets, [
+    {
+      maxFilePasses: CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES,
+      maxBytes: CODEX_REFRESH_BACKFILL_MAX_BYTES,
+    },
+    {
+      maxFilePasses: CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES,
+      maxBytes: CODEX_REFRESH_BACKFILL_MAX_BYTES,
+    },
+  ]);
+  assert.equal(CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES, 16_384);
+  assert.equal(CODEX_REFRESH_BACKFILL_MAX_BYTES, 64 * 1024 * 1024 * 1024);
 });
 
 test('worker lease encloses index load, manifest scan, and refresh', async () => {

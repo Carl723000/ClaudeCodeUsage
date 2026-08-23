@@ -125,6 +125,12 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
     const codexOnly = [...codexClasses].filter((className) => !claudeClasses.has(className)).sort();
 
     assert.deepEqual(codexOnly, []);
+    const equivalentCostIndex = codexHtml.indexOf('API-equivalent cost');
+    const processedIndex = codexHtml.indexOf('Processed');
+    assert.ok(equivalentCostIndex >= 0, 'Codex summary shows API-equivalent cost');
+    assert.ok(equivalentCostIndex < processedIndex, 'API-equivalent cost is the first summary card');
+    assert.match(codexHtml, /≈\s*\$[\d,.]+/);
+    assert.match(codexHtml, /not a bill or subscription charge/);
     assert.match(
       codexHtml,
       /Parent session log missing; conservative usage retained[^<]*1/,
@@ -162,6 +168,51 @@ test('dashboard provider defaults preserve Claude and support Codex-only install
   assert.equal(defaultDashboardProvider(false, true), 'codex');
   assert.equal(defaultDashboardProvider(true, true), 'claude');
   assert.equal(defaultDashboardProvider(false, false), 'claude');
+});
+
+test('Codex tab stays visible while its first index is still running', () => {
+  const originalLoad = (Module as any)._load;
+  const originalLanguage = I18n.getCurrentLanguage();
+  I18n.setLanguage('en');
+  (Module as any)._load = function(request: string, parent: unknown, isMain: boolean) {
+    if (request === 'vscode') {
+      return { workspace: { workspaceFolders: [] } };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    const { UsageWebviewProvider } = require('../webview') as typeof import('../webview');
+    const provider = new UsageWebviewProvider({} as any) as any;
+    provider.todayData = claudeUsageFixture();
+    provider.updateProviderData(
+      null,
+      {} as any,
+      {
+        claude: true,
+        codex: true,
+        codexData: false,
+        codexLoading: true,
+        codexProgress: {
+          scannedFiles: 1_566,
+          totalFiles: 1_827,
+          indexedBytes: 1_024,
+          totalBytes: 4_096,
+        },
+      },
+    );
+    provider.currentProvider = 'codex';
+
+    const html = provider.getMainContent();
+    assert.match(html, /id="provider-tab-codex"/);
+    assert.doesNotMatch(html, /id="provider-tab-compare"/);
+    assert.match(html, /Indexing is still in progress/);
+    assert.match(html, /Indexed log entries[^<]*1,566\/1,827 \(86%\)/);
+    assert.doesNotMatch(html, /1\.6K\/1\.8K/);
+    assert.match(html, /Indexed storage[^<]*1kB\/4kB/i);
+  } finally {
+    I18n.setLanguage(originalLanguage);
+    (Module as any)._load = originalLoad;
+  }
 });
 
 test('webview provider changes are allowlisted and kept outside time tabs', () => {
@@ -270,6 +321,16 @@ test('provider and Codex view copy is complete in every UI locale', () => {
     'de-DE': ['Eingabe ohne Cache', 'Nutzung ohne Cache', 'Verarbeitet', 'Eingabe', 'Gecachte Eingabe', 'Ausgabe', 'Reasoning'],
     id: ['Input tanpa cache', 'Penggunaan tanpa cache', 'Diproses', 'Input', 'Input cache', 'Output', 'Penalaran'],
   };
+  const equivalentCostLabels: Record<SupportedLanguage, string> = {
+    en: 'API-equivalent cost',
+    'de-DE': 'API-äquivalente Kosten',
+    'zh-TW': 'API 等效成本',
+    'zh-CN': 'API 等效成本',
+    ja: 'API 等価コスト',
+    ko: 'API 등가 비용',
+    'pt-BR': 'Custo equivalente de API',
+    id: 'Biaya ekuivalen API',
+  };
   try {
     for (const language of languages) {
       I18n.setLanguage(language);
@@ -296,6 +357,7 @@ test('provider and Codex view copy is complete in every UI locale', () => {
         ],
         tokenTerms[language],
       );
+      assert.equal(providers.codex.apiEquivalentCost, equivalentCostLabels[language]);
       if (language !== 'en') {
         for (const key of [
           'allTime',

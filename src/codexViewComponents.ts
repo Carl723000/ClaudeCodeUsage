@@ -79,6 +79,8 @@ export interface CodexViewCopy {
   projects: string;
   projectLabel: string;
   processed: string;
+  apiEquivalentCost: string;
+  apiEquivalentCostHelp: string;
   fresh: string;
   input: string;
   cachedInput: string;
@@ -144,6 +146,8 @@ export interface CodexViewCopy {
   indexedLogEntries: string;
   indexedStorage: string;
   indexedAllTime: string;
+  indexedSubtotal: string;
+  indexingInProgress: string;
   updatedAt: string;
   claudeTokenAccounting: string;
   codexTokenAccounting: string;
@@ -203,6 +207,8 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   projects: 'Projects',
   projectLabel: 'Project',
   processed: 'Processed',
+  apiEquivalentCost: 'API-equivalent cost',
+  apiEquivalentCostHelp: 'Estimated from currently indexed tokens at current official API rates; not a bill or subscription charge. Priced model coverage: {coverage}.',
   fresh: 'Uncached usage',
   input: 'Input',
   cachedInput: 'Cached input',
@@ -274,10 +280,13 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   used: 'used',
   remaining: 'remaining',
   localLogNotLive: 'Local log · not live',
-  accountSnapshotLastObserved: 'Account snapshot · last observed',
+  accountSnapshotLastObserved:
+    'Usage combines sign-ins in this Codex home · limits are last observed, not combined',
   limitExpired: 'Expired / stale last-observed limit',
   limitMissing: 'No locally observed usage limit',
   observedSessionDuration: 'Elapsed span between the first and last observed events; a proxy, not actual active time.',
+  indexedSubtotal: 'Indexed subtotal',
+  indexingInProgress: 'Indexing is still in progress; unverified legacy totals are excluded.',
   indexedLogEntries: 'Indexed log entries',
   indexedStorage: 'Indexed storage',
   indexedAllTime: 'Indexed all time',

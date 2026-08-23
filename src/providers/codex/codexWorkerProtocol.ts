@@ -10,6 +10,8 @@ export interface CodexWorkerRefreshInput {
   indexPath: string;
   salt: string;
   timeZone: string;
+  /** Controls the steady-state budget after any first-time/migration backfill. */
+  profile?: 'background' | 'foreground';
 }
 
 export type CodexWorkerRequest =

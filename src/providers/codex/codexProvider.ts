@@ -7,12 +7,15 @@ import {
   ProviderTokenCounts,
 } from '../providerTypes';
 import {
+  CodexFileContribution,
   CodexFileAggregate,
   CodexIndexCoverage,
   CodexIndexProgress,
   CodexIndexRecovery,
   CodexIndexV1,
   createEmptyCodexIndex,
+  isCodexUsageContributionCurrent,
+  loadCodexIndex,
 } from './codexIndex';
 import { CodexIndexClient } from './codexIndexClient';
 import {
@@ -21,6 +24,11 @@ import {
 } from './codexWorkerProtocol';
 import { loadCodexSessionTitles } from './codexIdentity';
 import { classifyCodexSessionDuplicates } from './codexDedup';
+import {
+  equivalentUsageFromProviderTokens,
+  WeeklyQuotaObservation,
+  WeeklyValueInputs,
+} from '../../weeklyValue';
 
 export interface CodexProviderOptions extends CodexWorkerRefreshInput {
   enabled: boolean;
@@ -42,6 +50,8 @@ export interface CodexProviderSnapshot {
   qualityFlags: Record<string, number>;
   limits: ProviderLimitSnapshot[];
   limit: ProviderLimitSnapshot | null;
+  /** Aggregate-only inputs for reset-aligned API-equivalent value estimates. */
+  weeklyValueInputs?: WeeklyValueInputs;
 }
 
 export interface CodexProviderResult {
@@ -128,6 +138,74 @@ function aggregateTotal(
   return total;
 }
 
+function isAccountWideCodexLimit(snapshot: ProviderLimitSnapshot): boolean {
+  const id = (snapshot.limitId ?? '').trim().toLowerCase();
+  const name = (snapshot.limitName ?? '').trim().toLowerCase();
+  return id === 'codex' || name === 'codex' || (!name && id === '');
+}
+
+function codexWeeklyValueInputs(
+  files: CodexFileContribution[],
+): WeeklyValueInputs {
+  const observations: WeeklyQuotaObservation[] = [];
+  const usage: WeeklyValueInputs['usage'] = [];
+  for (const file of files) {
+    const sourceKey = file.fileKey;
+    const seenSnapshots = new Set<string>();
+    for (const snapshot of [
+      ...Object.values(file.limits ?? {}),
+      ...(file.limit ? [file.limit] : []),
+    ]) {
+      if (!isAccountWideCodexLimit(snapshot)) {
+        continue;
+      }
+      const seriesKey = snapshot.limitId ?? snapshot.limitName ?? 'codex';
+      for (const window of snapshot.windows) {
+        if (
+          window.windowMinutes !== 7 * 24 * 60 ||
+          window.resetsAt === undefined
+        ) {
+          continue;
+        }
+        const identity = [
+          seriesKey,
+          snapshot.observedAt,
+          window.resetsAt,
+          window.usedPercent,
+        ].join('|');
+        if (seenSnapshots.has(identity)) {
+          continue;
+        }
+        seenSnapshots.add(identity);
+        observations.push({
+          provider: 'codex',
+          seriesKey,
+          ...(snapshot.limitName ? { seriesLabel: snapshot.limitName } : {}),
+          observedAt: snapshot.observedAt,
+          resetAt: window.resetsAt,
+          usedPercent: window.usedPercent,
+          sourceKey,
+        });
+      }
+    }
+    for (const slice of Object.values(file.aggregate.period?.days ?? {})) {
+      const timestamp = slice.lastObservedAt ?? slice.firstObservedAt;
+      if (timestamp === undefined) {
+        continue;
+      }
+      for (const [model, tokens] of Object.entries(slice.byModel)) {
+        usage.push(equivalentUsageFromProviderTokens(
+          timestamp,
+          model,
+          tokens,
+          sourceKey,
+        ));
+      }
+    }
+  }
+  return { observations, usage };
+}
+
 function snapshotFromIndex(
   index: CodexIndexV1,
   sessionTitles: Map<string, string> = new Map(),
@@ -138,7 +216,16 @@ function snapshotFromIndex(
   const contributions = [...canonicalFileKeys]
     .map((fileKey) => index.files[fileKey])
     .filter((file): file is CodexIndexV1['files'][string] => file !== undefined);
-  const files = contributions
+  const usageContributions = contributions.filter((contribution) =>
+    isCodexUsageContributionCurrent(contribution) &&
+    !contribution.lineageReconciliation &&
+    (
+      !contribution.lineage ||
+      contribution.lineage.appliedPrefixEvents ===
+        contribution.lineage.desiredPrefixEvents
+    ),
+  );
+  const files = usageContributions
     .map((file) => ({
       ...file.aggregate,
       session: {
@@ -153,12 +240,13 @@ function snapshotFromIndex(
   const limits = latestLimits(contributions);
   return {
     provider: 'codex',
-    total: aggregateTotal(contributions),
+    total: aggregateTotal(usageContributions),
     files,
     coverage: index.coverage,
     qualityFlags: qualityCounts(contributions),
     limits,
     limit: limits[0] ?? null,
+    weeklyValueInputs: codexWeeklyValueInputs(usageContributions),
   };
 }
 
@@ -175,6 +263,8 @@ export class CodexProvider {
   private client: CodexIndexClientLike | null = null;
   private currentSnapshot: CodexProviderSnapshot | null = null;
   private lastProgress: CodexIndexProgress | undefined;
+  private snapshotGeneration = 0;
+  private persistedSnapshotLoad: Promise<CodexProviderSnapshot | null> | null = null;
 
   constructor(
     private readonly options: CodexProviderOptions,
@@ -195,7 +285,58 @@ export class CodexProvider {
     return sessions || archive;
   }
 
-  async refresh(): Promise<CodexProviderResult> {
+  /**
+   * Hydrate the last atomically checkpointed subtotal without starting the
+   * worker. This keeps the dashboard useful while a long cold backfill or
+   * lineage reconciliation continues in the background.
+   */
+  async loadPersistedSnapshot(): Promise<CodexProviderSnapshot | null> {
+    if (this.currentSnapshot) {
+      return this.currentSnapshot;
+    }
+    if (this.persistedSnapshotLoad) {
+      return this.persistedSnapshotLoad;
+    }
+    const generation = this.snapshotGeneration;
+    const pending = (async (): Promise<CodexProviderSnapshot | null> => {
+      if (!(await this.isAvailable())) {
+        return null;
+      }
+      try {
+        const [index, sessionTitles] = await Promise.all([
+          loadCodexIndex(this.options.indexPath, this.options.timeZone),
+          loadCodexSessionTitles(this.options.codexHome, this.options.salt),
+        ]);
+        if (
+          index.coverage.totalFiles === 0 &&
+          Object.keys(index.files).length === 0
+        ) {
+          return null;
+        }
+        const snapshot = snapshotFromIndex(index, sessionTitles);
+        if (generation !== this.snapshotGeneration) {
+          return this.currentSnapshot;
+        }
+        this.currentSnapshot = snapshot;
+        return snapshot;
+      } catch {
+        return this.currentSnapshot;
+      }
+    })();
+    this.persistedSnapshotLoad = pending;
+    try {
+      return await pending;
+    } finally {
+      if (this.persistedSnapshotLoad === pending) {
+        this.persistedSnapshotLoad = null;
+      }
+    }
+  }
+
+  async refresh(
+    profile: 'background' | 'foreground' = 'background',
+    onProgress?: (progress: CodexIndexProgress) => void,
+  ): Promise<CodexProviderResult> {
     if (!(await this.isAvailable())) {
       return {
         outcome: 'unavailable',
@@ -211,15 +352,18 @@ export class CodexProvider {
           indexPath: this.options.indexPath,
           salt: this.options.salt,
           timeZone: this.options.timeZone,
+          profile,
         },
         (progress) => {
           this.lastProgress = progress;
+          onProgress?.(progress);
         },
       );
       const sessionTitles = await loadCodexSessionTitles(
         this.options.codexHome,
         this.options.salt,
       );
+      this.snapshotGeneration += 1;
       this.currentSnapshot = snapshotFromIndex(result.index, sessionTitles);
       const outcome: ProviderSourceOutcome =
         result.failedFiles > 0 ||
@@ -259,6 +403,7 @@ export class CodexProvider {
   }
 
   dispose(): void {
+    this.snapshotGeneration += 1;
     this.client?.dispose();
     this.client = null;
   }

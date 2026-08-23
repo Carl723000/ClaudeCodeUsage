@@ -109,6 +109,18 @@ export interface CodexFileContribution {
   periodMigration?: CodexPeriodMigrationState;
 }
 
+/**
+ * A reset-required contribution may have been computed with an obsolete
+ * lineage algorithm and is unsafe to present until rebuilt. A plain
+ * `stale-file` contribution is different: an append read failed after its
+ * previously verified prefix, so that conservative prefix remains usable.
+ */
+export function isCodexUsageContributionCurrent(
+  contribution: CodexFileContribution,
+): boolean {
+  return !contribution.qualityFlags.includes('stale-reset-required');
+}
+
 export interface CodexLineageReconciliationState extends CodexJsonlCursor {
   prefixEvents: number;
   tokenEventsSeen: number;
@@ -117,8 +129,16 @@ export interface CodexLineageReconciliationState extends CodexJsonlCursor {
   qualityFlags: string[];
 }
 
-export const CODEX_REFRESH_MAX_FILE_PASSES = 16;
-export const CODEX_REFRESH_MAX_BYTES = 32 * 1024 * 1024;
+// A first-time or legacy backfill receives one large streaming ceiling so a
+// multi-gigabyte corpus can converge without hundreds of refresh cycles. This
+// is an I/O limit, not a memory allocation. Once coverage is current, recurring
+// work returns to the bounded background/foreground ceilings below.
+export const CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES = 16_384;
+export const CODEX_REFRESH_BACKFILL_MAX_BYTES = 64 * 1024 * 1024 * 1024;
+export const CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES = 64;
+export const CODEX_REFRESH_BACKGROUND_MAX_BYTES = 128 * 1024 * 1024;
+export const CODEX_REFRESH_FOREGROUND_MAX_FILE_PASSES = 512;
+export const CODEX_REFRESH_FOREGROUND_MAX_BYTES = 2 * 1024 * 1024 * 1024;
 export const CODEX_REFRESH_MIN_BYTES = CODEX_MAX_JSONL_LINE_BYTES + 1;
 
 export interface CodexIndexWorkBudget {
@@ -1234,7 +1254,7 @@ function recomputeAggregate(
   const aggregate = emptyAggregate();
   for (const fileKey of deduplication.canonicalFileKeys) {
     const file = files[fileKey];
-    if (!file) {
+    if (!file || !isCodexUsageContributionCurrent(file)) {
       continue;
     }
     addTokens(aggregate.total, file.aggregate.total);
@@ -1273,6 +1293,7 @@ function coverageFor(
       : Math.max(0, Math.min(contribution.offset, entry.size));
     indexedBytes += parsedBytes;
     if (
+      !resetIsStale &&
       !flags.has('stale-file') &&
       contribution.offset >= entry.size &&
       !contribution.discardingOversizedLine &&
@@ -1319,19 +1340,25 @@ function coverageFor(
       }
       rangeTotalFiles += 1;
       rangeTotalBytes += entry.size;
-      const promoted = contribution?.aggregate.period?.timeZone === timeZone
+      const periodIsCurrent = Boolean(
+        contribution && isCodexUsageContributionCurrent(contribution),
+      );
+      const promoted = periodIsCurrent &&
+        contribution?.aggregate.period?.timeZone === timeZone
         ? Math.min(
             contribution.aggregate.period.indexedThrough,
             contribution.offset,
             entry.size,
           )
         : 0;
-      const draft = contribution?.periodMigration?.timeZone === timeZone
+      const draft = periodIsCurrent &&
+        contribution?.periodMigration?.timeZone === timeZone
         ? Math.min(contribution.periodMigration.offset, contribution.offset, entry.size)
         : 0;
       const migrated = Math.max(0, Math.max(promoted, draft));
       migratedBytes += migrated;
       if (
+        periodIsCurrent &&
         contribution &&
         contribution.offset >= entry.size &&
         !contribution.discardingOversizedLine &&
@@ -1473,15 +1500,20 @@ export async function updateCodexIndex(
     maxFilePasses: Math.max(
       0,
       Math.min(
-        CODEX_REFRESH_MAX_FILE_PASSES,
-        Math.floor(options.budget?.maxFilePasses ?? CODEX_REFRESH_MAX_FILE_PASSES),
+        CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES,
+        Math.floor(
+          options.budget?.maxFilePasses ??
+          CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES,
+        ),
       ),
     ),
     maxBytes: Math.max(
       0,
       Math.min(
-        CODEX_REFRESH_MAX_BYTES,
-        Math.floor(options.budget?.maxBytes ?? CODEX_REFRESH_MAX_BYTES),
+        CODEX_REFRESH_BACKFILL_MAX_BYTES,
+        Math.floor(
+          options.budget?.maxBytes ?? CODEX_REFRESH_BACKGROUND_MAX_BYTES,
+        ),
       ),
     ),
   };
@@ -2447,11 +2479,22 @@ function markLineageRescanRequired(index: CodexIndexV3): CodexIndexV3 {
     );
     contribution.identityChecked = false;
   }
+  index.aggregate = emptyAggregate();
+  index.coverage.indexedFiles = 0;
+  index.coverage.indexedBytes = 0;
   index.coverage.complete = false;
+  index.coverage.identity.exactDuplicateFiles = 0;
+  index.coverage.identity.ambiguousSessionGroups = 0;
   index.coverage.identity.complete = false;
-  index.coverage.period.last7Days.complete = false;
-  index.coverage.period.last30Days.complete = false;
-  index.coverage.period.allTime.complete = false;
+  for (const range of [
+    index.coverage.period.last7Days,
+    index.coverage.period.last30Days,
+    index.coverage.period.allTime,
+  ]) {
+    range.migratedFiles = 0;
+    range.migratedBytes = 0;
+    range.complete = false;
+  }
   return index;
 }
 

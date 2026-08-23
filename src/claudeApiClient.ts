@@ -6,6 +6,60 @@ import * as vscode from 'vscode';
 import { HttpResponse, requestViaCurl, requestViaFetch } from './httpClient';
 import { ClaudeApiUsageResponse, ClaudeCredentials } from './types';
 
+export interface ResolvedClaudeProfile {
+  configDirectory: string;
+  credentialsPath: string;
+  source: 'explicit' | 'environment' | 'default';
+  allowKeychainFallback: boolean;
+}
+
+function isDirectory(candidate: string): boolean {
+  try {
+    return fs.existsSync(candidate) && fs.statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/** Resolve the Claude profile represented by this editor window. An explicit
+ * dataDirectory wins even when its credentials file is currently absent: the
+ * quota must become unavailable rather than silently switching accounts. */
+export function resolveClaudeProfile(
+  dataDirectory?: string | null,
+  env: NodeJS.ProcessEnv = process.env,
+  homeDirectory: string = os.homedir(),
+  directoryExists: (candidate: string) => boolean = isDirectory,
+): ResolvedClaudeProfile {
+  const defaultDirectory = path.resolve(homeDirectory, '.claude');
+  const explicit = dataDirectory?.trim();
+  let configDirectory: string;
+  let source: ResolvedClaudeProfile['source'];
+
+  if (explicit) {
+    configDirectory = path.resolve(explicit);
+    source = 'explicit';
+  } else {
+    const environmentDirectory = (env.CLAUDE_CONFIG_DIR ?? '')
+      .split(',')
+      .map((candidate) => candidate.trim())
+      .filter((candidate) => candidate !== '')
+      .map((candidate) => path.resolve(candidate))
+      .find(directoryExists);
+    configDirectory = environmentDirectory ?? defaultDirectory;
+    source = environmentDirectory ? 'environment' : 'default';
+  }
+
+  return {
+    configDirectory,
+    credentialsPath: path.join(configDirectory, '.credentials.json'),
+    source,
+    // Claude Code exposes one global macOS Keychain item. It is safe only for
+    // the default profile; using it for a custom profile can show and refresh
+    // a different account's credentials (#89).
+    allowKeychainFallback: configDirectory === defaultDirectory,
+  };
+}
+
 // Fetches real 5-hour / weekly limit utilisation from Anthropic's OAuth usage
 // endpoint, reusing the credentials Claude Code already stores. This mirrors
 // what the `/usage` command shows. Approach adapted from upstream PR #9
@@ -23,6 +77,7 @@ import { ClaudeApiUsageResponse, ClaudeCredentials } from './types';
 
 export class ClaudeApiClient {
   private readonly credentialsPath: string;
+  private readonly allowKeychainFallback: boolean;
   private credentials: ClaudeCredentials | null = null;
   private credentialsSource: 'file' | 'keychain' | null = null;
   private rateLimitedUntil: number = 0;
@@ -31,8 +86,13 @@ export class ClaudeApiClient {
   // paying the cost of a doomed fetch attempt on every refresh.
   private preferCurl: boolean = false;
 
-  constructor(out: vscode.OutputChannel | null = null) {
-    this.credentialsPath = path.join(os.homedir(), '.claude', '.credentials.json');
+  constructor(
+    out: vscode.OutputChannel | null = null,
+    dataDirectory?: string | null,
+  ) {
+    const profile = resolveClaudeProfile(dataDirectory);
+    this.credentialsPath = profile.credentialsPath;
+    this.allowKeychainFallback = profile.allowKeychainFallback;
     this.out = out;
   }
 
@@ -47,7 +107,9 @@ export class ClaudeApiClient {
     try {
       if (!fs.existsSync(this.credentialsPath)) {
         this.log(`credentials: missing at ${this.credentialsPath}`);
-        return this.loadCredentialsFromKeychain();
+        return this.allowKeychainFallback
+          ? this.loadCredentialsFromKeychain()
+          : null;
       }
       const content = await fs.promises.readFile(this.credentialsPath, 'utf-8');
       const parsed = JSON.parse(content) as ClaudeCredentials;

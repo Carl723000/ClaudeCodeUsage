@@ -17,6 +17,14 @@ export type RefreshTrigger =
   | 'pricing'
   | 'manual';
 
+/** Keep recurring Codex work small; a direct user refresh receives the larger
+ * steady-state ceiling. First-time/migration backfill is selected by the worker. */
+export function codexRefreshProfileForTrigger(
+  trigger: RefreshTrigger,
+): 'background' | 'foreground' {
+  return trigger === 'manual' ? 'foreground' : 'background';
+}
+
 export type WindowActivityTransition = 'none' | 'resume' | 'suspend';
 
 export class WindowActivityGate {

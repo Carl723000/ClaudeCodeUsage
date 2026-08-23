@@ -8,6 +8,28 @@ export interface ProviderTranslations {
   codex: CodexViewCopy;
 }
 
+export interface WeeklyValueCopy {
+  title: string;
+  description: string;
+  usedValue: string;
+  fullValue: string;
+  unusedValue: string;
+  reset: string;
+  utilization: string;
+  confidence: string;
+  pricingCoverage: string;
+  current: string;
+  high: string;
+  medium: string;
+  low: string;
+  usageOnly: string;
+  noData: string;
+  historyFromLogs: string;
+  calendarFallback: string;
+  multiAccount: string;
+  indexedSubtotal: string;
+}
+
 export interface Translations {
   statusBar: {
     loading: string;
@@ -21,6 +43,7 @@ export interface Translations {
     v230: string;
   };
   providers: ProviderTranslations;
+  weeklyValue: WeeklyValueCopy;
   popup: {
     title: string;
     currentSession: string;
@@ -463,6 +486,8 @@ type CodexTask8CopyKey =
   | 'indexedLogEntries'
   | 'indexedStorage'
   | 'indexedAllTime'
+  | 'indexedSubtotal'
+  | 'indexingInProgress'
   | 'updatedAt'
   | 'claudeTokenAccounting'
   | 'codexTokenAccounting'
@@ -480,6 +505,8 @@ const TASK8_CODEX_COPY: Record<
     indexedLogEntries: 'Indexierte Protokolleinträge',
     indexedStorage: 'Indexierter Speicher',
     indexedAllTime: 'Indexierter Gesamtzeitraum',
+    indexedSubtotal: 'Indizierte Zwischensumme',
+    indexingInProgress: 'Die Indexierung läuft noch; nicht verifizierte Altsummen werden ausgeschlossen.',
     updatedAt: 'Aktualisiert um',
     claudeTokenAccounting: 'Claude-Token-Zählung',
     codexTokenAccounting: 'Codex-Token-Zählung',
@@ -511,6 +538,8 @@ const TASK8_CODEX_COPY: Record<
     indexedLogEntries: '已索引記錄',
     indexedStorage: '已索引儲存空間',
     indexedAllTime: '已索引的全部時間',
+    indexedSubtotal: '已索引小計',
+    indexingInProgress: '索引仍在進行；未驗證的舊版總量不會計入。',
     updatedAt: '更新於',
     claudeTokenAccounting: 'Claude Token 口徑',
     codexTokenAccounting: 'Codex Token 口徑',
@@ -542,6 +571,8 @@ const TASK8_CODEX_COPY: Record<
     indexedLogEntries: '已索引日志记录',
     indexedStorage: '已索引存储',
     indexedAllTime: '已索引的全部时间',
+    indexedSubtotal: '已索引小计',
+    indexingInProgress: '索引仍在进行；未验证的旧版总量不会计入。',
     updatedAt: '更新时间',
     claudeTokenAccounting: 'Claude Token 口径',
     codexTokenAccounting: 'Codex Token 口径',
@@ -573,6 +604,8 @@ const TASK8_CODEX_COPY: Record<
     indexedLogEntries: '索引済みログ項目',
     indexedStorage: '索引済みストレージ',
     indexedAllTime: '索引済みの全期間',
+    indexedSubtotal: 'インデックス済み小計',
+    indexingInProgress: 'インデックス作成中です。未検証の旧集計値は除外されています。',
     updatedAt: '更新日時',
     claudeTokenAccounting: 'Claude トークン集計',
     codexTokenAccounting: 'Codex トークン集計',
@@ -604,6 +637,8 @@ const TASK8_CODEX_COPY: Record<
     indexedLogEntries: '인덱싱된 로그 항목',
     indexedStorage: '인덱싱된 저장 공간',
     indexedAllTime: '인덱싱된 전체 기간',
+    indexedSubtotal: '인덱싱된 소계',
+    indexingInProgress: '인덱싱이 진행 중이며 검증되지 않은 이전 합계는 제외됩니다.',
     updatedAt: '업데이트 시각',
     claudeTokenAccounting: 'Claude 토큰 집계',
     codexTokenAccounting: 'Codex 토큰 집계',
@@ -635,6 +670,8 @@ const TASK8_CODEX_COPY: Record<
     indexedLogEntries: 'Registros de log indexados',
     indexedStorage: 'Armazenamento indexado',
     indexedAllTime: 'Todo o período indexado',
+    indexedSubtotal: 'Subtotal indexado',
+    indexingInProgress: 'A indexação ainda está em andamento; totais legados não verificados são excluídos.',
     updatedAt: 'Atualizado em',
     claudeTokenAccounting: 'Contagem de tokens do Claude',
     codexTokenAccounting: 'Contagem de tokens do Codex',
@@ -666,6 +703,8 @@ const TASK8_CODEX_COPY: Record<
     indexedLogEntries: 'Entri log terindeks',
     indexedStorage: 'Penyimpanan terindeks',
     indexedAllTime: 'Seluruh waktu terindeks',
+    indexedSubtotal: 'Subtotal terindeks',
+    indexingInProgress: 'Pengindeksan masih berlangsung; total lama yang belum diverifikasi tidak disertakan.',
     updatedAt: 'Diperbarui pada',
     claudeTokenAccounting: 'Penghitungan token Claude',
     codexTokenAccounting: 'Penghitungan token Codex',
@@ -741,11 +780,12 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Vergleichen' },
     {
       ...TASK8_CODEX_COPY['de-DE'],
-      accountSnapshotLastObserved: 'Kontostand-Snapshot · zuletzt beobachtet',
+      accountSnapshotLastObserved:
+        'Nutzung fasst Anmeldungen in diesem Codex home zusammen · Limits werden zuletzt beobachtet, nicht kombiniert',
       title: 'Codex-Nutzung', beta: 'Beta', overview: 'Übersicht', usageTrend: 'Nutzungstrend', daily: 'Täglich', date: 'Datum', role: 'Rolle', scope: 'Bereich', threadLabel: 'Thread', rootRole: 'Hauptaufgabe', childRole: 'Subagent', approvalReviewerRole: 'Freigabe-Prüfer', unknownRole: 'Unbekannt', noDailyData: 'Noch keine tägliche Codex-Nutzung indexiert.', noThreadData: 'Noch keine Codex-Threads indexiert.', lastTask: 'Letzte Aufgabe', last7Days: 'Letzte 7 Tage', last30Days: 'Letzte 30 Tage', projects: 'Projekte', projectLabel: 'Projekt',
       unnamedSession: 'Unbenannte Sitzung', unidentifiedProject: 'Nicht identifiziertes Projekt', parentThread: 'Übergeordnet', parentTask: 'Übergeordnete Aufgabe', searchThreads: 'Sitzungen suchen', sessions: 'Sitzungen', modelsEffort: 'Modelle & Aufwand', clearFilters: 'Filter löschen', activeFilters: 'Aktive Filter', all: 'Alle', localDirectory: 'Lokaler Ordner', lastActive: 'Zuletzt aktiv', expand: 'Erweitern', viewAllSessions: 'Alle Sitzungen anzeigen', sortBy: 'Sortieren nach', usageLimits: 'Nutzungslimits', resets: 'Zurücksetzung', credits: 'Guthaben', unlimited: 'Unbegrenzt',
       allTime: 'Gesamter Zeitraum', behavior: 'Verhalten', settings: 'Einstellungen', monthly: 'Monatlich', tokenComposition: 'Token-Zusammensetzung', freshInput: 'Eingabe ohne Cache', reasoningSubset: 'In Ausgabe enthalten', threadRoleComposition: 'Thread-Rollenverteilung', childThreadsPerRootTask: 'Unter-Threads / Hauptaufgabe', childFreshShare: 'Anteil der Nutzung ohne Cache durch Unter-Threads', approvalFreshShare: 'Anteil der Nutzung ohne Cache durch Freigabeprüfung', highEffortFreshShare: 'Anteil der Nutzung ohne Cache bei hohem Aufwand', processedToFreshRatio: 'Verarbeitet / Nutzung ohne Cache', reasoningOutputShare: 'Reasoning-Anteil der Ausgabe', postPatchToolCallsPerPatchCall: 'Tool-Call-Proxy nach Patch / Patch-Aufruf', patchCalls: 'Patch-Aufrufe', compactions: 'Kontextkomprimierungen',
-      processed: 'Verarbeitet', fresh: 'Nutzung ohne Cache', input: 'Eingabe', cachedInput: 'Gecachte Eingabe', output: 'Ausgabe', reasoning: 'Reasoning',
+      processed: 'Verarbeitet', apiEquivalentCost: 'API-äquivalente Kosten', apiEquivalentCostHelp: 'Aus derzeit indexierten Token mit aktuellen offiziellen API-Preisen geschätzt; keine Rechnung oder Abonnementbelastung. Preisabdeckung: {coverage}.', fresh: 'Nutzung ohne Cache', input: 'Eingabe', cachedInput: 'Gecachte Eingabe', output: 'Ausgabe', reasoning: 'Reasoning',
       model: 'Modell', models: 'Modelle', efforts: 'Aufwand', threads: 'Threads', rootTasks: 'Hauptaufgaben', childThreads: 'Unter-Threads', approvalReviewers: 'Freigabe-Prüfer', duration: 'Sitzungsspanne', cacheShare: 'Eingabe-Cache-Anteil',
       coverage: 'Abdeckung', quality: 'Qualität', complete: 'Vollständig', partial: 'Teilweise', lastObserved: 'Zuletzt beobachtet', unavailable: 'Nicht verfügbar', optimization: 'Lokale Optimierungssignale', structuralProxy: 'Struktureller Proxy; Tool-Call-Details werden nicht gelesen.', pasteConstraint: 'Kopierbare Einschränkung', constraintNoAgents: 'Keine unnötigen Unteragenten oder unabhängigen Prüfungen starten.', constraintLowerEffort: 'Für diese kleine Änderung eine niedrigere Aufwandsstufe an einer repräsentativen Aufgabe vergleichen.', constraintTests: 'Einen fokussierten Test und danach einen vollständigen Testlauf ausführen.', constraintStop: 'Bei erfüllten Kriterien stoppen; nicht zu produktionsreifer Härtung ausweiten.', compareTitle: 'Anbietervergleich', noRecentTask: 'Noch keine aktuelle Codex-Aufgabe indexiert.', fiveHourWindow: '5-Stunden-Fenster', weeklyWindow: 'Wöchentliches Fenster', used: 'verwendet', remaining: 'verbleibend', localLogNotLive: 'Lokales Protokoll · nicht live', limitExpired: 'Abgelaufen / zuletzt beobachtet', limitMissing: 'Kein lokal beobachtetes Nutzungslimit', observedSessionDuration: 'Zeitspanne zwischen dem ersten und letzten beobachteten Ereignis; ein Proxy, keine tatsächliche aktive Zeit.',
       insightTitles: { 'multi-agent-share': 'Anteil der Nutzung ohne Cache durch Unter-Threads', 'effort-comparison': 'Eine niedrigere Aufwandsstufe vergleichen', 'post-patch-tool-intensity': 'Post-Patch-Tool-Proxy', 'cache-context': 'Cache- und Langkontext', 'approval-reviewer-share': 'Anteil der Nutzung ohne Cache durch Freigabe-Prüfer' },
@@ -756,11 +796,12 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '比較' },
     {
       ...TASK8_CODEX_COPY['zh-TW'],
-      accountSnapshotLastObserved: '帳戶快照 · 最後觀測',
+      accountSnapshotLastObserved:
+        '用量會合併此 Codex home 中的多個登入 · 額度只顯示最後觀測，不合併',
       title: 'Codex 用量', beta: 'Beta', overview: '總覽', usageTrend: '用量趨勢', daily: '按日', date: '日期', role: '角色', scope: '範圍', threadLabel: '執行緒', rootRole: '根任務', childRole: 'Subagent', approvalReviewerRole: '權限審批', unknownRole: '未知', noDailyData: '尚未索引到 Codex 每日用量。', noThreadData: '尚未索引到 Codex 執行緒。', lastTask: '最近任務', last7Days: '最近 7 天', last30Days: '最近 30 天', projects: '專案', projectLabel: '專案',
       unnamedSession: '未命名工作階段', unidentifiedProject: '未識別專案', parentThread: '父執行緒', parentTask: '父任務', searchThreads: '搜尋工作階段', sessions: '工作階段', modelsEffort: '模型與推理強度', clearFilters: '清除篩選條件', activeFilters: '作用中的篩選條件', all: '全部', localDirectory: '本機資料夾', lastActive: '最後活動', expand: '展開', viewAllSessions: '檢視所有工作階段', sortBy: '排序依據', usageLimits: '用量限制', resets: '重設時間', credits: '點數', unlimited: '無上限',
       allTime: '全部時間', behavior: '行為', settings: '設定', monthly: '按月', tokenComposition: 'Token 構成', freshInput: '未快取輸入', reasoningSubset: '已包含在輸出中', threadRoleComposition: '執行緒角色構成', childThreadsPerRootTask: '每個根任務的子執行緒數', childFreshShare: '子執行緒未快取用量占比', approvalFreshShare: '審批未快取用量占比', highEffortFreshShare: '高推理強度未快取用量占比', processedToFreshRatio: '已處理 / 未快取用量', reasoningOutputShare: '推理占輸出比例', postPatchToolCallsPerPatchCall: '每次修補呼叫的修補後工具呼叫代理量', patchCalls: '修補呼叫次數', compactions: '上下文壓縮次數',
-      processed: '已處理', fresh: '未快取用量', input: '輸入', cachedInput: '快取輸入', output: '輸出', reasoning: '推理',
+      processed: '已處理', apiEquivalentCost: 'API 等效成本', apiEquivalentCostHelp: '依目前已建立索引的 Token 與現行官方 API 單價估算；不是帳單或訂閱扣款。已定價模型涵蓋率：{coverage}。', fresh: '未快取用量', input: '輸入', cachedInput: '快取輸入', output: '輸出', reasoning: '推理',
       model: '模型', models: '模型', efforts: '推理強度', threads: '執行緒', rootTasks: '根任務', childThreads: '子執行緒', approvalReviewers: '權限審批執行緒', duration: '工作階段跨度', cacheShare: '輸入快取占比',
       coverage: '索引覆蓋率', quality: '資料品質', complete: '完整', partial: '部分', lastObserved: '最後觀測', unavailable: '無資料', optimization: '本機最佳化訊號', structuralProxy: '結構性代理指標；不讀取工具呼叫細節。', pasteConstraint: '可複製約束', constraintNoAgents: '不要啟動不必要的 subagent 或獨立審閱。', constraintLowerEffort: '對這個小改動，用代表性任務比較低一級推理強度。', constraintTests: '只執行一次聚焦測試，再執行一次完整測試。', constraintStop: '達到驗收條件後停止，不要擴展為生產級加固。', compareTitle: '供應商比較', noRecentTask: '尚未索引到最近的 Codex 任務。', fiveHourWindow: '5 小時視窗', weeklyWindow: '每週視窗', used: '已用', remaining: '剩餘', localLogNotLive: '本機記錄 · 非即時', limitExpired: '已過期／最後觀測', limitMissing: '沒有本機觀測到的用量限制', observedSessionDuration: '首個與末個觀測事件之間的時間跨度代理值，並非實際活躍時長。',
       insightTitles: { 'multi-agent-share': '子執行緒的未快取用量占比', 'effort-comparison': '比較低一級推理強度', 'post-patch-tool-intensity': '修補後工具呼叫代理量', 'cache-context': '快取與長上下文解讀', 'approval-reviewer-share': '權限審批的未快取用量占比' },
@@ -771,11 +812,12 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '对比' },
     {
       ...TASK8_CODEX_COPY['zh-CN'],
-      accountSnapshotLastObserved: '账户快照 · 最后观测',
+      accountSnapshotLastObserved:
+        '用量会合并此 Codex home 中的多个登录 · 额度只显示最后观测，不合并',
       title: 'Codex 用量', beta: 'Beta', overview: '概览', usageTrend: '用量趋势', daily: '按日', date: '日期', role: '角色', scope: '范围', threadLabel: '线程', rootRole: '根任务', childRole: 'Subagent', approvalReviewerRole: '权限审批', unknownRole: '未知', noDailyData: '尚未索引到 Codex 每日用量。', noThreadData: '尚未索引到 Codex 线程。', lastTask: '最近任务', last7Days: '最近 7 天', last30Days: '最近 30 天', projects: '项目', projectLabel: '项目',
       unnamedSession: '未命名会话', unidentifiedProject: '未识别项目', parentThread: '父线程', parentTask: '父任务', searchThreads: '搜索会话', sessions: '会话', modelsEffort: '模型与推理强度', clearFilters: '清除筛选条件', activeFilters: '生效的筛选条件', all: '全部', localDirectory: '本地文件夹', lastActive: '最后活动', expand: '展开', viewAllSessions: '查看所有会话', sortBy: '排序依据', usageLimits: '用量限制', resets: '重置时间', credits: '点数', unlimited: '无限制',
       allTime: '全部时间', behavior: '行为', settings: '设置', monthly: '按月', tokenComposition: 'Token 构成', freshInput: '未缓存输入', reasoningSubset: '已包含在输出中', threadRoleComposition: '线程角色构成', childThreadsPerRootTask: '每个根任务的子线程数', childFreshShare: '子线程未缓存用量占比', approvalFreshShare: '审批未缓存用量占比', highEffortFreshShare: '高推理强度未缓存用量占比', processedToFreshRatio: '已处理 / 未缓存用量', reasoningOutputShare: '推理占输出比例', postPatchToolCallsPerPatchCall: '每次补丁调用的补丁后工具调用代理量', patchCalls: '补丁调用次数', compactions: '上下文压缩次数',
-      processed: '已处理', fresh: '未缓存用量', input: '输入', cachedInput: '缓存输入', output: '输出', reasoning: '推理',
+      processed: '已处理', apiEquivalentCost: 'API 等效成本', apiEquivalentCostHelp: '按当前已索引 Token 和现行官方 API 单价估算；不是账单或订阅扣费。已定价模型覆盖率：{coverage}。', fresh: '未缓存用量', input: '输入', cachedInput: '缓存输入', output: '输出', reasoning: '推理',
       model: '模型', models: '模型', efforts: '推理强度', threads: '线程', rootTasks: '根任务', childThreads: '子线程', approvalReviewers: '权限审批线程', duration: '会话跨度', cacheShare: '输入缓存占比',
       coverage: '索引覆盖率', quality: '数据质量', complete: '完整', partial: '部分', lastObserved: '最后观测', unavailable: '无数据', optimization: '本地优化信号', structuralProxy: '结构性代理指标；不读取工具调用细节。', pasteConstraint: '可复制约束', constraintNoAgents: '不要启动不必要的 subagent 或独立审阅。', constraintLowerEffort: '对这个小改动，用代表性任务对比低一级推理强度。', constraintTests: '只运行一次聚焦测试，再运行一次完整测试。', constraintStop: '达到验收条件后停止，不要扩展为生产级加固。', compareTitle: '供应商对比', noRecentTask: '尚未索引到最近的 Codex 任务。', fiveHourWindow: '5 小时窗口', weeklyWindow: '每周窗口', used: '已用', remaining: '剩余', localLogNotLive: '本地日志 · 非实时', limitExpired: '已过期／最后观测', limitMissing: '没有本地观测到的用量限制', observedSessionDuration: '首个与末个观测事件之间的时间跨度代理值，并非实际活跃时长。',
       insightTitles: { 'multi-agent-share': '子线程的未缓存用量占比', 'effort-comparison': '对比低一级推理强度', 'post-patch-tool-intensity': '补丁后工具调用代理量', 'cache-context': '缓存与长上下文解读', 'approval-reviewer-share': '权限审批的未缓存用量占比' },
@@ -786,11 +828,12 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '比較' },
     {
       ...TASK8_CODEX_COPY.ja,
-      accountSnapshotLastObserved: 'アカウントスナップショット · 最終観測',
+      accountSnapshotLastObserved:
+        'この Codex home の複数ログインの使用量を合算 · 上限は最終観測のみで、合算しません',
       title: 'Codex 使用量', beta: 'ベータ', overview: '概要', usageTrend: '使用量の推移', daily: '日別', date: '日付', role: '役割', scope: '範囲', threadLabel: 'スレッド', rootRole: 'ルート', childRole: 'サブエージェント', approvalReviewerRole: '承認レビュアー', unknownRole: '不明', noDailyData: '日別の Codex 使用量はまだ索引化されていません。', noThreadData: 'Codex スレッドはまだ索引化されていません。', lastTask: '最近のタスク', last7Days: '過去 7 日', last30Days: '過去 30 日', projects: 'プロジェクト', projectLabel: 'プロジェクト',
       unnamedSession: '名前のないセッション', unidentifiedProject: '未識別のプロジェクト', parentThread: '親スレッド', parentTask: '親タスク', searchThreads: 'セッションを検索', sessions: 'セッション', modelsEffort: 'モデルと推論強度', clearFilters: 'フィルターをクリア', activeFilters: '適用中のフィルター', all: 'すべて', localDirectory: 'ローカルフォルダー', lastActive: '最終アクティブ', expand: '展開', viewAllSessions: 'すべてのセッションを表示', sortBy: '並べ替え', usageLimits: '使用量上限', resets: 'リセット', credits: 'クレジット', unlimited: '無制限',
       allTime: '全期間', behavior: '行動', settings: '設定', monthly: '月別', tokenComposition: 'トークン構成', freshInput: '非キャッシュ入力', reasoningSubset: '出力に含まれます', threadRoleComposition: 'スレッド役割構成', childThreadsPerRootTask: 'ルートタスクあたりの子スレッド', childFreshShare: '子スレッドの非キャッシュ使用量比率', approvalFreshShare: '承認の非キャッシュ使用量比率', highEffortFreshShare: '高推論強度の非キャッシュ使用量比率', processedToFreshRatio: '処理済み / 非キャッシュ使用量', reasoningOutputShare: '出力に占める推論', postPatchToolCallsPerPatchCall: 'パッチ呼び出しあたりのパッチ後ツール呼び出しプロキシ', patchCalls: 'パッチ呼び出し', compactions: 'コンテキスト圧縮',
-      processed: '処理済み', fresh: '非キャッシュ使用量', input: '入力', cachedInput: 'キャッシュ入力', output: '出力', reasoning: '推論',
+      processed: '処理済み', apiEquivalentCost: 'API 等価コスト', apiEquivalentCostHelp: '現在索引済みの Token を現行の公式 API 単価で見積もった値です。請求額やサブスクリプション料金ではありません。価格適用率: {coverage}。', fresh: '非キャッシュ使用量', input: '入力', cachedInput: 'キャッシュ入力', output: '出力', reasoning: '推論',
       model: 'モデル', models: 'モデル', efforts: '推論強度', threads: 'スレッド', rootTasks: 'ルートタスク', childThreads: '子スレッド', approvalReviewers: '承認レビュアー', duration: 'セッション期間', cacheShare: '入力キャッシュ比率',
       coverage: 'カバレッジ', quality: '品質', complete: '完了', partial: '一部', lastObserved: '最終観測', unavailable: '利用不可', optimization: 'ローカル最適化シグナル', structuralProxy: '構造的プロキシです。ツール呼び出しの詳細は読みません。', pasteConstraint: '貼り付け用制約', constraintNoAgents: '不要なサブエージェントや独立レビューを開始しないでください。', constraintLowerEffort: 'この小さな変更では代表タスクで 1 段低い推論強度を比較してください。', constraintTests: '変更に直結するテストを 1 回、その後に全テストを 1 回実行してください。', constraintStop: '受け入れ条件を満たしたら停止し、本番級の堅牢化へ拡張しないでください。', compareTitle: 'プロバイダー比較', noRecentTask: '最近の Codex タスクはまだ索引化されていません。', fiveHourWindow: '5 時間枠', weeklyWindow: '週間枠', used: '使用済み', remaining: '残り', localLogNotLive: 'ローカルログ · ライブではありません', limitExpired: '期限切れ／最終観測', limitMissing: 'ローカルで観測された使用量上限はありません', observedSessionDuration: '最初と最後に観測されたイベント間の経過時間を示すプロキシで、実際のアクティブ時間ではありません。',
       insightTitles: { 'multi-agent-share': '子スレッドの非キャッシュ使用量比率', 'effort-comparison': '1 段低い推論強度との比較', 'post-patch-tool-intensity': 'パッチ後ツール呼び出しプロキシ', 'cache-context': 'キャッシュと長いコンテキスト', 'approval-reviewer-share': '承認レビュアーの非キャッシュ使用量比率' },
@@ -801,11 +844,12 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: '비교' },
     {
       ...TASK8_CODEX_COPY.ko,
-      accountSnapshotLastObserved: '계정 스냅샷 · 마지막 관측',
+      accountSnapshotLastObserved:
+        '이 Codex home의 여러 로그인 사용량을 합산 · 한도는 마지막 관측만 표시하며 합산하지 않음',
       title: 'Codex 사용량', beta: '베타', overview: '개요', usageTrend: '사용량 추이', daily: '일별', date: '날짜', role: '역할', scope: '범위', threadLabel: '스레드', rootRole: '루트', childRole: '하위 에이전트', approvalReviewerRole: '승인 검토자', unknownRole: '알 수 없음', noDailyData: '아직 일별 Codex 사용량이 인덱싱되지 않았습니다.', noThreadData: '아직 Codex 스레드가 인덱싱되지 않았습니다.', lastTask: '최근 작업', last7Days: '최근 7일', last30Days: '최근 30일', projects: '프로젝트', projectLabel: '프로젝트',
       unnamedSession: '이름 없는 세션', unidentifiedProject: '식별되지 않은 프로젝트', parentThread: '상위 스레드', parentTask: '상위 작업', searchThreads: '세션 검색', sessions: '세션', modelsEffort: '모델 및 추론 강도', clearFilters: '필터 지우기', activeFilters: '활성 필터', all: '전체', localDirectory: '로컬 폴더', lastActive: '마지막 활동', expand: '펼치기', viewAllSessions: '모든 세션 보기', sortBy: '정렬 기준', usageLimits: '사용량 한도', resets: '재설정', credits: '크레딧', unlimited: '무제한',
       allTime: '전체 기간', behavior: '행동', settings: '설정', monthly: '월별', tokenComposition: '토큰 구성', freshInput: '캐시되지 않은 입력', reasoningSubset: '출력에 포함됨', threadRoleComposition: '스레드 역할 구성', childThreadsPerRootTask: '루트 작업당 하위 스레드', childFreshShare: '하위 스레드 캐시되지 않은 사용량 비율', approvalFreshShare: '승인 캐시되지 않은 사용량 비율', highEffortFreshShare: '고강도 캐시되지 않은 사용량 비율', processedToFreshRatio: '처리됨 / 캐시되지 않은 사용량', reasoningOutputShare: '출력 중 추론 비율', postPatchToolCallsPerPatchCall: '패치 호출당 패치 후 도구 호출 프록시', patchCalls: '패치 호출', compactions: '컨텍스트 압축',
-      processed: '처리됨', fresh: '캐시되지 않은 사용량', input: '입력', cachedInput: '캐시 입력', output: '출력', reasoning: '추론',
+      processed: '처리됨', apiEquivalentCost: 'API 등가 비용', apiEquivalentCostHelp: '현재 인덱싱된 Token에 현행 공식 API 단가를 적용한 추정치입니다. 청구액이나 구독 결제액이 아닙니다. 가격 적용률: {coverage}.', fresh: '캐시되지 않은 사용량', input: '입력', cachedInput: '캐시 입력', output: '출력', reasoning: '추론',
       model: '모델', models: '모델', efforts: '추론 강도', threads: '스레드', rootTasks: '루트 작업', childThreads: '하위 스레드', approvalReviewers: '승인 검토자', duration: '세션 범위', cacheShare: '입력 캐시 비율',
       coverage: '커버리지', quality: '품질', complete: '완료', partial: '부분', lastObserved: '마지막 관측', unavailable: '사용 불가', optimization: '로컬 최적화 신호', structuralProxy: '구조적 프록시이며 도구 호출 세부 정보는 읽지 않습니다.', pasteConstraint: '붙여넣기용 제약', constraintNoAgents: '불필요한 하위 에이전트나 독립 검토를 시작하지 마세요.', constraintLowerEffort: '이 작은 변경은 대표 작업에서 한 단계 낮은 추론 강도를 비교하세요.', constraintTests: '변경에 맞춘 테스트 한 번과 전체 테스트 한 번만 실행하세요.', constraintStop: '수용 기준을 통과하면 중단하고 운영급 강화로 확장하지 마세요.', compareTitle: '공급자 비교', noRecentTask: '최근 Codex 작업이 아직 인덱싱되지 않았습니다.', fiveHourWindow: '5시간 창', weeklyWindow: '주간 창', used: '사용됨', remaining: '남음', localLogNotLive: '로컬 로그 · 실시간 아님', limitExpired: '만료됨 / 마지막 관측', limitMissing: '로컬에서 관측된 사용량 한도가 없습니다', observedSessionDuration: '처음과 마지막으로 관측된 이벤트 사이의 시간 범위를 나타내는 프록시이며 실제 활성 시간이 아닙니다.',
       insightTitles: { 'multi-agent-share': '하위 스레드 캐시되지 않은 사용량 비율', 'effort-comparison': '한 단계 낮은 추론 강도 비교', 'post-patch-tool-intensity': '패치 후 도구 호출 프록시', 'cache-context': '캐시 및 긴 컨텍스트', 'approval-reviewer-share': '승인 검토자 캐시되지 않은 사용량 비율' },
@@ -816,11 +860,12 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Comparar' },
     {
       ...TASK8_CODEX_COPY['pt-BR'],
-      accountSnapshotLastObserved: 'Snapshot da conta · última observação',
+      accountSnapshotLastObserved:
+        'O uso combina logins neste Codex home · limites são a última observação, não somados',
       title: 'Uso do Codex', beta: 'Beta', overview: 'Visão geral', usageTrend: 'Tendência de uso', daily: 'Diário', date: 'Data', role: 'Função', scope: 'Escopo', threadLabel: 'Thread', rootRole: 'Raiz', childRole: 'Subagente', approvalReviewerRole: 'Revisor de aprovação', unknownRole: 'Desconhecido', noDailyData: 'Nenhum uso diário do Codex foi indexado.', noThreadData: 'Nenhuma thread do Codex foi indexada.', lastTask: 'Tarefa recente', last7Days: 'Últimos 7 dias', last30Days: 'Últimos 30 dias', projects: 'Projetos', projectLabel: 'Projeto',
       unnamedSession: 'Sessão sem nome', unidentifiedProject: 'Projeto não identificado', parentThread: 'Thread pai', parentTask: 'Tarefa pai', searchThreads: 'Pesquisar sessões', sessions: 'Sessões', modelsEffort: 'Modelos e esforço', clearFilters: 'Limpar filtros', activeFilters: 'Filtros ativos', all: 'Tudo', localDirectory: 'Pasta local', lastActive: 'Última atividade', expand: 'Expandir', viewAllSessions: 'Ver todas as sessões', sortBy: 'Ordenar por', usageLimits: 'Limites de uso', resets: 'Redefinição', credits: 'Créditos', unlimited: 'Ilimitado',
       allTime: 'Todo o período', behavior: 'Comportamento', settings: 'Configurações', monthly: 'Mensal', tokenComposition: 'Composição de tokens', freshInput: 'Entrada sem cache', reasoningSubset: 'Incluído na saída', threadRoleComposition: 'Composição por função da thread', childThreadsPerRootTask: 'Threads filhas / tarefa raiz', childFreshShare: 'Participação do uso sem cache das threads filhas', approvalFreshShare: 'Participação do uso sem cache de aprovação', highEffortFreshShare: 'Participação do uso sem cache de alto esforço', processedToFreshRatio: 'Processado / uso sem cache', reasoningOutputShare: 'Participação do raciocínio na saída', postPatchToolCallsPerPatchCall: 'Proxy de chamadas de ferramenta pós-patch / chamada de patch', patchCalls: 'Chamadas de patch', compactions: 'Compactações',
-      processed: 'Processado', fresh: 'Uso sem cache', input: 'Entrada', cachedInput: 'Entrada em cache', output: 'Saída', reasoning: 'Raciocínio',
+      processed: 'Processado', apiEquivalentCost: 'Custo equivalente de API', apiEquivalentCostHelp: 'Estimado a partir dos Tokens indexados no momento com os preços oficiais atuais da API; não é uma fatura nem uma cobrança de assinatura. Cobertura de preços: {coverage}.', fresh: 'Uso sem cache', input: 'Entrada', cachedInput: 'Entrada em cache', output: 'Saída', reasoning: 'Raciocínio',
       model: 'Modelo', models: 'Modelos', efforts: 'Esforço', threads: 'Threads', rootTasks: 'Tarefas raiz', childThreads: 'Threads filhas', approvalReviewers: 'Revisores de aprovação', duration: 'Intervalo', cacheShare: 'Proporção de cache de entrada',
       coverage: 'Cobertura', quality: 'Qualidade', complete: 'Completa', partial: 'Parcial', lastObserved: 'Última observação', unavailable: 'Indisponível', optimization: 'Sinais locais de otimização', structuralProxy: 'Proxy estrutural; detalhes das chamadas de ferramenta não são lidos.', pasteConstraint: 'Restrição pronta para colar', constraintNoAgents: 'Não inicie subagentes ou revisões independentes desnecessárias.', constraintLowerEffort: 'Nesta mudança pequena, compare um nível de esforço menor em uma tarefa representativa.', constraintTests: 'Execute um teste focado e depois uma única execução completa.', constraintStop: 'Pare ao cumprir os critérios; não expanda para endurecimento de produção.', compareTitle: 'Comparação de provedores', noRecentTask: 'Nenhuma tarefa recente do Codex foi indexada.', fiveHourWindow: 'Janela de 5 horas', weeklyWindow: 'Janela semanal', used: 'usado', remaining: 'restante', localLogNotLive: 'Registro local · não é ao vivo', limitExpired: 'Expirado / última observação', limitMissing: 'Nenhum limite de uso observado localmente', observedSessionDuration: 'Intervalo entre o primeiro e o último evento observado; é um proxy, não o tempo de atividade real.',
       insightTitles: { 'multi-agent-share': 'Participação do uso sem cache das threads filhas', 'effort-comparison': 'Compare um nível de esforço menor', 'post-patch-tool-intensity': 'Proxy de chamadas de ferramenta pós-patch', 'cache-context': 'Cache e contexto longo', 'approval-reviewer-share': 'Participação do uso sem cache do revisor de aprovação' },
@@ -831,17 +876,117 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
     { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Bandingkan' },
     {
       ...TASK8_CODEX_COPY.id,
-      accountSnapshotLastObserved: 'Snapshot akun · terakhir diamati',
+      accountSnapshotLastObserved:
+        'Penggunaan menggabungkan login di Codex home ini · batas adalah pengamatan terakhir, tidak dijumlahkan',
       title: 'Penggunaan Codex', beta: 'Beta', overview: 'Ringkasan', usageTrend: 'Tren penggunaan', daily: 'Harian', date: 'Tanggal', role: 'Peran', scope: 'Cakupan', threadLabel: 'Thread', rootRole: 'Utama', childRole: 'Subagen', approvalReviewerRole: 'Peninjau persetujuan', unknownRole: 'Tidak diketahui', noDailyData: 'Belum ada penggunaan harian Codex yang diindeks.', noThreadData: 'Belum ada thread Codex yang diindeks.', lastTask: 'Tugas terbaru', last7Days: '7 hari terakhir', last30Days: '30 hari terakhir', projects: 'Proyek', projectLabel: 'Proyek',
       unnamedSession: 'Sesi tanpa nama', unidentifiedProject: 'Proyek tidak teridentifikasi', parentThread: 'Thread induk', parentTask: 'Tugas induk', searchThreads: 'Cari sesi', sessions: 'Sesi', modelsEffort: 'Model & upaya', clearFilters: 'Hapus filter', activeFilters: 'Filter aktif', all: 'Semua', localDirectory: 'Folder lokal', lastActive: 'Terakhir aktif', expand: 'Perluas', viewAllSessions: 'Lihat semua sesi', sortBy: 'Urutkan berdasarkan', usageLimits: 'Batas penggunaan', resets: 'Reset', credits: 'Kredit', unlimited: 'Tanpa batas',
       allTime: 'Sepanjang waktu', behavior: 'Perilaku', settings: 'Pengaturan', monthly: 'Bulanan', tokenComposition: 'Komposisi token', freshInput: 'Input tanpa cache', reasoningSubset: 'Termasuk dalam output', threadRoleComposition: 'Komposisi peran thread', childThreadsPerRootTask: 'Thread anak / tugas utama', childFreshShare: 'Porsi penggunaan tanpa cache thread anak', approvalFreshShare: 'Porsi penggunaan tanpa cache persetujuan', highEffortFreshShare: 'Porsi penggunaan tanpa cache effort tinggi', processedToFreshRatio: 'Diproses / penggunaan tanpa cache', reasoningOutputShare: 'Porsi penalaran dalam output', postPatchToolCallsPerPatchCall: 'Proksi panggilan alat pasca-patch / panggilan patch', patchCalls: 'Panggilan patch', compactions: 'Pemadatan konteks',
-      processed: 'Diproses', fresh: 'Penggunaan tanpa cache', input: 'Input', cachedInput: 'Input cache', output: 'Output', reasoning: 'Penalaran',
+      processed: 'Diproses', apiEquivalentCost: 'Biaya ekuivalen API', apiEquivalentCostHelp: 'Perkiraan dari Token yang saat ini terindeks dengan harga API resmi terkini; bukan tagihan atau biaya langganan. Cakupan harga: {coverage}.', fresh: 'Penggunaan tanpa cache', input: 'Input', cachedInput: 'Input cache', output: 'Output', reasoning: 'Penalaran',
       model: 'Model', models: 'Model', efforts: 'Upaya', threads: 'Thread', rootTasks: 'Tugas utama', childThreads: 'Thread anak', approvalReviewers: 'Peninjau persetujuan', duration: 'Rentang sesi', cacheShare: 'Porsi cache input',
       coverage: 'Cakupan', quality: 'Kualitas', complete: 'Lengkap', partial: 'Sebagian', lastObserved: 'Terakhir diamati', unavailable: 'Tidak tersedia', optimization: 'Sinyal optimasi lokal', structuralProxy: 'Proksi struktural; detail panggilan alat tidak dibaca.', pasteConstraint: 'Batasan siap tempel', constraintNoAgents: 'Jangan mulai subagen atau tinjauan independen yang tidak perlu.', constraintLowerEffort: 'Untuk perubahan kecil ini, bandingkan satu tingkat upaya lebih rendah pada tugas perwakilan.', constraintTests: 'Jalankan satu tes terfokus lalu satu kali tes lengkap.', constraintStop: 'Berhenti saat kriteria terpenuhi; jangan perluas menjadi pengerasan tingkat produksi.', compareTitle: 'Perbandingan penyedia', noRecentTask: 'Belum ada tugas Codex terbaru yang diindeks.', fiveHourWindow: 'Jendela 5 jam', weeklyWindow: 'Jendela mingguan', used: 'terpakai', remaining: 'tersisa', localLogNotLive: 'Log lokal · bukan langsung', limitExpired: 'Kedaluwarsa / terakhir diamati', limitMissing: 'Tidak ada batas penggunaan yang diamati secara lokal', observedSessionDuration: 'Rentang antara peristiwa pertama dan terakhir yang diamati; ini proksi, bukan waktu aktif sebenarnya.',
       insightTitles: { 'multi-agent-share': 'Porsi penggunaan tanpa cache thread anak', 'effort-comparison': 'Bandingkan satu tingkat upaya lebih rendah', 'post-patch-tool-intensity': 'Proksi panggilan alat pasca-patch', 'cache-context': 'Cache dan konteks panjang', 'approval-reviewer-share': 'Porsi penggunaan tanpa cache peninjau persetujuan' },
     },
     TASK5_CODEX_COPY.id,
   ),
+};
+
+const WEEKLY_VALUE_COPY: Record<SupportedLanguage, WeeklyValueCopy> = {
+  en: {
+    title: 'Weekly allowance value',
+    description: 'Current official API prices applied to local tokens; full allowance is inferred from the last observed utilization in each reset window. Request-level surcharges absent from aggregate logs are excluded. Estimate, not a bill.',
+    usedValue: 'Used equivalent', fullValue: 'Full allowance est.', unusedValue: 'Unused est.',
+    reset: 'Week / reset', utilization: 'End observed', confidence: 'Confidence', pricingCoverage: 'Priced coverage',
+    current: 'In progress', high: 'High', medium: 'Medium', low: 'Low', usageOnly: 'Usage only',
+    noData: 'No locally recorded weekly usage is available yet.',
+    historyFromLogs: 'Historical used equivalents come directly from local token logs. Full and unused estimates appear only for windows with a real quota-utilization observation.',
+    calendarFallback: 'No historical weekly reset was observed; usage-only history is grouped into Monday-to-Monday UTC calendar weeks.',
+    multiAccount: 'Codex usage-only history combines all sign-ins in this Codex home. Quota-derived total and unused estimates stay tied to the observed reset series; no account split is invented.',
+    indexedSubtotal: 'Indexing is incomplete; weekly values are conservative subtotals.',
+  },
+  'zh-CN': {
+    title: '每周等效额度价值',
+    description: '按当前官方 API 单价折算本地 Token；每个重置窗口的总额度由最后观测用量比例反推。聚合日志无法确认的请求级附加价格不计入。属于估算，并非账单。',
+    usedValue: '已用等价值', fullValue: '总额度估算', unusedValue: '未用估算',
+    reset: '周期 / 重置', utilization: '末次观测', confidence: '可信度', pricingCoverage: '已定价覆盖',
+    current: '进行中', high: '高', medium: '中', low: '低', usageOnly: '仅已用值',
+    noData: '尚无可用于按周计算的本地用量记录。',
+    historyFromLogs: '历史“已用等价值”直接由本地 Token 日志计算；只有某个窗口存在真实额度用量观测时，才显示总额度和未用额度估算。',
+    calendarFallback: '未观测到可用于对齐历史的每周重置时间；仅已用历史按 UTC 周一至周一的自然周分组。',
+    multiAccount: 'Codex 的仅已用历史会合并此 Codex home 中的全部登录。总额度和未用额度估算仍绑定到实际观测的重置序列；不会虚构账号拆分。',
+    indexedSubtotal: '索引尚未完成；每周价值目前是保守小计。',
+  },
+  'zh-TW': {
+    title: '每週等效額度價值',
+    description: '依目前官方 API 單價折算本機 Token；每個重設視窗的總額度由最後觀測用量比例反推。彙總日誌無法確認的請求級附加價格不計入。屬於估算，並非帳單。',
+    usedValue: '已用等價值', fullValue: '總額度估算', unusedValue: '未用估算',
+    reset: '週期 / 重設', utilization: '末次觀測', confidence: '可信度', pricingCoverage: '已定價涵蓋',
+    current: '進行中', high: '高', medium: '中', low: '低', usageOnly: '僅已用值',
+    noData: '尚無可用於每週計算的本機用量記錄。',
+    historyFromLogs: '歷史「已用等價值」直接由本機 Token 日誌計算；只有視窗存在真實額度用量觀測時，才顯示總額度與未用額度估算。',
+    calendarFallback: '未觀測到可用於對齊歷史的每週重設時間；僅已用歷史依 UTC 週一至週一的自然週分組。',
+    multiAccount: 'Codex 的僅已用歷史會合併此 Codex home 中的所有登入。總額度與未用額度估算仍綁定實際觀測的重設序列；不會虛構帳號拆分。',
+    indexedSubtotal: '索引尚未完成；每週價值目前是保守小計。',
+  },
+  ja: {
+    title: '週間上限の等価価値',
+    description: '現在の公式 API 単価をローカルトークンに適用し、各リセット枠の総上限を最終観測利用率から推定します。集計ログで確認できないリクエスト単位の追加料金は含みません。請求額ではありません。',
+    usedValue: '使用済み等価値', fullValue: '総上限の推定', unusedValue: '未使用の推定',
+    reset: '期間 / リセット', utilization: '最終観測', confidence: '信頼度', pricingCoverage: '価格適用率',
+    current: '進行中', high: '高', medium: '中', low: '低', usageOnly: '使用分のみ',
+    noData: '週単位で計算できるローカル使用記録がまだありません。',
+    historyFromLogs: '過去の使用済み等価値はローカルの Token ログから直接計算します。総上限と未使用分は、実際の上限利用率が観測された枠だけで推定します。',
+    calendarFallback: '履歴を揃える週間リセットが観測されていないため、使用分のみの履歴は UTC の月曜から月曜の暦週で集計します。',
+    multiAccount: 'Codex の使用分のみの履歴は、この Codex home の全ログインを合算します。総上限と未使用分の推定は観測済みリセット系列に紐づけ、架空のアカウント分割は行いません。',
+    indexedSubtotal: '索引作成中のため、週間価値は保守的な小計です。',
+  },
+  ko: {
+    title: '주간 한도 등가 가치',
+    description: '현재 공식 API 단가를 로컬 토큰에 적용하고 각 재설정 창의 총한도를 마지막 관측 사용률로 추정합니다. 집계 로그에서 확인할 수 없는 요청 단위 추가 요금은 제외합니다. 청구 금액이 아닙니다.',
+    usedValue: '사용 등가치', fullValue: '총한도 추정', unusedValue: '미사용 추정',
+    reset: '주 / 재설정', utilization: '마지막 관측', confidence: '신뢰도', pricingCoverage: '가격 적용률',
+    current: '진행 중', high: '높음', medium: '보통', low: '낮음', usageOnly: '사용분만',
+    noData: '주간 계산에 사용할 로컬 사용 기록이 아직 없습니다.',
+    historyFromLogs: '과거 사용 등가치는 로컬 Token 로그에서 직접 계산합니다. 실제 한도 사용률 관측이 있는 창에서만 총한도와 미사용분을 추정합니다.',
+    calendarFallback: '과거를 정렬할 주간 재설정이 관측되지 않아 사용분 전용 기록은 UTC 월요일부터 월요일까지의 달력 주로 묶습니다.',
+    multiAccount: 'Codex 사용분 전용 기록은 이 Codex home의 모든 로그인을 합산합니다. 총한도와 미사용분 추정은 관측된 재설정 계열에만 연결하며 계정 분리를 만들어 내지 않습니다.',
+    indexedSubtotal: '인덱싱이 끝나지 않아 주간 가치는 보수적인 소계입니다.',
+  },
+  'pt-BR': {
+    title: 'Valor equivalente semanal',
+    description: 'Aplica os preços oficiais atuais da API aos tokens locais e infere o limite total pela última utilização observada em cada janela. Sobretaxas por solicitação ausentes dos logs agregados não são incluídas. É uma estimativa, não uma fatura.',
+    usedValue: 'Equivalente usado', fullValue: 'Limite total est.', unusedValue: 'Não usado est.',
+    reset: 'Semana / reset', utilization: 'Última observação', confidence: 'Confiança', pricingCoverage: 'Cobertura de preços',
+    current: 'Em andamento', high: 'Alta', medium: 'Média', low: 'Baixa', usageOnly: 'Somente uso',
+    noData: 'Ainda não há uso local registrado para o cálculo semanal.',
+    historyFromLogs: 'Os equivalentes usados no histórico vêm diretamente dos logs locais de Token. O limite total e o não usado só são estimados quando há uma observação real da utilização da cota.',
+    calendarFallback: 'Nenhuma redefinição semanal histórica foi observada; o histórico somente de uso é agrupado em semanas UTC de segunda a segunda.',
+    multiAccount: 'O histórico somente de uso do Codex combina todos os logins deste Codex home. As estimativas de limite total e não usado continuam ligadas à série de redefinição observada; nenhuma divisão por conta é inventada.',
+    indexedSubtotal: 'A indexação está incompleta; os valores semanais são subtotais conservadores.',
+  },
+  'de-DE': {
+    title: 'Wöchentlicher Gegenwert',
+    description: 'Aktuelle offizielle API-Preise werden auf lokale Token angewandt; das Gesamtlimit wird aus der letzten beobachteten Auslastung je Reset-Fenster geschätzt. Anfragebezogene Aufpreise, die in aggregierten Logs fehlen, sind ausgeschlossen. Keine Rechnung.',
+    usedValue: 'Genutzter Gegenwert', fullValue: 'Gesamtlimit geschätzt', unusedValue: 'Ungenutzt geschätzt',
+    reset: 'Woche / Reset', utilization: 'Letzte Beobachtung', confidence: 'Vertrauen', pricingCoverage: 'Preisabdeckung',
+    current: 'Laufend', high: 'Hoch', medium: 'Mittel', low: 'Niedrig', usageOnly: 'Nur Nutzung',
+    noData: 'Noch keine lokal erfasste Nutzung für die Wochenberechnung verfügbar.',
+    historyFromLogs: 'Historische genutzte Gegenwerte stammen direkt aus lokalen Token-Logs. Gesamtlimit und ungenutzter Anteil werden nur bei real beobachteter Quotenauslastung geschätzt.',
+    calendarFallback: 'Kein historischer Wochen-Reset wurde beobachtet; reine Nutzungsverläufe werden in UTC-Kalenderwochen von Montag bis Montag gruppiert.',
+    multiAccount: 'Der reine Codex-Nutzungsverlauf kombiniert alle Anmeldungen in diesem Codex home. Schätzungen für Gesamtlimit und ungenutzten Anteil bleiben an die beobachtete Reset-Serie gebunden; keine Kontotrennung wird erfunden.',
+    indexedSubtotal: 'Die Indizierung ist unvollständig; Wochenwerte sind konservative Zwischensummen.',
+  },
+  id: {
+    title: 'Nilai ekuivalen mingguan',
+    description: 'Harga API resmi saat ini diterapkan pada token lokal; total batas disimpulkan dari pemakaian terakhir yang diamati pada tiap jendela reset. Biaya tambahan per permintaan yang tidak ada dalam log agregat tidak dihitung. Ini perkiraan, bukan tagihan.',
+    usedValue: 'Ekuivalen terpakai', fullValue: 'Total batas estimasi', unusedValue: 'Tak terpakai estimasi',
+    reset: 'Minggu / reset', utilization: 'Pengamatan akhir', confidence: 'Keyakinan', pricingCoverage: 'Cakupan harga',
+    current: 'Berjalan', high: 'Tinggi', medium: 'Sedang', low: 'Rendah', usageOnly: 'Hanya pemakaian',
+    noData: 'Belum ada penggunaan lokal yang tercatat untuk perhitungan mingguan.',
+    historyFromLogs: 'Ekuivalen terpakai historis dihitung langsung dari log Token lokal. Total batas dan sisa hanya diestimasi jika ada pengamatan nyata atas persentase kuota.',
+    calendarFallback: 'Tidak ada reset mingguan historis yang teramati; riwayat khusus pemakaian dikelompokkan dalam minggu UTC Senin-ke-Senin.',
+    multiAccount: 'Riwayat khusus pemakaian Codex menggabungkan semua login di Codex home ini. Estimasi total batas dan sisa tetap terikat pada seri reset yang diamati; pemisahan akun tidak direka.',
+    indexedSubtotal: 'Pengindeksan belum selesai; nilai mingguan masih berupa subtotal konservatif.',
+  },
 };
 
 const translations: Record<SupportedLanguage, Translations> = {
@@ -858,6 +1003,7 @@ const translations: Record<SupportedLanguage, Translations> = {
       v230: "What's new — Codex Beta usage and local optimization guidance, exact-version release notes, and removal of the obsolete model-specific weekly Opus option.",
     },
     providers: PROVIDERS.en,
+    weeklyValue: WEEKLY_VALUE_COPY.en,
     popup: {
       title: 'Claude Code Usage',
       currentSession: 'Current Session',
@@ -1092,6 +1238,7 @@ const translations: Record<SupportedLanguage, Translations> = {
       v230: 'Neu: Codex-Beta-Nutzung und lokale Optimierungshinweise, versionsgenaue Release-Hinweise und Entfernung der veralteten modellspezifischen wöchentlichen Opus-Option.',
     },
     providers: PROVIDERS['de-DE'],
+    weeklyValue: WEEKLY_VALUE_COPY['de-DE'],
     popup: {
       title: "Claude Code Nutzung",
       currentSession: "Aktuelle Sitzung",
@@ -1329,6 +1476,7 @@ const translations: Record<SupportedLanguage, Translations> = {
       v230: '新功能：Codex Beta 用量與本機優化建議、與安裝版本精確對應的更新說明，並移除已過時的特定模型每週 Opus 選項。',
     },
     providers: PROVIDERS['zh-TW'],
+    weeklyValue: WEEKLY_VALUE_COPY['zh-TW'],
     popup: {
       title: 'Claude Code 使用量',
       currentSession: '當前會話',
@@ -1559,6 +1707,7 @@ const translations: Record<SupportedLanguage, Translations> = {
       v230: '新功能：Codex Beta 用量与本地优化建议、与安装版本精确对应的更新说明，并移除已过时的特定模型每周 Opus 选项。',
     },
     providers: PROVIDERS['zh-CN'],
+    weeklyValue: WEEKLY_VALUE_COPY['zh-CN'],
     popup: {
       title: 'Claude Code 使用量',
       currentSession: '当前会话',
@@ -1789,6 +1938,7 @@ const translations: Record<SupportedLanguage, Translations> = {
       v230: '新機能：Codex Beta の使用量とローカル最適化ガイド、完全なバージョンに対応するリリース通知、および古いモデル別の週間 Opus オプションの削除。',
     },
     providers: PROVIDERS.ja,
+    weeklyValue: WEEKLY_VALUE_COPY.ja,
     popup: {
       title: 'Claude Code 使用量',
       currentSession: '現在のセッション',
@@ -2024,6 +2174,7 @@ const translations: Record<SupportedLanguage, Translations> = {
       v230: '새 기능: Codex Beta 사용량과 로컬 최적화 안내, 설치된 전체 버전에 맞는 릴리스 알림, 그리고 오래된 모델별 주간 Opus 옵션 제거.',
     },
     providers: PROVIDERS.ko,
+    weeklyValue: WEEKLY_VALUE_COPY.ko,
     popup: {
       title: 'Claude Code 사용량',
       currentSession: '현재 세션',
@@ -2259,6 +2410,7 @@ const translations: Record<SupportedLanguage, Translations> = {
       v230: 'Novidades: uso do Codex Beta e orientações locais de otimização, avisos da versão exata instalada e remoção da opção semanal obsoleta do Opus por modelo.',
     },
     providers: PROVIDERS['pt-BR'],
+    weeklyValue: WEEKLY_VALUE_COPY['pt-BR'],
     popup: {
       title: 'Uso do Claude Code',
       currentSession: 'Sessão atual',
@@ -2493,6 +2645,7 @@ const translations: Record<SupportedLanguage, Translations> = {
       v230: 'Yang baru: penggunaan Codex Beta dan panduan optimasi lokal, catatan rilis yang sesuai dengan versi lengkap terpasang, serta penghapusan opsi Opus mingguan khusus model yang sudah usang.',
     },
     providers: PROVIDERS.id,
+    weeklyValue: WEEKLY_VALUE_COPY.id,
     popup: {
       title: 'Claude Code Usage',
       currentSession: 'Sesi Saat Ini',

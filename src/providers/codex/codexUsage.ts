@@ -22,6 +22,7 @@ import {
   PseudonymousIdentityKey,
   stableCodexViewKey,
 } from './codexIdentity';
+import { WeeklyValueInputs } from '../../weeklyValue';
 
 export interface CodexMetricTotals {
   processed: number;
@@ -47,6 +48,8 @@ export interface CodexUsageScopeView {
   models: Array<{ key: string; totals: CodexMetricTotals }>;
   efforts: Array<{ key: string; totals: CodexMetricTotals }>;
   periodCoverage?: CodexRangeCoverage;
+  /** Visible values are a current, conservative subtotal while indexing continues. */
+  indexedSubtotal?: boolean;
 }
 
 export interface CodexDailyUsageView {
@@ -170,6 +173,7 @@ export interface CodexUsageView {
   limits: CodexLimitView[];
   /** Status-bar compatibility; Overview uses the classified limits field. */
   limit: ProviderLimitSnapshot | null;
+  weeklyValueInputs?: WeeklyValueInputs;
 }
 
 const MAX_DAILY_ROWS = 90;
@@ -284,7 +288,10 @@ function sessionDuration(file: CodexFileAggregate): number {
   return Math.max(0, endedAt - startedAt);
 }
 
-function scope(files: CodexFileAggregate[]): CodexUsageScopeView {
+function scope(
+  files: CodexFileAggregate[],
+  indexedSubtotal = false,
+): CodexUsageScopeView {
   const totalTokens = zeroTokens();
   const childTokens = zeroTokens();
   const approvalTokens = zeroTokens();
@@ -330,6 +337,7 @@ function scope(files: CodexFileAggregate[]): CodexUsageScopeView {
     structural,
     models: bucketRows(models),
     efforts: bucketRows(efforts),
+    indexedSubtotal,
   };
 }
 
@@ -338,6 +346,7 @@ function scopeFromPeriodDays(
   keys: string[],
   coverage: CodexRangeCoverage,
   timeZone: string,
+  indexIncomplete = false,
 ): CodexUsageScopeView {
   const selectedKeys = new Set(keys);
   const totalTokens = zeroTokens();
@@ -422,6 +431,7 @@ function scopeFromPeriodDays(
     models: bucketRows(models),
     efforts: bucketRows(efforts),
     periodCoverage: coverage,
+    indexedSubtotal: indexIncomplete || !coverage.complete,
   };
 }
 
@@ -840,20 +850,26 @@ export function buildCodexUsageView(
     group.push(file);
     projects.set(key, group);
   }
-  const recentScope = recent.length > 0 ? scope(recent) : null;
+  const aggregateIndexIncomplete =
+    !snapshot.coverage.complete || !snapshot.coverage.identity.complete;
+  const recentScope = recent.length > 0
+    ? scope(recent, aggregateIndexIncomplete)
+    : null;
   const last7DaysScope = scopeFromPeriodDays(
     snapshot.files,
     last7DayKeys,
     periodCoverage.last7Days,
     periodCoverage.timeZone,
+    aggregateIndexIncomplete,
   );
   const last30DaysScope = scopeFromPeriodDays(
     snapshot.files,
     last30DayKeys,
     periodCoverage.last30Days,
     periodCoverage.timeZone,
+    aggregateIndexIncomplete,
   );
-  const allTime = scope(snapshot.files);
+  const allTime = scope(snapshot.files, aggregateIndexIncomplete);
   const daily = dailyRows(snapshot.files, periodCoverage.timeZone);
   const taskRoot = taskRootFile(recent);
   const taskIdentityFile = taskRoot ?? fallbackTaskIdentityFile(recent);
@@ -916,7 +932,7 @@ export function buildCodexUsageView(
           recentThreads: allThreadRows
             .filter((thread) => thread.projectKey === projectKey)
             .slice(0, 20),
-          scope: scope(files),
+          scope: scope(files, aggregateIndexIncomplete),
         };
       })
       .sort(
@@ -954,5 +970,6 @@ export function buildCodexUsageView(
       .sort((left, right) => left.flag.localeCompare(right.flag)),
     limits,
     limit: currentLimit(snapshot.limit, now),
+    weeklyValueInputs: snapshot.weeklyValueInputs,
   };
 }

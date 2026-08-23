@@ -2,7 +2,7 @@ import * as fs from 'fs';
 import * as https from 'https';
 import * as path from 'path';
 import * as os from 'os';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import { renderHeatmapSvg } from './heatmapSvg';
 import { DEFAULT_SECTIONS, ShareRange, buildShareCardData, shareCardFilename } from './shareCard';
 import { renderShareCardSvg } from './shareCardSvg';
@@ -26,12 +26,18 @@ import { ClaudeApiUsageResponse, ContentAnalysis, ExtensionConfig } from './type
 import { SettingsStore } from './settings';
 import { normalizeQuotaWindows } from './quotaWindows';
 import {
+  appendWeeklyQuotaObservations,
+  claudeWeeklyQuotaObservations,
+  WeeklyQuotaObservation,
+} from './weeklyValue';
+import {
   diffUsageManifests,
   scanUsageManifest,
   UsageManifest,
 } from './claudeUsageFiles';
 import {
   commitRefreshSnapshot,
+  codexRefreshProfileForTrigger,
   pollIntervalMs,
   quotaFailureBackoffMs,
   QuietDebounce,
@@ -47,7 +53,11 @@ import {
   formatCodexIndexDiagnostic,
   formatRefreshDiagnostic,
 } from './refreshDiagnostics';
-import { CodexProvider } from './providers/codex/codexProvider';
+import {
+  CodexProvider,
+  CodexProviderSnapshot,
+} from './providers/codex/codexProvider';
+import { CodexIndexProgress } from './providers/codex/codexIndex';
 import { resolveCodexHome } from './providers/codex/codexManifest';
 import { buildCodexUsageView, CodexUsageView } from './providers/codex/codexUsage';
 import {
@@ -130,11 +140,19 @@ export class ClaudeCodeUsageExtension {
   // flaky network and the very first /usage fetch fails, try once more shortly
   // after so the indicator appears without waiting for the next regular tick.
   private quotaColdRetryDone: boolean = false;
+  private claudeProfileGeneration: number = 0;
+  private claudeWeeklyQuotaHistory: WeeklyQuotaObservation[] = [];
   private codexProvider: CodexProvider;
   private readonly codexSalt: string;
   private codexView: CodexUsageView | null = null;
   private codexInsights: CodexScopedInsights = emptyCodexScopedInsights();
+  private codexAvailable = false;
   private codexHasData = false;
+  private codexRefreshing = false;
+  private codexProgress: CodexIndexProgress | null = null;
+  private codexProgressLastRenderedAt = 0;
+  private codexCheckpointHydration: Promise<void> | null = null;
+  private codexCheckpointHydrationLastAttemptAt = 0;
 
   constructor(private context: vscode.ExtensionContext) {
     console.log('Claude Code Usage Extension: Constructor called');
@@ -143,7 +161,10 @@ export class ClaudeCodeUsageExtension {
     this.statusBar = new StatusBarManager();
     this.settings = new SettingsStore(context);
     this.webviewProvider = new UsageWebviewProvider(context);
-    this.apiClient = new ClaudeApiClient(this.outputChannel);
+    this.apiClient = new ClaudeApiClient(
+      this.outputChannel,
+      this.settings.get<string>('dataDirectory'),
+    );
     const existingCodexSalt = context.globalState.get<string>('ccu.codex.machineSalt');
     this.codexSalt = existingCodexSalt ?? randomBytes(32).toString('hex');
     if (!existingCodexSalt) {
@@ -832,7 +853,20 @@ export class ClaudeCodeUsageExtension {
     this.webviewProvider.updateProviderData(
       this.codexView,
       this.codexInsights,
-      { claude: claudeHasData, codex: this.codexHasData },
+      {
+        claude: claudeHasData,
+        codex: this.codexAvailable,
+        codexData: this.codexHasData,
+        codexLoading: this.codexRefreshing,
+        codexProgress: this.codexProgress
+          ? {
+              scannedFiles: this.codexProgress.scannedFiles,
+              totalFiles: this.codexProgress.totalFiles,
+              indexedBytes: this.codexProgress.indexedBytes,
+              totalBytes: this.codexProgress.totalBytes,
+            }
+          : null,
+      },
     );
 
     const selected =
@@ -864,6 +898,9 @@ export class ClaudeCodeUsageExtension {
       this.codexView = null;
       this.codexInsights = emptyCodexScopedInsights();
       this.codexHasData = false;
+      this.codexRefreshing = false;
+      this.codexProgress = null;
+      this.codexProgressLastRenderedAt = 0;
       this.outputChannel.appendLine(
         formatCodexIndexDiagnostic({
           outcome: 'error',
@@ -885,48 +922,149 @@ export class ClaudeCodeUsageExtension {
     }
   }
 
-  private async runCodexRefresh(_trigger: RefreshTrigger): Promise<void> {
+  private async runCodexRefresh(trigger: RefreshTrigger): Promise<void> {
     const config = this.getConfiguration();
     if (!config.codexEnabled) {
       this.codexView = null;
       this.codexInsights = emptyCodexScopedInsights();
+      this.codexAvailable = false;
       this.codexHasData = false;
+      this.codexRefreshing = false;
+      this.codexProgress = null;
+      this.codexProgressLastRenderedAt = 0;
       this.syncProviderUi();
       return;
     }
-    const result = await this.codexProvider.refresh();
-    if (result.outcome === 'unavailable') {
+    this.codexAvailable = await this.codexProvider.isAvailable();
+    if (!this.codexAvailable) {
       this.codexView = null;
       this.codexInsights = emptyCodexScopedInsights();
       this.codexHasData = false;
+      this.codexRefreshing = false;
+      this.codexProgress = null;
+      this.codexProgressLastRenderedAt = 0;
       this.syncProviderUi();
       return;
     }
-
-    this.codexView = buildCodexUsageView(result.snapshot);
-    this.codexInsights = buildScopedCodexInsights(this.codexView);
-    this.codexHasData = result.snapshot.coverage.totalFiles > 0;
+    this.codexRefreshing = true;
+    this.codexProgress = null;
+    this.codexProgressLastRenderedAt = 0;
     this.syncProviderUi();
-    const diagnostic = result.diagnostic;
-    this.outputChannel.appendLine(
-      formatCodexIndexDiagnostic({
-        outcome: result.outcome,
-        indexedFiles: result.snapshot.coverage.indexedFiles,
-        totalFiles: result.snapshot.coverage.totalFiles,
-        indexedBytes: result.snapshot.coverage.indexedBytes,
-        totalBytes: result.snapshot.coverage.totalBytes,
-        periodMigratedBytes:
-          result.snapshot.coverage.period.allTime.migratedBytes,
-        periodTotalBytes: result.snapshot.coverage.period.allTime.totalBytes,
-        migrationPending: diagnostic?.migrationPending ?? false,
-        indexRecovery: diagnostic?.indexRecovery?.reason,
-        bodyReads: diagnostic?.bodyReads ?? 0,
-        failedFiles: diagnostic?.failedFiles ?? 0,
-        metadataMs: diagnostic?.metadataMs ?? 0,
-        parseMs: diagnostic?.parseMs ?? 0,
-        qualityFlags: result.snapshot.qualityFlags,
-      }),
-    );
+    const provider = this.codexProvider;
+    this.codexCheckpointHydrationLastAttemptAt = Date.now();
+    const persisted = await provider.loadPersistedSnapshot();
+    if (provider !== this.codexProvider) {
+      return;
+    }
+    if (persisted) {
+      this.applyCodexSnapshot(persisted);
+      this.syncProviderUi();
+    }
+    try {
+      const result = await provider.refresh(
+        codexRefreshProfileForTrigger(trigger),
+        (progress) => this.onCodexIndexProgress(progress),
+      );
+      if (result.outcome === 'unavailable') {
+        this.codexView = null;
+        this.codexInsights = emptyCodexScopedInsights();
+        this.codexAvailable = false;
+        this.codexHasData = false;
+        return;
+      }
+
+      this.applyCodexSnapshot(result.snapshot);
+      const diagnostic = result.diagnostic;
+      this.outputChannel.appendLine(
+        formatCodexIndexDiagnostic({
+          outcome: result.outcome,
+          indexedFiles: result.snapshot.coverage.indexedFiles,
+          totalFiles: result.snapshot.coverage.totalFiles,
+          indexedBytes: result.snapshot.coverage.indexedBytes,
+          totalBytes: result.snapshot.coverage.totalBytes,
+          periodMigratedBytes:
+            result.snapshot.coverage.period.allTime.migratedBytes,
+          periodTotalBytes: result.snapshot.coverage.period.allTime.totalBytes,
+          migrationPending: diagnostic?.migrationPending ?? false,
+          indexRecovery: diagnostic?.indexRecovery?.reason,
+          bodyReads: diagnostic?.bodyReads ?? 0,
+          failedFiles: diagnostic?.failedFiles ?? 0,
+          metadataMs: diagnostic?.metadataMs ?? 0,
+          parseMs: diagnostic?.parseMs ?? 0,
+          qualityFlags: result.snapshot.qualityFlags,
+        }),
+      );
+    } finally {
+      this.codexRefreshing = false;
+      this.codexProgress = null;
+      this.codexProgressLastRenderedAt = 0;
+      this.syncProviderUi();
+    }
+  }
+
+  private onCodexIndexProgress(progress: CodexIndexProgress): void {
+    this.codexProgress = progress;
+    this.scheduleCodexCheckpointHydration();
+    const now = Date.now();
+    if (
+      this.codexProgressLastRenderedAt === 0 ||
+      now - this.codexProgressLastRenderedAt >= 250
+    ) {
+      this.codexProgressLastRenderedAt = now;
+      this.webviewProvider.updateCodexProgress({
+        scannedFiles: progress.scannedFiles,
+        totalFiles: progress.totalFiles,
+        indexedBytes: progress.indexedBytes,
+        totalBytes: progress.totalBytes,
+      });
+    }
+  }
+
+  private applyCodexSnapshot(snapshot: CodexProviderSnapshot): void {
+    this.codexView = buildCodexUsageView(snapshot);
+    this.codexInsights = buildScopedCodexInsights(this.codexView);
+    this.codexAvailable = true;
+    this.codexHasData = snapshot.coverage.totalFiles > 0;
+  }
+
+  /** Adopt the first atomic checkpoint during a brand-new cold index. */
+  private scheduleCodexCheckpointHydration(): void {
+    if (
+      this.codexView ||
+      !this.codexRefreshing ||
+      this.codexCheckpointHydration
+    ) {
+      return;
+    }
+    const now = Date.now();
+    if (
+      this.codexCheckpointHydrationLastAttemptAt > 0 &&
+      now - this.codexCheckpointHydrationLastAttemptAt < 1_000
+    ) {
+      return;
+    }
+    this.codexCheckpointHydrationLastAttemptAt = now;
+    const provider = this.codexProvider;
+    const pending = provider.loadPersistedSnapshot()
+      .then((snapshot) => {
+        if (
+          !snapshot ||
+          provider !== this.codexProvider ||
+          !this.codexRefreshing ||
+          this.codexView
+        ) {
+          return;
+        }
+        this.applyCodexSnapshot(snapshot);
+        this.syncProviderUi();
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (this.codexCheckpointHydration === pending) {
+          this.codexCheckpointHydration = null;
+        }
+      });
+    this.codexCheckpointHydration = pending;
   }
 
   // Settings whose change only affects the status bar (no dashboard reload).
@@ -966,6 +1104,8 @@ export class ClaudeCodeUsageExtension {
     // Apply watcher-delay changes immediately, then refresh and re-attach.
     this.stopFileWatching();
     this.stopCodexWatching();
+    this.stopCredentialsWatching();
+    this.selectClaudeProfile(config.dataDirectory);
     this.codexProvider.dispose();
     this.codexProvider = this.createCodexProvider(config);
     if (!this.windowActivity.focused) {
@@ -974,7 +1114,30 @@ export class ClaudeCodeUsageExtension {
     void this.refreshData(true, 'settings').then(() => {
       void this.startFileWatching();
       this.startCodexWatching();
+      this.startCredentialsWatching();
     });
+  }
+
+  /** Keep quota credentials on the same Claude profile as this window's logs.
+   * A profile switch invalidates every in-memory quota/backoff value because it
+   * belongs to a different account. */
+  private selectClaudeProfile(dataDirectory?: string | null): void {
+    const nextClient = new ClaudeApiClient(this.outputChannel, dataDirectory);
+    if (nextClient.getCredentialsPath() === this.apiClient.getCredentialsPath()) {
+      return;
+    }
+    this.apiClient = nextClient;
+    this.claudeProfileGeneration += 1;
+    this.cache.usageLimits = null;
+    this.cache.usageLimitsLastUpdate = new Date(0);
+    this.cache.usageLimitsBackoffUntil = new Date(0);
+    this.cache.usageLimitsFailStreak = 0;
+    this.quotaColdRetryDone = false;
+    this.statusBar.updateQuota(null);
+    this.webviewProvider.updateQuota(null);
+    this.claudeWeeklyQuotaHistory = [];
+    this.webviewProvider.updateWeeklyQuotaHistory([]);
+    this.loadPersistedQuota();
   }
 
   /**
@@ -1241,23 +1404,78 @@ export class ClaudeCodeUsageExtension {
   /** Fetch real usage limits via OAuth, cached for 2 minutes. */
   // Persist the last-known quota across reloads/restarts.
   private static readonly QUOTA_STATE_KEY = 'ccu.usageLimits';
+  private static readonly WEEKLY_QUOTA_STATE_KEY = 'ccu.weeklyQuotaHistory.v1';
+
+  private quotaProfileHash(): string {
+    return createHash('sha256')
+      .update(this.apiClient.getCredentialsPath())
+      .digest('hex')
+      .slice(0, 16);
+  }
+
+  private quotaStateKey(): string {
+    return `${ClaudeCodeUsageExtension.QUOTA_STATE_KEY}.${this.quotaProfileHash()}`;
+  }
+
+  private weeklyQuotaStateKey(): string {
+    return `${ClaudeCodeUsageExtension.WEEKLY_QUOTA_STATE_KEY}.${this.quotaProfileHash()}`;
+  }
 
   private loadPersistedQuota(): void {
     if (!this.getConfiguration().usageLimitTracking) {
       return;
     }
     try {
+      const storedHistory = this.context.globalState.get<WeeklyQuotaObservation[]>(
+        this.weeklyQuotaStateKey(),
+      ) ?? [];
       const saved = this.context.globalState.get<{ data: ClaudeApiUsageResponse; ts: number }>(
-        ClaudeCodeUsageExtension.QUOTA_STATE_KEY
+        this.quotaStateKey()
       );
+      const savedObservation = saved?.data
+        ? claudeWeeklyQuotaObservations(
+            saved.data,
+            this.quotaProfileHash(),
+            saved.ts || 0,
+          )
+        : [];
+      this.claudeWeeklyQuotaHistory = appendWeeklyQuotaObservations(
+        [],
+        [...storedHistory, ...savedObservation],
+      );
+      this.webviewProvider.updateWeeklyQuotaHistory(this.claudeWeeklyQuotaHistory);
       if (saved && saved.data) {
         this.cache.usageLimits = saved.data;
         this.cache.usageLimitsLastUpdate = new Date(saved.ts || 0);
         this.statusBar.updateQuota(saved.data);
+        this.webviewProvider.updateQuota(saved.data);
       }
     } catch {
       /* ignore corrupt persisted state */
     }
+  }
+
+  private recordClaudeWeeklyQuota(
+    usage: ClaudeApiUsageResponse,
+    observedAt: number,
+  ): void {
+    const additions = claudeWeeklyQuotaObservations(
+      usage,
+      this.quotaProfileHash(),
+      observedAt,
+    );
+    if (additions.length === 0) {
+      return;
+    }
+    this.claudeWeeklyQuotaHistory = appendWeeklyQuotaObservations(
+      this.claudeWeeklyQuotaHistory,
+      additions,
+    );
+    this.webviewProvider.updateWeeklyQuotaHistory(this.claudeWeeklyQuotaHistory);
+    void this.context.globalState.update(
+      this.weeklyQuotaStateKey(),
+      this.claudeWeeklyQuotaHistory,
+    );
   }
 
   private async maybeFetchUsageLimits(config: ExtensionConfig): Promise<ClaudeApiUsageResponse | null> {
@@ -1285,8 +1503,19 @@ export class ClaudeCodeUsageExtension {
     if (this.cache.usageLimits && age < ttl && !this.hasExpiredWindow(this.cache.usageLimits)) {
       return this.cache.usageLimits;
     }
-    const fetched = await this.apiClient.fetchUsageLimits();
+    const profileGeneration = this.claudeProfileGeneration;
+    const apiClient = this.apiClient;
+    const fetched = await apiClient.fetchUsageLimits();
+    if (
+      profileGeneration !== this.claudeProfileGeneration ||
+      apiClient !== this.apiClient
+    ) {
+      // A slower request from the previously selected profile must never
+      // overwrite the new account's in-memory or persisted quota snapshot.
+      return this.cache.usageLimits;
+    }
     if (fetched) {
+      const observedAt = Date.now();
       this.cache.usageLimits = fetched;
       this.cache.usageLimitsLastUpdate = new Date();
       this.cache.usageLimitsFailStreak = 0;
@@ -1296,9 +1525,10 @@ export class ClaudeCodeUsageExtension {
       this.cache.usageLimitsBackoffUntil = new Date(Date.now() + 30000);
       // Write through to disk so the next startup/reload has it instantly.
       void this.context.globalState.update(
-        ClaudeCodeUsageExtension.QUOTA_STATE_KEY,
-        { data: fetched, ts: Date.now() }
+        this.quotaStateKey(),
+        { data: fetched, ts: observedAt }
       );
+      this.recordClaudeWeeklyQuota(fetched, observedAt);
       return fetched;
     }
     // Failed (usually a 429 or invalid/expired credentials). Exponentially back

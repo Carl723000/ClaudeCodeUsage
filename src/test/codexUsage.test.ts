@@ -88,6 +88,10 @@ test('index backfill quality warning follows index convergence', () => {
   const snapshot = snapshotFixture();
   const incomplete = buildCodexUsageView(snapshot, NOW);
 
+  assert.equal(incomplete.lastTask?.indexedSubtotal, true);
+  assert.equal(incomplete.last30Days.indexedSubtotal, true);
+  assert.equal(incomplete.allTime.indexedSubtotal, true);
+
   assert.deepEqual(
     incomplete.qualityFlags.find(
       ({ flag }) => flag === 'index-backfill-incomplete',
@@ -98,7 +102,15 @@ test('index backfill quality warning follows index convergence', () => {
   snapshot.coverage.indexedFiles = snapshot.coverage.totalFiles;
   snapshot.coverage.indexedBytes = snapshot.coverage.totalBytes;
   snapshot.coverage.complete = true;
+  snapshot.coverage.identity.complete = true;
+  snapshot.coverage.period.last7Days.complete = true;
+  snapshot.coverage.period.last30Days.complete = true;
+  snapshot.coverage.period.allTime.complete = true;
   const converged = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(converged.lastTask?.indexedSubtotal, false);
+  assert.equal(converged.last30Days.indexedSubtotal, false);
+  assert.equal(converged.allTime.indexedSubtotal, false);
 
   assert.equal(
     converged.qualityFlags.some(

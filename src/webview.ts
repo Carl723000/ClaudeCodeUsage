@@ -18,6 +18,16 @@ import { renderConversationViewer } from './conversationViewerHtml';
 import { formatUsageDate, shortUsageDate } from './usageDateLabels';
 import { normalizeQuotaWindows } from './quotaWindows';
 import {
+  buildWeeklyUsageHistory,
+  buildWeeklyValueTrend,
+  claudeWeeklyEquivalentUsage,
+  equivalentUsageFromProviderTokens,
+  mergeWeeklyValuePoints,
+  summarizeEquivalentUsage,
+  WeeklyQuotaObservation,
+  WeeklyValuePoint,
+} from './weeklyValue';
+import {
   defaultDashboardProvider,
 } from './codexView';
 import {
@@ -52,6 +62,13 @@ import {
   WorkflowUsage,
 } from './types';
 
+interface CodexRenderProgress {
+  scannedFiles: number;
+  totalFiles: number;
+  indexedBytes: number;
+  totalBytes: number;
+}
+
 export class UsageWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
   private currentSessionData: SessionData | null = null;
@@ -68,7 +85,9 @@ export class UsageWebviewProvider {
   private currentProvider: 'claude' | 'codex' | 'compare' = 'claude';
   private codexView: CodexUsageView | null = null;
   private codexInsights: CodexScopedInsights = emptyCodexScopedInsights();
-  private providerAvailability = { claude: false, codex: false };
+  private providerAvailability = { claude: false, codex: false, codexData: false };
+  private codexLoading = false;
+  private codexProgress: CodexRenderProgress | null = null;
   private providerSelectionInitialized = false;
   private hourlyDataCache: Map<string, { hour: string; data: UsageData }[]> = new Map();
   private allRecords: any[] = [];
@@ -110,6 +129,7 @@ export class UsageWebviewProvider {
   // Real quota utilisation (pushed asynchronously) for the workflow quota
   // guard banner; dismissal lasts for the lifetime of this window.
   private usageLimits: ClaudeApiUsageResponse | null = null;
+  private claudeWeeklyQuotaHistory: WeeklyQuotaObservation[] = [];
   private quotaWarnDismissed: boolean = false;
   // Set by extension.ts: runs the Usage Optimizer round-trip (model lives there
   // with the config + OAuth client). Returns the optimised prompt + settings
@@ -270,7 +290,7 @@ export class UsageWebviewProvider {
             (requested === 'codex' && this.providerAvailability.codex) ||
             (requested === 'compare' &&
               this.providerAvailability.claude &&
-              this.providerAvailability.codex);
+              this.providerAvailability.codexData);
           if (allowed) {
             this.currentProvider = requested as 'claude' | 'codex' | 'compare';
             const sharedTabs = ['today', 'month', 'all', 'sessions', 'projects', 'content', 'settings'];
@@ -522,11 +542,23 @@ export class UsageWebviewProvider {
   updateProviderData(
     codexView: CodexUsageView | null,
     insights: CodexScopedInsights,
-    providerAvailability: { claude: boolean; codex: boolean },
+    providerAvailability: {
+      claude: boolean;
+      codex: boolean;
+      codexData?: boolean;
+      codexLoading?: boolean;
+      codexProgress?: CodexRenderProgress | null;
+    },
   ): void {
     this.codexView = codexView;
     this.codexInsights = codexView ? insights : emptyCodexScopedInsights();
-    this.providerAvailability = { ...providerAvailability };
+    this.codexLoading = providerAvailability.codexLoading ?? false;
+    this.codexProgress = providerAvailability.codexProgress ?? null;
+    this.providerAvailability = {
+      claude: providerAvailability.claude,
+      codex: providerAvailability.codex,
+      codexData: providerAvailability.codexData ?? providerAvailability.codex,
+    };
     if (!this.providerSelectionInitialized) {
       this.currentProvider = defaultDashboardProvider(
         providerAvailability.claude,
@@ -537,7 +569,7 @@ export class UsageWebviewProvider {
       (this.currentProvider === 'claude' && !providerAvailability.claude) ||
       (this.currentProvider === 'codex' && !providerAvailability.codex) ||
       (this.currentProvider === 'compare' &&
-        (!providerAvailability.claude || !providerAvailability.codex))
+        (!providerAvailability.claude || !this.providerAvailability.codexData))
     ) {
       this.currentProvider = defaultDashboardProvider(
         providerAvailability.claude,
@@ -545,6 +577,13 @@ export class UsageWebviewProvider {
       );
     }
     if (this.panel) {
+      this.updateWebview();
+    }
+  }
+
+  updateCodexProgress(progress: CodexRenderProgress): void {
+    this.codexProgress = progress;
+    if (this.panel && this.currentProvider === 'codex') {
       this.updateWebview();
     }
   }
@@ -565,6 +604,16 @@ export class UsageWebviewProvider {
     this.usageLimits = usageLimits;
     // Re-render only on change so the cheap quota poll doesn't redraw the
     // dashboard (and reset scroll position) every tick.
+    if (changed && this.panel && !this.isLoading) {
+      this.updateWebview();
+    }
+  }
+
+  /** Sanitized weekly quota observations, persisted per Claude profile by the
+   * extension host. No OAuth data or account identity enters the webview. */
+  updateWeeklyQuotaHistory(history: WeeklyQuotaObservation[]): void {
+    const changed = JSON.stringify(history) !== JSON.stringify(this.claudeWeeklyQuotaHistory);
+    this.claudeWeeklyQuotaHistory = history.map((item) => ({ ...item }));
     if (changed && this.panel && !this.isLoading) {
       this.updateWebview();
     }
@@ -731,7 +780,7 @@ export class UsageWebviewProvider {
     if (this.providerAvailability.codex) {
       html += button('codex', labels.codexBeta);
     }
-    if (this.providerAvailability.claude && this.providerAvailability.codex) {
+    if (this.providerAvailability.claude && this.providerAvailability.codexData) {
       html += button('compare', labels.compare);
     }
     return html + '</nav>';
@@ -785,7 +834,9 @@ export class UsageWebviewProvider {
         codexTotals.cache,
         codexTotals.output,
       ) +
-      '</div></section>';
+      '</div></section>' +
+      this.renderWeeklyValuePanel('claude') +
+      this.renderWeeklyValuePanel('codex');
   }
 
   private getAlternateProviderContent(): string {
@@ -1159,7 +1210,7 @@ export class UsageWebviewProvider {
       const view = this.codexView;
       const copy = I18n.t.providers.codex;
       if (!view) {
-        return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>';
+        return this.renderCodexEmptyState();
       }
       const formatters = createCodexLocalizedFormatters(I18n.getLocale(), I18n.getTimezone());
       let identity = '';
@@ -1182,7 +1233,8 @@ export class UsageWebviewProvider {
       }
       const limits = view.limits.length > 0
         ? '<div class="usage-summary"><div class="section-header"><h3>' + this.escapeHtml(copy.usageLimits) +
-          '</h3></div><div class="summary-grid">' + view.limits.map((limit) => {
+          '</h3></div><p class="model-details">' + this.escapeHtml(copy.accountSnapshotLastObserved) +
+          '</p><div class="summary-grid">' + view.limits.map((limit) => {
             const label = limit.limitName ?? (limit.windowMinutes === 300
               ? copy.fiveHourWindow
               : limit.windowMinutes === 10_080 ? copy.weeklyWindow : copy.usageLimits);
@@ -1219,8 +1271,7 @@ export class UsageWebviewProvider {
         this.escapeHtml(view.coverage.complete ? copy.complete : copy.partial) + '</p>' +
         qualityFlags + '</details>';
       if (!view.lastTask) {
-        return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>' +
-          coverage;
+        return this.renderCodexEmptyState() + coverage;
       }
       return this.renderUsageData(null, provider, view.lastTask) + identity + limits + coverage;
     }
@@ -1369,6 +1420,70 @@ export class UsageWebviewProvider {
     return '<div class="eff-chips">' + chips + '</div>';
   }
 
+  private renderCodexIndexedSubtotal(indexedSubtotal?: boolean): string {
+    if (!indexedSubtotal && !(this.codexLoading && this.codexProgress)) {
+      return '';
+    }
+    const copy = I18n.t.providers.codex;
+    const coverage = this.codexView?.coverage;
+    const progress: CodexRenderProgress | null =
+      this.codexLoading && this.codexProgress
+        ? this.codexProgress
+        : coverage
+          ? {
+              scannedFiles: coverage.indexedFiles,
+              totalFiles: coverage.totalFiles,
+              indexedBytes: coverage.indexedBytes,
+              totalBytes: coverage.totalBytes,
+            }
+          : null;
+    const details = progress ? ' · ' + this.renderCodexProgressText(progress) : '';
+    const subtotal = indexedSubtotal
+      ? '<strong>' + this.escapeHtml(copy.indexedSubtotal) + '</strong> · '
+      : '';
+    return '<p class="model-details">' + subtotal +
+      this.escapeHtml(copy.indexingInProgress) + details + '</p>';
+  }
+
+  private renderCodexEmptyState(): string {
+    const copy = I18n.t.providers.codex;
+    const message = this.codexLoading
+      ? copy.indexingInProgress
+      : copy.noRecentTask;
+    const progress = this.codexLoading && this.codexProgress
+      ? '<p class="model-details">' +
+        this.renderCodexProgressText(this.codexProgress) + '</p>'
+      : '';
+    return '<div class="no-data"><p>' + this.escapeHtml(message) + '</p>' +
+      progress + '</div>';
+  }
+
+  private renderCodexProgressText(progress: CodexRenderProgress): string {
+    const copy = I18n.t.providers.codex;
+    const exactCount = new Intl.NumberFormat(I18n.getLocale(), {
+      maximumFractionDigits: 0,
+    });
+    const completedPercent = progress.totalFiles > 0
+      ? Math.min(
+          100,
+          Math.max(0, Math.round(
+            progress.scannedFiles / progress.totalFiles * 100,
+          )),
+        )
+      : 0;
+    const formatters = createCodexLocalizedFormatters(
+      I18n.getLocale(),
+      I18n.getTimezone(),
+    );
+    return this.escapeHtml(copy.indexedLogEntries) + ': ' +
+      exactCount.format(progress.scannedFiles) + '/' +
+      exactCount.format(progress.totalFiles) +
+      (progress.totalFiles > 0 ? ' (' + completedPercent + '%)' : '') + ' · ' +
+      this.escapeHtml(copy.indexedStorage) + ': ' +
+      this.escapeHtml(formatters.formatBytes(progress.indexedBytes)) + '/' +
+      this.escapeHtml(formatters.formatBytes(progress.totalBytes));
+  }
+
   private renderUsageData(
     data: UsageData | null,
     provider: SettingProvider = 'claude',
@@ -1376,13 +1491,40 @@ export class UsageWebviewProvider {
   ): string {
     if (provider === 'codex') {
       const scope = codexScope;
-      const copy = I18n.t.providers.codex;
       if (!scope) {
-        return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>';
+        return this.renderCodexEmptyState();
       }
+      const copy = I18n.t.providers.codex;
       const metric = (label: string, value: number): string =>
         '<div class="summary-item"><div class="label">' + this.escapeHtml(label) +
         '</div><div class="value">' + I18n.formatNumber(value) + '</div></div>';
+      const equivalentRows = scope.models.map((row) =>
+        equivalentUsageFromProviderTokens(0, row.key, {
+          inputTotal: row.totals.input,
+          cachedInput: row.totals.cachedInput,
+          outputTotal: row.totals.output,
+          reasoningOutput: row.totals.reasoning,
+        }),
+      );
+      const equivalent = summarizeEquivalentUsage(
+        equivalentRows,
+        scope.total.processed,
+      );
+      const pricingCoverage = new Intl.NumberFormat(I18n.getLocale(), {
+        style: 'percent',
+        maximumFractionDigits: 0,
+      }).format(equivalent.pricingCoverage);
+      const equivalentHelp = copy.apiEquivalentCostHelp.replace(
+        '{coverage}',
+        pricingCoverage,
+      );
+      const equivalentCost = equivalent.pricedTokens > 0
+        ? '≈ ' + I18n.formatCurrency(equivalent.equivalentUsd)
+        : '—';
+      const equivalentCostMetric =
+        '<div class="summary-item" title="' + this.escapeHtml(equivalentHelp) + '">' +
+        '<div class="label">' + this.escapeHtml(copy.apiEquivalentCost) + '</div>' +
+        '<div class="value cost">' + this.escapeHtml(equivalentCost) + '</div></div>';
       const composition = tokenComposition(scope.total);
       const compositionTotal = composition.freshInput + composition.cachedInput + composition.output;
       const width = (value: number): string =>
@@ -1425,7 +1567,10 @@ export class UsageWebviewProvider {
             I18n.formatNumber(row.totals.reasoning) + '</strong></span></div></details>',
           ).join('') + '</div></div>';
       };
-      return '<div class="usage-summary"><div class="summary-grid">' +
+      return '<div class="usage-summary">' +
+        this.renderCodexIndexedSubtotal(scope.indexedSubtotal) +
+        '<div class="summary-grid">' +
+        equivalentCostMetric +
         metric(copy.processed, scope.total.processed) +
         metric(copy.fresh, scope.total.fresh) +
         metric(copy.input, scope.total.input) +
@@ -1641,7 +1786,7 @@ export class UsageWebviewProvider {
       const view = this.codexView;
       const copy = I18n.t.providers.codex;
       if (!view) {
-        return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>';
+        return this.renderCodexEmptyState();
       }
       const rows = view.last30DaysDaily;
       const breakdown = rows.length === 0
@@ -1767,7 +1912,7 @@ export class UsageWebviewProvider {
       const view = this.codexView;
       const copy = I18n.t.providers.codex;
       if (!view) {
-        return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>';
+        return this.renderCodexEmptyState();
       }
       const rows = view.monthly;
       const breakdown = rows.length === 0
@@ -1796,7 +1941,8 @@ export class UsageWebviewProvider {
             '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
           ).join('') + '</tbody></table></div></div>';
-      return this.renderUsageData(null, provider, view.allTime) + breakdown;
+      return this.renderUsageData(null, provider, view.allTime) +
+        this.renderWeeklyValuePanel(provider) + breakdown;
     }
     if (!this.allTimeData) {
       return `<div class="no-data"><p>${I18n.t.popup.noDataMessage}</p></div>`;
@@ -1900,7 +2046,147 @@ export class UsageWebviewProvider {
         : '';
 
     // Heatmap sits right above the "monthly usage" breakdown, below the totals.
-    return allTimeSummary + this.renderShareCardPanel() + heatmapPanel + dailyBreakdown;
+    return allTimeSummary + this.renderWeeklyValuePanel(provider) +
+      this.renderShareCardPanel() + heatmapPanel + dailyBreakdown;
+  }
+
+  private weeklyValuePoints(provider: SettingProvider): WeeklyValuePoint[] {
+    const now = Date.now();
+    const inputs = provider === 'codex'
+      ? this.codexView?.weeklyValueInputs
+      : {
+          observations: this.claudeWeeklyQuotaHistory,
+          usage: claudeWeeklyEquivalentUsage(this.allRecords),
+        };
+    if (!inputs) {
+      return [];
+    }
+    const anchorResetAt = inputs.observations
+      .filter((item) => Number.isFinite(item.observedAt) && Number.isFinite(item.resetAt))
+      .sort((left, right) => right.observedAt - left.observedAt)[0]?.resetAt;
+    const observed = buildWeeklyValueTrend(inputs, now);
+    const history = buildWeeklyUsageHistory(provider, inputs.usage, {
+      now,
+      anchorResetAt,
+    });
+    return mergeWeeklyValuePoints(observed, history);
+  }
+
+  /** Shared reset-aligned allowance-value renderer for Claude and Codex. The
+   * chart deliberately reuses the dashboard's existing stacked-bar classes:
+   * blue is observed use, green is the inferred unused share. */
+  private renderWeeklyValuePanel(provider: SettingProvider): string {
+    const copy = I18n.t.weeklyValue;
+    const points = this.weeklyValuePoints(provider);
+    const providerLabel = provider === 'codex'
+      ? I18n.t.providers.codexBeta
+      : I18n.t.providers.claude;
+    const heading = this.escapeHtml(`${copy.title} · ${providerLabel}`);
+    const notes = [
+      copy.description,
+      copy.historyFromLogs,
+      ...(points.some((point) => point.basis === 'calendar-usage')
+        ? [copy.calendarFallback]
+        : []),
+      ...(provider === 'codex' ? [copy.multiAccount] : []),
+      ...(provider === 'codex' && this.codexView && !this.codexView.periodCoverage.allTime.complete
+        ? [copy.indexedSubtotal]
+        : []),
+    ].map((line) => this.escapeHtml(line)).join('<br>');
+    if (points.length === 0) {
+      return '<div class="daily-breakdown"><div class="section-header"><h3>' +
+        heading + '</h3></div><p class="table-hint">' + notes + '</p>' +
+        '<div class="no-data"><p>' + this.escapeHtml(copy.noData) + '</p></div></div>';
+    }
+
+    const dateLabel = (value: number, short = false): string => {
+      try {
+        return new Intl.DateTimeFormat(I18n.getLocale(), {
+          ...(short
+            ? { month: 'short' as const, day: 'numeric' as const }
+            : {
+                year: 'numeric' as const,
+                month: 'short' as const,
+                day: 'numeric' as const,
+                hour: '2-digit' as const,
+                minute: '2-digit' as const,
+              }),
+          timeZone: I18n.getTimezone(),
+        }).format(new Date(value));
+      } catch {
+        return new Date(value).toISOString().slice(0, 10);
+      }
+    };
+    const confidenceLabel = (point: WeeklyValuePoint): string => {
+      switch (point.confidence) {
+        case 'high': return copy.high;
+        case 'medium': return copy.medium;
+        case 'low': return copy.low;
+        default: return copy.usageOnly;
+      }
+    };
+    const chartPoints = points.slice(0, 8).reverse();
+    const maxValue = Math.max(
+      1,
+      ...chartPoints.map((point) => point.fullEquivalentUsd ?? point.usedEquivalentUsd),
+    );
+    const maxHeight = 120;
+    const bars = chartPoints.map((point) => {
+      const total = Math.max(
+        point.usedEquivalentUsd,
+        point.fullEquivalentUsd ?? point.usedEquivalentUsd,
+      );
+      const barHeight = total > 0 ? (total / maxValue) * maxHeight : 0;
+      const usedHeight = total > 0
+        ? Math.min(barHeight, (point.usedEquivalentUsd / total) * barHeight)
+        : 0;
+      const unusedHeight = Math.max(0, barHeight - usedHeight);
+      const title = `${dateLabel(point.resetAt)} · ${copy.usedValue}: ${I18n.formatCurrency(point.usedEquivalentUsd)}`;
+      return '<div class="hc-col"><div class="stack-bar" title="' +
+        this.escapeHtml(title) + '">' +
+        '<div class="stack-seg seg-input" style="height:' + usedHeight.toFixed(2) + 'px"></div>' +
+        (point.fullEquivalentUsd !== null
+          ? '<div class="stack-seg seg-cache-read" style="height:' + unusedHeight.toFixed(2) + 'px"></div>'
+          : '') +
+        '</div></div>';
+    }).join('');
+    const xlabels = chartPoints.map((point) =>
+      '<div class="hc-xlabel">' + this.escapeHtml(dateLabel(point.resetAt, true)) + '</div>',
+    ).join('');
+    const legend = (cls: string, label: string): string =>
+      '<span class="legend-item"><span class="legend-dot ' + cls + '"></span>' +
+      this.escapeHtml(label) + '</span>';
+    const chart = '<div class="composition-chart"><div class="stack-legend">' +
+      legend('seg-input', copy.usedValue) + legend('seg-cache-read', copy.unusedValue) +
+      '</div><div class="hc-wrap"><div class="hc-yaxis"><span class="hc-yval">' +
+      I18n.formatCurrency(maxValue) + '</span><span class="hc-yval">' +
+      I18n.formatCurrency(maxValue / 2) + '</span><span class="hc-yval">$0</span></div>' +
+      '<div class="hc-main"><div class="hc-scroll" tabindex="0"><div class="hc-plot">' +
+      '<div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div>' +
+      '<div class="hc-bars">' + bars + '</div></div><div class="hc-xlabels">' +
+      xlabels + '</div></div></div></div></div>';
+    const dash = '—';
+    const tableRows = points.map((point) =>
+      '<tr><td class="date-cell">' + this.escapeHtml(dateLabel(point.resetAt)) +
+      (point.current ? ' · ' + this.escapeHtml(copy.current) : '') + '</td>' +
+      '<td class="cost-cell">' + I18n.formatCurrency(point.usedEquivalentUsd) + '</td>' +
+      '<td class="number-cell">' +
+      (point.utilizationPercent === null ? dash : this.formatPercent(point.utilizationPercent / 100)) + '</td>' +
+      '<td class="cost-cell">' +
+      (point.fullEquivalentUsd === null ? dash : I18n.formatCurrency(point.fullEquivalentUsd)) + '</td>' +
+      '<td class="cost-cell">' +
+      (point.unusedEquivalentUsd === null ? dash : I18n.formatCurrency(point.unusedEquivalentUsd)) + '</td>' +
+      '<td>' + this.escapeHtml(confidenceLabel(point)) + '</td>' +
+      '<td class="number-cell">' + this.formatPercent(point.pricingCoverage) + '</td></tr>',
+    ).join('');
+    return '<div class="daily-breakdown"><div class="section-header"><h3>' + heading +
+      '</h3></div><p class="table-hint">' + notes + '</p>' + chart +
+      '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+      '<th>' + this.escapeHtml(copy.reset) + '</th><th>' + this.escapeHtml(copy.usedValue) + '</th>' +
+      '<th>' + this.escapeHtml(copy.utilization) + '</th><th>' + this.escapeHtml(copy.fullValue) + '</th>' +
+      '<th>' + this.escapeHtml(copy.unusedValue) + '</th><th>' + this.escapeHtml(copy.confidence) + '</th>' +
+      '<th>' + this.escapeHtml(copy.pricingCoverage) + '</th></tr></thead><tbody>' +
+      tableRows + '</tbody></table></div></div>';
   }
 
   /** The "Share card" panel (All tab). Off by default (`enableShareCard`); when
@@ -2115,8 +2401,11 @@ export class UsageWebviewProvider {
     if (provider === 'codex') {
       const copy = I18n.t.providers.codex;
       const sessions = this.codexView?.recentThreads ?? [];
+      const subtotal = this.renderCodexIndexedSubtotal(
+        this.codexView?.allTime.indexedSubtotal,
+      );
       if (sessions.length === 0) {
-        return '<div class="no-data"><p>' + this.escapeHtml(copy.noThreadData) + '</p></div>';
+        return subtotal + '<div class="no-data"><p>' + this.escapeHtml(copy.noThreadData) + '</p></div>';
       }
       const formatters = createCodexLocalizedFormatters(I18n.getLocale(), I18n.getTimezone());
       const role = (value: CodexThreadUsageView['role']): string => {
@@ -2182,7 +2471,7 @@ export class UsageWebviewProvider {
       const th = (key: string, label: string, title?: string): string =>
         '<th class="sortable" data-sortkey="' + key + '"' +
         (title ? ' title="' + this.escapeHtml(title) + '"' : '') + '>' + this.escapeHtml(label) + '</th>';
-      return '<div class="daily-breakdown"><h3>' + this.escapeHtml(copy.sessions) + '</h3>' +
+      return subtotal + '<div class="daily-breakdown"><h3>' + this.escapeHtml(copy.sessions) + '</h3>' +
         '<p class="table-hint">' + this.escapeHtml(I18n.t.popup.sortHint) + '</p>' + filterBar +
         '<div class="session-list" id="sessionList"><div class="daily-table-container" tabindex="0">' +
         '<table class="daily-table sortable-table" data-provider-session-table>' +
@@ -2523,8 +2812,11 @@ export class UsageWebviewProvider {
     if (provider === 'codex') {
       const copy = I18n.t.providers.codex;
       const projects = this.codexView?.projects ?? [];
+      const subtotal = this.renderCodexIndexedSubtotal(
+        this.codexView?.allTime.indexedSubtotal,
+      );
       if (projects.length === 0) {
-        return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>';
+        return subtotal + this.renderCodexEmptyState();
       }
       const formatters = createCodexLocalizedFormatters(I18n.getLocale(), I18n.getTimezone());
       const rows = projects.map((project: CodexProjectUsageView) => {
@@ -2548,7 +2840,7 @@ export class UsageWebviewProvider {
       }).join('');
       const th = (key: string, label: string): string =>
         '<th class="sortable" data-sortkey="' + key + '">' + this.escapeHtml(label) + '</th>';
-      return '<div class="daily-breakdown"><h3>' + this.escapeHtml(copy.projects) + '</h3>' +
+      return subtotal + '<div class="daily-breakdown"><h3>' + this.escapeHtml(copy.projects) + '</h3>' +
         '<p class="table-hint">' + this.escapeHtml(I18n.t.popup.sortHint) + '</p>' +
         '<div class="daily-table-container" tabindex="0"><table class="daily-table sortable-table"><thead><tr>' +
         th('name', copy.projectLabel) + th('sessions', copy.threads) + th('processed', copy.processed) +
@@ -3581,7 +3873,7 @@ export class UsageWebviewProvider {
       const view = this.codexView;
       const copy = I18n.t.providers.codex;
       if (!view) {
-        return '<div class="no-data"><p>' + this.escapeHtml(copy.noRecentTask) + '</p></div>';
+        return this.renderCodexEmptyState();
       }
       const behavior = view.behaviorScopes.last30Days;
       const percent = (value: number): string => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
@@ -4436,12 +4728,8 @@ export class UsageWebviewProvider {
         background: #fff;
       }
 
-      /* Refresh-Now button is only relevant when auto-refresh is OFF — hide
-         it by default, show only when the body carries the .auto-off class. */
+      /* Manual refresh is also the explicit accelerated Codex catch-up path. */
       .btn-refresh-now {
-        display: none;
-      }
-      body.auto-off .btn-refresh-now {
         display: inline-block;
       }
 

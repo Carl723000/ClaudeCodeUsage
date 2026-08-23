@@ -10,6 +10,7 @@ import {
 } from '../providers/codex/codexProvider';
 import {
   CodexFileContribution,
+  CodexIndexProgress,
   CodexIndexV1,
   createEmptyCodexIndex,
 } from '../providers/codex/codexIndex';
@@ -143,17 +144,25 @@ class FakeClient implements CodexIndexClientLike {
     indexPath: string;
     salt: string;
     timeZone: string;
+    profile?: 'background' | 'foreground';
   }> = [];
-  constructor(private readonly responses: Array<CodexWorkerResult | Error>) {}
+  constructor(
+    private readonly responses: Array<CodexWorkerResult | Error>,
+    private readonly progress?: CodexIndexProgress,
+  ) {}
 
   async refresh(input: {
     codexHome: string;
     indexPath: string;
     salt: string;
     timeZone: string;
-  }): Promise<CodexWorkerResult> {
+    profile?: 'background' | 'foreground';
+  }, onProgress?: (progress: CodexIndexProgress) => void): Promise<CodexWorkerResult> {
     this.calls += 1;
     this.inputs.push(input);
+    if (this.progress) {
+      onProgress?.(this.progress);
+    }
     const next = this.responses.shift();
     if (next instanceof Error) {
       throw next;
@@ -224,6 +233,49 @@ test('disabled or unavailable providers do not create a worker client', async ()
   }
 });
 
+test('a persisted checkpoint hydrates a usable snapshot before the worker refresh', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-checkpoint-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const indexPath = path.join(root, 'codex-index-v1.json');
+    const checkpoint = partialIndex();
+    const unreconciled = contribution('unreconciled-file-key');
+    unreconciled.aggregate.total.inputTotal = 9_999;
+    unreconciled.lineage = {
+      fingerprintBlocks: [],
+      pendingFingerprints: ['0'.repeat(32)],
+      tokenEvents: 1,
+      desiredPrefixEvents: 1,
+      appliedPrefixEvents: 0,
+    };
+    checkpoint.files[unreconciled.fileKey] = unreconciled;
+    await writeFile(indexPath, JSON.stringify(checkpoint), 'utf8');
+    const client = new FakeClient([]);
+    const provider = new CodexProvider(
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath,
+        salt: 'salt',
+        timeZone: 'Asia/Hong_Kong',
+      },
+      () => client,
+    );
+
+    const snapshot = await provider.loadPersistedSnapshot();
+
+    assert.ok(snapshot);
+    assert.equal(snapshot.total.inputTotal, 80);
+    assert.equal(snapshot.coverage.indexedFiles, 1);
+    assert.equal(snapshot.coverage.totalFiles, 2);
+    assert.equal(snapshot.files.length, 1);
+    assert.deepEqual(provider.snapshot(), snapshot);
+    assert.equal(client.calls, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a partial refresh exposes aggregates, quality, and last observed limit', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-on-'));
   try {
@@ -251,7 +303,7 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
       () => client,
     );
 
-    const refreshed = await provider.refresh();
+    const refreshed = await provider.refresh('foreground');
 
     assert.equal(refreshed.outcome, 'partial');
     assert.equal(refreshed.snapshot.total.inputTotal, 80);
@@ -265,9 +317,120 @@ test('a partial refresh exposes aggregates, quality, and last observed limit', a
     assert.equal(refreshed.snapshot.limits.length, 1);
     assert.deepEqual(provider.snapshot(), refreshed.snapshot);
     assert.equal(client.inputs[0].timeZone, 'Asia/Hong_Kong');
+    assert.equal(client.inputs[0].profile, 'foreground');
     assert.deepEqual((refreshed.diagnostic as any).indexRecovery, {
       reason: 'invalid-json',
     });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('provider forwards live worker progress to the dashboard caller', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-progress-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const progress: CodexIndexProgress = {
+      scannedFiles: 12,
+      totalFiles: 40,
+      indexedBytes: 1_024,
+      totalBytes: 4_096,
+      period: createEmptyCodexIndex('UTC').coverage.period,
+    };
+    const client = new FakeClient([workerResult()], progress);
+    const provider = new CodexProvider(
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'UTC',
+      },
+      () => client,
+    );
+    const observed: CodexIndexProgress[] = [];
+
+    const refreshed = await provider.refresh('foreground', (next) => {
+      observed.push(next);
+    });
+
+    assert.deepEqual(observed, [progress]);
+    assert.deepEqual(refreshed.progress, progress);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('stale rebuild contributions stay out of usage while their quality and latest limit remain visible', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-rebuild-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const index = createEmptyCodexIndex('UTC');
+    const current = contribution('current-key');
+    current.parserState.sessionKey = 'current-session';
+    current.parserState.qualityFlags = [];
+    current.aggregate.session.sessionKey = 'current-session';
+    current.qualityFlags = [];
+    const stale = contribution('stale-key');
+    stale.parserState.sessionKey = 'stale-session';
+    stale.parserState.qualityFlags = ['stale-reset-required'];
+    stale.aggregate.session.sessionKey = 'stale-session';
+    stale.aggregate.total = {
+      inputTotal: 8_000_000,
+      cachedInput: 7_500_000,
+      outputTotal: 2_000_000,
+    };
+    stale.qualityFlags = ['stale-reset-required'];
+    stale.limit = {
+      provider: 'codex',
+      observedAt: Date.parse('2026-07-20T00:10:00.000Z'),
+      source: 'local-log',
+      confidence: 'last-observed',
+      windows: [{ label: 'primary', usedPercent: 91 }],
+    };
+    const retainedPrefix = contribution('retained-prefix-key');
+    retainedPrefix.parserState.sessionKey = 'retained-prefix-session';
+    retainedPrefix.aggregate.session.sessionKey = 'retained-prefix-session';
+    retainedPrefix.aggregate.total = {
+      inputTotal: 40,
+      cachedInput: 30,
+      outputTotal: 10,
+    };
+    retainedPrefix.qualityFlags = ['stale-file'];
+    index.files = {
+      [current.fileKey]: current,
+      [stale.fileKey]: stale,
+      [retainedPrefix.fileKey]: retainedPrefix,
+    };
+    index.coverage.totalFiles = 3;
+    index.coverage.totalBytes = 300;
+    index.coverage.complete = false;
+    const provider = new CodexProvider(
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'UTC',
+      },
+      () => new FakeClient([{ ...workerResult(index), failedFiles: 0 }]),
+    );
+
+    const refreshed = await provider.refresh();
+
+    assert.equal(refreshed.outcome, 'partial');
+    assert.equal(refreshed.snapshot.total.inputTotal, 120);
+    assert.equal(refreshed.snapshot.total.outputTotal, 30);
+    assert.equal(refreshed.snapshot.files.length, 2);
+    assert.equal(
+      refreshed.snapshot.files[0].session.sessionKey,
+      'current-session',
+    );
+    assert.deepEqual(refreshed.snapshot.qualityFlags, {
+      'stale-file': 1,
+      'stale-reset-required': 1,
+    });
+    assert.equal(refreshed.snapshot.limit?.windows[0].usedPercent, 91);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

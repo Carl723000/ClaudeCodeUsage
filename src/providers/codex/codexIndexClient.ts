@@ -33,6 +33,7 @@ interface ActiveRefresh {
   reject: (error: CodexWorkerError) => void;
   progressListeners: Array<(progress: CodexIndexProgress) => void>;
   cancelSent: boolean;
+  profile: 'background' | 'foreground';
 }
 
 export type CodexWorkerFactory = () => CodexWorkerLike;
@@ -60,6 +61,15 @@ export class CodexIndexClient {
       );
     }
     if (this.active) {
+      if (
+        input.profile === 'foreground' &&
+        this.active.profile !== 'foreground'
+      ) {
+        // A manual refresh must not be swallowed by a watcher scan that was
+        // already in flight. Let the bounded background pass checkpoint, then
+        // immediately run one accelerated pass.
+        return this.active.promise.then(() => this.refresh(input, onProgress));
+      }
       if (onProgress) {
         this.active.progressListeners.push(onProgress);
       }
@@ -81,6 +91,7 @@ export class CodexIndexClient {
       reject,
       progressListeners: onProgress ? [onProgress] : [],
       cancelSent: false,
+      profile: input.profile ?? 'background',
     };
     worker.postMessage({ type: 'refresh', requestId, ...input });
     return promise;

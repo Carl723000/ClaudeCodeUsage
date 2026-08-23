@@ -57,7 +57,7 @@ export function formatCodexStatus(
       )}%`
     : undefined;
   return {
-    text: `CX ${compact(value)}`,
+    text: `CX ${compact(value)}${scope.indexedSubtotal ? '*' : ''}`,
     limitText,
     stale: Boolean(limit && !liveWindow),
   };

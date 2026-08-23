@@ -65,6 +65,13 @@ test('processed and output metrics stay distinct', () => {
   assert.equal(formatCodexStatus(scope, 'output', null, NOW).text, 'CX 200');
 });
 
+test('an indexed subtotal is marked in the compact status text', () => {
+  assert.equal(
+    formatCodexStatus({ ...scope, indexedSubtotal: true }, 'processed', null, NOW).text,
+    'CX 1.2k*',
+  );
+});
+
 test('expired last-observed limits are omitted', () => {
   const formatted = formatCodexStatus(
     scope,

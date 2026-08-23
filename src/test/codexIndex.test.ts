@@ -1602,7 +1602,10 @@ test('the persisted v1 loader migrates legacy structural proxy keys', async () =
     assert.equal(loaded.schemaVersion, 3);
     assert.equal(loaded.files.a.offset, 100);
     assert.equal(loaded.files.a.discardingOversizedLine, false);
-    assert.equal(loaded.aggregate.total.inputTotal, 123);
+    assert.equal(loaded.aggregate.total.inputTotal, 0);
+    assert.ok(loaded.files.a.qualityFlags.includes('stale-reset-required'));
+    assert.equal(loaded.coverage.indexedFiles, 0);
+    assert.equal(loaded.coverage.indexedBytes, 0);
     assert.equal(loaded.files.a.aggregate.period, undefined);
     assert.deepEqual(loaded.files.a.aggregate.structural, {
       patchCalls: 1,
@@ -1865,12 +1868,12 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
       'legacy-quality',
       'stale-reset-required',
     ]);
-    assert.equal(loaded.aggregate.total.inputTotal, 123);
-    assert.equal(loaded.coverage.indexedBytes, 100);
+    assert.equal(loaded.aggregate.total.inputTotal, 0);
+    assert.equal(loaded.coverage.indexedBytes, 0);
     assert.equal(loaded.files.a.sourceArea, 'sessions');
     assert.deepEqual(loaded.coverage.identity, {
-      exactDuplicateFiles: 2,
-      ambiguousSessionGroups: 3,
+      exactDuplicateFiles: 0,
+      ambiguousSessionGroups: 0,
       complete: false,
     });
 
@@ -1909,11 +1912,11 @@ test('schema v2 load and save reconstruct only allowlisted anonymous DTO fields'
       saved.files.a.aggregate.period?.days['2026-07-20'].lastObservedAt,
       20,
     );
-    assert.equal(saved.aggregate.total.inputTotal, 123);
+    assert.equal(saved.aggregate.total.inputTotal, 0);
     assert.equal(saved.files.a.sourceArea, 'sessions');
     assert.deepEqual(saved.coverage.identity, {
-      exactDuplicateFiles: 2,
-      ambiguousSessionGroups: 3,
+      exactDuplicateFiles: 0,
+      ambiguousSessionGroups: 0,
       complete: false,
     });
   } finally {

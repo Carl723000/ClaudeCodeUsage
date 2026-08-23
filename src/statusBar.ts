@@ -376,6 +376,9 @@ export class StatusBarManager {
     this.statusBarItem.backgroundColor = undefined;
     const md = new vscode.MarkdownString();
     md.appendMarkdown(`**${copy.title} — ${copy.lastTask}**\n\n`);
+    if (scope.indexedSubtotal) {
+      md.appendMarkdown(`_${copy.indexedSubtotal} — ${copy.indexingInProgress}_\n\n`);
+    }
     md.appendMarkdown(`| ${copy.processed} | ${I18n.formatNumber(scope.total.processed)} |\n`);
     md.appendMarkdown('|:--|--:|\n');
     md.appendMarkdown(`| ${copy.fresh} | ${I18n.formatNumber(scope.total.fresh)} |\n`);
@@ -387,7 +390,7 @@ export class StatusBarManager {
 
     if (formatted.limitText) {
       this.quotaItem.text = `$(dashboard) ${formatted.limitText}`;
-      this.quotaItem.tooltip = `${copy.lastObserved} — ${formatted.limitText}`;
+      this.quotaItem.tooltip = `${copy.accountSnapshotLastObserved} — ${formatted.limitText}`;
       this.quotaItem.backgroundColor = undefined;
       this.quotaItem.show();
     } else {
