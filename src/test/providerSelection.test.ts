@@ -129,7 +129,7 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
     const processedIndex = codexHtml.indexOf('Processed');
     assert.ok(equivalentCostIndex >= 0, 'Codex summary shows API-equivalent cost');
     assert.ok(equivalentCostIndex < processedIndex, 'API-equivalent cost is the first summary card');
-    assert.match(codexHtml, /≈\s*\$[\d,.]+/);
+    assert.match(codexHtml, /\$[\d,.]+/);
     assert.match(codexHtml, /not a bill or subscription charge/);
     assert.match(
       codexHtml,

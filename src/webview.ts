@@ -1519,7 +1519,7 @@ export class UsageWebviewProvider {
         pricingCoverage,
       );
       const equivalentCost = equivalent.pricedTokens > 0
-        ? '≈ ' + I18n.formatCurrency(equivalent.equivalentUsd)
+        ? I18n.formatCurrency(equivalent.equivalentUsd)
         : '—';
       const equivalentCostMetric =
         '<div class="summary-item" title="' + this.escapeHtml(equivalentHelp) + '">' +

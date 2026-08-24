@@ -67,7 +67,7 @@ test('Codex summary leads with a clearly qualified API-equivalent cost', async (
   const cards = page.locator('#today .usage-summary').first().locator('.summary-grid .summary-item');
   await expect(cards).toHaveCount(7);
   await expect(cards.first().locator('.label')).toHaveText('API-equivalent cost');
-  await expect(cards.first().locator('.value')).toHaveText(/^≈ \$[\d,.]+$/);
+  await expect(cards.first().locator('.value')).toHaveText(/^\$[\d,.]+$/);
   await expect(cards.first()).toHaveAttribute(
     'title',
     /not a bill or subscription charge.*Priced model coverage: \d+%/,
@@ -84,8 +84,8 @@ test('Codex shows an unpriced marker without hiding unknown-model token totals',
   await expect(cards).toHaveCount(7);
   await expect(costValue).toHaveText('—');
   const costText = await costValue.textContent();
+  expect(costText).toBe('—');
   expect(costText).not.toContain('$');
-  expect(costText).not.toContain('≈');
   await expect(costCard).toHaveAttribute('title', /Priced model coverage: 0%/);
   await expect(cards.locator('.value')).toHaveText([
     '—',
