@@ -29,7 +29,7 @@ function contribution(
     offset: 100,
     discardingOversizedLine: false,
     parserState: {
-      schemaVersion: 1,
+      schemaVersion: 3,
       fileKey,
       sessionKey: 'anonymous-session-key',
       role: 'root',

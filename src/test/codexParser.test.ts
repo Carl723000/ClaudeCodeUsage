@@ -10,9 +10,11 @@ interface TokenLineOptions {
   inputTotal: number;
   inputLast: number;
   cachedInput?: number;
+  cachedInputLast?: number;
   outputTotal?: number;
   outputLast?: number;
   reasoningOutput?: number;
+  reasoningOutputLast?: number;
   rateLimit?: {
     usedPercent: number;
     windowMinutes: number;
@@ -38,9 +40,11 @@ function tokenLine(options: TokenLineOptions): string {
         },
         last_token_usage: {
           input_tokens: options.inputLast,
-          cached_input_tokens: 0,
+          cached_input_tokens:
+            options.cachedInputLast ?? options.cachedInput ?? 0,
           output_tokens: outputLast,
-          reasoning_output_tokens: options.reasoningOutput ?? 0,
+          reasoning_output_tokens:
+            options.reasoningOutputLast ?? options.reasoningOutput ?? 0,
           total_tokens: options.inputLast + outputLast,
         },
       },
@@ -57,7 +61,59 @@ function tokenLine(options: TokenLineOptions): string {
   });
 }
 
-test('repeated cumulative snapshots emit only advancing deltas', () => {
+interface SnapshotCounts {
+  input: number;
+  cached?: number;
+  output: number;
+  reasoning?: number;
+  total?: number;
+}
+
+function tokenSnapshot(options: {
+  total?: SnapshotCounts;
+  last?: SnapshotCounts;
+  limitId?: string;
+  second: number;
+}): string {
+  const counts = (value: SnapshotCounts | undefined) => value
+    ? {
+        input_tokens: value.input,
+        cached_input_tokens: value.cached ?? 0,
+        output_tokens: value.output,
+        reasoning_output_tokens: value.reasoning ?? 0,
+        total_tokens: value.total ?? value.input + value.output,
+      }
+    : undefined;
+  return JSON.stringify({
+    timestamp: `2026-07-20T00:00:${String(options.second).padStart(2, '0')}.000Z`,
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: counts(options.total),
+        last_token_usage: counts(options.last),
+      },
+      rate_limits: options.limitId
+        ? { limit_id: options.limitId }
+        : undefined,
+    },
+  });
+}
+
+function parseSnapshots(lines: string[]) {
+  let state = createCodexParserState('file-key');
+  return lines.map((line) => {
+    const parsed = parseCodexLine(
+      line,
+      state,
+      (raw) => `source:${raw}`,
+    );
+    state = parsed.state;
+    return parsed;
+  });
+}
+
+test('exact last usage wins while repeated snapshots remain deduplicated', () => {
   let state = createCodexParserState('file-key');
 
   const first = parseCodexLine(
@@ -78,7 +134,246 @@ test('repeated cumulative snapshots emit only advancing deltas', () => {
   assert.equal(first.events[0].tokens.inputTotal, 100);
   assert.equal(repeat.events.length, 0);
   assert.equal(next.events[0].tokens.inputTotal, 50);
-  assert.equal(next.events[0].tokens.outputTotal, 0);
+  assert.equal(next.events[0].tokens.outputTotal, 20);
+});
+
+test('interleaved cumulative lanes use exact last usage and suppress an adjacent replay', () => {
+  const results = parseSnapshots([
+    tokenSnapshot({
+      total: { input: 76_780_408, cached: 73_010_432, output: 243_036 },
+      last: { input: 175_074, cached: 169_728, output: 6_827 },
+      limitId: 'codex',
+      second: 1,
+    }),
+    tokenSnapshot({
+      total: { input: 87_709_262, cached: 83_563_008, output: 240_919 },
+      last: { input: 151_258, cached: 147_200, output: 87 },
+      limitId: 'codex-bengalfox',
+      second: 2,
+    }),
+    tokenSnapshot({
+      total: { input: 76_962_538, cached: 73_180_160, output: 243_258 },
+      last: { input: 182_130, cached: 169_728, output: 222 },
+      limitId: 'codex',
+      second: 3,
+    }),
+    tokenSnapshot({
+      total: { input: 87_709_262, cached: 83_563_008, output: 240_919 },
+      last: { input: 151_258, cached: 147_200, output: 87 },
+      limitId: 'codex-bengalfox',
+      second: 4,
+    }),
+  ]);
+
+  assert.deepEqual(
+    results.flatMap((result) => result.events.map((event) => event.tokens)),
+    [
+      {
+        inputTotal: 175_074,
+        cachedInput: 169_728,
+        outputTotal: 6_827,
+        reasoningOutput: 0,
+        sourceTotal: 181_901,
+      },
+      {
+        inputTotal: 151_258,
+        cachedInput: 147_200,
+        outputTotal: 87,
+        reasoningOutput: 0,
+        sourceTotal: 151_345,
+      },
+      {
+        inputTotal: 182_130,
+        cachedInput: 169_728,
+        outputTotal: 222,
+        reasoningOutput: 0,
+        sourceTotal: 182_352,
+      },
+    ],
+  );
+});
+
+test('a same-source snapshot replay remains deduplicated after another lane advances', () => {
+  const results = parseSnapshots([
+    tokenSnapshot({
+      total: { input: 1_000, output: 10 },
+      last: { input: 100, output: 10 },
+      limitId: 'codex',
+      second: 1,
+    }),
+    tokenSnapshot({
+      total: { input: 2_000, output: 20 },
+      last: { input: 100, output: 10 },
+      limitId: 'codex-bengalfox',
+      second: 2,
+    }),
+    tokenSnapshot({
+      total: { input: 1_000, output: 10 },
+      last: { input: 100, output: 10 },
+      limitId: 'codex',
+      second: 3,
+    }),
+  ]);
+
+  assert.deepEqual(
+    results.flatMap((result) => result.events.map((event) => event.tokens.inputTotal)),
+    [100, 100],
+  );
+});
+
+test('a reset may legitimately reuse an older cross-source snapshot', () => {
+  const results = parseSnapshots([
+    tokenSnapshot({
+      total: { input: 1_000, output: 10 },
+      last: { input: 100, output: 10 },
+      limitId: 'codex',
+      second: 1,
+    }),
+    tokenSnapshot({
+      total: { input: 1_000, output: 10 },
+      last: { input: 100, output: 10 },
+      limitId: 'codex-bengalfox',
+      second: 2,
+    }),
+    tokenSnapshot({
+      total: { input: 2_000, output: 20 },
+      last: { input: 100, output: 10 },
+      limitId: 'codex',
+      second: 3,
+    }),
+    tokenSnapshot({
+      total: { input: 1_000, output: 10 },
+      last: { input: 50, output: 5 },
+      limitId: 'codex',
+      second: 4,
+    }),
+  ]);
+
+  assert.deepEqual(
+    results.flatMap((result) => result.events.map((event) => event.tokens.inputTotal)),
+    [100, 100, 50],
+  );
+});
+
+test('last-only requests remain countable without inventing replay evidence', () => {
+  const line = (limitId: string, second: number) => tokenSnapshot({
+    last: { input: 100, cached: 80, output: 10, reasoning: 4 },
+    limitId,
+    second,
+  });
+  const results = parseSnapshots([
+    line('codex', 1),
+    line('codex-bengalfox', 2),
+  ]);
+
+  assert.deepEqual(
+    results.flatMap((result) => result.events.map((event) => event.tokens.inputTotal)),
+    [100, 100],
+  );
+});
+
+test('last total_tokens remains context size rather than attributed usage', () => {
+  const results = parseSnapshots([
+    tokenSnapshot({
+      total: { input: 1_000, cached: 800, output: 50, reasoning: 20 },
+      last: {
+        input: 100,
+        cached: 80,
+        output: 10,
+        reasoning: 4,
+        total: 60_000,
+      },
+      limitId: 'codex',
+      second: 1,
+    }),
+    tokenSnapshot({
+      total: { input: 1_000, cached: 800, output: 50, reasoning: 20 },
+      last: { input: 0, output: 0, total: 61_000 },
+      limitId: 'codex',
+      second: 2,
+    }),
+  ]);
+
+  assert.deepEqual(
+    results.flatMap((result) => result.events.map((event) => event.tokens)),
+    [{
+      inputTotal: 100,
+      cachedInput: 80,
+      outputTotal: 10,
+      reasoningOutput: 4,
+      sourceTotal: 110,
+    }],
+  );
+});
+
+test('missing last usage retains cumulative high-water fallback', () => {
+  const results = parseSnapshots([
+    tokenSnapshot({
+      total: { input: 100, cached: 80, output: 10, reasoning: 4 },
+      second: 1,
+    }),
+    tokenSnapshot({
+      total: { input: 150, cached: 120, output: 15, reasoning: 6 },
+      second: 2,
+    }),
+  ]);
+
+  assert.deepEqual(
+    results.flatMap((result) => result.events.map((event) => event.tokens)),
+    [
+      {
+        inputTotal: 100,
+        cachedInput: 80,
+        outputTotal: 10,
+        reasoningOutput: 4,
+        sourceTotal: 110,
+      },
+      {
+        inputTotal: 50,
+        cachedInput: 40,
+        outputTotal: 5,
+        reasoningOutput: 2,
+        sourceTotal: 55,
+      },
+    ],
+  );
+});
+
+test('Codex cache_read_input_tokens alias is counted as cached input', () => {
+  const parsed = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:01.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'token_count',
+        info: {
+          total_token_usage: {
+            input_tokens: 1_000,
+            cache_read_input_tokens: 800,
+            output_tokens: 50,
+            reasoning_output_tokens: 20,
+            total_tokens: 1_050,
+          },
+          last_token_usage: {
+            input_tokens: 100,
+            cache_read_input_tokens: 80,
+            output_tokens: 10,
+            reasoning_output_tokens: 4,
+            total_tokens: 60_000,
+          },
+        },
+      },
+    }),
+    createCodexParserState('file-key'),
+  );
+
+  assert.deepEqual(parsed.events[0].tokens, {
+    inputTotal: 100,
+    cachedInput: 80,
+    outputTotal: 10,
+    reasoningOutput: 4,
+    sourceTotal: 110,
+  });
 });
 
 test('cached and reasoning remain subsets and inherit turn context', () => {
@@ -363,19 +658,31 @@ test('rate limits preserve named primary secondary and credit metadata', () => {
   });
 });
 
-test('counter regression starts a partial lineage without negative usage', () => {
+test('counter regression keeps exact last usage and marks it partial', () => {
   let state = createCodexParserState('root-file');
   state = parseCodexLine(
     tokenLine({ inputTotal: 100, inputLast: 100 }),
     state,
   ).state;
   const result = parseCodexLine(
-    tokenLine({ inputTotal: 90, inputLast: 0 }),
+    tokenLine({
+      inputTotal: 90,
+      inputLast: 5,
+      outputTotal: 15,
+      outputLast: 5,
+    }),
     state,
   );
 
   assert.ok(result.state.qualityFlags.includes('counter-regression'));
-  assert.equal(result.events.length, 0);
+  assert.deepEqual(result.events[0].tokens, {
+    inputTotal: 5,
+    cachedInput: 0,
+    outputTotal: 5,
+    reasoningOutput: 0,
+    sourceTotal: 10,
+  });
+  assert.equal(result.events[0].confidence, 'partial');
 });
 
 test('session metadata is pseudonymized and auto-review stays distinct', () => {

@@ -2078,6 +2078,50 @@ function sanitizePseudonymousIdentityKey(
     : undefined;
 }
 
+const TOKEN_SNAPSHOT_SIGNATURE =
+  /^t:(?:-|\d+:\d+:\d+:\d+:\d+)\|l:(?:-|\d+:\d+:\d+:\d+:\d+)$/;
+const MAX_TOKEN_SNAPSHOT_SOURCES = 32;
+
+function sanitizeTokenSnapshotSignature(value: unknown): string | undefined {
+  return typeof value === 'string' &&
+      value.length <= 200 &&
+      TOKEN_SNAPSHOT_SIGNATURE.test(value)
+    ? value
+    : undefined;
+}
+
+function sanitizeTokenSnapshotSource(value: string): string | undefined {
+  if (value === 'default' || value === 'unknown-source') {
+    return value;
+  }
+  return sanitizePseudonymousIdentityKey(value);
+}
+
+function sanitizeTokenSnapshotSignatures(
+  value: unknown,
+): Record<string, string> | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const signatures: Record<string, string> = {};
+  let found = false;
+  for (const [rawSource, rawSignature] of Object.entries(value)) {
+    const source = sanitizeTokenSnapshotSource(rawSource);
+    const signature = sanitizeTokenSnapshotSignature(rawSignature);
+    if (!source || !signature) {
+      continue;
+    }
+    delete signatures[source];
+    signatures[source] = signature;
+    found = true;
+    const keys = Object.keys(signatures);
+    if (keys.length > MAX_TOKEN_SNAPSHOT_SOURCES) {
+      delete signatures[keys[0]];
+    }
+  }
+  return found ? signatures : undefined;
+}
+
 function sanitizeParserState(value: unknown, fileKey: string): CodexParserState {
   const record = isRecord(value) ? value : {};
   const verifiedFileKey =
@@ -2101,8 +2145,14 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
         totalTokens: finiteNumber(record.highWater.totalTokens),
       }
     : undefined;
+  const snapshotSignaturesBySource = sanitizeTokenSnapshotSignatures(
+    record.snapshotSignaturesBySource,
+  );
+  const previousSnapshotSignature = sanitizeTokenSnapshotSignature(
+    record.previousSnapshotSignature,
+  );
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     fileKey,
     sessionKey,
     ...(treeKey ? { treeKey } : {}),
@@ -2120,6 +2170,8 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
     ...(effort ? { effort } : {}),
     role: sanitizeRole(record.role),
     ...(highWater ? { highWater } : {}),
+    ...(snapshotSignaturesBySource ? { snapshotSignaturesBySource } : {}),
+    ...(previousSnapshotSignature ? { previousSnapshotSignature } : {}),
     qualityFlags: sanitizeQualityFlags(record.qualityFlags),
   };
 }
@@ -2611,6 +2663,14 @@ function sanitizeIndexV2(value: unknown): CodexIndexV3 {
   };
 }
 
+function requiresTokenSemanticsRescan(index: CodexIndexV3): boolean {
+  return Object.values(index.files).some((contribution) =>
+    !isRecord(contribution) ||
+    !isRecord(contribution.parserState) ||
+    contribution.parserState.schemaVersion !== 3
+  );
+}
+
 export type CodexIndexRecoveryReason =
   | 'invalid-json'
   | 'unsupported-schema';
@@ -2659,7 +2719,11 @@ export async function loadCodexIndex(
     return migrateIndexV2(parsed);
   }
   if (isIndexV3(parsed)) {
-    return sanitizeIndexV2(parsed);
+    const needsTokenSemanticsRescan = requiresTokenSemanticsRescan(parsed);
+    const sanitized = sanitizeIndexV2(parsed);
+    return needsTokenSemanticsRescan
+      ? markLineageRescanRequired(sanitized)
+      : sanitized;
   }
   await quarantineCorruptCodexIndex(indexPath);
   onRecovery?.({ reason: 'unsupported-schema' });

@@ -74,13 +74,6 @@ function tokenCount(input: number, output = 0, second = 1): string {
           reasoning_output_tokens: 0,
           total_tokens: input + output,
         },
-        last_token_usage: {
-          input_tokens: input,
-          cached_input_tokens: 0,
-          output_tokens: output,
-          reasoning_output_tokens: 0,
-          total_tokens: input + output,
-        },
       },
     },
   });

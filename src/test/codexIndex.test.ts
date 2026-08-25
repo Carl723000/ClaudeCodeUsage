@@ -31,6 +31,7 @@ import {
   scanCodexManifest,
 } from '../providers/codex/codexManifest';
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
+import { parseCodexLine } from '../providers/codex/codexParser';
 
 const SALT = 'test-machine-salt';
 
@@ -146,6 +147,137 @@ test('concurrent atomic saves use independent temporary files', async () => {
   }
 });
 
+test('schema-3 reload preserves only bounded pseudonymous replay evidence', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-replay-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const fileKey = pseudonymousIdentityKey(SALT, 'replay-file');
+    const sourceKey = pseudonymousIdentityKey(SALT, 'rate-limit:codex');
+    const signature = 't:100:80:10:4:110|l:20:15:3:1:999';
+    const index = createEmptyCodexIndex('UTC');
+    const contribution = dedupContribution(fileKey, 'sessions');
+    contribution.parserState = {
+      schemaVersion: 3,
+      fileKey,
+      sessionKey: fileKey,
+      role: 'root',
+      highWater: {
+        inputTokens: 100,
+        cachedInputTokens: 80,
+        outputTokens: 10,
+        reasoningOutputTokens: 4,
+        totalTokens: 110,
+      },
+      snapshotSignaturesBySource: {
+        ...Object.fromEntries(
+          Array.from({ length: 34 }, (_, index) => [
+            pseudonymousIdentityKey(SALT, `rate-limit:lane-${index}`),
+            `t:${index}:0:0:0:${index}|l:0:0:0:0:${index}`,
+          ]),
+        ),
+        'raw-account@example.invalid': signature,
+        [pseudonymousIdentityKey(SALT, 'rate-limit:invalid')]:
+          't:/private/path|l:secret',
+        [sourceKey]: signature,
+      },
+      previousSnapshotSignature: signature,
+      qualityFlags: [],
+    };
+    index.files[fileKey] = contribution;
+
+    await saveCodexIndexAtomic(indexPath, index);
+    const loaded = await loadCodexIndex(indexPath, 'UTC');
+    const replayState = loaded.files[fileKey].parserState;
+    const savedSources = Object.keys(replayState.snapshotSignaturesBySource ?? {});
+
+    assert.equal(replayState.schemaVersion, 3);
+    assert.equal(savedSources.length, 32);
+    assert.ok(savedSources.includes(sourceKey));
+    assert.equal(savedSources.includes('raw-account@example.invalid'), false);
+    assert.equal(
+      replayState.snapshotSignaturesBySource?.[
+        pseudonymousIdentityKey(SALT, 'rate-limit:invalid')
+      ],
+      undefined,
+    );
+    assert.equal(replayState.previousSnapshotSignature, signature);
+
+    const replay = parseCodexLine(
+      JSON.stringify({
+        timestamp: '2026-07-20T00:02:00.000Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: 100,
+              cached_input_tokens: 80,
+              output_tokens: 10,
+              reasoning_output_tokens: 4,
+              total_tokens: 110,
+            },
+            last_token_usage: {
+              input_tokens: 20,
+              cached_input_tokens: 15,
+              output_tokens: 3,
+              reasoning_output_tokens: 1,
+              total_tokens: 999,
+            },
+          },
+          rate_limits: { limit_id: 'codex' },
+        },
+      }),
+      replayState,
+      (raw) => pseudonymousIdentityKey(SALT, raw),
+    );
+    assert.equal(replay.events.length, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('schema-3 index with pre-last-usage parser state requests one rescan', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-token-migration-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const fileKey = pseudonymousIdentityKey(SALT, 'legacy-token-file');
+    const index = createEmptyCodexIndex('UTC');
+    const contribution = dedupContribution(fileKey, 'sessions');
+    contribution.parserState = {
+      ...contribution.parserState,
+      schemaVersion: 2,
+      fileKey,
+      sessionKey: fileKey,
+    };
+    index.files[fileKey] = contribution;
+    index.aggregate.total = {
+      inputTotal: 100,
+      cachedInput: 50,
+      outputTotal: 20,
+      reasoningOutput: 10,
+      sourceTotal: 120,
+    };
+    index.coverage.indexedFiles = 1;
+    index.coverage.totalFiles = 1;
+    index.coverage.indexedBytes = 100;
+    index.coverage.totalBytes = 100;
+    index.coverage.complete = true;
+    await writeFile(indexPath, JSON.stringify(index), 'utf8');
+
+    const loaded = await loadCodexIndex(indexPath, 'UTC');
+
+    assert.equal(loaded.aggregate.total.inputTotal, 0);
+    assert.equal(loaded.coverage.indexedFiles, 0);
+    assert.equal(loaded.coverage.indexedBytes, 0);
+    assert.equal(loaded.coverage.complete, false);
+    assert.ok(
+      loaded.files[fileKey].qualityFlags.includes('stale-reset-required'),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('index reload replaces invalid legacy session identity and drops raw parent and project keys', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-identity-sanitize-'));
   try {
@@ -240,7 +372,7 @@ test('index load and save fail closed for unsafe metadata labels and bucket keys
       offset: 100,
       discardingOversizedLine: false,
       parserState: {
-        schemaVersion: 1,
+        schemaVersion: 3,
         fileKey,
         sessionKey,
         agentNickname: unsafe.posix,
@@ -1030,7 +1162,7 @@ function dedupContribution(
     offset: 100,
     discardingOversizedLine: false,
     parserState: {
-      schemaVersion: 1,
+      schemaVersion: 3,
       fileKey,
       sessionKey: 'shared-anonymous-session',
       role: 'root',

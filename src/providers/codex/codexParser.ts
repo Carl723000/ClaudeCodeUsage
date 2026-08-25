@@ -23,7 +23,7 @@ export interface CodexRawTokenCounts {
 }
 
 export interface CodexParserState {
-  schemaVersion: 1 | 2;
+  schemaVersion: 1 | 2 | 3;
   fileKey: string;
   sessionKey: string;
   treeKey?: string;
@@ -38,6 +38,8 @@ export interface CodexParserState {
   effort?: string;
   role: ProviderThreadRole;
   highWater?: CodexRawTokenCounts;
+  snapshotSignaturesBySource?: Record<string, string>;
+  previousSnapshotSignature?: string;
   qualityFlags: string[];
 }
 
@@ -61,7 +63,7 @@ export function createCodexParserState(
   fileKey: string,
 ): CodexParserState {
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
     fileKey,
     sessionKey: fileKey,
     identityLocked: false,
@@ -81,18 +83,78 @@ function rawTokenCounts(value: unknown): CodexRawTokenCounts | null {
   if (!isObject(value)) {
     return null;
   }
-  const inputTokens = numberField(value, 'input_tokens');
-  const outputTokens = numberField(value, 'output_tokens');
+  const validTokenField = (key: string): number | undefined => {
+    const result = numberField(value, key);
+    return result !== undefined && Number.isSafeInteger(result) && result >= 0
+      ? result
+      : undefined;
+  };
+  const inputTokens = validTokenField('input_tokens');
+  const outputTokens = validTokenField('output_tokens');
   if (inputTokens === undefined || outputTokens === undefined) {
     return null;
   }
   return {
     inputTokens,
-    cachedInputTokens: numberField(value, 'cached_input_tokens') ?? 0,
+    cachedInputTokens:
+      validTokenField('cached_input_tokens') ??
+      validTokenField('cache_read_input_tokens') ??
+      0,
     outputTokens,
-    reasoningOutputTokens: numberField(value, 'reasoning_output_tokens') ?? 0,
-    totalTokens: numberField(value, 'total_tokens') ?? inputTokens + outputTokens,
+    reasoningOutputTokens: validTokenField('reasoning_output_tokens') ?? 0,
+    totalTokens: validTokenField('total_tokens') ?? inputTokens + outputTokens,
   };
+}
+
+function rawSignature(value: CodexRawTokenCounts | null): string {
+  return value
+    ? [
+        value.inputTokens,
+        value.cachedInputTokens,
+        value.outputTokens,
+        value.reasoningOutputTokens,
+        value.totalTokens,
+      ].join(':')
+    : '-';
+}
+
+function tokenSnapshotSignature(
+  total: CodexRawTokenCounts | null,
+  last: CodexRawTokenCounts | null,
+): string {
+  return `t:${rawSignature(total)}|l:${rawSignature(last)}`;
+}
+
+function exactTokenCounts(value: CodexRawTokenCounts): ProviderTokenCounts {
+  return {
+    inputTotal: value.inputTokens,
+    cachedInput: Math.min(value.inputTokens, value.cachedInputTokens),
+    outputTotal: value.outputTokens,
+    reasoningOutput: Math.min(
+      value.outputTokens,
+      value.reasoningOutputTokens,
+    ),
+    // Codex uses last_token_usage.total_tokens for the active context size.
+    // Attributed processed usage remains input + output.
+    sourceTotal: value.inputTokens + value.outputTokens,
+  };
+}
+
+const MAX_SNAPSHOT_SOURCES = 32;
+
+function rememberSnapshotSignature(
+  current: Record<string, string> | undefined,
+  source: string,
+  signature: string,
+): Record<string, string> {
+  const next = { ...current };
+  delete next[source];
+  next[source] = signature;
+  const keys = Object.keys(next);
+  for (let index = 0; index < keys.length - MAX_SNAPSHOT_SOURCES; index += 1) {
+    delete next[keys[index]];
+  }
+  return next;
 }
 
 function componentDelta(
@@ -419,43 +481,65 @@ function parseTokenCount(
   entry: JsonObject,
   payload: JsonObject,
   state: CodexParserState,
+  pseudonymize?: (raw: string) => string,
 ): CodexLineOutput {
   if (!isObject(payload.info)) {
     return { state: withFlag(state, 'missing-token-info'), events: [] };
   }
   const info = payload.info;
   const current = rawTokenCounts(info.total_token_usage);
-  if (!current) {
+  const last = rawTokenCounts(info.last_token_usage);
+  if (!current && !last) {
     return { state: withFlag(state, 'invalid-token-count'), events: [] };
   }
 
   const observedAt = timestampOf(entry);
   const limit = parsePrimaryLimit(payload, info, observedAt);
+  const rateLimits = isObject(payload.rate_limits)
+    ? payload.rate_limits
+    : isObject(info.rate_limits)
+      ? info.rate_limits
+      : undefined;
+  const rawSource = rateLimits
+    ? stringField(rateLimits, 'limit_id')
+    : undefined;
+  const source = rawSource
+    ? pseudonymize?.(`rate-limit:${rawSource}`) ?? 'unknown-source'
+    : 'default';
+  const signature = tokenSnapshotSignature(current, last);
+  const duplicate = Boolean(
+    current &&
+    (
+      state.snapshotSignaturesBySource?.[source] === signature ||
+      state.previousSnapshotSignature === signature
+    )
+  );
   const previous = state.highWater ?? zeroCounts();
-  const regressed = hasRegression(current, previous);
-  const nextHighWater = containedHighWater(current, previous);
-  const tokens = componentDelta(nextHighWater, previous);
-  const nextState = {
+  const regressed = current ? hasRegression(current, previous) : false;
+  const nextHighWater = current
+    ? containedHighWater(current, previous)
+    : state.highWater;
+  const tokens = duplicate
+    ? componentDelta(previous, previous)
+    : last
+      ? exactTokenCounts(last)
+      : componentDelta(nextHighWater!, previous);
+  let nextState: CodexParserState = {
     ...(regressed ? withFlag(state, 'counter-regression') : state),
-    highWater: nextHighWater,
+    ...(nextHighWater ? { highWater: nextHighWater } : {}),
+    previousSnapshotSignature: signature,
   };
-  const last = rawTokenCounts(info.last_token_usage);
-  const lineageTokenKey = [
-    current.inputTokens,
-    current.cachedInputTokens,
-    current.outputTokens,
-    current.reasoningOutputTokens,
-    current.totalTokens,
-    ...(last
-      ? [
-          last.inputTokens,
-          last.cachedInputTokens,
-          last.outputTokens,
-          last.reasoningOutputTokens,
-          last.totalTokens,
-        ]
-      : []),
-  ].join(':');
+  if (current) {
+    nextState = {
+      ...nextState,
+      snapshotSignaturesBySource: rememberSnapshotSignature(
+        state.snapshotSignaturesBySource,
+        source,
+        signature,
+      ),
+    };
+  }
+  const lineageTokenKey = signature;
   if (!hasUsage(tokens)) {
     return { state: nextState, events: [], limit, lineageTokenKey };
   }
@@ -472,8 +556,8 @@ function parseTokenCount(
     effort: state.effort,
     role: state.role,
     tokens,
-    confidence: state.qualityFlags.length > 0 ? 'partial' : 'exact',
-    qualityFlags: [...state.qualityFlags],
+    confidence: nextState.qualityFlags.length > 0 ? 'partial' : 'exact',
+    qualityFlags: [...nextState.qualityFlags],
   };
   return { state: nextState, events: [event], limit, lineageTokenKey };
 }
@@ -499,7 +583,7 @@ export function parseCodexLine(
       return { state: withFlag(state, 'invalid-event-payload'), events: [] };
     }
     if (stringField(entry.payload, 'type') === 'token_count') {
-      return parseTokenCount(entry, entry.payload, state);
+      return parseTokenCount(entry, entry.payload, state, pseudonymize);
     }
     if (stringField(entry.payload, 'type') === 'task_started') {
       return { state, events: [], lineageBoundary: true };
