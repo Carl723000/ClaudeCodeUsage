@@ -32,9 +32,9 @@ aggregate sync are deferred to v2.4.x after a separate privacy review.
 | `providers/providerTypes.ts` | Provider-neutral token, event, confidence, outcome, coverage, and limit contracts. |
 | `providers/claudeProvider.ts` | Thin compatibility adapter that exposes existing Claude aggregates without changing their results. |
 | `providers/codex/codexSchema.ts` | Minimal safe JSON guards; never flattens or returns message/command/tool bodies. |
-| `providers/codex/codexParser.ts` | Codex cumulative high-water parsing, pseudonymous lineage metadata, structural counters, quality flags, and last-observed limits. |
+| `providers/codex/codexParser.ts` | Codex exact-request parsing with cumulative high-water fallback, pseudonymous lineage metadata, structural counters, quality flags, and last-observed limits. |
 | `providers/codex/codexManifest.ts` | Allowlisted Codex directory discovery, HMAC file keys, fingerprints, and manifest diffing. |
-| `providers/codex/codexIndex.ts` | Schema-2 persistent per-file numeric aggregates, bounded cold/tail parsing, independent aggregate/period coverage, and atomic save/load. |
+| `providers/codex/codexIndex.ts` | Schema-3 persistent per-file numeric aggregates and replay evidence, bounded cold/tail parsing, independent aggregate/period coverage, and atomic save/load. |
 | `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | Background worker, recent-first progress, cancellation, resume, and single-flight client. |
 | `providers/codex/codexProvider.ts` | Extension-facing Codex snapshot facade and partial/unavailable/error outcomes. |
 | `providers/codex/codexUsage.ts` | Codex-specific task/7-day/30-day/project view-model aggregation. |
@@ -58,7 +58,7 @@ Claude JSONL ──> ClaudeDataLoader ──> Claude adapter ──> Claude stat
 allowlisted Codex JSONL
   ──> manifest metadata
   ──> background worker
-  ──> schema guard + lineage high-water parser
+  ──> schema guard + exact-request parser with lineage high-water fallback
   ──> per-file numeric aggregate index
   ──> CodexProviderSnapshot
   ──> Codex scopes + insights
@@ -96,10 +96,18 @@ Codex uses these rules:
 - neither subset is added again to processed totals
 - fresh input + output is an optimization aid, not a cost/quota equivalence
 
-Codex `total_token_usage` is cumulative and may include an inherited parent
-baseline. Parsing therefore uses per-component, per-lineage high-water marks.
-Unknown parents, regressions, and schema drift produce quality flags rather
-than negative or fabricated usage.
+Each valid Codex `token_count` normally carries `last_token_usage`; its input,
+cached-input, output, and reasoning components are the exact request-level
+attribution. `last_token_usage.total_tokens` is the active context size and is
+not attributed as request usage. A full numeric signature of both total and
+last snapshots suppresses replay only when it matches the same pseudonymous
+rate-limit source or the immediately preceding record. This narrow proof avoids
+silently merging a legitimate reset from another interleaved source.
+
+If `last_token_usage` is absent, `total_token_usage` remains a cumulative
+fallback and may include an inherited parent baseline. That path uses
+per-component, per-lineage high-water marks. Unknown parents, regressions, and
+schema drift produce quality flags rather than negative or fabricated usage.
 
 Codex `rate_limits.primary` found in local logs is a last-observed snapshot only.
 It is hidden once its reset time passes. v2.3.0 does not read Codex credentials
@@ -134,7 +142,11 @@ stores a raw incomplete line or a carry buffer. The only reader for those old
 fields is the explicitly named legacy schema-1 migration boundary; it discards
 the carry before the v3 index is saved. Schema-1 and schema-2 indexes are marked
 for a bounded lineage rescan; their prior totals are not retained and added to
-the rebuilt result.
+the rebuilt result. A schema-3 container whose per-file parser state predates
+exact-request semantics is also reset once, so incompatible aggregates are
+never mixed. The parser state may persist only bounded numeric total-plus-last
+signatures keyed by machine-salted pseudonyms, plus the immediately preceding
+numeric signature.
 
 Each physical rollout locks its first reliable session and tree identity. An
 ordered numeric-event fingerprint trace then finds the copied prefix of a child
@@ -142,8 +154,9 @@ inside its verified parent while retaining every independent sibling suffix.
 Nested forks and separate fork epochs apply their own prefix once. If the
 reported parent is absent, the child stays conservatively counted in full and a
 visible `missing-parent` quality warning replaces silent subtraction. Counter
-regressions use component high-water containment; they never create negative
-deltas or count a reset gap again. A verified ordered overlap for the same
+regressions still emit exact last usage with partial confidence; the cumulative
+fallback uses component high-water containment and never creates negative
+deltas or counts a reset gap again. A verified ordered overlap for the same
 pseudonymous session across active/archive copies is likewise counted once,
 while conflicting identity metadata still keeps identity coverage incomplete.
 

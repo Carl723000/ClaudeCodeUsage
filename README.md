@@ -123,6 +123,12 @@ consent prompt.
   is a subset of output. No Codex billing cost is shown. The first Codex summary
   card is a clearly labelled API-equivalent cost estimate for the selected scope;
   the All-time view also shows the weekly trend using the same pricing basis.
+- **Request-level token attribution** — valid `last_token_usage` components are
+  preferred, while its `total_tokens` remains an active-context measurement,
+  not request usage. A full numeric total-plus-last signature suppresses only
+  proven replay; missing last snapshots fall back to cumulative lineage
+  high-water. Upgrading triggers one automatic reindex, with the indexed
+  subtotal still visible throughout the pass.
 - **Weekly allowance-value trend** — Claude and Codex All-time / Compare views
   calculate historical used equivalents directly from local token logs. Where a
   real weekly reset is observed, history follows that cadence; otherwise

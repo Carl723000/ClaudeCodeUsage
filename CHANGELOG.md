@@ -7,6 +7,14 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ## [2.3.0] — Unreleased
 
 ### Fixed
+- **Codex request-level token attribution** — valid `last_token_usage` snapshots
+  now provide the exact input, cached-input, output, and reasoning components;
+  their `total_tokens` value remains an active-context measurement rather than
+  request usage. A full numeric total-plus-last signature suppresses only a
+  replay from the same pseudonymous rate-limit source or an immediately adjacent
+  duplicate. Missing last snapshots retain the cumulative lineage high-water
+  fallback. Existing schema-3 indexes rebuild once, keep showing indexed
+  subtotals during that pass, and never mix the two attribution semantics.
 - **Conservative Codex rebuild totals** — schema and lineage migrations no
   longer expose retained legacy aggregates as current usage. Cards, tables,
   projects, sessions, recommendations, and the status bar now use only freshly
@@ -156,7 +164,7 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   30-day structural aggregates and disclose partial coverage.
 - Codex period charts now reuse the existing dashboard's Y axis, grid, theme
   colors, horizontal scrolling, and metric-switching behavior.
-- **Schema-2 period indexing** — the compatible `codex-index-v1.json` path now
+- **Persistent period indexing** — the compatible `codex-index-v1.json` path now
   persists only sanitized aggregates, promotes exact local day slices in bounded
   resumable batches, and exposes independent 7-day, 30-day, and all-time
   coverage. All-time aggregates remain verified independently of partial period
@@ -206,7 +214,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   index path or contents; unrelated filesystem errors still fail closed.
 - **Codex fork overcounting** — copied token histories replayed into child
   rollouts no longer inflate provider totals. Counter regressions use
-  component-wise high-water containment rather than adding reset gaps again.
+  exact last-request components with partial confidence; only the missing-last
+  cumulative fallback uses component-wise high-water containment rather than
+  adding reset gaps again.
 - **Visible Codex backfill state** — while bounded indexing is still converging,
   Coverage · Quality now warns that current totals are incomplete, shows the
   real indexed-files/total-files progress, and clears the warning automatically

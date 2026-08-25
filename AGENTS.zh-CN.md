@@ -23,8 +23,8 @@
 - `src/dataLoader.ts`：JSONL 发现/解析、去重、归因、内容分析和用量聚合。
 - `src/providers/providerTypes.ts` 与 provider adapter：provider-neutral token、
   coverage、confidence 与 limit contract；不得抹平 provider 语义。
-- `src/providers/codex/`：允许目录发现、schema guard、cumulative high-water 解析、
-  per-file 聚合索引、worker protocol 和 Codex facade。
+- `src/providers/codex/`：允许目录发现、schema guard、精确单次请求解析及
+  cumulative high-water 回退、per-file 聚合索引、worker protocol 和 Codex facade。
 - `src/codexView.ts` / `src/codexViewComponents.ts`：只保存 Codex 文案与默认
   provider contract，不负责 HTML、client code 或样式。
 - `src/settings.ts`：`SETTINGS` catalog 与 `SettingsStore`；不要散落直接配置读取。
@@ -62,8 +62,14 @@
 - Codex processed tokens 是 `input + output`；fresh input + output 是
   `max(0, input - cached input) + output`，它只是行为优化指标，不是成本或配额等价。
   Cached input 是 input 子集，reasoning 是 output 子集，绝不重复相加。
-- 用每个 lineage 的 high-water baseline 解析 cumulative `total_token_usage`。Counter
-  regression、unknown parent 和 schema drift 产生明确 quality flag，不伪造精度。
+- 有效请求的各 token component 优先取自 `last_token_usage`；其中 `total_tokens`
+  表示活跃上下文大小，不是该请求的用量。只有完整的 total-plus-last 数字签名与
+  同一 machine-salted rate-limit 来源或紧邻的上一条记录一致时，才判定为重放。
+  若缺少 last usage，则回退为按 lineage high-water baseline 解析 cumulative
+  `total_token_usage`。Counter regression、unknown parent 和 schema drift 产生明确
+  quality flag，不伪造精度。
+- 持久化 parser 语义变化必须触发一次有界自动重扫。重建期间排除旧 aggregate，
+  持续显示已索引小计与进度，不混合两套不兼容的总量。
 - 从 Codex 本地日志恢复的 rate limit 只是 `last-observed`；到达 reset 时间后丢弃，
   不为了追求“实时”而读 credential 或发网络请求。
 - 2.4-GB-class 历史必须由 background worker 与持久化 per-file 聚合索引处理。

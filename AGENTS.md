@@ -27,8 +27,9 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
   content analysis, and usage aggregation.
 - `src/providers/providerTypes.ts` and provider adapters: provider-neutral token,
   coverage, confidence, and limit contracts. Do not erase provider semantics.
-- `src/providers/codex/`: allowed-root discovery, schema guards, cumulative
-  high-water parsing, per-file aggregate index, worker protocol, and Codex facade.
+- `src/providers/codex/`: allowed-root discovery, schema guards, exact-request
+  parsing with cumulative high-water fallback, per-file aggregate index, worker
+  protocol, and Codex facade.
 - `src/codexView.ts` / `src/codexViewComponents.ts`: Codex copy and default-provider
   contracts only; they do not own HTML, client code, or styles.
 - `src/settings.ts`: the `SETTINGS` catalog and `SettingsStore`; do not scatter
@@ -75,9 +76,16 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
   `max(0, input - cached input) + output`; it is a behavior aid, not a cost or
   quota equivalent. Cached input is a subset of input and reasoning is a subset
   of output, so never add either twice.
-- Parse cumulative `total_token_usage` with per-lineage high-water baselines.
-  Counter regressions, unknown parents, and schema drift produce explicit
-  quality flags instead of invented precision.
+- Attribute valid request components from `last_token_usage`; its `total_tokens`
+  field is active-context size, not request usage. Suppress replay only when the
+  full numeric total-plus-last signature matches the same machine-salted
+  rate-limit source or the immediately preceding record. If last usage is
+  absent, fall back to cumulative `total_token_usage` with per-lineage
+  high-water baselines. Counter regressions, unknown parents, and schema drift
+  produce explicit quality flags instead of invented precision.
+- A persisted parser-semantics change must force one bounded automatic rescan.
+  Exclude old aggregates while rebuilding and keep the indexed subtotal and
+  progress visible rather than mixing incompatible totals.
 - Codex rate limits recovered from local logs are `last-observed` only. Drop
   them after their reset time; do not access credentials or call a network API
   merely to make them current.

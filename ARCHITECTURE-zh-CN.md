@@ -26,9 +26,9 @@ Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做�
 | `providers/providerTypes.ts` | Provider-neutral token、event、confidence、outcome、coverage 和 limit contract。 |
 | `providers/claudeProvider.ts` | 薄兼容 adapter，不改变既有 Claude 聚合结果。 |
 | `providers/codex/codexSchema.ts` | 最小安全 JSON guard，不展开或返回 message/command/tool body。 |
-| `providers/codex/codexParser.ts` | Codex cumulative high-water 解析、伪名 lineage metadata、结构计数、quality flag 和 last-observed limit。 |
+| `providers/codex/codexParser.ts` | Codex 精确单次请求解析及 cumulative high-water 回退、伪名 lineage metadata、结构计数、quality flag 和 last-observed limit。 |
 | `providers/codex/codexManifest.ts` | Codex 允许目录发现、HMAC file key、fingerprint 和 manifest diff。 |
-| `providers/codex/codexIndex.ts` | schema-2 的 per-file 数字聚合持久化、有界 cold/tail parse、独立 aggregate/period coverage 和原子存取。 |
+| `providers/codex/codexIndex.ts` | schema-3 的 per-file 数字聚合与重放证据持久化、有界 cold/tail parse、独立 aggregate/period coverage 和原子存取。 |
 | `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | 后台 worker、recent-first progress、cancel、resume 和 single-flight client。 |
 | `providers/codex/codexProvider.ts` | 面向 extension 的 Codex snapshot facade 与 partial/unavailable/error outcome。 |
 | `providers/codex/codexUsage.ts` | Codex-specific 最近 task/7 天/30 天/项目 view model 聚合。 |
@@ -51,7 +51,7 @@ Claude JSONL ──> ClaudeDataLoader ──> Claude adapter ──> Claude 状�
 允许的 Codex JSONL
   ──> manifest metadata
   ──> background worker
-  ──> schema guard + lineage high-water parser
+  ──> schema guard + 精确单次请求 parser（lineage high-water 回退）
   ──> per-file 数字聚合索引
   ──> CodexProviderSnapshot
   ──> Codex scope + insight
@@ -83,9 +83,15 @@ Codex 使用以下规则：
 - 两个子集都不再次加入 processed total
 - fresh input + output 是优化行为的辅助指标，不与成本/配额等价
 
-Codex `total_token_usage` 是 cumulative，且可能包含继承的 parent baseline。因此按 component
-和 lineage 维护 high-water。Unknown parent、counter regression 和 schema drift 产生 quality flag，
-不生成负用量或伪造精度。
+每条有效的 Codex `token_count` 通常都带 `last_token_usage`；其中 input、cached input、
+output 与 reasoning component 是精确的单次请求归因。`last_token_usage.total_tokens` 表示
+活跃上下文大小，不作为该请求用量。只有 total 与 last 两份 snapshot 的完整数字签名与
+同一伪名 rate-limit 来源或紧邻的上一条记录一致时，才判定为重放。这个窄证明不会把另一条
+交错来源在合法 reset 后的记录静默合并掉。
+
+若缺少 `last_token_usage`，则把 cumulative `total_token_usage` 作为回退；它可能包含继承的
+parent baseline，因此该路径按 component 与 lineage 维护 high-water。Unknown parent、counter
+regression 和 schema drift 产生 quality flag，不生成负用量或伪造精度。
 
 本地日志中的 Codex `rate_limits.primary` 只是 last-observed snapshot，到 reset 时间后隐藏。
 v2.3.0 不读 Codex credential，也不发网络请求刷新它。
@@ -113,13 +119,16 @@ Machine salt 存在 VS Code `globalState`，不写入索引。Worker progress/re
 伪名 key、清洗后的 label，以及仅由数字 token 计数向量生成的不透明指纹。v3 不保存未完成原始行，
 也不保存 carry buffer。旧字段只在明确命名的 schema-1 legacy migration 边界被读取；该迁移会先
 丢弃 carry，之后才保存 v3 索引。schema 1 与 schema 2 索引都会被标记为需要执行有界 lineage 重扫；
-旧总量不会保留后再叠加到重建结果。
+旧总量不会保留后再叠加到重建结果。若 schema 3 容器里的 per-file parser state 仍早于精确单次请求
+语义，也会执行一次 reset，绝不混合不兼容 aggregate。Parser state 只允许持久化有界的 total-plus-last
+数字签名、对应的 machine-salted 伪名 key，以及紧邻的上一条数字签名。
 
 每个物理 rollout 锁定首个可靠的 session 与 tree 身份。随后用有序的数字事件指纹，在已验证父节点
 中定位 child 复制的前缀，同时保留每个独立 sibling 的后缀。多层 fork 与不同 fork epoch 各自只扣除
 一次复制前缀。若声明的 parent 缺失，child 会保守地按全量计入，并在 UI 显示 `missing-parent` 质量警告，
-不会静默扣除。计数器回退使用按 component 的 high-water containment，不产生负 delta，也不会重复计入
-reset gap。同一伪名 session 的 active/archive 副本若存在已验证的有序重叠，该段也只计一次；若身份元数据
+不会静默扣除。计数器回退仍按精确 last usage 计入并标为 partial；cumulative 回退路径使用按 component
+的 high-water containment，不产生负 delta，也不会重复计入 reset gap。同一伪名 session 的
+active/archive 副本若存在已验证的有序重叠，该段也只计一次；若身份元数据
 互相冲突，identity coverage 仍保持 incomplete。
 
 这里有两个相互独立的可信度层。all-time 视图来自 canonical file contribution 的已验证的
