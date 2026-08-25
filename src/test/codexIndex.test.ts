@@ -278,6 +278,86 @@ test('schema-3 index with pre-last-usage parser state requests one rescan', asyn
   }
 });
 
+test('token semantics rescan preserves completed files across a partial checkpoint reload', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-token-resume-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const indexPath = path.join(root, 'codex-index.json');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'older.jsonl'),
+      completeSession('older', 100, 20),
+      'utf8',
+    );
+    await writeFile(
+      path.join(sessions, 'newer.jsonl'),
+      completeSession('newer', 300, 60),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    for (const entry of manifest.files) {
+      const isNewer = path.basename(entry.absolutePath) === 'newer.jsonl';
+      entry.mtimeMs = isNewer ? 2 : 1;
+      manifest.persistable[entry.fileKey].mtimeMs = entry.mtimeMs;
+    }
+    const current = await updateCodexIndex(
+      createEmptyCodexIndex('UTC'),
+      manifest,
+      { salt: SALT, timeZone: 'UTC' },
+    );
+    const legacy = structuredClone(current.index);
+    for (const contribution of Object.values(legacy.files)) {
+      contribution.parserState = {
+        ...contribution.parserState,
+        schemaVersion: 2,
+      };
+    }
+    await writeFile(indexPath, JSON.stringify(legacy), 'utf8');
+
+    const reset = await loadCodexIndex(indexPath, 'UTC');
+    const firstPass = await updateCodexIndex(reset, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      budget: { maxFilePasses: 1, maxBytes: CODEX_REFRESH_MIN_BYTES },
+    });
+    const completedBeforeReload = Object.values(firstPass.index.files).filter(
+      (contribution) =>
+        !contribution.qualityFlags.includes('stale-reset-required'),
+    );
+    assert.equal(completedBeforeReload.length, 1);
+    assert.equal(firstPass.index.aggregate.total.inputTotal, 300);
+    assert.equal(firstPass.index.coverage.indexedFiles, 1);
+    await saveCodexIndexAtomic(indexPath, firstPass.index);
+
+    const resumed = await loadCodexIndex(indexPath, 'UTC');
+    assert.equal(resumed.aggregate.total.inputTotal, 300);
+    assert.equal(resumed.coverage.indexedFiles, 1);
+    assert.equal(
+      Object.values(resumed.files).filter((contribution) =>
+        contribution.qualityFlags.includes('stale-reset-required')
+      ).length,
+      1,
+    );
+
+    const secondPass = await updateCodexIndex(resumed, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      budget: { maxFilePasses: 1, maxBytes: CODEX_REFRESH_MIN_BYTES },
+    });
+    assert.equal(secondPass.index.aggregate.total.inputTotal, 400);
+    assert.equal(secondPass.index.coverage.indexedFiles, 2);
+    assert.equal(secondPass.index.coverage.complete, true);
+    assert.equal(
+      Object.values(secondPass.index.files).some((contribution) =>
+        contribution.qualityFlags.includes('stale-reset-required')
+      ),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('index reload replaces invalid legacy session identity and drops raw parent and project keys', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-identity-sanitize-'));
   try {
