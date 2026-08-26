@@ -134,6 +134,14 @@ function bySession(index: CodexIndexV3, rawId: string) {
   );
 }
 
+function fieldsByFile(index: CodexIndexV3, field: 'aggregate' | 'lineage') {
+  // Discovery and persisted maps need not share insertion order. Preserve the
+  // file identity when comparing every aggregate or lineage field.
+  return Object.fromEntries(
+    Object.entries(index.files).map(([key, file]) => [key, file[field]]),
+  );
+}
+
 test('resume appended to one physical rollout keeps the terminal cumulative value', async () => {
   const { root, index } = await scanFixture({
     resume: rollout(
@@ -347,8 +355,8 @@ test('exact-last fork totals survive reload, replayed appends, and warm refresh'
     assert.strictEqual(warm.index, incremental.index);
     assert.deepEqual(incremental.index.aggregate, full.index.aggregate);
     assert.deepEqual(
-      Object.values(incremental.index.files).map((file) => file.aggregate),
-      Object.values(full.index.files).map((file) => file.aggregate),
+      fieldsByFile(incremental.index, 'aggregate'),
+      fieldsByFile(full.index, 'aggregate'),
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -677,8 +685,8 @@ test('incremental, warm, persisted-shape, and full lineage scans agree exactly',
     await saveCodexIndexAtomic(indexPath, initial.index);
     const reloaded = await loadCodexIndex(indexPath, 'UTC');
     assert.deepEqual(
-      Object.values(reloaded.files).map((file) => file.lineage),
-      Object.values(initial.index.files).map((file) => file.lineage),
+      fieldsByFile(reloaded, 'lineage'),
+      fieldsByFile(initial.index, 'lineage'),
     );
     await appendFile(childPath, `${tokenCount(130, 0, 4)}\n`, 'utf8');
     const finalManifest = await scanCodexManifest(root, SALT);
@@ -703,8 +711,17 @@ test('incremental, warm, persisted-shape, and full lineage scans agree exactly',
     assert.strictEqual(warm.index, incremental.index);
     assert.deepEqual(incremental.index.aggregate, full.index.aggregate);
     assert.deepEqual(
-      Object.values(incremental.index.files).map((file) => file.aggregate),
-      Object.values(full.index.files).map((file) => file.aggregate),
+      fieldsByFile(incremental.index, 'aggregate'),
+      fieldsByFile(full.index, 'aggregate'),
+    );
+    // Exercise the opposite map order explicitly on every platform, instead
+    // of relying on filesystem timestamp precision to expose the difference.
+    assert.deepEqual(
+      fieldsByFile(incremental.index, 'aggregate'),
+      fieldsByFile({
+        ...full.index,
+        files: Object.fromEntries(Object.entries(full.index.files).reverse()),
+      }, 'aggregate'),
     );
   } finally {
     await rm(root, { recursive: true, force: true });
