@@ -23,6 +23,7 @@ import {
   createCodexParserState,
   parseCodexLine,
 } from '../providers/codex/codexParser';
+import { ProviderTokenCounts } from '../providers/providerTypes';
 
 const SALT = 'lineage-fixture-salt';
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
@@ -74,6 +75,32 @@ function tokenCount(input: number, output = 0, second = 1): string {
           reasoning_output_tokens: 0,
           total_tokens: input + output,
         },
+      },
+    },
+  });
+}
+
+function exactTokenCount(
+  total: ProviderTokenCounts,
+  last: ProviderTokenCounts,
+  second = 1,
+): string {
+  const snapshot = (tokens: ProviderTokenCounts) => ({
+    input_tokens: tokens.inputTotal,
+    cached_input_tokens: tokens.cachedInput ?? 0,
+    output_tokens: tokens.outputTotal,
+    reasoning_output_tokens: tokens.reasoningOutput ?? 0,
+    total_tokens: tokens.inputTotal + tokens.outputTotal,
+  });
+  return JSON.stringify({
+    timestamp: `2026-07-20T00:00:${String(second).padStart(2, '0')}.000Z`,
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: snapshot(total),
+        // Active context is intentionally unrelated to attributed usage.
+        last_token_usage: { ...snapshot(last), total_tokens: 64_000 },
       },
     },
   });
@@ -145,6 +172,184 @@ test('a child fork subtracts only its copied parent prefix', async () => {
     assert.equal(index.aggregate.total.inputTotal, 130);
     assert.equal(index.aggregate.total.outputTotal, 15);
     assert.equal(bySession(index, 'child')?.aggregate.total.inputTotal, 30);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('exact-last fork attribution skips copied replay records and retains post-fork resets', async () => {
+  const parentFirst = exactTokenCount(
+    { inputTotal: 1_000, cachedInput: 700, outputTotal: 100, reasoningOutput: 40 },
+    { inputTotal: 100, cachedInput: 60, outputTotal: 10, reasoningOutput: 4 },
+  );
+  const parentSecond = exactTokenCount(
+    { inputTotal: 1_030, cachedInput: 715, outputTotal: 105, reasoningOutput: 42 },
+    { inputTotal: 30, cachedInput: 15, outputTotal: 5, reasoningOutput: 2 },
+    2,
+  );
+  // Three copied token records, but only two emitted usage events. Prefix
+  // removal must count records, including the suppressed replay.
+  const prefix = [parentFirst, parentFirst, parentSecond];
+  const { root, index } = await scanFixture({
+    parent: rollout(sessionMeta('parent', 'tree'), ...prefix),
+    child: rollout(
+      sessionMeta('child', 'tree', 'parent'),
+      sessionMeta('parent', 'tree'),
+      ...prefix,
+      taskStarted('child-turn', 3),
+      exactTokenCount(
+        { inputTotal: 40, cachedInput: 15, outputTotal: 8, reasoningOutput: 3 },
+        { inputTotal: 40, cachedInput: 15, outputTotal: 8, reasoningOutput: 3 },
+        4,
+      ),
+      exactTokenCount(
+        { inputTotal: 60, cachedInput: 22, outputTotal: 13, reasoningOutput: 5 },
+        { inputTotal: 20, cachedInput: 7, outputTotal: 5, reasoningOutput: 2 },
+        5,
+      ),
+    ),
+  });
+  try {
+    assert.deepEqual(bySession(index, 'parent')?.aggregate.total, {
+      inputTotal: 130, cachedInput: 75, cacheWriteInput: 0,
+      outputTotal: 15, reasoningOutput: 6, sourceTotal: 145,
+    });
+    const child = bySession(index, 'child');
+    assert.equal(child?.lineage?.desiredPrefixEvents, 3);
+    assert.equal(child?.lineage?.appliedPrefixEvents, 3);
+    assert.ok(child?.qualityFlags.includes('counter-regression'));
+    assert.deepEqual(child?.aggregate.total, {
+      inputTotal: 60, cachedInput: 22, cacheWriteInput: 0,
+      outputTotal: 13, reasoningOutput: 5, sourceTotal: 73,
+    });
+    assert.deepEqual(index.aggregate.total, {
+      inputTotal: 190, cachedInput: 97, cacheWriteInput: 0,
+      outputTotal: 28, reasoningOutput: 11, sourceTotal: 218,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('exact-last sibling suffixes stay independent across nested fork prefixes', async () => {
+  const parentUsage = exactTokenCount(
+    { inputTotal: 1_000, cachedInput: 700, outputTotal: 100, reasoningOutput: 40 },
+    { inputTotal: 100, cachedInput: 60, outputTotal: 10, reasoningOutput: 4 },
+  );
+  // The two siblings deliberately share identical numeric snapshots. The
+  // request input (30) also differs from the cumulative increase (130).
+  const siblingUsage = exactTokenCount(
+    { inputTotal: 1_130, cachedInput: 760, outputTotal: 120, reasoningOutput: 45 },
+    { inputTotal: 30, cachedInput: 12, outputTotal: 4, reasoningOutput: 2 },
+    3,
+  );
+  const child = (id: string): string => rollout(
+    sessionMeta(id, 'tree', 'parent'),
+    sessionMeta('parent', 'tree'),
+    parentUsage,
+    taskStarted(`${id}-turn`, 2),
+    siblingUsage,
+  );
+  const { root, index } = await scanFixture({
+    parent: rollout(sessionMeta('parent', 'tree'), parentUsage),
+    childA: child('child-a'),
+    childB: child('child-b'),
+    grandchild: rollout(
+      sessionMeta('grandchild', 'tree', 'child-a'),
+      sessionMeta('child-a', 'tree', 'parent'),
+      sessionMeta('parent', 'tree'),
+      parentUsage,
+      taskStarted('child-a-turn', 2),
+      siblingUsage,
+      taskStarted('grandchild-turn', 4),
+      exactTokenCount(
+        { inputTotal: 1_250, cachedInput: 800, outputTotal: 130, reasoningOutput: 50 },
+        { inputTotal: 20, cachedInput: 8, outputTotal: 3, reasoningOutput: 1 },
+        5,
+      ),
+    ),
+  });
+  try {
+    for (const id of ['child-a', 'child-b']) {
+      const sibling = bySession(index, id);
+      assert.equal(sibling?.lineage?.appliedPrefixEvents, 1);
+      assert.deepEqual(sibling?.aggregate.total, {
+        inputTotal: 30, cachedInput: 12, cacheWriteInput: 0,
+        outputTotal: 4, reasoningOutput: 2, sourceTotal: 34,
+      });
+    }
+    const grandchild = bySession(index, 'grandchild');
+    assert.equal(grandchild?.lineage?.appliedPrefixEvents, 2);
+    assert.deepEqual(grandchild?.aggregate.total, {
+      inputTotal: 20, cachedInput: 8, cacheWriteInput: 0,
+      outputTotal: 3, reasoningOutput: 1, sourceTotal: 23,
+    });
+    assert.deepEqual(index.aggregate.total, {
+      inputTotal: 180, cachedInput: 92, cacheWriteInput: 0,
+      outputTotal: 21, reasoningOutput: 9, sourceTotal: 201,
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('exact-last fork totals survive reload, replayed appends, and warm refresh', async () => {
+  const parentUsage = exactTokenCount(
+    { inputTotal: 1_000, cachedInput: 700, outputTotal: 100, reasoningOutput: 40 },
+    { inputTotal: 100, cachedInput: 60, outputTotal: 10, reasoningOutput: 4 },
+  );
+  const childUsage = exactTokenCount(
+    { inputTotal: 1_130, cachedInput: 760, outputTotal: 120, reasoningOutput: 45 },
+    { inputTotal: 30, cachedInput: 12, outputTotal: 4, reasoningOutput: 2 },
+    3,
+  );
+  const { root, index } = await scanFixture({
+    parent: rollout(sessionMeta('parent', 'tree'), parentUsage),
+    child: rollout(
+      sessionMeta('child', 'tree', 'parent'),
+      sessionMeta('parent', 'tree'),
+      parentUsage,
+      taskStarted('child-turn', 2),
+      childUsage,
+    ),
+  });
+  try {
+    assert.equal(index.aggregate.total.inputTotal, 130);
+    const indexPath = path.join(root, 'codex-index.json');
+    await saveCodexIndexAtomic(indexPath, index);
+    const reloaded = await loadCodexIndex(indexPath, 'UTC');
+    assert.deepEqual(reloaded.aggregate, index.aggregate);
+    assert.equal(bySession(reloaded, 'child')?.lineage?.appliedPrefixEvents, 1);
+
+    await appendFile(path.join(root, 'sessions', 'child.jsonl'), rollout(
+      childUsage,
+      exactTokenCount(
+        { inputTotal: 20, cachedInput: 8, outputTotal: 3, reasoningOutput: 1 },
+        { inputTotal: 20, cachedInput: 8, outputTotal: 3, reasoningOutput: 1 },
+        4,
+      ),
+    ), 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const options = { salt: SALT, timeZone: 'UTC', now: () => NOW };
+    const incremental = await updateCodexIndex(reloaded, manifest, options);
+    const warm = await updateCodexIndex(incremental.index, manifest, options);
+    const full = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, options);
+
+    assert.deepEqual(bySession(incremental.index, 'child')?.aggregate.total, {
+      inputTotal: 50, cachedInput: 20, cacheWriteInput: 0,
+      outputTotal: 7, reasoningOutput: 3, sourceTotal: 57,
+    });
+    assert.deepEqual(incremental.index.aggregate.total, {
+      inputTotal: 150, cachedInput: 80, cacheWriteInput: 0,
+      outputTotal: 17, reasoningOutput: 7, sourceTotal: 167,
+    });
+    assert.equal(warm.indexChanged, false);
+    assert.strictEqual(warm.index, incremental.index);
+    assert.deepEqual(incremental.index.aggregate, full.index.aggregate);
+    assert.deepEqual(
+      Object.values(incremental.index.files).map((file) => file.aggregate),
+      Object.values(full.index.files).map((file) => file.aggregate),
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
