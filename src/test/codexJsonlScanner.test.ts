@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import {
+  CODEX_JSONL_CHUNK_BYTES,
   CODEX_MAX_JSONL_LINE_BYTES,
   CodexJsonlReader,
   scanCodexJsonlLines,
@@ -33,6 +34,10 @@ function memoryReader(body: Buffer, chunkEnds: readonly number[] = []): CodexJso
     },
   };
 }
+
+test('the production reader uses a multi-megabyte cold-scan chunk', () => {
+  assert.equal(CODEX_JSONL_CHUNK_BYTES, 1024 * 1024);
+});
 
 test('decodes a complete UTF-8 JSON line only after split Buffer chunks join', async () => {
   const completeJsonLine = JSON.stringify({ title: '真实标题' });

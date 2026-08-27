@@ -15,7 +15,9 @@ provider-specific usage and optimization view.
   OAuth 5-hour/weekly quota.
 - Codex Beta: local processed/fresh/cache/output/reasoning metrics, model and
   effort breakdowns, thread structure, index coverage, quality flags, and
-  structural optimization guidance.
+  structural optimization guidance. Known models also receive a clearly
+  qualified API-equivalent cost estimate; it is never a bill or subscription
+  charge, and unknown models remain unpriced.
 - Compare: side-by-side compatible metrics only. It never sums provider cost,
   quota, or tokens into a misleading combined total.
 
@@ -28,14 +30,16 @@ aggregate sync are deferred to v2.4.x after a separate privacy review.
 | Module | Role |
 |---|---|
 | `extension.ts` | Activation, commands, settings, provider lifecycle, refresh orchestration, watchers, status/webview wiring, and anonymous diagnostics. |
-| `dataLoader.ts` | Existing Claude discovery, parsing, deduplication, attribution, content analysis, and aggregation. |
+| `dataLoader.ts` | Claude parsing, validation, attribution, and content-analysis primitives retained for exact compatibility. |
+| `claudeIncrementalIndex.ts` | Production in-memory per-file Claude index: append-tail parsing, exact cross-file response deduplication, affected-group aggregation, content-analysis contributions, and materialized dashboard rows. |
 | `providers/providerTypes.ts` | Provider-neutral token, event, confidence, outcome, coverage, and limit contracts. |
 | `providers/claudeProvider.ts` | Thin compatibility adapter that exposes existing Claude aggregates without changing their results. |
 | `providers/codex/codexSchema.ts` | Minimal safe JSON guards; never flattens or returns message/command/tool bodies. |
 | `providers/codex/codexParser.ts` | Codex exact-request parsing with cumulative high-water fallback, pseudonymous lineage metadata, structural counters, quality flags, and last-observed limits. |
 | `providers/codex/codexManifest.ts` | Allowlisted Codex directory discovery, HMAC file keys, fingerprints, and manifest diffing. |
 | `providers/codex/codexIndex.ts` | Schema-3 persistent per-file numeric aggregates and replay evidence, bounded cold/tail parsing, independent aggregate/period coverage, and atomic save/load. |
-| `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | Background worker, recent-first progress, cancellation, resume, and single-flight client. |
+| `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | Background coordinator, recent-first progress, cancellation, resume, checkpoint persistence, and single-flight client. |
+| `providers/codex/codexFilePassPool.ts` / `codexFilePassWorker.ts` | Adaptive bounded local pool for independent per-file main, lineage, period, and identity passes during one-time incomplete backfills. |
 | `providers/codex/codexProvider.ts` | Extension-facing Codex snapshot facade and partial/unavailable/error outcomes. |
 | `providers/codex/codexUsage.ts` | Codex-specific task/7-day/30-day/project view-model aggregation. |
 | `providers/codex/codexInsights.ts` | Deterministic structural usage guidance; no prompt/body inspection. |
@@ -53,7 +57,12 @@ ownership and tests.
 ## Provider data flow
 
 ```text
-Claude JSONL ──> ClaudeDataLoader ──> Claude adapter ──> Claude status/dashboard
+Claude JSONL
+  ──> manifest metadata
+  ──> in-memory per-file incremental index
+  ──> exact global response identity + affected aggregate groups
+  ──> materialized Claude status/dashboard inputs
+  ──> Claude adapter
 
 allowlisted Codex JSONL
   ──> manifest metadata
@@ -177,7 +186,9 @@ repository name over a directory fallback, and recent-task ordering uses the
 maximum activity observed across a complete lineage. A strictly exact
 active/archive pair is deduplicated only after both copies are verified and
 their safe signatures agree; any other repeated session is ambiguous and keeps
-identity coverage incomplete rather than guessing.
+identity coverage incomplete rather than guessing. This stable ambiguity is a
+data-quality state, not unfinished I/O: once base and required period coverage
+are complete, it no longer leaves the dashboard labelled as still indexing.
 
 The five structural call proxies are `patchCalls`, `toolCalls`,
 `postPatchToolCalls`, `compactCount`, and `taskCompleteCount`. They describe
@@ -188,21 +199,37 @@ body, or tool-argument content.
 ## Refresh and scale
 
 Claude polling always honors `refreshInterval`; its file watcher uses the
-configured quiet debounce. Codex uses its own quiet debounce (default 30
-seconds, configurable to Off/10/30/60/120/300).
+configured quiet debounce. The production Claude path maintains an in-memory
+per-file index: unchanged refreshes read zero JSONL bodies, appends read only a
+verified tail, and truncate/replace/move/delete changes rebuild only affected
+files and aggregate groups. Content-analysis contributions and the established
+cross-file response-identity rules are updated through the same atomic path.
+A new Extension Host performs one cold in-memory build; watcher-driven refreshes
+do not reread and reaggregate the complete corpus. Codex uses its own quiet
+debounce (default 30 seconds, configurable to Off/10/30/60/120/300).
 
 Codex history is designed for multi-gigabyte local corpora:
 
 - discovery and parsing run outside the Extension Host in a worker;
-- files are indexed recent-first with progress and cancellation;
+- files are indexed recent-first with progress and cancellation; an incomplete
+  backfill uses up to half of the available logical CPUs, capped at six local
+  file-pass workers, while completed indexes return to the single low-power
+  coordinator path;
 - unchanged warm refresh reads no JSONL body;
 - a first non-empty index or incomplete legacy migration gets one bounded
   16,384 file passes / 64 GiB streaming ceiling; this is not an up-front memory
   allocation and retains cancellation and atomic resume checkpoints. After
   convergence, automatic work uses 64 file passes / 128 MiB and the
   always-visible manual Refresh uses 512 file passes / 2 GiB. The safe minimum
-  is 1 MiB + 1 byte, reads use 256 KiB chunks, and a JSONL line is capped at
+  is 1 MiB + 1 byte, reads use 1 MiB chunks, and a Codex JSONL line is capped at
   1 MiB;
+- live progress remains frequent, while a large persisted snapshot is written
+  at most roughly every 10 seconds, 2 GiB, or 256 completed file passes, plus
+  the final stage boundary. This bounds crash recovery without letting repeated
+  tens-of-megabytes snapshots dominate a fast backfill;
+- derived lineage is reconciled only in stages that can change it; period and
+  stable stages reuse the verified relationship instead of repeatedly scanning
+  the complete index;
 - append refresh reads only the new tail; an incomplete line stays only in the
   scanner's short-lived memory and is retried from the safe cursor, never in v3;
 - truncation/replacement reparses only the affected file;

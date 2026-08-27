@@ -158,6 +158,17 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
       provider.getMainContent(),
       /Usage index is still being built/,
     );
+
+    codexSnapshot.coverage.identity.ambiguousSessionGroups = 2;
+    codexSnapshot.coverage.identity.complete = false;
+    provider.codexView = buildCodexUsageView(codexSnapshot, CODEX_WEBVIEW_NOW);
+    provider.codexInsights = buildScopedCodexInsights(provider.codexView);
+    const ambiguousIdentityHtml = provider.getMainContent();
+    assert.doesNotMatch(ambiguousIdentityHtml, /Usage index is still being built/);
+    assert.match(
+      ambiguousIdentityHtml,
+      /Duplicate session identity is ambiguous; both local copies are retained[^<]*2/,
+    );
   } finally {
     (Module as any)._load = originalLoad;
   }
@@ -342,7 +353,7 @@ test('provider and Codex view copy is complete in every UI locale', () => {
         if (typeof value === 'string') {
           assert.notEqual(value.trim(), '', `${language} has empty Codex copy`);
         } else {
-          assert.ok([5, 15, 16, 17].includes(Object.keys(value).length));
+          assert.ok([5, 15, 16, 17, 18].includes(Object.keys(value).length));
         }
       }
       assert.deepEqual(

@@ -17,6 +17,7 @@ import {
   CodexIndexCancelledError,
   CodexIndexBudgetError,
   CodexFileContribution,
+  CodexFilePassBatchRunner,
   CodexIndexIo,
   CodexIndexUpdateOptions,
   CODEX_REFRESH_MIN_BYTES,
@@ -30,6 +31,7 @@ import {
   CodexRuntimeManifestEntry,
   scanCodexManifest,
 } from '../providers/codex/codexManifest';
+import { CodexFilePassPool } from '../providers/codex/codexFilePassPool';
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 import { parseCodexLine } from '../providers/codex/codexParser';
 
@@ -762,6 +764,17 @@ function trackingIo(): TrackingIo {
   };
 }
 
+function chunkingIo(chunkBytes: number): CodexIndexIo {
+  return {
+    async *read(entry, start, endExclusive) {
+      const body = await readFile(entry.absolutePath);
+      for (let offset = start; offset < endExclusive; offset += chunkBytes) {
+        yield body.subarray(offset, Math.min(offset + chunkBytes, endExclusive));
+      }
+    },
+  };
+}
+
 test('fully indexed unchanged corpus returns a warm no-op without body reads', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-noop-'));
   try {
@@ -797,6 +810,168 @@ test('fully indexed unchanged corpus returns a warm no-op without body reads', a
     assert.equal(warm.migration.pending, false);
     assert.equal(io.bodyReads.size, 0);
     assert.equal(checkpoints, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a small warm append is durably checkpointed only once', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-warm-checkpoint-'));
+  try {
+    const refreshNow = Date.parse('2026-07-22T12:00:00.000Z');
+    const sessions = path.join(root, 'sessions');
+    const logPath = path.join(sessions, 'append.jsonl');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(logPath, completeSession('warm-append', 100, 20), 'utf8');
+    const coldManifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), coldManifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => refreshNow,
+    });
+    await appendFile(
+      logPath,
+      `${tokenLine(150, 30, '2026-07-22T12:01:00.000Z')}\n`,
+      'utf8',
+    );
+    const warmManifest = await scanCodexManifest(root, SALT);
+    let checkpoints = 0;
+
+    const warm = await updateCodexIndex(cold.index, warmManifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => refreshNow,
+      scheduling: {
+        progressEveryMs: Number.POSITIVE_INFINITY,
+        progressEveryBytes: Number.POSITIVE_INFINITY,
+        checkpointEveryMs: Number.POSITIVE_INFINITY,
+        checkpointEveryBytes: Number.POSITIVE_INFINITY,
+        checkpointEveryFilePasses: 64,
+        now: () => 0,
+      },
+      onCheckpoint: async () => { checkpoints += 1; },
+    });
+
+    assert.equal(warm.bodyReads, 1);
+    assert.equal(warm.failedFiles, 0);
+    assert.equal(checkpoints, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('large cold rebuilds throttle progress and batch durable checkpoints without changing totals', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-batched-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    const lines = Array.from(
+      { length: 14_000 },
+      (_, index) => tokenLine(
+        index + 1,
+        1,
+        `2026-07-20T00:${String(index % 60).padStart(2, '0')}:00.000Z`,
+      ),
+    );
+    await writeFile(
+      path.join(sessions, 'large.jsonl'),
+      `${sessionLine('large-batched')}\n${contextLine()}\n${lines.join('\n')}\n`,
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const reference = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      io: chunkingIo(64 * 1024),
+      budget: { maxFilePasses: 16, maxBytes: 64 * 1024 * 1024 },
+    });
+    let progressCalls = 0;
+    let checkpoints = 0;
+
+    const batched = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      io: chunkingIo(64 * 1024),
+      budget: { maxFilePasses: 16, maxBytes: 64 * 1024 * 1024 },
+      scheduling: {
+        progressEveryBytes: 512 * 1024,
+        checkpointEveryBytes: 2 * 1024 * 1024,
+        checkpointEveryFilePasses: 64,
+        progressEveryMs: Number.POSITIVE_INFINITY,
+        checkpointEveryMs: Number.POSITIVE_INFINITY,
+        now: () => 0,
+      },
+      onProgress: () => { progressCalls += 1; },
+      onCheckpoint: async () => { checkpoints += 1; },
+    });
+
+    assert.deepEqual(batched.index.aggregate, reference.index.aggregate);
+    assert.deepEqual(batched.index.coverage, reference.index.coverage);
+    assert.ok(progressCalls > 0);
+    assert.ok(progressCalls < 40, `expected throttled progress, saw ${progressCalls}`);
+    assert.ok(checkpoints > 0);
+    assert.ok(checkpoints < 16, `expected batched checkpoints, saw ${checkpoints}`);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('parallel file passes preserve the exact sequential index across every backfill stage', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-parallel-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    for (let index = 0; index < 12; index += 1) {
+      const id = `parallel-${index}`;
+      const metadata = index > 0 && index % 3 === 0
+        ? childSessionLine(id, `parallel-${index - 1}`)
+        : sessionLine(id);
+      await writeFile(
+        path.join(sessions, `${String(index).padStart(2, '0')}.jsonl`),
+        [
+          metadata,
+          contextLine(index % 2 === 0 ? 'gpt-5.6-sol' : 'gpt-5.6-terra'),
+          tokenLine(100 + index, 10 + index, '2026-07-20T00:01:00.000Z'),
+          tokenLine(150 + index, 15 + index, '2026-07-20T00:02:00.000Z'),
+          '',
+        ].join('\n'),
+        'utf8',
+      );
+    }
+    const manifest = await scanCodexManifest(root, SALT);
+    const sequential = await updateCodexIndex(
+      createEmptyCodexIndex('UTC'),
+      manifest,
+      {
+        salt: SALT,
+        budget: { maxFilePasses: 256, maxBytes: 64 * 1024 * 1024 },
+      },
+    );
+    const batchSizes: number[] = [];
+    const pool = new CodexFilePassPool(3);
+    const runner: CodexFilePassBatchRunner = async (tasks, ...rest) => {
+      batchSizes.push(tasks.length);
+      await pool.run(tasks, ...rest);
+    };
+    let parallel;
+    try {
+      parallel = await updateCodexIndex(
+        createEmptyCodexIndex('UTC'),
+        manifest,
+        {
+          salt: SALT,
+          budget: { maxFilePasses: 256, maxBytes: 64 * 1024 * 1024 },
+          filePassBatch: runner,
+        },
+      );
+    } finally {
+      await pool.dispose();
+    }
+
+    assert.ok(batchSizes.some((size) => size > 1), JSON.stringify(batchSizes));
+    assert.deepEqual(parallel.index, sequential.index);
+    assert.deepEqual(parallel.migration, sequential.migration);
+    assert.equal(parallel.failedFiles, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

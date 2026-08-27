@@ -23,6 +23,7 @@ import {
   loadCodexIndex,
 } from '../providers/codex/codexIndex';
 import { runCodexWorkerRefresh } from '../providers/codex/codexIndexWorker';
+import { recommendedCodexBackfillWorkers } from '../providers/codex/codexFilePassPool';
 import {
   CodexWorkerMessage,
   CodexWorkerRequest,
@@ -30,6 +31,15 @@ import {
 } from '../providers/codex/codexWorkerProtocol';
 
 const SALT = 'test-machine-salt';
+
+test('cold-backfill worker count scales with the machine but remains bounded', () => {
+  assert.equal(recommendedCodexBackfillWorkers(1), 1);
+  assert.equal(recommendedCodexBackfillWorkers(2), 1);
+  assert.equal(recommendedCodexBackfillWorkers(4), 2);
+  assert.equal(recommendedCodexBackfillWorkers(8), 4);
+  assert.equal(recommendedCodexBackfillWorkers(16), 6);
+  assert.equal(recommendedCodexBackfillWorkers(128), 6);
+});
 
 class FakeWorker extends EventEmitter implements CodexWorkerLike {
   readonly requests: CodexWorkerRequest[] = [];
@@ -385,6 +395,35 @@ test('unchanged worker refresh skips the final atomic index write', async () => 
   assert.equal((resultMessage.result as any).indexChanged, false);
 });
 
+test('a refresh already saved by its final checkpoint skips the duplicate final write', async () => {
+  const savedIndex = createEmptyCodexIndex(request.timeZone);
+  let saves = 0;
+
+  await runCodexWorkerRefresh(
+    { type: 'refresh', requestId: 'checkpointed-final', ...request },
+    {
+      isCancelled: () => false,
+      post: () => undefined,
+      acquireCodexIndexLease: async () => ({ release: async () => undefined }),
+      loadCodexIndex: async () => savedIndex,
+      scanCodexManifest: async () => ({ files: [], persistable: {} }),
+      updateCodexIndex: async (_previous, _manifest, options) => {
+        await options.onCheckpoint?.(savedIndex);
+        return {
+          index: savedIndex,
+          indexChanged: true,
+          bodyReads: 1,
+          failedFiles: 0,
+          migration: { filePasses: 1, bytesRead: 10, pending: false },
+        };
+      },
+      saveCodexIndexAtomic: async () => { saves += 1; },
+    },
+  );
+
+  assert.equal(saves, 1);
+});
+
 test('worker keeps background refresh bounded and accelerates only the foreground profile', async () => {
   const savedIndex = createEmptyCodexIndex(request.timeZone);
   const budgets: Array<{ maxFilePasses: number; maxBytes: number }> = [];
@@ -488,6 +527,64 @@ test('worker gives first-time and incomplete backfills one streaming pass before
   ]);
   assert.equal(CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES, 16_384);
   assert.equal(CODEX_REFRESH_BACKFILL_MAX_BYTES, 64 * 1024 * 1024 * 1024);
+});
+
+test('worker enables and disposes the multi-file pool only for an expedited backfill', async () => {
+  const firstIndex = createEmptyCodexIndex(request.timeZone);
+  const manifest = {
+    files: [{
+      fileKey: 'first-log',
+      absolutePath: '/private/runtime-only-codex-home/sessions/first.jsonl',
+      nonPersisted: true as const,
+      sourceArea: 'sessions' as const,
+      size: 100,
+      mtimeMs: 1,
+    }],
+    persistable: {
+      'first-log': {
+        fileKey: 'first-log',
+        sourceArea: 'sessions' as const,
+        size: 100,
+        mtimeMs: 1,
+      },
+    },
+  };
+  let created = 0;
+  let disposed = 0;
+  let receivedBatchRunner = false;
+
+  await runCodexWorkerRefresh(
+    { type: 'refresh', requestId: 'parallel-backfill', ...request },
+    {
+      isCancelled: () => false,
+      post: () => undefined,
+      acquireCodexIndexLease: async () => ({ release: async () => undefined }),
+      loadCodexIndex: async () => firstIndex,
+      scanCodexManifest: async () => manifest,
+      createCodexFilePassPool: () => {
+        created += 1;
+        return {
+          run: async () => undefined,
+          dispose: async () => { disposed += 1; },
+        };
+      },
+      updateCodexIndex: async (_previous, _manifest, options) => {
+        receivedBatchRunner = options.filePassBatch !== undefined;
+        return {
+          index: firstIndex,
+          indexChanged: false,
+          bodyReads: 0,
+          failedFiles: 0,
+          migration: { filePasses: 0, bytesRead: 0, pending: true },
+        };
+      },
+      saveCodexIndexAtomic: async () => undefined,
+    },
+  );
+
+  assert.equal(created, 1);
+  assert.equal(disposed, 1);
+  assert.equal(receivedBatchRunner, true);
 });
 
 test('worker lease encloses index load, manifest scan, and refresh', async () => {

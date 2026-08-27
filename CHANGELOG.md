@@ -7,6 +7,25 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ## [2.3.0] — Unreleased
 
 ### Fixed
+- **Claude changed-file refreshes no longer reread the full corpus (#87)** —
+  the production refresh path now keeps an exact in-memory per-file index,
+  reads only a verified append tail, and rebuilds only affected files for
+  truncate, replacement, move, and delete events. Cross-file response identity,
+  request-ID degradation, content UUID ownership, titles, context, sessions,
+  projects, branches, workflows, costliest messages, and all time buckets retain
+  the established full-loader results. Dashboard aggregates are materialized
+  incrementally, so an unchanged watcher refresh reads zero JSONL bodies and
+  performs zero aggregate mutations. A new Extension Host still performs one
+  cold in-memory build; normal runtime changes no longer repeat that work.
+- **Codex one-time backfills now use high-end hardware** — incomplete indexes
+  use an adaptive local pool of up to half the logical CPUs, capped at six
+  workers, for independent file passes. One-MiB stream chunks, stage-aware
+  lineage reconciliation, one durable write for a small warm append, and
+  coarser resumable checkpoints prevent repeated tens-of-megabytes index writes
+  from dominating the scan. Once complete, refresh returns to the bounded
+  low-power incremental path. Stable duplicate-session ambiguity is now shown
+  as an explicit data-quality warning and no longer leaves the page falsely
+  labelled as still indexing forever.
 - **Codex request-level token attribution** — valid `last_token_usage` snapshots
   now provide the exact input, cached-input, output, and reasoning components;
   their `total_tokens` value remains an active-context measurement rather than
@@ -93,8 +112,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Scalable Codex indexing** — a cancellable background worker and persistent
   per-file aggregate index support incremental progress, tail-only append reads,
   resume, and zero unchanged usage-record/rollout JSONL body rereads on warm
-  refreshes. This does not include the exact `$CODEX_HOME/session_index.jsonl`
-  title stream performed on every refresh.
+  refreshes. Incomplete one-time backfills may use the bounded adaptive local
+  file-pass pool; completed indexes do not retain those extra workers. This does
+  not include the exact `$CODEX_HOME/session_index.jsonl` title stream performed
+  on every refresh.
 - **One-pass initial Codex backfill** — the first non-empty index or an
   incomplete legacy migration receives a bounded 64 GiB / 16,384-file-pass
   streaming ceiling, with cancellation and atomic resume checkpoints. The

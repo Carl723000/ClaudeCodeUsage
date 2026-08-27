@@ -8,6 +8,12 @@ import { DEFAULT_SECTIONS, ShareRange, buildShareCardData, shareCardFilename } f
 import { renderShareCardSvg } from './shareCardSvg';
 import * as vscode from 'vscode';
 import { ClaudeDataLoader } from './dataLoader';
+import {
+  ClaudeUsageIndex,
+  claudeUsageDashboardSnapshot,
+  createClaudeUsageIndex,
+  updateClaudeUsageIndex,
+} from './claudeIncrementalIndex';
 import { StatusBarManager } from './statusBar';
 import { UsageWebviewProvider } from './webview';
 import { I18n } from './i18n';
@@ -109,6 +115,7 @@ export class ClaudeCodeUsageExtension {
   private cache: {
     records: any[];
     contentAnalysis: ContentAnalysis | null;
+    claudeIndex: ClaudeUsageIndex;
     manifest: UsageManifest | null;
     lastUpdate: Date;
     dataDirectory: string | null;
@@ -119,6 +126,7 @@ export class ClaudeCodeUsageExtension {
   } = {
     records: [],
     contentAnalysis: null,
+    claudeIndex: createClaudeUsageIndex(),
     manifest: null,
     lastUpdate: new Date(0),
     dataDirectory: null,
@@ -1656,13 +1664,11 @@ export class ClaudeCodeUsageExtension {
       });
 
       if (!needFullRefresh) {
-        this.statusBar.updateContext(
-          ClaudeDataLoader.getCurrentContextInfo(
-            this.cache.records,
-            vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-            config.contextWindowOverride
-          )
-        );
+        this.statusBar.updateContext(claudeUsageDashboardSnapshot(this.cache.claudeIndex, {
+          workspacePath: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+          projectGroupingMode: config.projectGroupingMode,
+          contextWindowOverride: config.contextWindowOverride,
+        }).context);
         this.cache.manifest = manifest;
         this.cache.dataDirectory = dataDirectory;
         this.outputChannel.appendLine(formatRefreshDiagnostic({
@@ -1693,7 +1699,10 @@ export class ClaudeCodeUsageExtension {
         }
       }
 
-      const loaded = await ClaudeDataLoader.loadUsageRecords(dataDirectory, {
+      const baseIndex = directoryChanged
+        ? createClaudeUsageIndex()
+        : this.cache.claudeIndex;
+      const loaded = await updateClaudeUsageIndex(baseIndex, dataDirectory, {
         analyzeContent: config.enableContentAnalysis,
         windowDays: config.advicePromptWindowDays,
         manifest,
@@ -1712,6 +1721,8 @@ export class ClaudeCodeUsageExtension {
           filesFailed: loaded.diagnostics.filesFailed,
           bytesRead: loaded.diagnostics.bytesRead,
           linesParsed: loaded.diagnostics.linesParsed,
+          bodyReads: loaded.diagnostics.bodyReads,
+          aggregateMutations: loaded.diagnostics.aggregateMutations,
           watcherEvents,
           coalescedTriggers,
           manifestMs,
@@ -1735,26 +1746,27 @@ export class ClaudeCodeUsageExtension {
         }
       } else {
         const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        const sessionData = ClaudeDataLoader.getCurrentSessionData(records, workspacePath);
-        const todayData = ClaudeDataLoader.getTodayData(records);
-        const workspaceTodayData = workspacePath
-          ? ClaudeDataLoader.getTodayData(ClaudeDataLoader.filterByWorkspace(records, workspacePath))
-          : null;
-        const monthData = ClaudeDataLoader.getThisMonthData(records);
-        const allTimeData = ClaudeDataLoader.getAllTimeData(records);
-        const dailyDataForMonth = ClaudeDataLoader.getDailyDataForMonth(records);
-        const dailyDataForAllTime = ClaudeDataLoader.getDailyDataForAllTime(records);
-        const hourlyDataForToday = ClaudeDataLoader.getHourlyDataForToday(records);
-        const sessionBreakdown = ClaudeDataLoader.getSessionBreakdown(records);
-        const projectBreakdown = ClaudeDataLoader.getProjectBreakdown(records, undefined, config.projectGroupingMode);
-        const branchBreakdown = ClaudeDataLoader.getBranchBreakdown(records);
-        const workflowBreakdown = ClaudeDataLoader.getWorkflowBreakdown(records);
-        const costliestMessages = ClaudeDataLoader.getCostliestMessages(records);
+        const materialized = claudeUsageDashboardSnapshot(loaded.index, {
+          workspacePath,
+          projectGroupingMode: config.projectGroupingMode,
+          contextWindowOverride: config.contextWindowOverride,
+        });
+        const sessionData = materialized.session;
+        const todayData = materialized.today;
+        const workspaceTodayData = materialized.workspaceToday;
+        const monthData = materialized.month;
+        const allTimeData = materialized.allTime;
+        const dailyDataForMonth = materialized.dailyForMonth;
+        const dailyDataForAllTime = materialized.monthlyForAllTime;
+        const hourlyDataForToday = materialized.hourlyForToday;
+        const sessionBreakdown = materialized.sessions;
+        const projectBreakdown = materialized.projects;
+        const branchBreakdown = materialized.branches;
+        const workflowBreakdown = materialized.workflows;
+        const costliestMessages = materialized.costliestMessages;
 
         this.statusBar.updateUsageData(todayData, workspaceTodayData, undefined, undefined, monthData);
-        this.statusBar.updateContext(
-          ClaudeDataLoader.getCurrentContextInfo(records, workspacePath, config.contextWindowOverride)
-        );
+        this.statusBar.updateContext(materialized.context);
         if (updateWebview) {
           this.webviewProvider.updateData(sessionData, todayData, monthData, allTimeData, dailyDataForMonth, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages);
         }
@@ -1768,6 +1780,7 @@ export class ClaudeCodeUsageExtension {
         (nextManifest, snapshot) => {
           this.cache.records = snapshot.records;
           this.cache.contentAnalysis = snapshot.contentAnalysis;
+          this.cache.claudeIndex = loaded.index;
           this.cache.manifest = nextManifest;
           this.cache.dataDirectory = dataDirectory;
           this.cache.lastUpdate = new Date();
@@ -1782,6 +1795,8 @@ export class ClaudeCodeUsageExtension {
         filesFailed: loaded.diagnostics.filesFailed,
         bytesRead: loaded.diagnostics.bytesRead,
         linesParsed: loaded.diagnostics.linesParsed,
+        bodyReads: loaded.diagnostics.bodyReads,
+        aggregateMutations: loaded.diagnostics.aggregateMutations,
         watcherEvents,
         coalescedTriggers,
         manifestMs,

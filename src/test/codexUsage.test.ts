@@ -102,7 +102,8 @@ test('index backfill quality warning follows index convergence', () => {
   snapshot.coverage.indexedFiles = snapshot.coverage.totalFiles;
   snapshot.coverage.indexedBytes = snapshot.coverage.totalBytes;
   snapshot.coverage.complete = true;
-  snapshot.coverage.identity.complete = true;
+  snapshot.coverage.identity.ambiguousSessionGroups = 2;
+  snapshot.coverage.identity.complete = false;
   snapshot.coverage.period.last7Days.complete = true;
   snapshot.coverage.period.last30Days.complete = true;
   snapshot.coverage.period.allTime.complete = true;
@@ -115,6 +116,22 @@ test('index backfill quality warning follows index convergence', () => {
   assert.equal(
     converged.qualityFlags.some(
       ({ flag }) => flag === 'index-backfill-incomplete',
+    ),
+    false,
+  );
+  assert.deepEqual(
+    converged.qualityFlags.find(
+      ({ flag }) => flag === 'ambiguous-session-identity',
+    ),
+    { flag: 'ambiguous-session-identity', count: 2 },
+  );
+
+  snapshot.coverage.identity.ambiguousSessionGroups = 0;
+  snapshot.coverage.identity.complete = true;
+  const exactIdentity = buildCodexUsageView(snapshot, NOW);
+  assert.equal(
+    exactIdentity.qualityFlags.some(
+      ({ flag }) => flag === 'ambiguous-session-identity',
     ),
     false,
   );

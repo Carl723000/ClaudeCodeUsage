@@ -11,7 +11,8 @@ v2.3.0 保留完整 Claude 体验，并增加 provider-specific 的 Codex Beta �
 
 - Claude：精确的本地 token bucket、模型成本估算和 Anthropic OAuth 5 小时/每周配额。
 - Codex Beta：本地 processed/fresh/cache/output/reasoning 指标、模型与 effort 拆分、
-  thread 结构、索引 coverage、quality flag 与结构化优化建议。
+  thread 结构、索引 coverage、quality flag 与结构化优化建议。已知模型还会显示明确限定的
+  API 等效成本估算；它绝不是账单或订阅扣费，未知模型保持未定价。
 - Compare：只并列可比指标，绝不把不同 provider 的成本、配额或 token 求和为误导性总量。
 
 完整账单/发票对账、驱动任一 coding agent 与后台 telemetry 不在范围内。
@@ -22,14 +23,16 @@ Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做�
 | 模块 | 职责 |
 |---|---|
 | `extension.ts` | 激活、命令、设置、provider 生命周期、刷新编排、watcher、状态栏/webview 接线和匿名诊断。 |
-| `dataLoader.ts` | 既有 Claude 发现、解析、去重、归因、内容分析和聚合。 |
+| `dataLoader.ts` | 为精确兼容保留的 Claude 解析、校验、归因和内容分析 primitive。 |
+| `claudeIncrementalIndex.ts` | 生产环境 Claude 内存 per-file 索引：append-tail 解析、精确跨文件 response 去重、受影响 group 聚合、内容分析 contribution 和已物化 dashboard row。 |
 | `providers/providerTypes.ts` | Provider-neutral token、event、confidence、outcome、coverage 和 limit contract。 |
 | `providers/claudeProvider.ts` | 薄兼容 adapter，不改变既有 Claude 聚合结果。 |
 | `providers/codex/codexSchema.ts` | 最小安全 JSON guard，不展开或返回 message/command/tool body。 |
 | `providers/codex/codexParser.ts` | Codex 精确单次请求解析及 cumulative high-water 回退、伪名 lineage metadata、结构计数、quality flag 和 last-observed limit。 |
 | `providers/codex/codexManifest.ts` | Codex 允许目录发现、HMAC file key、fingerprint 和 manifest diff。 |
 | `providers/codex/codexIndex.ts` | schema-3 的 per-file 数字聚合与重放证据持久化、有界 cold/tail parse、独立 aggregate/period coverage 和原子存取。 |
-| `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | 后台 worker、recent-first progress、cancel、resume 和 single-flight client。 |
+| `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | 后台协调器、recent-first progress、cancel、resume、checkpoint 持久化和 single-flight client。 |
+| `providers/codex/codexFilePassPool.ts` / `codexFilePassWorker.ts` | 一次性未完成回填期间，用于独立 main、lineage、period 和 identity per-file pass 的自适应受限本地 pool。 |
 | `providers/codex/codexProvider.ts` | 面向 extension 的 Codex snapshot facade 与 partial/unavailable/error outcome。 |
 | `providers/codex/codexUsage.ts` | Codex-specific 最近 task/7 天/30 天/项目 view model 聚合。 |
 | `providers/codex/codexInsights.ts` | 确定性的结构用量建议，不读 prompt/body。 |
@@ -46,7 +49,12 @@ Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做�
 ## Provider 数据流
 
 ```text
-Claude JSONL ──> ClaudeDataLoader ──> Claude adapter ──> Claude 状态栏/dashboard
+Claude JSONL
+  ──> manifest metadata
+  ──> 内存 per-file 增量索引
+  ──> 精确全局 response identity + 受影响 aggregate group
+  ──> 已物化 Claude 状态栏/dashboard input
+  ──> Claude adapter
 
 允许的 Codex JSONL
   ──> manifest metadata
@@ -143,6 +151,8 @@ Identity 同样是一份 coverage 契约。Git 的 SCP 形式 SSH URL 与 HTTPS 
 最近任务排序使用完整 lineage 上观察到的最大活动时间。只有 active/archive 的严格精确副本——两侧
 都已验证且安全 signature 完全一致——才去重；任何其他重复 Session 都标为歧义，并使 identity
 coverage 保持 incomplete，而不是猜测。
+这种稳定歧义属于数据质量状态，不是未完成 I/O：base 与必要 period coverage 完成后，
+dashboard 不再因此一直标为「仍在索引」。
 
 五个结构调用代理量是 `patchCalls`、`toolCalls`、`postPatchToolCalls`、`compactCount` 与
 `taskCompleteCount`。它们只描述观察到的结构 envelope，不是文件、命令或审阅次数；不会产生美元成本，
@@ -151,17 +161,27 @@ coverage 保持 incomplete，而不是猜测。
 ## 刷新与规模
 
 Claude polling 始终遵守 `refreshInterval`，file watcher 使用配置的 quiet debounce。
+生产 Claude 路径维护内存 per-file 索引：unchanged refresh 的 JSONL body read 为 0，
+append 只读已验证 tail，truncate/replace/move/delete 只重建受影响文件和 aggregate group。
+内容分析 contribution 与既有跨文件 response-identity 规则通过同一原子路径更新。新的
+Extension Host 会执行一次冷内存建索引；watcher 驱动的刷新不会重读、重聚合整个语料。
 Codex 使用独立 quiet debounce（默认 30 秒，可选 Off/10/30/60/120/300）。
 
 Codex 按多 GiB 本地历史设计：
 
 - 发现与解析在 Extension Host 之外的 worker 中执行；
-- recent-first 索引，支持 progress 与 cancel；
+- recent-first 索引，支持 progress 与 cancel；未完成回填最多使用可用逻辑 CPU 的一半，
+  并把本地 file-pass worker 上限设为 6；索引完成后回到单一低功耗协调路径；
 - unchanged warm refresh 不读 JSONL body；
 - 首次非空索引或尚未完成的旧索引迁移会获得一次受限的 16,384 次文件遍历 / 64 GiB
   流式上限；这不是预先分配的内存，并保留取消与原子续传 checkpoint。收敛后，自动任务使用
   64 次文件遍历 / 128 MiB，始终可见的手动「刷新」使用 512 次文件遍历 / 2 GiB。
-  安全下限为 1 MiB + 1 byte，读取 chunk 为 256 KiB，单条 JSONL line 上限为 1 MiB；
+  安全下限为 1 MiB + 1 byte，读取 chunk 为 1 MiB，单条 Codex JSONL line 上限为 1 MiB；
+- 实时 progress 保持高频，但大型持久 snapshot 最多约每 10 秒、2 GiB 或 256 个完成的
+  file pass 写入一次，并在最终阶段边界保存。这样既限制崩溃后的重做量，也避免反复写入
+  数十 MB snapshot 主导高速回填耗时；
+- 只有可能改变 lineage 的阶段才重新 reconcile；period 和稳定阶段复用已验证关系，
+  不再反复扫描完整索引；
 - append refresh 只读新 tail；未完成行只留在 scanner 的短期内存，从 safe cursor 重试，绝不写入 v3；
 - truncate/replacement 只重解析受影响文件；
 - cancel checkpoint 会原子保存 per-file contribution 与 migration progress，下一轮从已验证 cursor resume；

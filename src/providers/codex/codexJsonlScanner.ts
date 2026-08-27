@@ -2,7 +2,10 @@ import { createReadStream } from 'node:fs';
 
 import { CodexRuntimeManifestEntry } from './codexManifest';
 
-export const CODEX_JSONL_CHUNK_BYTES = 256 * 1024;
+// Cold rebuilds are dominated by JSON parsing and index bookkeeping rather
+// than raw disk latency. A 1 MiB stream chunk keeps cancellation responsive
+// while avoiding four callbacks for work that can safely be handled together.
+export const CODEX_JSONL_CHUNK_BYTES = 1024 * 1024;
 export const CODEX_MAX_JSONL_LINE_BYTES = 1024 * 1024;
 
 export interface CodexJsonlCursor {
@@ -60,6 +63,7 @@ export async function scanCodexJsonlLines(
   endExclusive: number,
   onLine: (line: string, endOffset: number) => void,
   onChunk?: (progress: CodexJsonlChunkProgress) => Promise<void>,
+  maxLineBytes: number = CODEX_MAX_JSONL_LINE_BYTES,
 ): Promise<CodexJsonlScanResult> {
   const start = Math.max(0, cursor.offset);
   const end = Math.max(start, endExclusive);
@@ -95,7 +99,7 @@ export async function scanCodexJsonlLines(
 
       if (discarding) {
         safeOffset = absoluteSegmentEnd;
-      } else if (pendingBytes + segment.length > CODEX_MAX_JSONL_LINE_BYTES) {
+      } else if (pendingBytes + segment.length > maxLineBytes) {
         pendingParts = [];
         pendingBytes = 0;
         discarding = true;

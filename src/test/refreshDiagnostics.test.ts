@@ -15,6 +15,8 @@ test('refresh diagnostics contain only stage names and anonymous numeric counter
     filesFailed: 0,
     bytesRead: 4096,
     linesParsed: 17,
+    bodyReads: 1,
+    aggregateMutations: 2,
     watcherEvents: 42,
     coalescedTriggers: 3,
     manifestMs: 12.34,
@@ -25,7 +27,8 @@ test('refresh diagnostics contain only stage names and anonymous numeric counter
   assert.equal(
     line,
     'refresh: trigger=watch files(discovered=389 changed=1 reused=388 removed=0 failed=0) ' +
-      'io(bytes=4096 lines=17) events(watcher=42 coalesced=3) ' +
+      'io(bytes=4096 lines=17) incremental(bodies=1 aggregate-mutations=2) ' +
+      'events(watcher=42 coalesced=3) ' +
       'ms(manifest=12.3 read-parse=45.7 aggregate-render=8.9 total=67.0)'
   );
   assert.equal(/[/\\]|secret|session|prompt|credential|\.jsonl/i.test(line), false);

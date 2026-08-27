@@ -8,7 +8,8 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
 - Claude Code Usage is a VS Code extension that reads local Claude Code and
   Codex usage logs. Claude keeps its exact token totals, cost estimates, and
   OAuth quota; Codex Beta in v2.3.0 has provider-specific local usage and
-  optimization views without pretending its metrics equal Claude billing.
+  optimization views plus clearly labelled API-equivalent cost estimates,
+  without pretending those estimates are a bill or subscription charge.
 - Preserve the established product identity and Claude workflows while adding
   provider-neutral contracts. Claude and Codex dashboard presentation must use
   the same provider-aware render functions and the same CSS contract.
@@ -23,13 +24,17 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
 
 - `src/extension.ts`: activation, commands, refresh orchestration, watcher,
   coalescing, settings changes, and diagnostic output.
-- `src/dataLoader.ts`: JSONL discovery/parsing, deduplication, attribution,
-  content analysis, and usage aggregation.
+- `src/dataLoader.ts`: Claude JSONL parsing primitives, validation, attribution,
+  and content-analysis reducers retained for exact compatibility.
+- `src/claudeIncrementalIndex.ts`: the production in-memory per-file Claude
+  usage index, append-tail parser, exact global deduplication, and materialized
+  dashboard aggregates. Runtime refreshes must not fall back to a full-corpus
+  body read or full-record aggregation.
 - `src/providers/providerTypes.ts` and provider adapters: provider-neutral token,
   coverage, confidence, and limit contracts. Do not erase provider semantics.
 - `src/providers/codex/`: allowed-root discovery, schema guards, exact-request
   parsing with cumulative high-water fallback, per-file aggregate index, worker
-  protocol, and Codex facade.
+  protocol, bounded multi-worker cold backfill, and Codex facade.
 - `src/codexView.ts` / `src/codexViewComponents.ts`: Codex copy and default-provider
   contracts only; they do not own HTML, client code, or styles.
 - `src/settings.ts`: the `SETTINGS` catalog and `SettingsStore`; do not scatter
@@ -92,7 +97,16 @@ Simplified-Chinese review copy lives in [AGENTS.zh-CN.md](AGENTS.zh-CN.md).
 - 2.4-GB-class history must be indexed in a background worker with a persistent
   per-file aggregate index. Unchanged warm refresh reads no JSONL body; append
   refresh reads only the tail. Support progress, cancellation, resume, and
-  single-flight refresh.
+  single-flight refresh. A one-time incomplete backfill may use an adaptive,
+  bounded local worker pool and coarser durable checkpoints; steady-state work
+  returns to the low-power incremental path.
+- Claude runtime refreshes use the in-memory per-file index in
+  `claudeIncrementalIndex.ts`. An unchanged refresh reads zero JSONL bodies;
+  append/truncate/replace/move/delete work is limited to affected files and
+  affected aggregate groups while preserving the established response-identity
+  and content-analysis semantics. A new Extension Host may still perform one
+  cold in-memory build; this is distinct from rereading the corpus after every
+  watcher event.
 - Codex optimization advice uses structural numeric signals only. Never inspect
   or persist prompt/response/command bodies or tool arguments.
 

@@ -205,6 +205,59 @@ export interface CodexIndexProgress {
   period: CodexPeriodCoverage;
 }
 
+export interface CodexIndexSchedulingPolicy {
+  progressEveryMs: number;
+  progressEveryBytes: number;
+  checkpointEveryMs: number;
+  checkpointEveryBytes: number;
+  checkpointEveryFilePasses: number;
+  now: () => number;
+}
+
+export const DEFAULT_CODEX_INDEX_SCHEDULING: CodexIndexSchedulingPolicy = {
+  progressEveryMs: 250,
+  progressEveryBytes: 16 * 1024 * 1024,
+  // Progress remains frequent and in-memory. Durable checkpoints are much
+  // coarser because a large index snapshot can itself be tens of megabytes;
+  // writing it for every small group of completed files used to dominate a
+  // high-throughput backfill. A crash can lose only the bounded interval below.
+  checkpointEveryMs: 10_000,
+  checkpointEveryBytes: 2 * 1024 * 1024 * 1024,
+  checkpointEveryFilePasses: 256,
+  now: Date.now,
+};
+
+export type CodexFilePassKind = 'main' | 'lineage' | 'period' | 'identity';
+
+/**
+ * A self-contained, per-file pass. Runtime paths are sent only to the local
+ * worker that reads the file and are never persisted in the index.
+ */
+export interface CodexFilePassTask {
+  taskId: string;
+  kind: CodexFilePassKind;
+  contribution: CodexFileContribution;
+  entry: CodexRuntimeManifestEntry;
+  salt: string;
+  timeZone: string;
+  endExclusive: number;
+}
+
+export type CodexFilePassOutcome =
+  | {
+      taskId: string;
+      ok: true;
+      contribution: CodexFileContribution;
+      bytesRead: number;
+    }
+  | { taskId: string; ok: false };
+
+export type CodexFilePassBatchRunner = (
+  tasks: readonly CodexFilePassTask[],
+  onOutcome: (outcome: CodexFilePassOutcome) => Promise<void>,
+  shouldCancel?: () => boolean,
+) => Promise<void>;
+
 export interface CodexIndexUpdateOptions {
   salt: string;
   timeZone: string;
@@ -214,6 +267,9 @@ export interface CodexIndexUpdateOptions {
   shouldCancel?: () => boolean;
   onProgress?: (progress: CodexIndexProgress) => void;
   onCheckpoint?: (index: CodexIndexV3) => Promise<void>;
+  scheduling?: Partial<CodexIndexSchedulingPolicy>;
+  /** Present only for accelerated cold/incomplete backfills. */
+  filePassBatch?: CodexFilePassBatchRunner;
 }
 
 export interface CodexIndexUpdateResult {
@@ -1001,6 +1057,73 @@ async function backfillIdentity(
   return result ?? { ...contribution, identityChecked: true };
 }
 
+/**
+ * Execute one independent file pass. Cross-file lineage ownership,
+ * duplicate classification, aggregation, and durable checkpoints remain in
+ * `updateCodexIndex`, so parallel workers cannot change global semantics.
+ */
+export async function runCodexFilePass(
+  task: CodexFilePassTask,
+): Promise<Extract<CodexFilePassOutcome, { ok: true }>> {
+  const options: CodexIndexUpdateOptions = {
+    salt: task.salt,
+    timeZone: task.timeZone,
+  };
+  const noChunk: ContributionChunkHandler = async () => undefined;
+  let result: CodexFilePassResult;
+  switch (task.kind) {
+    case 'main':
+      result = await updateContribution(
+        task.contribution,
+        task.entry,
+        options,
+        defaultIo(),
+        task.endExclusive,
+        noChunk,
+      );
+      break;
+    case 'lineage':
+      result = await reconcileContributionLineage(
+        task.contribution,
+        task.entry,
+        options,
+        defaultIo(),
+        task.endExclusive,
+        noChunk,
+      );
+      break;
+    case 'period':
+      result = await migrateContributionPeriod(
+        task.contribution,
+        task.entry,
+        options,
+        defaultIo(),
+        task.endExclusive,
+        noChunk,
+      );
+      break;
+    case 'identity': {
+      const contribution = await backfillIdentity(
+        task.contribution,
+        task.entry,
+        options,
+        defaultIo(),
+      );
+      result = {
+        contribution,
+        bytesRead: Math.min(task.entry.size, MAX_IDENTITY_BYTES),
+      };
+      break;
+    }
+  }
+  return {
+    taskId: task.taskId,
+    ok: true,
+    contribution: result.contribution,
+    bytesRead: result.bytesRead,
+  };
+}
+
 function lineageFingerprintBuffer(lineage: CodexLineageTrace): Buffer {
   return Buffer.concat([
     ...lineage.fingerprintBlocks.map((block) => Buffer.from(block, 'base64')),
@@ -1496,6 +1619,10 @@ export async function updateCodexIndex(
   const refreshInstant = (options.now ?? Date.now)();
   const asOfDay = dayKeyInZone(new Date(refreshInstant), timeZone);
   const normalizedOptions: CodexIndexUpdateOptions = { ...options, timeZone };
+  const scheduling: CodexIndexSchedulingPolicy = {
+    ...DEFAULT_CODEX_INDEX_SCHEDULING,
+    ...options.scheduling,
+  };
   const budget: CodexIndexWorkBudget = {
     maxFilePasses: Math.max(
       0,
@@ -1538,11 +1665,17 @@ export async function updateCodexIndex(
   let filePasses = 0;
   let bytesRead = 0;
   let cancellationCheckpointed = false;
-  const observesIntermediateState =
-    options.onProgress !== undefined ||
-    options.onCheckpoint !== undefined ||
-    options.shouldCancel !== undefined;
-
+  let dirtySinceCheckpoint = true;
+  let filePassesSinceCheckpoint = 0;
+  let lastProgressAt = Number.NEGATIVE_INFINITY;
+  let lastProgressBytes = 0;
+  // A fresh update does not need an immediate durable write after its first
+  // chunk. Start the timer now so small warm appends converge into the forced
+  // stage checkpoint, while large rebuilds still checkpoint by time, bytes, or
+  // completed file passes.
+  let lastCheckpointAt = scheduling.now();
+  let lastCheckpointBytes = 0;
+  let reconcileLineageForCheckpoint = true;
   for (const move of diff.moved) {
     const contribution = index.files[move.fromKey];
     const entry = entries.get(move.toKey);
@@ -1613,16 +1746,96 @@ export async function updateCodexIndex(
     .filter((entry): entry is CodexRuntimeManifestEntry => entry !== undefined)
     .sort(recentFirst);
 
-  const checkpoint = async (): Promise<void> => {
-    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
-    await options.onCheckpoint?.(cloneIndex(index));
+  const publishProgress = (force = false): boolean => {
+    if (!options.onProgress) {
+      return false;
+    }
+    const current = scheduling.now();
+    const due = force ||
+      lastProgressAt === Number.NEGATIVE_INFINITY ||
+      current - lastProgressAt >= Math.max(0, scheduling.progressEveryMs) ||
+      bytesRead - lastProgressBytes >= Math.max(0, scheduling.progressEveryBytes);
+    if (!due) {
+      return false;
+    }
+    recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
+    options.onProgress(progressFor(index, index.coverage.indexedFiles));
+    lastProgressAt = current;
+    lastProgressBytes = bytesRead;
+    return true;
+  };
+  const checkpoint = async (force = false): Promise<boolean> => {
+    if (!options.onCheckpoint || !dirtySinceCheckpoint) {
+      return false;
+    }
+    const current = scheduling.now();
+    const due = force ||
+      lastCheckpointAt === Number.NEGATIVE_INFINITY ||
+      current - lastCheckpointAt >= Math.max(0, scheduling.checkpointEveryMs) ||
+      bytesRead - lastCheckpointBytes >= Math.max(0, scheduling.checkpointEveryBytes) ||
+      filePassesSinceCheckpoint >= Math.max(
+        1,
+        scheduling.checkpointEveryFilePasses,
+      );
+    if (!due) {
+      return false;
+    }
+    recomputeDerivedIndex(
+      index,
+      manifest,
+      timeZone,
+      asOfDay,
+      reconcileLineageForCheckpoint,
+    );
+    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
+    lastProgressAt = current;
+    lastProgressBytes = bytesRead;
+    // The callback is awaited, so the live index cannot change while an atomic
+    // save sanitizes and serializes it. Avoid a second whole-index clone here.
+    await options.onCheckpoint(index);
+    dirtySinceCheckpoint = false;
+    filePassesSinceCheckpoint = 0;
+    lastCheckpointAt = current;
+    lastCheckpointBytes = bytesRead;
+    return true;
+  };
+  const finishStage = async (
+    didWork: boolean,
+    ensureDerived = false,
+  ): Promise<void> => {
+    if (didWork && !dirtySinceCheckpoint) {
+      return;
+    }
+    if (didWork) {
+      if (await checkpoint(true)) {
+        return;
+      }
+      recomputeDerivedIndex(
+        index,
+        manifest,
+        timeZone,
+        asOfDay,
+        reconcileLineageForCheckpoint,
+      );
+      publishProgress(true);
+      return;
+    }
+    if (ensureDerived) {
+      recomputeDerivedIndex(
+        index,
+        manifest,
+        timeZone,
+        asOfDay,
+        reconcileLineageForCheckpoint,
+      );
+    }
   };
   const cancelBeforePass = async (): Promise<void> => {
     if (!options.shouldCancel?.()) {
       return;
     }
     if (!cancellationCheckpointed) {
-      await checkpoint();
+      await checkpoint(true);
       cancellationCheckpointed = true;
     }
     throw new CodexIndexCancelledError();
@@ -1633,13 +1846,24 @@ export async function updateCodexIndex(
   ): ContributionChunkHandler => async (contribution, passBytesRead) => {
     bytesRead = passStartingBytes + passBytesRead;
     index.files[entry.fileKey] = contribution;
-    if (observesIntermediateState) {
-      recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
-    }
-    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
+    dirtySinceCheckpoint = true;
     if (options.shouldCancel?.()) {
       if (!cancellationCheckpointed) {
-        await checkpoint();
+        await checkpoint(true);
+        cancellationCheckpointed = true;
+      }
+      throw new CodexIndexCancelledError();
+    }
+    if (!(await checkpoint(false))) {
+      publishProgress(false);
+    }
+    // A progress/checkpoint callback can make an external cancellation visible
+    // while this worker is paused. Re-check before reading the next chunk so a
+    // final chunk still leaves a resumable draft rather than running another
+    // phase first.
+    if (options.shouldCancel?.()) {
+      if (!cancellationCheckpointed) {
+        await checkpoint(true);
         cancellationCheckpointed = true;
       }
       throw new CodexIndexCancelledError();
@@ -1647,8 +1871,118 @@ export async function updateCodexIndex(
   };
   const hasBudget = (): boolean =>
     filePasses < budget.maxFilePasses && bytesRead < budget.maxBytes;
+  const runParallelTasks = async (
+    tasks: readonly CodexFilePassTask[],
+    onFailure: (task: CodexFilePassTask) => void,
+  ): Promise<void> => {
+    if (!options.filePassBatch || tasks.length === 0) {
+      return;
+    }
+    const byId = new Map(tasks.map((task) => [task.taskId, task]));
+    bodyReads += tasks.length;
+    filePasses += tasks.length;
+    try {
+      await options.filePassBatch(
+        tasks,
+        async (outcome) => {
+          const task = byId.get(outcome.taskId);
+          if (!task) {
+            throw new Error('Codex file worker returned an unknown task');
+          }
+          if (outcome.ok) {
+            bytesRead += outcome.bytesRead;
+            index.files[task.entry.fileKey] = outcome.contribution;
+          } else {
+            failedFiles += 1;
+            onFailure(task);
+          }
+          dirtySinceCheckpoint = true;
+          filePassesSinceCheckpoint += 1;
+          if (!(await checkpoint(false))) {
+            publishProgress(false);
+          }
+          if (options.shouldCancel?.()) {
+            if (!cancellationCheckpointed) {
+              await checkpoint(true);
+              cancellationCheckpointed = true;
+            }
+            throw new CodexIndexCancelledError();
+          }
+        },
+        options.shouldCancel,
+      );
+    } catch (error) {
+      if (error instanceof CodexIndexCancelledError) {
+        if (!cancellationCheckpointed) {
+          await checkpoint(true);
+          cancellationCheckpointed = true;
+        }
+      }
+      throw error;
+    }
+  };
 
-  for (const entry of mainWork) {
+  const mainPassStart = filePasses;
+  if (options.filePassBatch && mainWork.length > 1) {
+    await cancelBeforePass();
+    const tasks: CodexFilePassTask[] = [];
+    const priorByTask = new Map<string, CodexFileContribution | undefined>();
+    const resetFlagByTask = new Map<string, string | undefined>();
+    let reservedBytes = 0;
+    for (const entry of mainWork) {
+      if (
+        filePasses + tasks.length >= budget.maxFilePasses ||
+        bytesRead + reservedBytes >= budget.maxBytes
+      ) {
+        break;
+      }
+      const resetFlag = resetFlags.get(entry.fileKey);
+      const prior = index.files[entry.fileKey];
+      const base = resetFlag || !prior ||
+          prior.qualityFlags.includes('stale-reset-required')
+        ? contributionFor(entry, timeZone, resetFlag ? [resetFlag] : [])
+        : {
+            ...cloneContribution(prior),
+            qualityFlags: prior.qualityFlags.filter(
+              (flag) => flag !== 'stale-file' && flag !== 'stale-reset-required',
+            ),
+          };
+      const remainingBytes = budget.maxBytes - bytesRead - reservedBytes;
+      const endExclusive = Math.min(entry.size, base.offset + remainingBytes);
+      if (endExclusive <= base.offset) {
+        break;
+      }
+      const taskId = `main:${entry.fileKey}`;
+      tasks.push({
+        taskId,
+        kind: 'main',
+        contribution: base,
+        entry,
+        salt: normalizedOptions.salt,
+        timeZone,
+        endExclusive,
+      });
+      priorByTask.set(taskId, prior);
+      resetFlagByTask.set(taskId, resetFlag);
+      reservedBytes += endExclusive - base.offset;
+    }
+    await runParallelTasks(tasks, (task) => {
+      const prior = priorByTask.get(task.taskId);
+      if (!prior) {
+        return;
+      }
+      index.files[task.entry.fileKey] = {
+        ...prior,
+        qualityFlags: uniqueFlags(
+          prior.qualityFlags,
+          ['stale-file'],
+          resetFlagByTask.get(task.taskId)
+            ? ['stale-reset-required']
+            : [],
+        ),
+      };
+    });
+  } else for (const entry of mainWork) {
     if (!hasBudget()) {
       break;
     }
@@ -1699,21 +2033,15 @@ export async function updateCodexIndex(
         };
       }
     }
-    if (observesIntermediateState) {
-      recomputeDerivedIndex(
-        index,
-        manifest,
-        timeZone,
-        asOfDay,
-        options.onCheckpoint !== undefined,
-      );
+    dirtySinceCheckpoint = true;
+    filePassesSinceCheckpoint += 1;
+    if (!(await checkpoint(false))) {
+      publishProgress(false);
     }
-    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
-    await options.onCheckpoint?.(cloneIndex(index));
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
+  await finishStage(filePasses > mainPassStart, true);
   const lineageWork = manifest.files
     .filter((entry) => {
       const contribution = index.files[entry.fileKey];
@@ -1728,7 +2056,59 @@ export async function updateCodexIndex(
     })
     .sort(recentFirst);
 
-  for (const entry of lineageWork) {
+  reconcileLineageForCheckpoint = false;
+  const lineagePassStart = filePasses;
+  if (options.filePassBatch && lineageWork.length > 1) {
+    await cancelBeforePass();
+    const tasks: CodexFilePassTask[] = [];
+    const priorByTask = new Map<string, CodexFileContribution>();
+    let reservedBytes = 0;
+    for (const entry of lineageWork) {
+      if (
+        filePasses + tasks.length >= budget.maxFilePasses ||
+        bytesRead + reservedBytes >= budget.maxBytes
+      ) {
+        break;
+      }
+      const prior = index.files[entry.fileKey];
+      if (!prior) {
+        continue;
+      }
+      const base = cloneContribution(prior);
+      const reconciliation = base.lineageReconciliation;
+      const start = reconciliation &&
+          reconciliation.prefixEvents === base.lineage?.desiredPrefixEvents
+        ? reconciliation.offset
+        : 0;
+      const endExclusive = Math.min(
+        entry.size,
+        start + (budget.maxBytes - bytesRead - reservedBytes),
+      );
+      if (endExclusive <= start) {
+        promoteCaughtUpLineage(base);
+        index.files[entry.fileKey] = base;
+        continue;
+      }
+      const taskId = `lineage:${entry.fileKey}`;
+      tasks.push({
+        taskId,
+        kind: 'lineage',
+        contribution: base,
+        entry,
+        salt: normalizedOptions.salt,
+        timeZone,
+        endExclusive,
+      });
+      priorByTask.set(taskId, prior);
+      reservedBytes += endExclusive - start;
+    }
+    await runParallelTasks(tasks, (task) => {
+      const prior = priorByTask.get(task.taskId);
+      if (prior) {
+        index.files[task.entry.fileKey] = prior;
+      }
+    });
+  } else for (const entry of lineageWork) {
     if (!hasBudget()) {
       break;
     }
@@ -1773,17 +2153,15 @@ export async function updateCodexIndex(
       failedFiles += 1;
       index.files[entry.fileKey] = prior;
     }
-    if (observesIntermediateState) {
-      recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
+    dirtySinceCheckpoint = true;
+    filePassesSinceCheckpoint += 1;
+    if (!(await checkpoint(false))) {
+      publishProgress(false);
     }
-    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
-    await options.onCheckpoint?.(cloneIndex(index));
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  if (observesIntermediateState) {
-    recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
-  }
+  await finishStage(filePasses > lineagePassStart);
   const canonical = classifyCodexSessionDuplicates(index.files).canonicalFileKeys;
   const periodWork = manifest.files
     .filter((entry) => {
@@ -1807,7 +2185,54 @@ export async function updateCodexIndex(
     })
     .sort(recentFirst);
 
-  for (const entry of periodWork) {
+  const periodPassStart = filePasses;
+  if (options.filePassBatch && periodWork.length > 1) {
+    await cancelBeforePass();
+    const tasks: CodexFilePassTask[] = [];
+    const priorByTask = new Map<string, CodexFileContribution>();
+    let reservedBytes = 0;
+    for (const entry of periodWork) {
+      if (
+        filePasses + tasks.length >= budget.maxFilePasses ||
+        bytesRead + reservedBytes >= budget.maxBytes
+      ) {
+        break;
+      }
+      const prior = index.files[entry.fileKey];
+      if (!prior) {
+        continue;
+      }
+      const base = cloneContribution(prior);
+      const start = base.periodMigration?.timeZone === timeZone
+        ? base.periodMigration.offset
+        : 0;
+      const endExclusive = Math.min(
+        base.offset,
+        start + (budget.maxBytes - bytesRead - reservedBytes),
+      );
+      if (endExclusive <= start) {
+        break;
+      }
+      const taskId = `period:${entry.fileKey}`;
+      tasks.push({
+        taskId,
+        kind: 'period',
+        contribution: base,
+        entry,
+        salt: normalizedOptions.salt,
+        timeZone,
+        endExclusive,
+      });
+      priorByTask.set(taskId, prior);
+      reservedBytes += endExclusive - start;
+    }
+    await runParallelTasks(tasks, (task) => {
+      const prior = priorByTask.get(task.taskId);
+      if (prior) {
+        index.files[task.entry.fileKey] = prior;
+      }
+    });
+  } else for (const entry of periodWork) {
     if (!hasBudget()) {
       break;
     }
@@ -1848,15 +2273,51 @@ export async function updateCodexIndex(
       failedFiles += 1;
       index.files[entry.fileKey] = prior;
     }
-    if (observesIntermediateState) {
-      recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
+    dirtySinceCheckpoint = true;
+    filePassesSinceCheckpoint += 1;
+    if (!(await checkpoint(false))) {
+      publishProgress(false);
     }
-    options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
-    await options.onCheckpoint?.(cloneIndex(index));
     await new Promise<void>((resolve) => setImmediate(resolve));
   }
 
-  for (const entry of manifest.files.sort(recentFirst)) {
+  await finishStage(filePasses > periodPassStart);
+
+  reconcileLineageForCheckpoint = true;
+  const identityPassStart = filePasses;
+  const identityWork = manifest.files.sort(recentFirst);
+  const pendingIdentity = identityWork.filter(
+    (entry) => index.files[entry.fileKey]?.identityChecked !== true,
+  );
+  if (options.filePassBatch && pendingIdentity.length > 1) {
+    await cancelBeforePass();
+    const tasks: CodexFilePassTask[] = [];
+    let reservedBytes = 0;
+    for (const entry of pendingIdentity) {
+      const contribution = index.files[entry.fileKey];
+      if (!contribution) {
+        continue;
+      }
+      const identityBytes = Math.min(entry.size, MAX_IDENTITY_BYTES);
+      if (
+        filePasses + tasks.length >= budget.maxFilePasses ||
+        bytesRead + reservedBytes + identityBytes > budget.maxBytes
+      ) {
+        break;
+      }
+      tasks.push({
+        taskId: `identity:${entry.fileKey}`,
+        kind: 'identity',
+        contribution: cloneContribution(contribution),
+        entry,
+        salt: normalizedOptions.salt,
+        timeZone,
+        endExclusive: identityBytes,
+      });
+      reservedBytes += identityBytes;
+    }
+    await runParallelTasks(tasks, () => undefined);
+  } else for (const entry of identityWork) {
     if (!hasBudget()) {
       break;
     }
@@ -1879,10 +2340,10 @@ export async function updateCodexIndex(
         normalizedOptions,
         io,
         async () => {
-          options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
+          publishProgress(false);
           if (options.shouldCancel?.()) {
             if (!cancellationCheckpointed) {
-              await checkpoint();
+              await checkpoint(true);
               cancellationCheckpointed = true;
             }
             throw new CodexIndexCancelledError();
@@ -1895,13 +2356,18 @@ export async function updateCodexIndex(
       }
       failedFiles += 1;
     }
-    recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
-    await options.onCheckpoint?.(cloneIndex(index));
+    dirtySinceCheckpoint = true;
+    filePassesSinceCheckpoint += 1;
+    if (!(await checkpoint(false))) {
+      publishProgress(false);
+    }
   }
 
-  recomputeDerivedIndex(index, manifest, timeZone, asOfDay);
+  await finishStage(filePasses > identityPassStart);
   if (filePasses === 0) {
     options.onProgress?.(progressFor(index, manifest.files.length));
+  } else {
+    publishProgress(true);
   }
   return {
     index,

@@ -8,7 +8,8 @@
 - Claude Code Usage 是一个读取本地 Claude Code 与 Codex 用量日志的
   VS Code 扩展。Claude 保留精确 token 总量、成本估算与 OAuth 配额；
   v2.3.0 直接包含 Codex Beta，提供 provider-specific 的本地用量与优化视图，
-  不假定其指标与 Claude 账单等价。
+  以及明确标注的 API 等效成本估算；不得把估算冒充账单或订阅扣费，
+  也不假定其指标与 Claude 账单等价。
 - 保留既有产品身份与 Claude 工作流，同时增加 provider-neutral contract。
   Claude 与 Codex 仪表盘必须复用同一组 provider-aware render function 和同一份 CSS contract。
 - 优先保证 token 归因准确，不追求账单级精度。精确总量、明确标注的估算、
@@ -20,11 +21,16 @@
 ## 架构边界
 
 - `src/extension.ts`：激活、命令、刷新调度、watcher、合并刷新、设置变化和诊断输出。
-- `src/dataLoader.ts`：JSONL 发现/解析、去重、归因、内容分析和用量聚合。
+- `src/dataLoader.ts`：Claude JSONL 解析 primitive、校验、归因与内容分析 reducer，
+  用于保持既有精确语义兼容。
+- `src/claudeIncrementalIndex.ts`：生产环境使用的 Claude 内存 per-file 用量索引、
+  append-tail 解析、精确全局去重与已物化的 dashboard aggregate。运行中刷新不得
+  回退为全语料 body 重读或全 records 重新聚合。
 - `src/providers/providerTypes.ts` 与 provider adapter：provider-neutral token、
   coverage、confidence 与 limit contract；不得抹平 provider 语义。
 - `src/providers/codex/`：允许目录发现、schema guard、精确单次请求解析及
-  cumulative high-water 回退、per-file 聚合索引、worker protocol 和 Codex facade。
+  cumulative high-water 回退、per-file 聚合索引、worker protocol、受限多 worker
+  冷回填和 Codex facade。
 - `src/codexView.ts` / `src/codexViewComponents.ts`：只保存 Codex 文案与默认
   provider contract，不负责 HTML、client code 或样式。
 - `src/settings.ts`：`SETTINGS` catalog 与 `SettingsStore`；不要散落直接配置读取。
@@ -74,7 +80,13 @@
   不为了追求“实时”而读 credential 或发网络请求。
 - 2.4-GB-class 历史必须由 background worker 与持久化 per-file 聚合索引处理。
   Unchanged warm refresh 不读 JSONL body，append refresh 只读 tail；支持 progress、cancel、resume
-  与 single-flight。
+  与 single-flight。一次性的未完成回填可以使用自适应、受限的本地 worker pool 与
+  更粗粒度的 durable checkpoint；收敛后必须回到低功耗增量路径。
+- Claude 运行中刷新使用 `claudeIncrementalIndex.ts` 的内存 per-file 索引。
+  Unchanged refresh 的 JSONL body read 必须为 0；append/truncate/replace/move/delete
+  只处理受影响文件和 aggregate group，同时保持既有 response-identity 去重与
+  content-analysis 语义。新的 Extension Host 仍可执行一次冷内存建索引；这与每次
+  watcher event 都重读全语料是两回事。
 - Codex 优化建议只使用结构化数字信号，不读取或持久化 prompt/response/command body
   或 tool arguments。
 

@@ -851,7 +851,10 @@ export function buildCodexUsageView(
     projects.set(key, group);
   }
   const aggregateIndexIncomplete =
-    !snapshot.coverage.complete || !snapshot.coverage.identity.complete;
+    !snapshot.coverage.complete ||
+    !periodCoverage.last7Days.complete ||
+    !periodCoverage.last30Days.complete ||
+    !periodCoverage.allTime.complete;
   const recentScope = recent.length > 0
     ? scope(recent, aggregateIndexIncomplete)
     : null;
@@ -899,6 +902,12 @@ export function buildCodexUsageView(
     qualityFlags['index-backfill-incomplete'] = 1;
   } else {
     delete qualityFlags['index-backfill-incomplete'];
+  }
+  if (snapshot.coverage.identity.ambiguousSessionGroups > 0) {
+    qualityFlags['ambiguous-session-identity'] =
+      snapshot.coverage.identity.ambiguousSessionGroups;
+  } else {
+    delete qualityFlags['ambiguous-session-identity'];
   }
 
   return {

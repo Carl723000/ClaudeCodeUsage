@@ -24,6 +24,7 @@ import {
   CodexIndexLeaseCancelledError,
   acquireCodexIndexLease,
 } from './codexIndexLease';
+import { CodexFilePassPool } from './codexFilePassPool';
 
 const cancelled = new Set<string>();
 let activeRequestId: string | null = null;
@@ -85,6 +86,7 @@ export interface CodexWorkerRefreshRuntime {
   scanCodexManifest: typeof scanCodexManifest;
   updateCodexIndex: typeof updateCodexIndex;
   saveCodexIndexAtomic: typeof saveCodexIndexAtomic;
+  createCodexFilePassPool?: () => Pick<CodexFilePassPool, 'run' | 'dispose'>;
   now?: () => number;
 }
 
@@ -114,36 +116,48 @@ export async function runCodexWorkerRefresh(
         previous,
         manifest.files.length,
       );
-      const updated = await runtime.updateCodexIndex(previous, manifest, {
-        salt: request.salt,
-        timeZone: request.timeZone,
-        now,
-        budget: {
-          maxFilePasses: expeditedBackfill
-            ? CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES
-            : foreground
-            ? CODEX_REFRESH_FOREGROUND_MAX_FILE_PASSES
-            : CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES,
-          maxBytes: expeditedBackfill
-            ? CODEX_REFRESH_BACKFILL_MAX_BYTES
-            : foreground
-            ? CODEX_REFRESH_FOREGROUND_MAX_BYTES
-            : CODEX_REFRESH_BACKGROUND_MAX_BYTES,
-        },
-        shouldCancel: runtime.isCancelled,
-        onCheckpoint: (index) =>
-          runtime.saveCodexIndexAtomic(request.indexPath, index),
-        onProgress: (progress) =>
-          runtime.post({
-            type: 'progress',
-            requestId: request.requestId,
-            progress,
-          }),
-      });
+      const filePassPool = expeditedBackfill
+        ? runtime.createCodexFilePassPool?.()
+        : undefined;
+      let checkpointWrites = 0;
+      let updated;
+      try {
+        updated = await runtime.updateCodexIndex(previous, manifest, {
+          salt: request.salt,
+          timeZone: request.timeZone,
+          now,
+          budget: {
+            maxFilePasses: expeditedBackfill
+              ? CODEX_REFRESH_BACKFILL_MAX_FILE_PASSES
+              : foreground
+              ? CODEX_REFRESH_FOREGROUND_MAX_FILE_PASSES
+              : CODEX_REFRESH_BACKGROUND_MAX_FILE_PASSES,
+            maxBytes: expeditedBackfill
+              ? CODEX_REFRESH_BACKFILL_MAX_BYTES
+              : foreground
+              ? CODEX_REFRESH_FOREGROUND_MAX_BYTES
+              : CODEX_REFRESH_BACKGROUND_MAX_BYTES,
+          },
+          shouldCancel: runtime.isCancelled,
+          onCheckpoint: async (index) => {
+            await runtime.saveCodexIndexAtomic(request.indexPath, index);
+            checkpointWrites += 1;
+          },
+          onProgress: (progress) =>
+            runtime.post({
+              type: 'progress',
+              requestId: request.requestId,
+              progress,
+            }),
+          ...(filePassPool ? { filePassBatch: filePassPool.run } : {}),
+        });
+      } finally {
+        await filePassPool?.dispose();
+      }
       if (runtime.isCancelled()) {
         throw new CodexIndexCancelledError();
       }
-      if (updated.indexChanged || indexRecovery) {
+      if ((updated.indexChanged || indexRecovery) && checkpointWrites === 0) {
         await runtime.saveCodexIndexAtomic(request.indexPath, updated.index);
       }
       if (runtime.isCancelled()) {
@@ -192,6 +206,7 @@ async function runRefresh(
       scanCodexManifest,
       updateCodexIndex,
       saveCodexIndexAtomic,
+      createCodexFilePassPool: () => new CodexFilePassPool(),
     });
   } finally {
     cancelled.delete(request.requestId);
