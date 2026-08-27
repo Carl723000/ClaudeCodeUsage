@@ -22,3 +22,20 @@ test('extension advice and optimizer runtime stay API/BYOK-only', () => {
   assert.match(runtimeAdvice, /apiUrl:\s*config\.adviceApiUrl/);
   assert.doesNotMatch(runtimeAdvice, /getAccessToken\s*\(/);
 });
+
+test('future advice seams remain unreachable from production host and webview code', () => {
+  const production = [
+    readFileSync(path.join(root, 'src', 'extension.ts'), 'utf8'),
+    readFileSync(path.join(root, 'src', 'webview.ts'), 'utf8'),
+  ].join('\n');
+
+  for (const seam of [
+    'planAdviceEvidencePreparation',
+    'buildLegacyPersonalizationDraft',
+    'projectLegacyPersonalization',
+    'requestStructuredAdviceViaLegacyByok',
+    'appendStoredComparablePair',
+  ]) {
+    assert.doesNotMatch(production, new RegExp(`\\b${seam}\\b`));
+  }
+});

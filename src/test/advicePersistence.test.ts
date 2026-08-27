@@ -105,6 +105,29 @@ test('unknown, corrupt, or identifying local data fails closed and is never over
   }
 });
 
+test('current local state rejects prompt consent without aggregate consent', async () => {
+  const inconsistent = {
+    ...createClosedAdviceLocalState(),
+    featureMode: 'enabled' as const,
+    aggregateConsent: 'not-granted' as const,
+    promptSampleConsent: 'explicit' as const,
+  };
+  const storage = new MemoryStorage();
+  storage.value = inconsistent;
+
+  const loaded = await loadAndMigrateAdviceLocalState(storage);
+  assert.deepEqual(loaded, {
+    ok: false,
+    reason: 'invalid-local-data',
+    value: createClosedAdviceLocalState(),
+  });
+  assert.equal(storage.updates.length, 0);
+
+  const saved = await saveAdviceLocalState(storage, inconsistent);
+  assert.deepEqual(saved, { ok: false, reason: 'invalid-local-data' });
+  assert.equal(storage.updates.length, 0);
+});
+
 test('migration write failure returns a closed state without exposing the storage error', async () => {
   const storage = new MemoryStorage();
   storage.value = {

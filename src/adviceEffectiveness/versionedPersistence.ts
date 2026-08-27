@@ -313,6 +313,7 @@ function parseCurrentState(value: unknown): AdviceLocalState | undefined {
     !oneOf(value.featureMode, ['disabled', 'enabled'] as const) ||
     !oneOf(value.aggregateConsent, ['not-granted', 'explicit'] as const) ||
     !oneOf(value.promptSampleConsent, ['not-granted', 'explicit'] as const) ||
+    (value.promptSampleConsent === 'explicit' && value.aggregateConsent !== 'explicit') ||
     !Array.isArray(value.feedback) ||
     value.feedback.length > MAX_PERSISTED_ADVICE_FEEDBACK ||
     !Array.isArray(value.comparablePairs) ||

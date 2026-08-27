@@ -20,6 +20,21 @@
 
 已有的 `Get AI Advice` 与 Prompt Optimizer 仍是独立的旧功能；它们的兼容边界见第 9 节，不能被视为满足新链路的密封 payload 或严格解析保证。
 
+### 2026-08-27 主仓库路线图对齐
+
+本任务已逐项读取并对齐主仓库 `decision-reports/2026-08-24-release-roadmap/` 下的
+`feature-coverage-matrix.md`、`parallel-development-handoff.md` 与
+`github-connected-roadmap.md`。本分支的真实提交链是 R8 `48e5e77` → foundation
+cherry-pick `91739a8` → integration `20466a7`。旧 foundation 分支
+`codex/v2.3.1-ai-advice-validity-foundation` 的 `c7a95d9` 与 `91739a8` 是同一
+patch，但基于旧 `0b4b750`；未来不得整支合并或重复 cherry-pick。
+
+#87 的最终 Claude 增量索引不在本分支。2026-08-27 出现了 clean 候选
+`2584173`，但它与 R8／本分支大幅分叉，并同时修改 `dataLoader.ts`、
+`extension.ts`、Codex backfill 与架构文档，不能当成一个小补丁移入。最终候选必须先等
+v2.2.3 的 #87/#89/#92 正式落地，再从稳定 v2.3.0 选择性重放本分支的纯契约、适配、
+持久化、host wiring 和 UI 层；当前原型不是最终集成基线。
+
 ## 2. 实现地图与所有权
 
 | 责任 | 当前接入点 | 约束 |
@@ -33,6 +48,8 @@
 | model 可逆实验 | `src/adviceEffectiveness/modelExperiment.ts` | 只允许相邻向下一档，至少五对任务 |
 | 严格模型输出 | `src/adviceEffectiveness/structuredOutput.ts` | JSON-only、exact shape、已知引用、无修复/fallback |
 | 唯一未来 BYOK 接线 | `src/adviceEffectiveness/legacyBridge.ts` | 仅 `backend: api`；当前生产代码未调用 |
+| #87 证据准备计划 | `src/adviceEffectiveness/evidencePreparation.ts` | 纯函数、无 I/O；关闭态和 aggregates-only 永不请求内容扫描，个性化缺快照时只返回“需显式刷新” |
+| 旧个性化迁移准备 | `src/adviceEffectiveness/legacyPersonalization.ts` | userContext/prompt 只保留于 host 内存草稿；无第二项 consent 时不产生投影，当前生产未调用 |
 | framework 来源分类 | `src/promptOrigin.ts`、`src/dataLoader.ts` | 只看结构标记并立即聚合，不做语义/写作质量判断 |
 | host / UI 薄接线 | `src/extension.ts`、`src/webview.ts` | feature flag、host-only prompt、opaque snapshot、本地反馈 |
 
@@ -61,6 +78,20 @@ host 始终拥有观察、证据、隐私和来源。未来远程模型最多只
 适配器类型不接受 raw record、路径、session ID、标题或 prompt。`extension.ts` 只在本地把当前窗口的记录归约成 DTO，再调用适配器。scope/window 不一致、计数越界或非有限数会整批拒绝。
 
 Claude 的结构化证据可用于密封远程预览，但仍需聚合数据的独立明确同意。
+
+### #87 增量索引依赖
+
+当前 R8 原型在实验开关打开时，仍会从 `cache.records` 过滤窗口并重新计算 usage aggregate
+和 session breakdown。默认关闭时不会增加当前发布开销，但这条路径不能进入正式 v2.3.1。
+未来必须消费稳定 #87 `ClaudeUsageIndex` 已物化的同窗口 aggregate、session summary、
+coverage 与 quality 状态；prompt 样本和 framework-overhead 也必须来自同一 per-file analysis
+contribution，不能为了 advice 再扫描 JSONL。
+
+`planAdviceEvidencePreparation` 已把这条边界固化为无 I/O 的 typed seam：本地展示和
+aggregates-only 只消费现成数据；prompt 个性化只有在两项 consent 均明确、且用户主动预览或
+发送时才检查内容快照。缺失、过期或窗口不一致只返回
+`refresh-content-analysis` 的 host action 请求，同时固定 `allowAutomaticScan: false`；函数本身
+永远不读文件或触发刷新。它在最终 stable index 接入前保持未接线。
 
 ### Codex
 
@@ -112,6 +143,7 @@ SHA-256 是快照身份/一致性摘要，不是签名，也不代表服务端�
 - 合法 v1 envelope 只迁移已验证反馈；feature、aggregate consent、prompt consent 全部重置为关闭，可比任务对从空数组开始。
 - 未知未来版本、额外字段、重复 ID、非法 enum、非有限数或存储错误都返回全关闭状态，并且不覆盖原始未知/损坏数据。
 - 写入失败后 host 进入 degraded 状态，拒绝继续修改 consent 或反馈。
+- v2 状态若出现 `promptSampleConsent=explicit` 但 aggregate consent 未授予，会作为损坏状态整体失败关闭，且不会覆盖原值。
 
 基础提交中的独立 `feedback.ts` / `claudeCodeUsage.adviceEffectiveness.feedback.v1` event ledger 仍保留供兼容测试，但不是集成 UI 的写入点，也不会被静默合并进 v2 envelope。未来若决定迁移，必须单独设计可审计的一次性导入；在此之前不得双写。
 
@@ -175,6 +207,13 @@ model rightsizing 只是一条 typed、可逆实验 seam：允许 `opus → sonn
 
 旧 `getAdvice` / `adviceSummary` 的 prompt 行为是历史兼容边界，不应被描述成新链路的隐私保证。新链路中的聚合同意和 prompt 样本同意不能与旧 Optimizer consent 或任何旧配置布尔值互相替代。
 
+`legacyPersonalization.ts` 只准备 A-20 的迁移接口，不改变旧 runtime：它把
+`advice.userContext` 与候选 prompt 样本重建为有界的 host-only 草稿，丢弃 cwd、session ID
+和未知字段，并把样本年龄标为窗口内、早于窗口或未知。内容为空时无需迁移；有内容时必须使用
+新的 prompt-personalization consent。未授权时 `projectLegacyPersonalization` 返回
+`undefined`；授权后才产生可逐字预览的 allowlisted 投影。投影前还会重新验证整个内存草稿，
+拒绝额外字段和不一致元数据。该投影尚未进入 canonical payload，因此 A-20 仍是部分完成而非已接线。
+
 ## 10. 严格解析与 OAuth 403 边界
 
 `parseStructuredAdviceOutput` 只接受一个 bounded、exact-shape JSON object。它拒绝 Markdown fence、前后 prose、未知字段、未知 observation/evidence reference、重复 ID、过大数组/字符串、无条件动作、无成功判据、无 quality guardrail 以及不合版本的输出。它不剥 fence、不修 JSON、不返回部分 batch，也不调用旧 Markdown/Optimizer fallback；空 `recommendations` 是合法的 fail-closed 结果。
@@ -223,14 +262,24 @@ Claude Code OAuth 凭据仍只用于既有 usage/quota API。历史上的 OAuth 
 - 完成 F5 Extension Development Host smoke、可行的 Playwright/截图检查、`npm run compile`、全量 `npm test`、VSIX 打包，以及发布候选所需的 macOS/Linux installed-VSIX smoke。
 - 若最终成为用户可见发布内容，再按项目政策单独更新 CHANGELOG 和全部七份 README；这些不是本候选准备分支的隐式授权。
 
+其中“操作 → full reload → 状态保留/快照失效”的端到端验收当前尚未完成；现有测试只覆盖
+host 回执后的页面状态和独立的 `globalState` 读写。正式候选必须补真实 consent/feedback
+操作后的 full-page replacement 测试，以及 consent 撤回后旧 opaque snapshot 不可再取回的
+host 测试，不能把当前证据写成已通过。
+
 ## 12. 当前已知限制与下一步
 
 - 新面板没有生产 sender；密封预览不代表数据已经发送。
 - 自动生成/匹配可比任务对与真实质量 rubric 采集仍未实现；当前只有严格存储和纯比较接口。
+- 当前 Claude host wiring 仍从 `cache.records` 重算；正式 v2.3.1 必须改为稳定 #87 的已物化 aggregate/coverage seam，并证明 advice 不增加 JSONL body read。
+- 远程 parser 已严格校验结构和引用，但 host-owned recommendation lineage／建议类型与成功政策尚未锁定；模型不能自行发明跨日 ID 或把无关 evidence 包装成 `/clear` 等建议。
+- Codex adapter 可以产生多条 recommendation，但实验 UI 当前只闭环第一条；正式候选必须逐条反馈/比较，或由 host 给出可审计的唯一选择规则。
+- consent/feedback 的 full-reload persistence 与 consent 撤回后的 snapshot 失效仍缺端到端测试。
 - topic drift 和写作质量没有本地语义证据。
 - Codex 没有远程 payload schema，保持 local-only。
 - 旧 `Get AI Advice` 和 Prompt Optimizer 尚未迁移到统一 contract，且保留各自历史解析行为。
 - framework origin 是结构 proxy，日志 schema 漂移可能降低覆盖；不得用猜测补齐。
+- `advice.userContext`／样本年龄只有未接线的 host-only 迁移 seam；aggregates-only payload 仍不会包含这些内容。
 - 独立 feedback v1 ledger 没有自动导入 v2 envelope。
 
 未来最小接线顺序应是：先完成上述验收与网络隐私评审，再让 host 通过 opaque snapshot ID 取回同一个 Prepared 对象，唯一调用 `requestStructuredAdviceViaLegacyByok`，严格解析后由 host 重新组装完整 `AdviceContract`；不要从 webview body、`getAdvice`、`buildAdviceSummary`、`getUsageAdvice` 或 Prompt Optimizer 绕接。

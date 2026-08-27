@@ -20,6 +20,24 @@ The current safety boundary is:
 
 The existing `Get AI Advice` and Prompt Optimizer remain separate legacy features. Their compatibility boundaries are documented in section 9; they must not be represented as satisfying the new path's sealed-payload or strict-parser guarantees.
 
+### 2026-08-27 main-roadmap alignment
+
+This task has read and aligned with `feature-coverage-matrix.md`,
+`parallel-development-handoff.md`, and `github-connected-roadmap.md` under the main
+repository's `decision-reports/2026-08-24-release-roadmap/`. The actual commit chain is
+R8 `48e5e77` → foundation cherry-pick `91739a8` → integration `20466a7`. Commit
+`c7a95d9` on `codex/v2.3.1-ai-advice-validity-foundation` has the same patch as
+`91739a8` but is based on old commit `0b4b750`; it must not be branch-merged or
+cherry-picked again.
+
+The final Claude #87 incremental index is not on this branch. A clean candidate,
+`2584173`, appeared on 2026-08-27, but it diverges substantially from R8 and also
+changes `dataLoader.ts`, `extension.ts`, Codex backfill, and architecture documents.
+It is not a small patch to import here. A final candidate must first inherit the
+released v2.2.3 #87/#89/#92 work and stable v2.3.0, then selectively replay this
+branch's contract, adapter, persistence, host-wiring, and UI layers. This prototype
+is not the final integration baseline.
+
 ## 2. Implementation map and ownership
 
 | Responsibility | Current integration point | Constraint |
@@ -33,6 +51,8 @@ The existing `Get AI Advice` and Prompt Optimizer remain separate legacy feature
 | Reversible model experiment | `src/adviceEffectiveness/modelExperiment.ts` | One adjacent downward tier only, at least five pairs |
 | Strict model output | `src/adviceEffectiveness/structuredOutput.ts` | JSON-only, exact shape, known references, no repair/fallback |
 | Sole future BYOK seam | `src/adviceEffectiveness/legacyBridge.ts` | `backend: api` only; production code does not call it |
+| #87 evidence preparation plan | `src/adviceEffectiveness/evidencePreparation.ts` | Pure and I/O-free; disabled and aggregates-only modes never request content scans, and a missing personalization snapshot only yields an explicit-refresh request |
+| Legacy personalization migration preparation | `src/adviceEffectiveness/legacyPersonalization.ts` | userContext/prompts remain in a host-memory draft; no projection exists without the second consent; production does not call it |
 | Framework-origin classification | `src/promptOrigin.ts`, `src/dataLoader.ts` | Structural markers are aggregated immediately; no semantic or writing-quality judgment |
 | Thin host / UI wiring | `src/extension.ts`, `src/webview.ts` | Feature flag, host-only prompts, opaque snapshot, local feedback |
 
@@ -61,6 +81,24 @@ The host always owns observations, evidence, privacy, and provenance. A future r
 The adapter type does not accept raw records, paths, session IDs, titles, or prompts. `extension.ts` reduces records to the DTO locally before invoking it. A scope/window mismatch, out-of-range count, or non-finite value rejects the entire result.
 
 Claude's structural evidence is eligible for a sealed remote preview, but only after separate explicit aggregate consent.
+
+### #87 incremental-index dependency
+
+When this R8 prototype is enabled, it still filters `cache.records` and recomputes
+usage aggregates and session breakdowns. The default-off state adds no current-release
+cost, but this path cannot ship in v2.3.1. The final integration must consume a
+same-window aggregate, session summary, coverage, and quality state materialized by
+the stable #87 `ClaudeUsageIndex`. Prompt samples and framework overhead must come
+from the same per-file analysis contribution; advice must never trigger another JSONL
+scan.
+
+`planAdviceEvidencePreparation` now records that boundary as an I/O-free typed seam.
+Local rendering and aggregates-only mode consume existing data only. Prompt
+personalization checks a content snapshot only after both consents are explicit and
+the user asks to preview or send. A missing, stale, or mismatched snapshot yields a
+`refresh-content-analysis` host-action request while `allowAutomaticScan` remains
+fixed to `false`; the function never reads files or starts a refresh. It remains
+unwired until the final stable index exists.
 
 ### Codex
 
@@ -112,6 +150,7 @@ Migration and degradation policy:
 - A valid v1 envelope migrates only validated feedback; feature mode, aggregate consent, and prompt consent all close, and comparable pairs start empty.
 - An unknown future version, extra field, duplicate ID, invalid enum, non-finite number, or storage error returns the all-closed state and does not overwrite the unknown/corrupt source.
 - After a write failure, the host enters degraded mode and rejects further consent or feedback mutations.
+- A v2 state with explicit prompt consent but no aggregate consent is treated as corrupt, fails closed as a whole, and is never overwritten.
 
 The foundation's separate `feedback.ts` / `claudeCodeUsage.adviceEffectiveness.feedback.v1` event ledger remains for compatibility tests, but it is not the integrated UI's write target and is not silently merged into the v2 envelope. Any future migration needs a separately reviewed one-time import; code must not dual-write in the meantime.
 
@@ -175,6 +214,17 @@ Comparison requires a local `applied` mark and a helpful/not-helpful rating, fol
 
 The legacy `getAdvice` / `adviceSummary` prompt behavior is a historical compatibility boundary and must not be described as the new path's privacy guarantee. The new aggregate and prompt-sample consents are not interchangeable with old Optimizer consent or any legacy configuration boolean.
 
+`legacyPersonalization.ts` prepares only the A-20 migration seam and does not change
+legacy runtime behavior. It rebuilds `advice.userContext` and candidate prompt
+samples into a bounded, host-only draft, drops cwd, session IDs, and unknown fields,
+and classifies sample age as within-window, older-than-window, or unknown. No content
+means no migration; any content requires the new prompt-personalization consent.
+`projectLegacyPersonalization` returns `undefined` without that consent and emits an
+allowlisted, verbatim-previewable projection only after explicit consent. It also
+revalidates the complete in-memory draft before projection, rejecting extra fields
+and inconsistent metadata. The projection is not yet part of the canonical payload,
+so A-20 remains partially prepared rather than wired.
+
 ## 10. Strict parsing and the OAuth 403 boundary
 
 `parseStructuredAdviceOutput` accepts exactly one bounded, exact-shape JSON object. It rejects Markdown fences, surrounding prose, unknown fields, unknown observation/evidence references, duplicate IDs, oversized arrays/text, missing conditional actions, missing success criteria or quality guardrails, and unsupported versions. It does not strip fences, repair JSON, return a partial batch, or call legacy Markdown/Optimizer fallbacks. An empty `recommendations` array is a valid fail-closed result.
@@ -223,14 +273,25 @@ Before anyone changes a default, adds a send button, or calls the feature shippe
 - Complete an F5 Extension Development Host smoke test, feasible Playwright/screenshot review, `npm run compile`, the full `npm test`, VSIX packaging, and the macOS/Linux installed-VSIX smoke required for a release candidate.
 - If this later becomes a user-visible release, update CHANGELOG and all seven README files as a separately authorized release task; that work is not implicitly authorized by this candidate branch.
 
+The operation → full reload → persistence/invalidation gate is not yet complete.
+Existing tests cover post-host-reply page state and independent `globalState`
+read/write behavior, but not a real full-page replacement after consent or feedback,
+nor host retrieval failure for an old opaque snapshot after consent withdrawal. The
+final candidate must add those tests and must not report this gate as passed today.
+
 ## 12. Current limitations and next step
 
 - The new panel has no production sender; a sealed preview does not mean data was sent.
 - Automatic comparable-task generation/matching and real quality-rubric collection are not implemented; only strict storage and pure comparison interfaces exist.
+- Current Claude host wiring still recomputes from `cache.records`; final v2.3.1 must use the stable #87 materialized aggregate/coverage seam and prove advice causes no extra JSONL body reads.
+- The remote parser strictly validates shape and references, but host-owned recommendation lineage/type and success policy are not yet locked. A model must not invent cross-day IDs or wrap unrelated evidence in a `/clear` recommendation.
+- The Codex adapter may produce multiple recommendations, while the experimental UI currently closes feedback/comparison around the first only. The final candidate needs per-recommendation closure or one auditable host-owned selection rule.
+- Full-reload persistence for consent/feedback and old-snapshot invalidation after consent withdrawal still lack end-to-end tests.
 - Topic drift and writing quality have no local semantic evidence.
 - Codex has no remote payload schema and remains local-only.
 - Legacy `Get AI Advice` and Prompt Optimizer have not migrated to the unified contract and retain their historical parsing behavior.
 - Framework origin is a structural proxy; log schema drift may reduce coverage and must not be filled with guesses.
+- `advice.userContext` and sample age have only an unwired host-only migration seam; aggregates-only payloads still contain neither.
 - The separate feedback v1 ledger is not automatically imported into the v2 envelope.
 
 The minimum future wiring sequence is: first complete the gates above and a network privacy review; then let the host resolve the same Prepared object from its opaque snapshot ID and call only `requestStructuredAdviceViaLegacyByok`; after strict parsing, let the host assemble the complete `AdviceContract`. Do not wire through webview body text, `getAdvice`, `buildAdviceSummary`, `getUsageAdvice`, or Prompt Optimizer.
