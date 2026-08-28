@@ -7,11 +7,22 @@ it grows.
 ## Project scope
 
 Before proposing a feature, it helps to know the positioning: this extension is
-intentionally **Claude-only and lightweight**, prioritising **token-precision**
-(seeing where tokens go) over cost-precision, and using AI to help people use
-Claude Code better. Multi-provider monitoring and full billing reconciliation
-are explicitly out of scope. Features that sharpen token attribution or the
-advice experience are the best fit.
+provider-aware and lightweight, supporting Claude Code and **Codex Beta**.
+Codex Beta is enabled by default and can be turned off in provider settings.
+The emphasis is truthful local usage and token attribution rather than billing
+reconciliation. Features that sharpen attribution, privacy, or the advice
+experience are the best fit.
+
+Usage ingestion reads only each provider's local metadata and usage logs.
+Usage ingestion is read-only, and Codex data is never mutated. Codex does not estimate
+dollar cost. Its usage JSONL is streamed and temporarily parsed for allowlisted
+metadata; conversation fields are not inspected or used for analysis and are never
+retained. Codex limits are last-observed values from local logs, not real-time billing
+data.
+
+Claude session actions are separately gated and disabled by default. When enabled,
+they can resume or delete a selected session.
+Deleting the selected session moves its log to the OS trash.
 
 ## Development setup
 
@@ -23,29 +34,37 @@ npm run watch            # recompile on change
 
 - Press **F5** in VS Code to launch the Extension Development Host and test
   your changes manually.
-- Package a `.vsix` with `npx @vscode/vsce package`.
-
-The extension reads `~/.claude/projects/**/*.jsonl` **read-only** — it never
-writes to your Claude data.
+- Package a `.vsix` with `npx -y @vscode/vsce@3.9.1 package`.
 
 ## Pull requests
 
 - Keep each PR focused on one logical change.
-- Run `npm run compile` and make sure it's clean before opening the PR.
+- Run `npm test` and the relevant browser/host layers below before opening the
+  PR.
 - Describe the problem and the fix; screenshots help for UI changes.
 - If your change affects user-facing behaviour, update `CHANGELOG.md` and the
   relevant parts of `README.md`.
 
 ## Tests
 
-Tests use **Node's built-in runner** (`node:test` + `node:assert`) — no extra
-dependencies. They run against the *compiled* output:
+Tests run in three layers:
 
-```bash
-npm test          # compiles, then runs node --test over out/test/*.test.js
-```
+1. **Node logic and policy — `npm test`.** This runs the TypeScript compile,
+   then executes the Node logic and repository-policy tests against compiled
+   output with Node's built-in runner (`node:test` + `node:assert`).
+2. **Real Webview Chromium — `npm run test:ui`.** This compiles and exercises
+   the real, complete Webview in Chromium, covering interaction, reload state,
+   Axe accessibility, eight-locale overflow, and visual baselines.
+3. **VS Code host smoke.** Press **F5** or install a packaged VSIX. Verify real
+   VS Code host activation, real local metadata, and theme smoke behavior. This
+   layer does not replace the first two layers.
 
-CI runs the same command on every PR (`.github/workflows/test.yml`).
+CI uses separate gates, with packaging after both test jobs pass on every PR
+(`.github/workflows/test.yml`). Canonical Linux screenshots may only be updated
+with the exact official container
+`mcr.microsoft.com/playwright:v1.61.1-noble`, with
+`PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`. A macOS run must not overwrite a
+Linux snapshot; reproduce and update it in that exact Linux container.
 
 **Where tests live.** Put test files **directly** in `src/test/`, named
 `*.test.ts`. Because `tsc` is configured with `rootDir: src`, they compile to
@@ -54,8 +73,8 @@ packaged `.vsix`. Keep the directory flat — the `test` script globs
 `out/test/*.test.js` (a single level, so it stays portable across Node
 versions), which means files in nested subfolders would be silently skipped.
 
-**What to test.** This harness is for **pure, dependency-free logic** — modules
-that don't import the `vscode` API:
+**What to test in the Node layer.** Keep modules under direct test independent
+of the live `vscode` API. Existing examples include:
 
 - pricing & cost calculation (`pricing.ts`)
 - aggregation: daily / weekly / monthly / all-time (`dataLoader.ts`)
@@ -67,12 +86,9 @@ is a worked example to copy from. Prefer asserting on **observable behaviour**
 (a computed cost, a resolved pricing tier) over implementation details, and add
 a case for the tricky edge you just fixed so it can't regress.
 
-**What doesn't belong here.** Anything that touches the live `vscode` API
-(status-bar wiring, webview, commands) needs the heavier
-[`@vscode/test-electron`](https://github.com/microsoft/vscode-test) harness,
-which isn't set up yet. If you need it, raise it on
-[#25](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/25) first so we keep the
-two harnesses cleanly separated.
+Webview behavior belongs in `tests/ui/` and must use the production rendering
+harness rather than synthetic HTML. Extension activation, commands, and real
+local-provider integration receive the VS Code host smoke layer.
 
 ## Releases
 
@@ -110,7 +126,7 @@ missing or empty PR diff stops the workflow without posting a review.
 
 Codex automatic attribution is not enabled in v2.2.1. It requires a separately
 implemented and trusted OpenAI/Codex transport; a model name or repository
-variable alone cannot enable it.
+variable alone cannot enable it. Codex automatic attribution remains disabled in v2.3.0.
 
 ### Maintainer-reviewed Codex text
 
@@ -128,8 +144,10 @@ This means the maintainer reviewed the text. It does not add a synthetic
 ### Maintainer-only mention agent
 
 `.github/workflows/claude.yml` is a separate, maintainer-gated Claude Code
-workflow with repository write permissions. v2.2.1 does not migrate this privileged workflow to Codex. Treat every assistant reply as a starting point,
-not repository authority; the maintainer makes the final decision.
+workflow with repository write permissions. v2.2.1 does not migrate this privileged workflow to Codex.
+v2.3.0 still does not migrate this privileged workflow to Codex. Treat every
+assistant reply as a starting point, not repository authority; the maintainer
+makes the final decision.
 
 ## Code of conduct
 

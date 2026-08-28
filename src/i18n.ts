@@ -1,4 +1,40 @@
 import { SupportedLanguage } from './types';
+import { CODEX_COPY_EN, CodexViewCopy } from './codexView';
+
+export interface ProviderTranslations {
+  claude: string;
+  codexBeta: string;
+  compare: string;
+  codex: CodexViewCopy;
+}
+
+export interface WeeklyValueCopy {
+  title: string;
+  description: string;
+  period: string;
+  currentPeriod: string;
+  currentPeriodShort: string;
+  resetsAt: string;
+  usedValue: string;
+  fullValue: string;
+  unusedValue: string;
+  reset: string;
+  utilization: string;
+  confidence: string;
+  pricingCoverage: string;
+  current: string;
+  high: string;
+  medium: string;
+  low: string;
+  usageOnly: string;
+  noData: string;
+  historyFromLogs: string;
+  calendarFallback: string;
+  multiAccount: string;
+  boundaryApproximation: string;
+  boundaryApproximate: string;
+  indexedSubtotal: string;
+}
 
 export interface Translations {
   statusBar: {
@@ -9,6 +45,11 @@ export interface Translations {
     refreshFailed: string;
     currentSession: string;
   };
+  releaseAnnouncement: {
+    v230: string;
+  };
+  providers: ProviderTranslations;
+  weeklyValue: WeeklyValueCopy;
   popup: {
     title: string;
     currentSession: string;
@@ -23,6 +64,7 @@ export interface Translations {
     settingsIntro: string;
     settingsResetAll: string;
     settingsGroupGeneral: string;
+    settingsGroupProviders: string;
     settingsGroupFeatures: string;
     settingsGroupStatusBar: string;
     settingsGroupData: string;
@@ -203,6 +245,787 @@ export interface Translations {
   };
 }
 
+type CodexCopyMapKey =
+  | 'insightTitles'
+  | 'insightObservations'
+  | 'insightTips'
+  | 'insightEvidenceLabels';
+
+type CodexCopyOverrides = Partial<Omit<CodexViewCopy, CodexCopyMapKey>> & {
+  insightTitles?: Partial<CodexViewCopy['insightTitles']>;
+  insightObservations?: Partial<CodexViewCopy['insightObservations']>;
+  insightTips?: Partial<CodexViewCopy['insightTips']>;
+  insightEvidenceLabels?: Partial<CodexViewCopy['insightEvidenceLabels']>;
+};
+
+const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverrides> = {
+  'de-DE': {
+    recommendations: 'Empfehlungen',
+    constraintNoAgents: 'Entscheide bei vergleichbaren Aufgaben vorab, ob Subagenten sinnvoll sind.',
+    constraintLowerEffort: 'Vergleiche bei einer repräsentativen Aufgabe die beobachtete hohe Aufwandsstufe per A/B-Test mit einer niedrigeren Stufe.',
+    constraintPostPatch: 'Nutze nach dem nächsten Patch den strukturellen Proxy, um eine kürzere Werkzeugfolge zu erwägen.',
+    constraintCacheContext: 'Beziehe den Cache- und Kontext-Proxy bei der Wahl der nächsten Aufgabengrenze ein.',
+    constraintApprovalReviewer: 'Prüfe vor dem Hinzufügen von Freigabe-Prüfern, ob diese Rolle für die Aufgabe benötigt wird.',
+    recommendationComposition: 'Beobachtete Rollen-, Modell- und Aufwandsverteilung',
+    recommendationProxyKpi: 'Struktureller Proxy-KPI',
+    recommendationEmpty: 'Für diesen Bereich liegen keine evidenzbasierten Empfehlungen vor.',
+    recommendationPartial: 'Einige Datumsbereiche sind nicht verfügbar, während der tägliche Index vervollständigt wird.',
+    insightObservation: 'Beobachtung',
+    insightEvidence: 'Evidenz',
+    insightConditionalAction: 'Bedingte Maßnahme',
+    insightObservations: {
+      'multi-agent-share': 'Ein erheblicher Anteil der beobachteten Nutzung ohne Cache ist Subagenten-Rollen zugeordnet.',
+      'effort-comparison': 'In diesem strukturellen Proxy-Bereich wurde eine hohe Aufwandsstufe beobachtet.',
+      'post-patch-tool-intensity': 'Die beobachtete Werkzeugaktivität nach Patches ist in diesem strukturellen Proxy-Bereich erhöht.',
+      'cache-context': 'Die verarbeitete Aktivität ist im Verhältnis zur Nutzung ohne Cache hoch; Cache und Kontext können diesen Proxy beeinflussen.',
+      'approval-reviewer-share': 'Ein relevanter Anteil der beobachteten Nutzung ohne Cache ist Freigabe-Prüfer-Rollen zugeordnet.',
+    },
+    insightTips: {
+      'multi-agent-share': 'Entscheide bei vergleichbaren Aufgaben vorab, ob Subagenten sinnvoll sind.',
+      'effort-comparison': 'Vergleiche bei einer repräsentativen Aufgabe die hohe Aufwandsstufe per A/B-Test mit einer niedrigeren Stufe.',
+      'post-patch-tool-intensity': 'Nutze diesen Proxy nach dem nächsten Patch, um eine kürzere Werkzeugfolge zu erwägen.',
+      'cache-context': 'Beziehe Cache- und Kontextbeobachtungen bei der Wahl der nächsten Aufgabengrenze ein.',
+      'approval-reviewer-share': 'Prüfe vor dem Hinzufügen von Freigabe-Prüfern, ob diese Rolle benötigt wird.',
+    },
+    insightEvidenceLabels: {
+      taskCount: 'Hauptaufgaben', rootSessionFresh: 'Nutzung ohne Cache durch Haupt- oder unbekannte Rollen', subagentFresh: 'Nutzung ohne Cache der Subagenten', approvalReviewerFresh: 'Nutzung ohne Cache der Freigabe-Prüfer', observedEffort: 'Beobachtete Aufwandsstufe', highEffortFresh: 'Nutzung ohne Cache bei hoher Aufwandsstufe', lowMediumEffortFresh: 'Nutzung ohne Cache bei niedrigerer Aufwandsstufe', patchCalls: 'Patch-Aufrufe (Proxy)', toolCalls: 'Werkzeugaufrufe (Proxy)', postPatchToolCalls: 'Werkzeugaufrufe nach Patch (Proxy)', compactCount: 'Kontextkomprimierungen (Proxy)', taskCompleteCount: 'Aufgabenabschluss-Ereignisse (Proxy)', processedToFreshRatio: 'Proxy verarbeitet / ohne Cache', cachedInputShare: 'Anteil gecachter Eingabe', reasoningOutputShare: 'Reasoning-Anteil der Ausgabe',
+    },
+  },
+  'zh-TW': {
+    recommendations: '最佳化建議',
+    constraintNoAgents: '對可比較的任務，先判斷是否需要 subagent，再決定是否啟動。',
+    constraintLowerEffort: '選一個代表性任務，將觀測到的高推理強度與低一級設定做 A/B 比較。',
+    constraintPostPatch: '下次修補後，參考結構性代理指標，評估是否可縮短工具使用流程。',
+    constraintCacheContext: '決定下一個任務邊界時，將快取與上下文代理指標納入考量。',
+    constraintApprovalReviewer: '加入權限審批角色前，先確認該任務是否需要此角色。',
+    recommendationComposition: '已觀測的角色、模型與推理強度構成',
+    recommendationProxyKpi: '結構性代理 KPI',
+    recommendationEmpty: '此範圍沒有具備證據的建議。',
+    recommendationPartial: '每日索引補齊期間，部分日期範圍暫不可用。',
+    insightObservation: '觀測',
+    insightEvidence: '證據',
+    insightConditionalAction: '條件式行動',
+    insightObservations: {
+      'multi-agent-share': '觀測到的未快取用量中，有相當比例與 subagent 角色相關。',
+      'effort-comparison': '此結構性代理範圍觀測到高推理強度。',
+      'post-patch-tool-intensity': '此結構性代理範圍在修補後觀測到較高的工具活動。',
+      'cache-context': '已處理活動相對未快取用量偏高；快取與上下文可能影響此代理指標。',
+      'approval-reviewer-share': '觀測到的未快取用量中，有明顯比例與權限審批角色相關。',
+    },
+    insightTips: {
+      'multi-agent-share': '對可比較的任務，先判斷是否需要 subagent，再決定是否啟動。',
+      'effort-comparison': '選一個代表性任務，將高推理強度與低一級設定做 A/B 比較。',
+      'post-patch-tool-intensity': '下次修補後，參考此代理指標評估是否可縮短工具使用流程。',
+      'cache-context': '決定下一個任務邊界時，將快取與上下文觀測納入考量。',
+      'approval-reviewer-share': '加入權限審批角色前，先確認任務是否需要此角色。',
+    },
+    insightEvidenceLabels: {
+      taskCount: '根任務數', rootSessionFresh: '根角色或未知角色的未快取用量', subagentFresh: 'Subagent 未快取用量', approvalReviewerFresh: '權限審批未快取用量', observedEffort: '觀測到的推理強度', highEffortFresh: '高推理強度未快取用量', lowMediumEffortFresh: '較低推理強度未快取用量', patchCalls: '修補呼叫（代理）', toolCalls: '工具呼叫（代理）', postPatchToolCalls: '修補後工具呼叫（代理）', compactCount: '上下文壓縮（代理）', taskCompleteCount: '任務完成事件（代理）', processedToFreshRatio: '已處理／未快取用量代理比值', cachedInputShare: '快取輸入占比', reasoningOutputShare: '推理輸出占比',
+    },
+  },
+  'zh-CN': {
+    recommendations: '优化建议',
+    constraintNoAgents: '对可比较的任务，先判断是否需要 subagent，再决定是否启动。',
+    constraintLowerEffort: '选择一个代表性任务，将观测到的高推理强度与低一级设置做 A/B 对比。',
+    constraintPostPatch: '下次应用补丁后，参考结构性代理指标，评估是否可以缩短工具使用流程。',
+    constraintCacheContext: '决定下一个任务边界时，将缓存与上下文代理指标纳入考虑。',
+    constraintApprovalReviewer: '加入权限审批角色前，先确认该任务是否需要此角色。',
+    recommendationComposition: '已观测的角色、模型与推理强度构成',
+    recommendationProxyKpi: '结构性代理 KPI',
+    recommendationEmpty: '此范围没有具备证据的建议。',
+    recommendationPartial: '每日索引补齐期间，部分日期范围暂不可用。',
+    insightObservation: '观测',
+    insightEvidence: '证据',
+    insightConditionalAction: '条件式行动',
+    insightObservations: {
+      'multi-agent-share': '观测到的未缓存用量中，有相当比例与 subagent 角色相关。',
+      'effort-comparison': '此结构性代理范围观测到高推理强度。',
+      'post-patch-tool-intensity': '此结构性代理范围在应用补丁后观测到较高的工具活动。',
+      'cache-context': '已处理活动相对未缓存用量偏高；缓存与上下文可能影响此代理指标。',
+      'approval-reviewer-share': '观测到的未缓存用量中，有明显比例与权限审批角色相关。',
+    },
+    insightTips: {
+      'multi-agent-share': '对可比较的任务，先判断是否需要 subagent，再决定是否启动。',
+      'effort-comparison': '选择一个代表性任务，将高推理强度与低一级设置做 A/B 对比。',
+      'post-patch-tool-intensity': '下次应用补丁后，参考此代理指标评估是否可以缩短工具使用流程。',
+      'cache-context': '决定下一个任务边界时，将缓存与上下文观测纳入考虑。',
+      'approval-reviewer-share': '加入权限审批角色前，先确认任务是否需要此角色。',
+    },
+    insightEvidenceLabels: {
+      taskCount: '根任务数', rootSessionFresh: '根角色或未知角色的未缓存用量', subagentFresh: 'Subagent 未缓存用量', approvalReviewerFresh: '权限审批未缓存用量', observedEffort: '观测到的推理强度', highEffortFresh: '高推理强度未缓存用量', lowMediumEffortFresh: '较低推理强度未缓存用量', patchCalls: '补丁调用（代理）', toolCalls: '工具调用（代理）', postPatchToolCalls: '补丁后工具调用（代理）', compactCount: '上下文压缩（代理）', taskCompleteCount: '任务完成事件（代理）', processedToFreshRatio: '已处理／未缓存用量代理比值', cachedInputShare: '缓存输入占比', reasoningOutputShare: '推理输出占比',
+    },
+  },
+  ja: {
+    recommendations: '最適化の提案',
+    constraintNoAgents: '比較可能なタスクでは、サブエージェントが必要かを起動前に判断してください。',
+    constraintLowerEffort: '代表的なタスクで、観測された高い推論強度と一段低い設定を A/B 比較してください。',
+    constraintPostPatch: '次のパッチ後に構造プロキシを参照し、ツール利用の流れを短くできるか検討してください。',
+    constraintCacheContext: '次のタスク境界を選ぶ際に、キャッシュとコンテキストのプロキシを考慮してください。',
+    constraintApprovalReviewer: '承認レビュアーを追加する前に、そのタスクで役割が必要か確認してください。',
+    recommendationComposition: '観測された役割・モデル・推論強度の構成',
+    recommendationProxyKpi: '構造プロキシ KPI',
+    recommendationEmpty: 'この範囲には根拠のある提案がありません。',
+    recommendationPartial: '日別インデックスの更新中は、一部の日付範囲を利用できません。',
+    insightObservation: '観測',
+    insightEvidence: '根拠',
+    insightConditionalAction: '条件付きアクション',
+    insightObservations: {
+      'multi-agent-share': '観測された非キャッシュ使用量の大きな割合がサブエージェント役割に関連しています。',
+      'effort-comparison': 'この構造プロキシ範囲で高い推論強度が観測されました。',
+      'post-patch-tool-intensity': 'この構造プロキシ範囲では、パッチ後のツール活動が高めです。',
+      'cache-context': '非キャッシュ使用量に対して処理済み活動が多く、キャッシュやコンテキストがこのプロキシに影響し得ます。',
+      'approval-reviewer-share': '観測された非キャッシュ使用量の一定割合が承認レビュアー役割に関連しています。',
+    },
+    insightTips: {
+      'multi-agent-share': '比較可能なタスクでは、サブエージェントが必要かを起動前に判断してください。',
+      'effort-comparison': '代表的なタスクで、高い推論強度と一段低い設定を A/B 比較してください。',
+      'post-patch-tool-intensity': '次のパッチ後にこのプロキシを参照し、ツール利用の流れを短くできるか検討してください。',
+      'cache-context': '次のタスク境界を選ぶ際に、キャッシュとコンテキストの観測を考慮してください。',
+      'approval-reviewer-share': '承認レビュアーを追加する前に、その役割が必要か確認してください。',
+    },
+    insightEvidenceLabels: {
+      taskCount: 'ルートタスク数', rootSessionFresh: 'ルート／役割不明の非キャッシュ使用量', subagentFresh: 'サブエージェントの非キャッシュ使用量', approvalReviewerFresh: '承認レビュアーの非キャッシュ使用量', observedEffort: '観測された推論強度', highEffortFresh: '高い推論強度の非キャッシュ使用量', lowMediumEffortFresh: '低い推論強度の非キャッシュ使用量', patchCalls: 'パッチ呼び出し（プロキシ）', toolCalls: 'ツール呼び出し（プロキシ）', postPatchToolCalls: 'パッチ後ツール呼び出し（プロキシ）', compactCount: 'コンテキスト圧縮（プロキシ）', taskCompleteCount: 'タスク完了イベント（プロキシ）', processedToFreshRatio: '処理済み／非キャッシュ使用量のプロキシ比率', cachedInputShare: 'キャッシュ入力の割合', reasoningOutputShare: '出力に占める推論の割合',
+    },
+  },
+  ko: {
+    recommendations: '최적화 제안',
+    constraintNoAgents: '비교 가능한 작업에서는 하위 에이전트가 필요한지 시작 전에 판단하세요.',
+    constraintLowerEffort: '대표 작업에서 관측된 높은 추론 강도와 한 단계 낮은 설정을 A/B 비교하세요.',
+    constraintPostPatch: '다음 패치 후 구조적 프록시를 참고해 도구 사용 흐름을 줄일 수 있는지 검토하세요.',
+    constraintCacheContext: '다음 작업 경계를 정할 때 캐시 및 컨텍스트 프록시를 고려하세요.',
+    constraintApprovalReviewer: '승인 검토자를 추가하기 전에 해당 작업에 그 역할이 필요한지 확인하세요.',
+    recommendationComposition: '관측된 역할·모델·추론 강도 구성',
+    recommendationProxyKpi: '구조적 프록시 KPI',
+    recommendationEmpty: '이 범위에는 근거가 있는 제안이 없습니다.',
+    recommendationPartial: '일별 인덱스를 보완하는 동안 일부 날짜 범위를 사용할 수 없습니다.',
+    insightObservation: '관측',
+    insightEvidence: '근거',
+    insightConditionalAction: '조건부 조치',
+    insightObservations: {
+      'multi-agent-share': '관측된 캐시되지 않은 사용량의 상당 부분이 하위 에이전트 역할과 연관되어 있습니다.',
+      'effort-comparison': '이 구조적 프록시 범위에서 높은 추론 강도가 관측되었습니다.',
+      'post-patch-tool-intensity': '이 구조적 프록시 범위에서 패치 후 도구 활동이 높게 관측되었습니다.',
+      'cache-context': '캐시되지 않은 사용량에 비해 처리된 활동이 많으며 캐시와 컨텍스트가 이 프록시에 영향을 줄 수 있습니다.',
+      'approval-reviewer-share': '관측된 캐시되지 않은 사용량의 일정 부분이 승인 검토자 역할과 연관되어 있습니다.',
+    },
+    insightTips: {
+      'multi-agent-share': '비교 가능한 작업에서는 하위 에이전트가 필요한지 시작 전에 판단하세요.',
+      'effort-comparison': '대표 작업에서 높은 추론 강도와 한 단계 낮은 설정을 A/B 비교하세요.',
+      'post-patch-tool-intensity': '다음 패치 후 이 프록시를 참고해 도구 사용 흐름을 줄일 수 있는지 검토하세요.',
+      'cache-context': '다음 작업 경계를 정할 때 캐시 및 컨텍스트 관측을 고려하세요.',
+      'approval-reviewer-share': '승인 검토자를 추가하기 전에 그 역할이 필요한지 확인하세요.',
+    },
+    insightEvidenceLabels: {
+      taskCount: '루트 작업 수', rootSessionFresh: '루트 역할 또는 알 수 없는 역할의 캐시되지 않은 사용량', subagentFresh: '하위 에이전트 캐시되지 않은 사용량', approvalReviewerFresh: '승인 검토자 캐시되지 않은 사용량', observedEffort: '관측된 추론 강도', highEffortFresh: '높은 추론 강도 캐시되지 않은 사용량', lowMediumEffortFresh: '낮은 추론 강도 캐시되지 않은 사용량', patchCalls: '패치 호출(프록시)', toolCalls: '도구 호출(프록시)', postPatchToolCalls: '패치 후 도구 호출(프록시)', compactCount: '컨텍스트 압축(프록시)', taskCompleteCount: '작업 완료 이벤트(프록시)', processedToFreshRatio: '처리됨／캐시되지 않은 사용량 프록시 비율', cachedInputShare: '캐시 입력 비율', reasoningOutputShare: '출력 중 추론 비율',
+    },
+  },
+  'pt-BR': {
+    recommendations: 'Recomendações de otimização',
+    constraintNoAgents: 'Em tarefas comparáveis, decida antes se subagentes são necessários.',
+    constraintLowerEffort: 'Em uma tarefa representativa, compare por A/B o esforço alto observado com um nível inferior.',
+    constraintPostPatch: 'Após o próximo patch, use o proxy estrutural para avaliar um fluxo de ferramentas mais curto.',
+    constraintCacheContext: 'Considere o proxy de cache e contexto ao escolher o próximo limite da tarefa.',
+    constraintApprovalReviewer: 'Antes de adicionar revisores de aprovação, confirme se a tarefa precisa dessa função.',
+    recommendationComposition: 'Composição observada de funções, modelos e esforço',
+    recommendationProxyKpi: 'KPI de proxy estrutural',
+    recommendationEmpty: 'Não há recomendações baseadas em evidências para este escopo.',
+    recommendationPartial: 'Alguns intervalos de datas ficam indisponíveis enquanto o índice diário é atualizado.',
+    insightObservation: 'Observação',
+    insightEvidence: 'Evidência',
+    insightConditionalAction: 'Ação condicional',
+    insightObservations: {
+      'multi-agent-share': 'Uma parcela relevante do uso sem cache observado está associada a funções de subagente.',
+      'effort-comparison': 'Foi observado esforço alto neste escopo de proxy estrutural.',
+      'post-patch-tool-intensity': 'A atividade de ferramentas após patches está elevada neste escopo de proxy estrutural.',
+      'cache-context': 'A atividade processada está alta em relação ao uso sem cache; cache e contexto podem influenciar este proxy.',
+      'approval-reviewer-share': 'Uma parcela relevante do uso sem cache observado está associada a funções de revisor de aprovação.',
+    },
+    insightTips: {
+      'multi-agent-share': 'Em tarefas comparáveis, decida antes se subagentes são necessários.',
+      'effort-comparison': 'Em uma tarefa representativa, compare por A/B o esforço alto com um nível inferior.',
+      'post-patch-tool-intensity': 'Após o próximo patch, use este proxy para avaliar um fluxo de ferramentas mais curto.',
+      'cache-context': 'Considere as observações de cache e contexto ao escolher o próximo limite da tarefa.',
+      'approval-reviewer-share': 'Antes de adicionar revisores de aprovação, confirme se essa função é necessária.',
+    },
+    insightEvidenceLabels: {
+      taskCount: 'Tarefas raiz', rootSessionFresh: 'Uso sem cache da função raiz ou de função desconhecida', subagentFresh: 'Uso sem cache de subagentes', approvalReviewerFresh: 'Uso sem cache de revisores de aprovação', observedEffort: 'Esforço observado', highEffortFresh: 'Uso sem cache com esforço alto', lowMediumEffortFresh: 'Uso sem cache com esforço inferior', patchCalls: 'Chamadas de patch (proxy)', toolCalls: 'Chamadas de ferramenta (proxy)', postPatchToolCalls: 'Chamadas de ferramenta pós-patch (proxy)', compactCount: 'Compactações de contexto (proxy)', taskCompleteCount: 'Eventos de conclusão de tarefa (proxy)', processedToFreshRatio: 'Proxy processado / sem cache', cachedInputShare: 'Proporção de entrada em cache', reasoningOutputShare: 'Proporção de raciocínio na saída',
+    },
+  },
+  id: {
+    recommendations: 'Rekomendasi optimasi',
+    constraintNoAgents: 'Untuk tugas yang sebanding, tentukan lebih dulu apakah subagen diperlukan.',
+    constraintLowerEffort: 'Pada tugas perwakilan, bandingkan secara A/B effort tinggi yang teramati dengan satu tingkat lebih rendah.',
+    constraintPostPatch: 'Setelah patch berikutnya, gunakan proksi struktural untuk menilai alur alat yang lebih singkat.',
+    constraintCacheContext: 'Pertimbangkan proksi cache dan konteks saat memilih batas tugas berikutnya.',
+    constraintApprovalReviewer: 'Sebelum menambah peninjau persetujuan, pastikan tugas tersebut memerlukan peran itu.',
+    recommendationComposition: 'Komposisi peran, model, dan effort yang teramati',
+    recommendationProxyKpi: 'KPI proksi struktural',
+    recommendationEmpty: 'Tidak ada rekomendasi berbasis bukti untuk cakupan ini.',
+    recommendationPartial: 'Beberapa rentang tanggal tidak tersedia selama indeks harian dilengkapi.',
+    insightObservation: 'Pengamatan',
+    insightEvidence: 'Bukti',
+    insightConditionalAction: 'Tindakan bersyarat',
+    insightObservations: {
+      'multi-agent-share': 'Porsi yang berarti dari penggunaan tanpa cache teramati berkaitan dengan peran subagen.',
+      'effort-comparison': 'Effort tinggi teramati dalam cakupan proksi struktural ini.',
+      'post-patch-tool-intensity': 'Aktivitas alat setelah patch teramati lebih tinggi dalam cakupan proksi struktural ini.',
+      'cache-context': 'Aktivitas terproses tinggi dibanding penggunaan tanpa cache; cache dan konteks dapat memengaruhi proksi ini.',
+      'approval-reviewer-share': 'Porsi yang berarti dari penggunaan tanpa cache teramati berkaitan dengan peran peninjau persetujuan.',
+    },
+    insightTips: {
+      'multi-agent-share': 'Untuk tugas yang sebanding, tentukan lebih dulu apakah subagen diperlukan.',
+      'effort-comparison': 'Pada tugas perwakilan, bandingkan secara A/B effort tinggi dengan satu tingkat lebih rendah.',
+      'post-patch-tool-intensity': 'Setelah patch berikutnya, gunakan proksi ini untuk menilai alur alat yang lebih singkat.',
+      'cache-context': 'Pertimbangkan pengamatan cache dan konteks saat memilih batas tugas berikutnya.',
+      'approval-reviewer-share': 'Sebelum menambah peninjau persetujuan, pastikan peran itu diperlukan.',
+    },
+    insightEvidenceLabels: {
+      taskCount: 'Jumlah tugas utama', rootSessionFresh: 'Penggunaan tanpa cache oleh peran utama atau peran yang tidak diketahui', subagentFresh: 'Penggunaan tanpa cache subagen', approvalReviewerFresh: 'Penggunaan tanpa cache peninjau persetujuan', observedEffort: 'Effort teramati', highEffortFresh: 'Penggunaan tanpa cache effort tinggi', lowMediumEffortFresh: 'Penggunaan tanpa cache effort lebih rendah', patchCalls: 'Panggilan patch (proksi)', toolCalls: 'Panggilan alat (proksi)', postPatchToolCalls: 'Panggilan alat pasca-patch (proksi)', compactCount: 'Pemadatan konteks (proksi)', taskCompleteCount: 'Peristiwa penyelesaian tugas (proksi)', processedToFreshRatio: 'Proksi diproses / tanpa cache', cachedInputShare: 'Porsi input cache', reasoningOutputShare: 'Porsi penalaran dalam output',
+    },
+  },
+};
+
+type CodexTask8CopyKey =
+  | 'refresh'
+  | 'explore'
+  | 'noMonthlyData'
+  | 'indexedLogEntries'
+  | 'indexedStorage'
+  | 'indexedAllTime'
+  | 'indexedSubtotal'
+  | 'indexingInProgress'
+  | 'updatedAt'
+  | 'claudeTokenAccounting'
+  | 'codexTokenAccounting'
+  | 'qualityFlagLabels'
+  | 'qualityFlagUnknown';
+
+const TASK8_CODEX_COPY: Record<
+  Exclude<SupportedLanguage, 'en'>,
+  Pick<CodexViewCopy, CodexTask8CopyKey>
+> = {
+  'de-DE': {
+    refresh: 'Aktualisieren',
+    explore: 'Erkunden',
+    noMonthlyData: 'Noch keine monatliche Codex-Nutzung indexiert.',
+    indexedLogEntries: 'Indexierte Protokolleinträge',
+    indexedStorage: 'Indexierter Speicher',
+    indexedAllTime: 'Indexierter Gesamtzeitraum',
+    indexedSubtotal: 'Indizierte Zwischensumme',
+    indexingInProgress: 'Die Indexierung läuft noch; nicht verifizierte Altsummen werden ausgeschlossen.',
+    updatedAt: 'Aktualisiert um',
+    claudeTokenAccounting: 'Claude-Token-Zählung',
+    codexTokenAccounting: 'Codex-Token-Zählung',
+    qualityFlagLabels: {
+      'invalid-turn-context': 'Ungültiger Turn-Kontext',
+      'invalid-session-meta': 'Ungültige Sitzungsmetadaten',
+      'missing-pseudonymizer': 'Identitätsschutz nicht verfügbar',
+      'missing-token-info': 'Fehlende Token-Informationen',
+      'invalid-token-count': 'Ungültige Token-Anzahl',
+      'counter-regression': 'Rückläufiger Nutzungszähler',
+      'missing-parent': 'Protokoll der übergeordneten Sitzung fehlt; konservative Nutzung beibehalten',
+      'index-backfill-incomplete': 'Nutzungsindex wird noch aufgebaut; aktuelle Werte sind unvollständig und die Indexierung wird automatisch fortgesetzt',
+      'ambiguous-session-identity': 'Doppelte Sitzungsidentität ist mehrdeutig; beide lokalen Kopien werden beibehalten',
+      'invalid-json': 'Unlesbarer JSON-Protokolleintrag',
+      'invalid-event-payload': 'Ungültige Ereignisdaten',
+      'unknown-event': 'Nicht erkanntes Protokollereignis',
+      'invalid-event-timestamp': 'Ungültiger Ereigniszeitstempel',
+      'oversized-jsonl-line': 'Zu großer Protokolleintrag',
+      'truncated-jsonl': 'Protokolldatei wurde gekürzt',
+      'replaced-jsonl': 'Protokolldatei wurde ersetzt',
+      'stale-file': 'Letzte geprüfte Dateidaten werden verwendet',
+      'stale-reset-required': 'Vollständiger Datei-Neuscan erforderlich',
+    },
+    qualityFlagUnknown: 'Anderes Datenqualitätsproblem',
+  },
+  'zh-TW': {
+    refresh: '重新整理',
+    explore: '探索',
+    noMonthlyData: '尚未索引到 Codex 每月用量。',
+    indexedLogEntries: '已索引記錄',
+    indexedStorage: '已索引儲存空間',
+    indexedAllTime: '已索引的全部時間',
+    indexedSubtotal: '已索引小計',
+    indexingInProgress: '索引仍在進行；未驗證的舊版總量不會計入。',
+    updatedAt: '更新於',
+    claudeTokenAccounting: 'Claude Token 口徑',
+    codexTokenAccounting: 'Codex Token 口徑',
+    qualityFlagLabels: {
+      'invalid-turn-context': '無效的輪次內容',
+      'invalid-session-meta': '無效的工作階段中繼資料',
+      'missing-pseudonymizer': '無法使用身分保護',
+      'missing-token-info': '缺少 Token 資訊',
+      'invalid-token-count': '無效的 Token 數量',
+      'counter-regression': '用量計數器回退',
+      'missing-parent': '缺少父工作階段記錄；已保留保守用量',
+      'index-backfill-incomplete': '用量索引仍在建立；目前數字不完整，索引會自動繼續',
+      'ambiguous-session-identity': '重複工作階段身分無法安全判定；兩份本機副本均已保留',
+      'invalid-json': '無法讀取的 JSON 記錄',
+      'invalid-event-payload': '無效的事件資料',
+      'unknown-event': '無法識別的記錄事件',
+      'invalid-event-timestamp': '無效的事件時間戳',
+      'oversized-jsonl-line': '記錄項目過大',
+      'truncated-jsonl': '記錄檔已截短',
+      'replaced-jsonl': '記錄檔已被取代',
+      'stale-file': '正在使用上次驗證的檔案資料',
+      'stale-reset-required': '需要完整重新掃描檔案',
+    },
+    qualityFlagUnknown: '其他資料品質問題',
+  },
+  'zh-CN': {
+    refresh: '刷新',
+    explore: '探索',
+    noMonthlyData: '尚未索引到 Codex 每月用量。',
+    indexedLogEntries: '已索引日志记录',
+    indexedStorage: '已索引存储',
+    indexedAllTime: '已索引的全部时间',
+    indexedSubtotal: '已索引小计',
+    indexingInProgress: '索引仍在进行；未验证的旧版总量不会计入。',
+    updatedAt: '更新时间',
+    claudeTokenAccounting: 'Claude Token 口径',
+    codexTokenAccounting: 'Codex Token 口径',
+    qualityFlagLabels: {
+      'invalid-turn-context': '无效的轮次上下文',
+      'invalid-session-meta': '无效的会话元数据',
+      'missing-pseudonymizer': '身份保护不可用',
+      'missing-token-info': '缺少 Token 信息',
+      'invalid-token-count': '无效的 Token 数量',
+      'counter-regression': '用量计数器回退',
+      'missing-parent': '缺少父会话日志；已保留保守用量',
+      'index-backfill-incomplete': '用量索引仍在建立；当前数字不完整，索引会自动继续',
+      'ambiguous-session-identity': '重复会话身份无法安全判定；两个本地副本均已保留',
+      'invalid-json': '无法读取的 JSON 日志记录',
+      'invalid-event-payload': '无效的事件载荷',
+      'unknown-event': '无法识别的日志事件',
+      'invalid-event-timestamp': '无效的事件时间戳',
+      'oversized-jsonl-line': '日志记录过大',
+      'truncated-jsonl': '日志文件已截断',
+      'replaced-jsonl': '日志文件已替换',
+      'stale-file': '正在使用上次验证的文件数据',
+      'stale-reset-required': '需要完整重新扫描文件',
+    },
+    qualityFlagUnknown: '其他数据质量问题',
+  },
+  ja: {
+    refresh: '更新',
+    explore: '探索',
+    noMonthlyData: '月別の Codex 使用量はまだ索引化されていません。',
+    indexedLogEntries: '索引済みログ項目',
+    indexedStorage: '索引済みストレージ',
+    indexedAllTime: '索引済みの全期間',
+    indexedSubtotal: 'インデックス済み小計',
+    indexingInProgress: 'インデックス作成中です。未検証の旧集計値は除外されています。',
+    updatedAt: '更新日時',
+    claudeTokenAccounting: 'Claude トークン集計',
+    codexTokenAccounting: 'Codex トークン集計',
+    qualityFlagLabels: {
+      'invalid-turn-context': '無効なターンコンテキスト',
+      'invalid-session-meta': '無効なセッションメタデータ',
+      'missing-pseudonymizer': 'ID 保護を利用できません',
+      'missing-token-info': 'トークン情報がありません',
+      'invalid-token-count': '無効なトークン数',
+      'counter-regression': '使用量カウンターの後退',
+      'missing-parent': '親セッションのログがないため、保守的な使用量を保持',
+      'index-backfill-incomplete': '使用量インデックスを作成中です。現在の数値は不完全で、インデックス作成は自動的に続行されます',
+      'ambiguous-session-identity': '重複セッションの同一性を確定できないため、両方のローカルコピーを保持しています',
+      'invalid-json': '読み取れない JSON ログ項目',
+      'invalid-event-payload': '無効なイベントペイロード',
+      'unknown-event': '認識されないログイベント',
+      'invalid-event-timestamp': '無効なイベントタイムスタンプ',
+      'oversized-jsonl-line': 'ログ項目が大きすぎます',
+      'truncated-jsonl': 'ログファイルが切り詰められました',
+      'replaced-jsonl': 'ログファイルが置き換えられました',
+      'stale-file': '最後に検証したファイルデータを使用中',
+      'stale-reset-required': 'ファイル全体の再スキャンが必要',
+    },
+    qualityFlagUnknown: 'その他のデータ品質問題',
+  },
+  ko: {
+    refresh: '새로 고침',
+    explore: '탐색',
+    noMonthlyData: '아직 월별 Codex 사용량이 인덱싱되지 않았습니다.',
+    indexedLogEntries: '인덱싱된 로그 항목',
+    indexedStorage: '인덱싱된 저장 공간',
+    indexedAllTime: '인덱싱된 전체 기간',
+    indexedSubtotal: '인덱싱된 소계',
+    indexingInProgress: '인덱싱이 진행 중이며 검증되지 않은 이전 합계는 제외됩니다.',
+    updatedAt: '업데이트 시각',
+    claudeTokenAccounting: 'Claude 토큰 집계',
+    codexTokenAccounting: 'Codex 토큰 집계',
+    qualityFlagLabels: {
+      'invalid-turn-context': '잘못된 턴 컨텍스트',
+      'invalid-session-meta': '잘못된 세션 메타데이터',
+      'missing-pseudonymizer': 'ID 보호를 사용할 수 없음',
+      'missing-token-info': '토큰 정보 누락',
+      'invalid-token-count': '잘못된 토큰 수',
+      'counter-regression': '사용량 카운터 역행',
+      'missing-parent': '부모 세션 로그 누락; 보수적 사용량 유지',
+      'index-backfill-incomplete': '사용량 인덱스를 만드는 중입니다. 현재 수치는 불완전하며 인덱싱은 자동으로 계속됩니다',
+      'ambiguous-session-identity': '중복 세션의 동일성을 확정할 수 없어 두 로컬 사본을 모두 유지합니다',
+      'invalid-json': '읽을 수 없는 JSON 로그 항목',
+      'invalid-event-payload': '잘못된 이벤트 페이로드',
+      'unknown-event': '인식되지 않은 로그 이벤트',
+      'invalid-event-timestamp': '잘못된 이벤트 타임스탬프',
+      'oversized-jsonl-line': '로그 항목이 너무 큼',
+      'truncated-jsonl': '로그 파일이 잘림',
+      'replaced-jsonl': '로그 파일이 교체됨',
+      'stale-file': '마지막으로 검증된 파일 데이터 사용 중',
+      'stale-reset-required': '전체 파일 재스캔 필요',
+    },
+    qualityFlagUnknown: '기타 데이터 품질 문제',
+  },
+  'pt-BR': {
+    refresh: 'Atualizar',
+    explore: 'Explorar',
+    noMonthlyData: 'Nenhum uso mensal do Codex foi indexado ainda.',
+    indexedLogEntries: 'Registros de log indexados',
+    indexedStorage: 'Armazenamento indexado',
+    indexedAllTime: 'Todo o período indexado',
+    indexedSubtotal: 'Subtotal indexado',
+    indexingInProgress: 'A indexação ainda está em andamento; totais legados não verificados são excluídos.',
+    updatedAt: 'Atualizado em',
+    claudeTokenAccounting: 'Contagem de tokens do Claude',
+    codexTokenAccounting: 'Contagem de tokens do Codex',
+    qualityFlagLabels: {
+      'invalid-turn-context': 'Contexto de turno inválido',
+      'invalid-session-meta': 'Metadados de sessão inválidos',
+      'missing-pseudonymizer': 'Proteção de identidade indisponível',
+      'missing-token-info': 'Informações de token ausentes',
+      'invalid-token-count': 'Contagem de tokens inválida',
+      'counter-regression': 'Regressão do contador de uso',
+      'missing-parent': 'Log da sessão pai ausente; uso conservador mantido',
+      'index-backfill-incomplete': 'O índice de uso ainda está sendo criado; os números atuais estão incompletos e a indexação continuará automaticamente',
+      'ambiguous-session-identity': 'A identidade da sessão duplicada é ambígua; ambas as cópias locais foram mantidas',
+      'invalid-json': 'Entrada de log JSON ilegível',
+      'invalid-event-payload': 'Payload de evento inválido',
+      'unknown-event': 'Evento de log não reconhecido',
+      'invalid-event-timestamp': 'Timestamp de evento inválido',
+      'oversized-jsonl-line': 'Entrada de log grande demais',
+      'truncated-jsonl': 'Arquivo de log truncado',
+      'replaced-jsonl': 'Arquivo de log substituído',
+      'stale-file': 'Usando os últimos dados de arquivo verificados',
+      'stale-reset-required': 'Nova varredura completa do arquivo necessária',
+    },
+    qualityFlagUnknown: 'Outro problema de qualidade dos dados',
+  },
+  id: {
+    refresh: 'Segarkan',
+    explore: 'Jelajahi',
+    noMonthlyData: 'Belum ada penggunaan bulanan Codex yang diindeks.',
+    indexedLogEntries: 'Entri log terindeks',
+    indexedStorage: 'Penyimpanan terindeks',
+    indexedAllTime: 'Seluruh waktu terindeks',
+    indexedSubtotal: 'Subtotal terindeks',
+    indexingInProgress: 'Pengindeksan masih berlangsung; total lama yang belum diverifikasi tidak disertakan.',
+    updatedAt: 'Diperbarui pada',
+    claudeTokenAccounting: 'Penghitungan token Claude',
+    codexTokenAccounting: 'Penghitungan token Codex',
+    qualityFlagLabels: {
+      'invalid-turn-context': 'Konteks giliran tidak valid',
+      'invalid-session-meta': 'Metadata sesi tidak valid',
+      'missing-pseudonymizer': 'Perlindungan identitas tidak tersedia',
+      'missing-token-info': 'Informasi token tidak ada',
+      'invalid-token-count': 'Jumlah token tidak valid',
+      'counter-regression': 'Penghitung penggunaan mundur',
+      'missing-parent': 'Log sesi induk tidak ada; penggunaan konservatif dipertahankan',
+      'index-backfill-incomplete': 'Indeks penggunaan masih dibuat; angka saat ini belum lengkap dan pengindeksan akan berlanjut otomatis',
+      'ambiguous-session-identity': 'Identitas sesi duplikat ambigu; kedua salinan lokal dipertahankan',
+      'invalid-json': 'Entri log JSON tidak terbaca',
+      'invalid-event-payload': 'Payload peristiwa tidak valid',
+      'unknown-event': 'Peristiwa log tidak dikenali',
+      'invalid-event-timestamp': 'Timestamp peristiwa tidak valid',
+      'oversized-jsonl-line': 'Entri log terlalu besar',
+      'truncated-jsonl': 'File log terpotong',
+      'replaced-jsonl': 'File log diganti',
+      'stale-file': 'Menggunakan data file terakhir yang terverifikasi',
+      'stale-reset-required': 'Pemindaian ulang file secara penuh diperlukan',
+    },
+    qualityFlagUnknown: 'Masalah kualitas data lainnya',
+  },
+};
+
+function providerTranslations(
+  labels: { claude: string; codexBeta: string; compare: string },
+  overrides: CodexCopyOverrides,
+  task5Overrides: CodexCopyOverrides = {},
+): ProviderTranslations {
+  const {
+    constraintTests: _legacyConstraintTests,
+    constraintStop: _legacyConstraintStop,
+    ...safeOverrides
+  } = overrides;
+  const merged = { ...safeOverrides, ...task5Overrides };
+  return {
+    ...labels,
+    codex: {
+      ...CODEX_COPY_EN,
+      ...merged,
+      insightTitles: {
+        ...CODEX_COPY_EN.insightTitles,
+        ...overrides.insightTitles,
+        ...task5Overrides.insightTitles,
+      },
+      insightObservations: {
+        ...CODEX_COPY_EN.insightObservations,
+        ...overrides.insightObservations,
+        ...task5Overrides.insightObservations,
+      },
+      insightTips: {
+        ...CODEX_COPY_EN.insightTips,
+        ...overrides.insightTips,
+        ...task5Overrides.insightTips,
+      },
+      insightEvidenceLabels: {
+        ...CODEX_COPY_EN.insightEvidenceLabels,
+        ...overrides.insightEvidenceLabels,
+        ...task5Overrides.insightEvidenceLabels,
+      },
+    },
+  };
+}
+
+const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
+  en: providerTranslations(
+    { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Compare' },
+    {},
+  ),
+  'de-DE': providerTranslations(
+    { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Vergleichen' },
+    {
+      ...TASK8_CODEX_COPY['de-DE'],
+      accountSnapshotLastObserved:
+        'Nutzung fasst Anmeldungen in diesem Codex home zusammen · Limits werden zuletzt beobachtet, nicht kombiniert',
+      title: 'Codex-Nutzung', beta: 'Beta', overview: 'Übersicht', usageTrend: 'Nutzungstrend', daily: 'Täglich', date: 'Datum', role: 'Rolle', scope: 'Bereich', threadLabel: 'Thread', rootRole: 'Hauptaufgabe', childRole: 'Subagent', approvalReviewerRole: 'Freigabe-Prüfer', unknownRole: 'Unbekannt', noDailyData: 'Noch keine tägliche Codex-Nutzung indexiert.', noThreadData: 'Noch keine Codex-Threads indexiert.', lastTask: 'Letzte Aufgabe', last7Days: 'Letzte 7 Tage', last30Days: 'Letzte 30 Tage', projects: 'Projekte', projectLabel: 'Projekt',
+      unnamedSession: 'Unbenannte Sitzung', unidentifiedProject: 'Nicht identifiziertes Projekt', parentThread: 'Übergeordnet', parentTask: 'Übergeordnete Aufgabe', searchThreads: 'Sitzungen suchen', sessions: 'Sitzungen', modelsEffort: 'Modelle & Aufwand', clearFilters: 'Filter löschen', activeFilters: 'Aktive Filter', all: 'Alle', localDirectory: 'Lokaler Ordner', lastActive: 'Zuletzt aktiv', expand: 'Erweitern', viewAllSessions: 'Alle Sitzungen anzeigen', sortBy: 'Sortieren nach', usageLimits: 'Nutzungslimits', resets: 'Zurücksetzung', credits: 'Guthaben', unlimited: 'Unbegrenzt',
+      allTime: 'Gesamter Zeitraum', behavior: 'Verhalten', settings: 'Einstellungen', monthly: 'Monatlich', tokenComposition: 'Token-Zusammensetzung', freshInput: 'Eingabe ohne Cache', reasoningSubset: 'In Ausgabe enthalten', threadRoleComposition: 'Thread-Rollenverteilung', childThreadsPerRootTask: 'Unter-Threads / Hauptaufgabe', childFreshShare: 'Anteil der Nutzung ohne Cache durch Unter-Threads', approvalFreshShare: 'Anteil der Nutzung ohne Cache durch Freigabeprüfung', highEffortFreshShare: 'Anteil der Nutzung ohne Cache bei hohem Aufwand', processedToFreshRatio: 'Verarbeitet / Nutzung ohne Cache', reasoningOutputShare: 'Reasoning-Anteil der Ausgabe', postPatchToolCallsPerPatchCall: 'Tool-Call-Proxy nach Patch / Patch-Aufruf', patchCalls: 'Patch-Aufrufe', compactions: 'Kontextkomprimierungen',
+      processed: 'Verarbeitet', apiEquivalentCost: 'API-äquivalente Kosten', apiEquivalentCostHelp: 'Aus derzeit indexierten Token mit aktuellen offiziellen API-Preisen geschätzt; keine Rechnung oder Abonnementbelastung. Preisabdeckung: {coverage}.', fresh: 'Nutzung ohne Cache', input: 'Eingabe', cachedInput: 'Gecachte Eingabe', output: 'Ausgabe', reasoning: 'Reasoning',
+      model: 'Modell', models: 'Modelle', efforts: 'Aufwand', threads: 'Threads', rootTasks: 'Hauptaufgaben', childThreads: 'Unter-Threads', approvalReviewers: 'Freigabe-Prüfer', duration: 'Sitzungsspanne', cacheShare: 'Eingabe-Cache-Anteil',
+      coverage: 'Abdeckung', quality: 'Qualität', complete: 'Vollständig', partial: 'Teilweise', lastObserved: 'Zuletzt beobachtet', unavailable: 'Nicht verfügbar', optimization: 'Lokale Optimierungssignale', structuralProxy: 'Struktureller Proxy; Tool-Call-Details werden nicht gelesen.', pasteConstraint: 'Kopierbare Einschränkung', constraintNoAgents: 'Keine unnötigen Unteragenten oder unabhängigen Prüfungen starten.', constraintLowerEffort: 'Für diese kleine Änderung eine niedrigere Aufwandsstufe an einer repräsentativen Aufgabe vergleichen.', constraintTests: 'Einen fokussierten Test und danach einen vollständigen Testlauf ausführen.', constraintStop: 'Bei erfüllten Kriterien stoppen; nicht zu produktionsreifer Härtung ausweiten.', compareTitle: 'Anbietervergleich', noRecentTask: 'Noch keine aktuelle Codex-Aufgabe indexiert.', fiveHourWindow: '5-Stunden-Fenster', weeklyWindow: 'Wöchentliches Fenster', used: 'verwendet', remaining: 'verbleibend', localLogNotLive: 'Lokales Protokoll · nicht live', limitExpired: 'Abgelaufen / zuletzt beobachtet', limitMissing: 'Kein lokal beobachtetes Nutzungslimit', observedSessionDuration: 'Zeitspanne zwischen dem ersten und letzten beobachteten Ereignis; ein Proxy, keine tatsächliche aktive Zeit.',
+      insightTitles: { 'multi-agent-share': 'Anteil der Nutzung ohne Cache durch Unter-Threads', 'effort-comparison': 'Eine niedrigere Aufwandsstufe vergleichen', 'post-patch-tool-intensity': 'Post-Patch-Tool-Proxy', 'cache-context': 'Cache- und Langkontext', 'approval-reviewer-share': 'Anteil der Nutzung ohne Cache durch Freigabe-Prüfer' },
+    },
+    TASK5_CODEX_COPY['de-DE'],
+  ),
+  'zh-TW': providerTranslations(
+    { claude: 'Claude', codexBeta: 'Codex Beta', compare: '比較' },
+    {
+      ...TASK8_CODEX_COPY['zh-TW'],
+      accountSnapshotLastObserved:
+        '用量會合併此 Codex home 中的多個登入 · 額度只顯示最後觀測，不合併',
+      title: 'Codex 用量', beta: 'Beta', overview: '總覽', usageTrend: '用量趨勢', daily: '按日', date: '日期', role: '角色', scope: '範圍', threadLabel: '執行緒', rootRole: '根任務', childRole: 'Subagent', approvalReviewerRole: '權限審批', unknownRole: '未知', noDailyData: '尚未索引到 Codex 每日用量。', noThreadData: '尚未索引到 Codex 執行緒。', lastTask: '最近任務', last7Days: '最近 7 天', last30Days: '最近 30 天', projects: '專案', projectLabel: '專案',
+      unnamedSession: '未命名工作階段', unidentifiedProject: '未識別專案', parentThread: '父執行緒', parentTask: '父任務', searchThreads: '搜尋工作階段', sessions: '工作階段', modelsEffort: '模型與推理強度', clearFilters: '清除篩選條件', activeFilters: '作用中的篩選條件', all: '全部', localDirectory: '本機資料夾', lastActive: '最後活動', expand: '展開', viewAllSessions: '檢視所有工作階段', sortBy: '排序依據', usageLimits: '用量限制', resets: '重設時間', credits: '點數', unlimited: '無上限',
+      allTime: '全部時間', behavior: '行為', settings: '設定', monthly: '按月', tokenComposition: 'Token 構成', freshInput: '未快取輸入', reasoningSubset: '已包含在輸出中', threadRoleComposition: '執行緒角色構成', childThreadsPerRootTask: '每個根任務的子執行緒數', childFreshShare: '子執行緒未快取用量占比', approvalFreshShare: '審批未快取用量占比', highEffortFreshShare: '高推理強度未快取用量占比', processedToFreshRatio: '已處理 / 未快取用量', reasoningOutputShare: '推理占輸出比例', postPatchToolCallsPerPatchCall: '每次修補呼叫的修補後工具呼叫代理量', patchCalls: '修補呼叫次數', compactions: '上下文壓縮次數',
+      processed: '已處理', apiEquivalentCost: 'API 等效成本', apiEquivalentCostHelp: '依目前已建立索引的 Token 與現行官方 API 單價估算；不是帳單或訂閱扣款。已定價模型涵蓋率：{coverage}。', fresh: '未快取用量', input: '輸入', cachedInput: '快取輸入', output: '輸出', reasoning: '推理',
+      model: '模型', models: '模型', efforts: '推理強度', threads: '執行緒', rootTasks: '根任務', childThreads: '子執行緒', approvalReviewers: '權限審批執行緒', duration: '工作階段跨度', cacheShare: '輸入快取占比',
+      coverage: '索引覆蓋率', quality: '資料品質', complete: '完整', partial: '部分', lastObserved: '最後觀測', unavailable: '無資料', optimization: '本機最佳化訊號', structuralProxy: '結構性代理指標；不讀取工具呼叫細節。', pasteConstraint: '可複製約束', constraintNoAgents: '不要啟動不必要的 subagent 或獨立審閱。', constraintLowerEffort: '對這個小改動，用代表性任務比較低一級推理強度。', constraintTests: '只執行一次聚焦測試，再執行一次完整測試。', constraintStop: '達到驗收條件後停止，不要擴展為生產級加固。', compareTitle: '供應商比較', noRecentTask: '尚未索引到最近的 Codex 任務。', fiveHourWindow: '5 小時視窗', weeklyWindow: '每週視窗', used: '已用', remaining: '剩餘', localLogNotLive: '本機記錄 · 非即時', limitExpired: '已過期／最後觀測', limitMissing: '沒有本機觀測到的用量限制', observedSessionDuration: '首個與末個觀測事件之間的時間跨度代理值，並非實際活躍時長。',
+      insightTitles: { 'multi-agent-share': '子執行緒的未快取用量占比', 'effort-comparison': '比較低一級推理強度', 'post-patch-tool-intensity': '修補後工具呼叫代理量', 'cache-context': '快取與長上下文解讀', 'approval-reviewer-share': '權限審批的未快取用量占比' },
+    },
+    TASK5_CODEX_COPY['zh-TW'],
+  ),
+  'zh-CN': providerTranslations(
+    { claude: 'Claude', codexBeta: 'Codex Beta', compare: '对比' },
+    {
+      ...TASK8_CODEX_COPY['zh-CN'],
+      accountSnapshotLastObserved:
+        '用量会合并此 Codex home 中的多个登录 · 额度只显示最后观测，不合并',
+      title: 'Codex 用量', beta: 'Beta', overview: '概览', usageTrend: '用量趋势', daily: '按日', date: '日期', role: '角色', scope: '范围', threadLabel: '线程', rootRole: '根任务', childRole: 'Subagent', approvalReviewerRole: '权限审批', unknownRole: '未知', noDailyData: '尚未索引到 Codex 每日用量。', noThreadData: '尚未索引到 Codex 线程。', lastTask: '最近任务', last7Days: '最近 7 天', last30Days: '最近 30 天', projects: '项目', projectLabel: '项目',
+      unnamedSession: '未命名会话', unidentifiedProject: '未识别项目', parentThread: '父线程', parentTask: '父任务', searchThreads: '搜索会话', sessions: '会话', modelsEffort: '模型与推理强度', clearFilters: '清除筛选条件', activeFilters: '生效的筛选条件', all: '全部', localDirectory: '本地文件夹', lastActive: '最后活动', expand: '展开', viewAllSessions: '查看所有会话', sortBy: '排序依据', usageLimits: '用量限制', resets: '重置时间', credits: '点数', unlimited: '无限制',
+      allTime: '全部时间', behavior: '行为', settings: '设置', monthly: '按月', tokenComposition: 'Token 构成', freshInput: '未缓存输入', reasoningSubset: '已包含在输出中', threadRoleComposition: '线程角色构成', childThreadsPerRootTask: '每个根任务的子线程数', childFreshShare: '子线程未缓存用量占比', approvalFreshShare: '审批未缓存用量占比', highEffortFreshShare: '高推理强度未缓存用量占比', processedToFreshRatio: '已处理 / 未缓存用量', reasoningOutputShare: '推理占输出比例', postPatchToolCallsPerPatchCall: '每次补丁调用的补丁后工具调用代理量', patchCalls: '补丁调用次数', compactions: '上下文压缩次数',
+      processed: '已处理', apiEquivalentCost: 'API 等效成本', apiEquivalentCostHelp: '按当前已索引 Token 和现行官方 API 单价估算；不是账单或订阅扣费。已定价模型覆盖率：{coverage}。', fresh: '未缓存用量', input: '输入', cachedInput: '缓存输入', output: '输出', reasoning: '推理',
+      model: '模型', models: '模型', efforts: '推理强度', threads: '线程', rootTasks: '根任务', childThreads: '子线程', approvalReviewers: '权限审批线程', duration: '会话跨度', cacheShare: '输入缓存占比',
+      coverage: '索引覆盖率', quality: '数据质量', complete: '完整', partial: '部分', lastObserved: '最后观测', unavailable: '无数据', optimization: '本地优化信号', structuralProxy: '结构性代理指标；不读取工具调用细节。', pasteConstraint: '可复制约束', constraintNoAgents: '不要启动不必要的 subagent 或独立审阅。', constraintLowerEffort: '对这个小改动，用代表性任务对比低一级推理强度。', constraintTests: '只运行一次聚焦测试，再运行一次完整测试。', constraintStop: '达到验收条件后停止，不要扩展为生产级加固。', compareTitle: '供应商对比', noRecentTask: '尚未索引到最近的 Codex 任务。', fiveHourWindow: '5 小时窗口', weeklyWindow: '每周窗口', used: '已用', remaining: '剩余', localLogNotLive: '本地日志 · 非实时', limitExpired: '已过期／最后观测', limitMissing: '没有本地观测到的用量限制', observedSessionDuration: '首个与末个观测事件之间的时间跨度代理值，并非实际活跃时长。',
+      insightTitles: { 'multi-agent-share': '子线程的未缓存用量占比', 'effort-comparison': '对比低一级推理强度', 'post-patch-tool-intensity': '补丁后工具调用代理量', 'cache-context': '缓存与长上下文解读', 'approval-reviewer-share': '权限审批的未缓存用量占比' },
+    },
+    TASK5_CODEX_COPY['zh-CN'],
+  ),
+  ja: providerTranslations(
+    { claude: 'Claude', codexBeta: 'Codex Beta', compare: '比較' },
+    {
+      ...TASK8_CODEX_COPY.ja,
+      accountSnapshotLastObserved:
+        'この Codex home の複数ログインの使用量を合算 · 上限は最終観測のみで、合算しません',
+      title: 'Codex 使用量', beta: 'ベータ', overview: '概要', usageTrend: '使用量の推移', daily: '日別', date: '日付', role: '役割', scope: '範囲', threadLabel: 'スレッド', rootRole: 'ルート', childRole: 'サブエージェント', approvalReviewerRole: '承認レビュアー', unknownRole: '不明', noDailyData: '日別の Codex 使用量はまだ索引化されていません。', noThreadData: 'Codex スレッドはまだ索引化されていません。', lastTask: '最近のタスク', last7Days: '過去 7 日', last30Days: '過去 30 日', projects: 'プロジェクト', projectLabel: 'プロジェクト',
+      unnamedSession: '名前のないセッション', unidentifiedProject: '未識別のプロジェクト', parentThread: '親スレッド', parentTask: '親タスク', searchThreads: 'セッションを検索', sessions: 'セッション', modelsEffort: 'モデルと推論強度', clearFilters: 'フィルターをクリア', activeFilters: '適用中のフィルター', all: 'すべて', localDirectory: 'ローカルフォルダー', lastActive: '最終アクティブ', expand: '展開', viewAllSessions: 'すべてのセッションを表示', sortBy: '並べ替え', usageLimits: '使用量上限', resets: 'リセット', credits: 'クレジット', unlimited: '無制限',
+      allTime: '全期間', behavior: '行動', settings: '設定', monthly: '月別', tokenComposition: 'トークン構成', freshInput: '非キャッシュ入力', reasoningSubset: '出力に含まれます', threadRoleComposition: 'スレッド役割構成', childThreadsPerRootTask: 'ルートタスクあたりの子スレッド', childFreshShare: '子スレッドの非キャッシュ使用量比率', approvalFreshShare: '承認の非キャッシュ使用量比率', highEffortFreshShare: '高推論強度の非キャッシュ使用量比率', processedToFreshRatio: '処理済み / 非キャッシュ使用量', reasoningOutputShare: '出力に占める推論', postPatchToolCallsPerPatchCall: 'パッチ呼び出しあたりのパッチ後ツール呼び出しプロキシ', patchCalls: 'パッチ呼び出し', compactions: 'コンテキスト圧縮',
+      processed: '処理済み', apiEquivalentCost: 'API 等価コスト', apiEquivalentCostHelp: '現在索引済みの Token を現行の公式 API 単価で見積もった値です。請求額やサブスクリプション料金ではありません。価格適用率: {coverage}。', fresh: '非キャッシュ使用量', input: '入力', cachedInput: 'キャッシュ入力', output: '出力', reasoning: '推論',
+      model: 'モデル', models: 'モデル', efforts: '推論強度', threads: 'スレッド', rootTasks: 'ルートタスク', childThreads: '子スレッド', approvalReviewers: '承認レビュアー', duration: 'セッション期間', cacheShare: '入力キャッシュ比率',
+      coverage: 'カバレッジ', quality: '品質', complete: '完了', partial: '一部', lastObserved: '最終観測', unavailable: '利用不可', optimization: 'ローカル最適化シグナル', structuralProxy: '構造的プロキシです。ツール呼び出しの詳細は読みません。', pasteConstraint: '貼り付け用制約', constraintNoAgents: '不要なサブエージェントや独立レビューを開始しないでください。', constraintLowerEffort: 'この小さな変更では代表タスクで 1 段低い推論強度を比較してください。', constraintTests: '変更に直結するテストを 1 回、その後に全テストを 1 回実行してください。', constraintStop: '受け入れ条件を満たしたら停止し、本番級の堅牢化へ拡張しないでください。', compareTitle: 'プロバイダー比較', noRecentTask: '最近の Codex タスクはまだ索引化されていません。', fiveHourWindow: '5 時間枠', weeklyWindow: '週間枠', used: '使用済み', remaining: '残り', localLogNotLive: 'ローカルログ · ライブではありません', limitExpired: '期限切れ／最終観測', limitMissing: 'ローカルで観測された使用量上限はありません', observedSessionDuration: '最初と最後に観測されたイベント間の経過時間を示すプロキシで、実際のアクティブ時間ではありません。',
+      insightTitles: { 'multi-agent-share': '子スレッドの非キャッシュ使用量比率', 'effort-comparison': '1 段低い推論強度との比較', 'post-patch-tool-intensity': 'パッチ後ツール呼び出しプロキシ', 'cache-context': 'キャッシュと長いコンテキスト', 'approval-reviewer-share': '承認レビュアーの非キャッシュ使用量比率' },
+    },
+    TASK5_CODEX_COPY.ja,
+  ),
+  ko: providerTranslations(
+    { claude: 'Claude', codexBeta: 'Codex Beta', compare: '비교' },
+    {
+      ...TASK8_CODEX_COPY.ko,
+      accountSnapshotLastObserved:
+        '이 Codex home의 여러 로그인 사용량을 합산 · 한도는 마지막 관측만 표시하며 합산하지 않음',
+      title: 'Codex 사용량', beta: '베타', overview: '개요', usageTrend: '사용량 추이', daily: '일별', date: '날짜', role: '역할', scope: '범위', threadLabel: '스레드', rootRole: '루트', childRole: '하위 에이전트', approvalReviewerRole: '승인 검토자', unknownRole: '알 수 없음', noDailyData: '아직 일별 Codex 사용량이 인덱싱되지 않았습니다.', noThreadData: '아직 Codex 스레드가 인덱싱되지 않았습니다.', lastTask: '최근 작업', last7Days: '최근 7일', last30Days: '최근 30일', projects: '프로젝트', projectLabel: '프로젝트',
+      unnamedSession: '이름 없는 세션', unidentifiedProject: '식별되지 않은 프로젝트', parentThread: '상위 스레드', parentTask: '상위 작업', searchThreads: '세션 검색', sessions: '세션', modelsEffort: '모델 및 추론 강도', clearFilters: '필터 지우기', activeFilters: '활성 필터', all: '전체', localDirectory: '로컬 폴더', lastActive: '마지막 활동', expand: '펼치기', viewAllSessions: '모든 세션 보기', sortBy: '정렬 기준', usageLimits: '사용량 한도', resets: '재설정', credits: '크레딧', unlimited: '무제한',
+      allTime: '전체 기간', behavior: '행동', settings: '설정', monthly: '월별', tokenComposition: '토큰 구성', freshInput: '캐시되지 않은 입력', reasoningSubset: '출력에 포함됨', threadRoleComposition: '스레드 역할 구성', childThreadsPerRootTask: '루트 작업당 하위 스레드', childFreshShare: '하위 스레드 캐시되지 않은 사용량 비율', approvalFreshShare: '승인 캐시되지 않은 사용량 비율', highEffortFreshShare: '고강도 캐시되지 않은 사용량 비율', processedToFreshRatio: '처리됨 / 캐시되지 않은 사용량', reasoningOutputShare: '출력 중 추론 비율', postPatchToolCallsPerPatchCall: '패치 호출당 패치 후 도구 호출 프록시', patchCalls: '패치 호출', compactions: '컨텍스트 압축',
+      processed: '처리됨', apiEquivalentCost: 'API 등가 비용', apiEquivalentCostHelp: '현재 인덱싱된 Token에 현행 공식 API 단가를 적용한 추정치입니다. 청구액이나 구독 결제액이 아닙니다. 가격 적용률: {coverage}.', fresh: '캐시되지 않은 사용량', input: '입력', cachedInput: '캐시 입력', output: '출력', reasoning: '추론',
+      model: '모델', models: '모델', efforts: '추론 강도', threads: '스레드', rootTasks: '루트 작업', childThreads: '하위 스레드', approvalReviewers: '승인 검토자', duration: '세션 범위', cacheShare: '입력 캐시 비율',
+      coverage: '커버리지', quality: '품질', complete: '완료', partial: '부분', lastObserved: '마지막 관측', unavailable: '사용 불가', optimization: '로컬 최적화 신호', structuralProxy: '구조적 프록시이며 도구 호출 세부 정보는 읽지 않습니다.', pasteConstraint: '붙여넣기용 제약', constraintNoAgents: '불필요한 하위 에이전트나 독립 검토를 시작하지 마세요.', constraintLowerEffort: '이 작은 변경은 대표 작업에서 한 단계 낮은 추론 강도를 비교하세요.', constraintTests: '변경에 맞춘 테스트 한 번과 전체 테스트 한 번만 실행하세요.', constraintStop: '수용 기준을 통과하면 중단하고 운영급 강화로 확장하지 마세요.', compareTitle: '공급자 비교', noRecentTask: '최근 Codex 작업이 아직 인덱싱되지 않았습니다.', fiveHourWindow: '5시간 창', weeklyWindow: '주간 창', used: '사용됨', remaining: '남음', localLogNotLive: '로컬 로그 · 실시간 아님', limitExpired: '만료됨 / 마지막 관측', limitMissing: '로컬에서 관측된 사용량 한도가 없습니다', observedSessionDuration: '처음과 마지막으로 관측된 이벤트 사이의 시간 범위를 나타내는 프록시이며 실제 활성 시간이 아닙니다.',
+      insightTitles: { 'multi-agent-share': '하위 스레드 캐시되지 않은 사용량 비율', 'effort-comparison': '한 단계 낮은 추론 강도 비교', 'post-patch-tool-intensity': '패치 후 도구 호출 프록시', 'cache-context': '캐시 및 긴 컨텍스트', 'approval-reviewer-share': '승인 검토자 캐시되지 않은 사용량 비율' },
+    },
+    TASK5_CODEX_COPY.ko,
+  ),
+  'pt-BR': providerTranslations(
+    { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Comparar' },
+    {
+      ...TASK8_CODEX_COPY['pt-BR'],
+      accountSnapshotLastObserved:
+        'O uso combina logins neste Codex home · limites são a última observação, não somados',
+      title: 'Uso do Codex', beta: 'Beta', overview: 'Visão geral', usageTrend: 'Tendência de uso', daily: 'Diário', date: 'Data', role: 'Função', scope: 'Escopo', threadLabel: 'Thread', rootRole: 'Raiz', childRole: 'Subagente', approvalReviewerRole: 'Revisor de aprovação', unknownRole: 'Desconhecido', noDailyData: 'Nenhum uso diário do Codex foi indexado.', noThreadData: 'Nenhuma thread do Codex foi indexada.', lastTask: 'Tarefa recente', last7Days: 'Últimos 7 dias', last30Days: 'Últimos 30 dias', projects: 'Projetos', projectLabel: 'Projeto',
+      unnamedSession: 'Sessão sem nome', unidentifiedProject: 'Projeto não identificado', parentThread: 'Thread pai', parentTask: 'Tarefa pai', searchThreads: 'Pesquisar sessões', sessions: 'Sessões', modelsEffort: 'Modelos e esforço', clearFilters: 'Limpar filtros', activeFilters: 'Filtros ativos', all: 'Tudo', localDirectory: 'Pasta local', lastActive: 'Última atividade', expand: 'Expandir', viewAllSessions: 'Ver todas as sessões', sortBy: 'Ordenar por', usageLimits: 'Limites de uso', resets: 'Redefinição', credits: 'Créditos', unlimited: 'Ilimitado',
+      allTime: 'Todo o período', behavior: 'Comportamento', settings: 'Configurações', monthly: 'Mensal', tokenComposition: 'Composição de tokens', freshInput: 'Entrada sem cache', reasoningSubset: 'Incluído na saída', threadRoleComposition: 'Composição por função da thread', childThreadsPerRootTask: 'Threads filhas / tarefa raiz', childFreshShare: 'Participação do uso sem cache das threads filhas', approvalFreshShare: 'Participação do uso sem cache de aprovação', highEffortFreshShare: 'Participação do uso sem cache de alto esforço', processedToFreshRatio: 'Processado / uso sem cache', reasoningOutputShare: 'Participação do raciocínio na saída', postPatchToolCallsPerPatchCall: 'Proxy de chamadas de ferramenta pós-patch / chamada de patch', patchCalls: 'Chamadas de patch', compactions: 'Compactações',
+      processed: 'Processado', apiEquivalentCost: 'Custo equivalente de API', apiEquivalentCostHelp: 'Estimado a partir dos Tokens indexados no momento com os preços oficiais atuais da API; não é uma fatura nem uma cobrança de assinatura. Cobertura de preços: {coverage}.', fresh: 'Uso sem cache', input: 'Entrada', cachedInput: 'Entrada em cache', output: 'Saída', reasoning: 'Raciocínio',
+      model: 'Modelo', models: 'Modelos', efforts: 'Esforço', threads: 'Threads', rootTasks: 'Tarefas raiz', childThreads: 'Threads filhas', approvalReviewers: 'Revisores de aprovação', duration: 'Intervalo', cacheShare: 'Proporção de cache de entrada',
+      coverage: 'Cobertura', quality: 'Qualidade', complete: 'Completa', partial: 'Parcial', lastObserved: 'Última observação', unavailable: 'Indisponível', optimization: 'Sinais locais de otimização', structuralProxy: 'Proxy estrutural; detalhes das chamadas de ferramenta não são lidos.', pasteConstraint: 'Restrição pronta para colar', constraintNoAgents: 'Não inicie subagentes ou revisões independentes desnecessárias.', constraintLowerEffort: 'Nesta mudança pequena, compare um nível de esforço menor em uma tarefa representativa.', constraintTests: 'Execute um teste focado e depois uma única execução completa.', constraintStop: 'Pare ao cumprir os critérios; não expanda para endurecimento de produção.', compareTitle: 'Comparação de provedores', noRecentTask: 'Nenhuma tarefa recente do Codex foi indexada.', fiveHourWindow: 'Janela de 5 horas', weeklyWindow: 'Janela semanal', used: 'usado', remaining: 'restante', localLogNotLive: 'Registro local · não é ao vivo', limitExpired: 'Expirado / última observação', limitMissing: 'Nenhum limite de uso observado localmente', observedSessionDuration: 'Intervalo entre o primeiro e o último evento observado; é um proxy, não o tempo de atividade real.',
+      insightTitles: { 'multi-agent-share': 'Participação do uso sem cache das threads filhas', 'effort-comparison': 'Compare um nível de esforço menor', 'post-patch-tool-intensity': 'Proxy de chamadas de ferramenta pós-patch', 'cache-context': 'Cache e contexto longo', 'approval-reviewer-share': 'Participação do uso sem cache do revisor de aprovação' },
+    },
+    TASK5_CODEX_COPY['pt-BR'],
+  ),
+  id: providerTranslations(
+    { claude: 'Claude', codexBeta: 'Codex Beta', compare: 'Bandingkan' },
+    {
+      ...TASK8_CODEX_COPY.id,
+      accountSnapshotLastObserved:
+        'Penggunaan menggabungkan login di Codex home ini · batas adalah pengamatan terakhir, tidak dijumlahkan',
+      title: 'Penggunaan Codex', beta: 'Beta', overview: 'Ringkasan', usageTrend: 'Tren penggunaan', daily: 'Harian', date: 'Tanggal', role: 'Peran', scope: 'Cakupan', threadLabel: 'Thread', rootRole: 'Utama', childRole: 'Subagen', approvalReviewerRole: 'Peninjau persetujuan', unknownRole: 'Tidak diketahui', noDailyData: 'Belum ada penggunaan harian Codex yang diindeks.', noThreadData: 'Belum ada thread Codex yang diindeks.', lastTask: 'Tugas terbaru', last7Days: '7 hari terakhir', last30Days: '30 hari terakhir', projects: 'Proyek', projectLabel: 'Proyek',
+      unnamedSession: 'Sesi tanpa nama', unidentifiedProject: 'Proyek tidak teridentifikasi', parentThread: 'Thread induk', parentTask: 'Tugas induk', searchThreads: 'Cari sesi', sessions: 'Sesi', modelsEffort: 'Model & upaya', clearFilters: 'Hapus filter', activeFilters: 'Filter aktif', all: 'Semua', localDirectory: 'Folder lokal', lastActive: 'Terakhir aktif', expand: 'Perluas', viewAllSessions: 'Lihat semua sesi', sortBy: 'Urutkan berdasarkan', usageLimits: 'Batas penggunaan', resets: 'Reset', credits: 'Kredit', unlimited: 'Tanpa batas',
+      allTime: 'Sepanjang waktu', behavior: 'Perilaku', settings: 'Pengaturan', monthly: 'Bulanan', tokenComposition: 'Komposisi token', freshInput: 'Input tanpa cache', reasoningSubset: 'Termasuk dalam output', threadRoleComposition: 'Komposisi peran thread', childThreadsPerRootTask: 'Thread anak / tugas utama', childFreshShare: 'Porsi penggunaan tanpa cache thread anak', approvalFreshShare: 'Porsi penggunaan tanpa cache persetujuan', highEffortFreshShare: 'Porsi penggunaan tanpa cache effort tinggi', processedToFreshRatio: 'Diproses / penggunaan tanpa cache', reasoningOutputShare: 'Porsi penalaran dalam output', postPatchToolCallsPerPatchCall: 'Proksi panggilan alat pasca-patch / panggilan patch', patchCalls: 'Panggilan patch', compactions: 'Pemadatan konteks',
+      processed: 'Diproses', apiEquivalentCost: 'Biaya ekuivalen API', apiEquivalentCostHelp: 'Perkiraan dari Token yang saat ini terindeks dengan harga API resmi terkini; bukan tagihan atau biaya langganan. Cakupan harga: {coverage}.', fresh: 'Penggunaan tanpa cache', input: 'Input', cachedInput: 'Input cache', output: 'Output', reasoning: 'Penalaran',
+      model: 'Model', models: 'Model', efforts: 'Upaya', threads: 'Thread', rootTasks: 'Tugas utama', childThreads: 'Thread anak', approvalReviewers: 'Peninjau persetujuan', duration: 'Rentang sesi', cacheShare: 'Porsi cache input',
+      coverage: 'Cakupan', quality: 'Kualitas', complete: 'Lengkap', partial: 'Sebagian', lastObserved: 'Terakhir diamati', unavailable: 'Tidak tersedia', optimization: 'Sinyal optimasi lokal', structuralProxy: 'Proksi struktural; detail panggilan alat tidak dibaca.', pasteConstraint: 'Batasan siap tempel', constraintNoAgents: 'Jangan mulai subagen atau tinjauan independen yang tidak perlu.', constraintLowerEffort: 'Untuk perubahan kecil ini, bandingkan satu tingkat upaya lebih rendah pada tugas perwakilan.', constraintTests: 'Jalankan satu tes terfokus lalu satu kali tes lengkap.', constraintStop: 'Berhenti saat kriteria terpenuhi; jangan perluas menjadi pengerasan tingkat produksi.', compareTitle: 'Perbandingan penyedia', noRecentTask: 'Belum ada tugas Codex terbaru yang diindeks.', fiveHourWindow: 'Jendela 5 jam', weeklyWindow: 'Jendela mingguan', used: 'terpakai', remaining: 'tersisa', localLogNotLive: 'Log lokal · bukan langsung', limitExpired: 'Kedaluwarsa / terakhir diamati', limitMissing: 'Tidak ada batas penggunaan yang diamati secara lokal', observedSessionDuration: 'Rentang antara peristiwa pertama dan terakhir yang diamati; ini proksi, bukan waktu aktif sebenarnya.',
+      insightTitles: { 'multi-agent-share': 'Porsi penggunaan tanpa cache thread anak', 'effort-comparison': 'Bandingkan satu tingkat upaya lebih rendah', 'post-patch-tool-intensity': 'Proksi panggilan alat pasca-patch', 'cache-context': 'Cache dan konteks panjang', 'approval-reviewer-share': 'Porsi penggunaan tanpa cache peninjau persetujuan' },
+    },
+    TASK5_CODEX_COPY.id,
+  ),
+};
+
+const WEEKLY_VALUE_COPY: Record<SupportedLanguage, WeeklyValueCopy> = {
+  en: {
+    title: 'Weekly allowance value',
+    description: 'Current official API prices applied to local tokens; full allowance is inferred from the last observed utilization in each reset window. Request-level surcharges absent from aggregate logs are excluded. Estimate, not a bill.',
+    period: 'Period', currentPeriod: 'Current period', currentPeriodShort: 'Current', resetsAt: 'resets',
+    usedValue: 'Used equivalent', fullValue: 'Full allowance est.', unusedValue: 'Unused est.',
+    reset: 'Week / reset', utilization: 'End observed', confidence: 'Confidence', pricingCoverage: 'Priced coverage',
+    current: 'In progress', high: 'High', medium: 'Medium', low: 'Low', usageOnly: 'Usage only',
+    noData: 'No locally recorded weekly usage is available yet.',
+    historyFromLogs: 'Historical used equivalents come directly from local token logs. Full and unused estimates appear only for windows with a real quota-utilization observation.',
+    calendarFallback: 'No historical weekly reset was observed; usage-only history is grouped into Monday-to-Monday UTC calendar weeks.',
+    multiAccount: 'Codex usage-only history combines all sign-ins in this Codex home. When usage cannot be reliably attributed to a single quota observation, only the used equivalent is shown; no account split or allowance estimate is invented.',
+    boundaryApproximation: 'Codex usage is aggregated by day. If an official reset falls within a recorded day, the affected period keeps only its used equivalent; full and unused values are not inferred.',
+    boundaryApproximate: 'Boundary approx.',
+    indexedSubtotal: 'Indexing is incomplete; weekly values are conservative subtotals.',
+  },
+  'zh-CN': {
+    title: '每周等效额度价值',
+    description: '按当前官方 API 单价折算本地 Token；每个重置窗口的总额度由最后观测用量比例反推。聚合日志无法确认的请求级附加价格不计入。属于估算，并非账单。',
+    period: '周期', currentPeriod: '当前周期', currentPeriodShort: '当前', resetsAt: '重置于',
+    usedValue: '已用等价值', fullValue: '总额度估算', unusedValue: '未用估算',
+    reset: '周期 / 重置', utilization: '末次观测', confidence: '可信度', pricingCoverage: '已定价覆盖',
+    current: '进行中', high: '高', medium: '中', low: '低', usageOnly: '仅已用值',
+    noData: '尚无可用于按周计算的本地用量记录。',
+    historyFromLogs: '历史“已用等价值”直接由本地 Token 日志计算；只有某个窗口存在真实额度用量观测时，才显示总额度和未用额度估算。',
+    calendarFallback: '未观测到可用于对齐历史的每周重置时间；仅已用历史按 UTC 周一至周一的自然周分组。',
+    multiAccount: 'Codex 的仅已用历史会合并此 Codex home 中的全部登录。用量无法可靠归属到单一额度观测时，只显示已用等价值；不会虚构账号拆分或额度估算。',
+    boundaryApproximation: 'Codex 用量按日汇总。如果官方重置发生在某个已记录日期内，受影响周期只保留已用等价值，不反推总额度或未用额度。',
+    boundaryApproximate: '边界近似',
+    indexedSubtotal: '索引尚未完成；每周价值目前是保守小计。',
+  },
+  'zh-TW': {
+    title: '每週等效額度價值',
+    description: '依目前官方 API 單價折算本機 Token；每個重設視窗的總額度由最後觀測用量比例反推。彙總日誌無法確認的請求級附加價格不計入。屬於估算，並非帳單。',
+    period: '週期', currentPeriod: '目前週期', currentPeriodShort: '目前', resetsAt: '重設於',
+    usedValue: '已用等價值', fullValue: '總額度估算', unusedValue: '未用估算',
+    reset: '週期 / 重設', utilization: '末次觀測', confidence: '可信度', pricingCoverage: '已定價涵蓋',
+    current: '進行中', high: '高', medium: '中', low: '低', usageOnly: '僅已用值',
+    noData: '尚無可用於每週計算的本機用量記錄。',
+    historyFromLogs: '歷史「已用等價值」直接由本機 Token 日誌計算；只有視窗存在真實額度用量觀測時，才顯示總額度與未用額度估算。',
+    calendarFallback: '未觀測到可用於對齊歷史的每週重設時間；僅已用歷史依 UTC 週一至週一的自然週分組。',
+    multiAccount: 'Codex 的僅已用歷史會合併此 Codex home 中的所有登入。用量無法可靠歸屬到單一額度觀測時，只顯示已用等價值；不會虛構帳號拆分或額度估算。',
+    boundaryApproximation: 'Codex 用量按日彙總。如果官方重設發生在某個已記錄日期內，受影響週期只保留已用等價值，不反推總額度或未用額度。',
+    boundaryApproximate: '邊界近似',
+    indexedSubtotal: '索引尚未完成；每週價值目前是保守小計。',
+  },
+  ja: {
+    title: '週間上限の等価価値',
+    description: '現在の公式 API 単価をローカルトークンに適用し、各リセット枠の総上限を最終観測利用率から推定します。集計ログで確認できないリクエスト単位の追加料金は含みません。請求額ではありません。',
+    period: '期間', currentPeriod: '現在の期間', currentPeriodShort: '現在', resetsAt: 'リセット',
+    usedValue: '使用済み等価値', fullValue: '総上限の推定', unusedValue: '未使用の推定',
+    reset: '期間 / リセット', utilization: '最終観測', confidence: '信頼度', pricingCoverage: '価格適用率',
+    current: '進行中', high: '高', medium: '中', low: '低', usageOnly: '使用分のみ',
+    noData: '週単位で計算できるローカル使用記録がまだありません。',
+    historyFromLogs: '過去の使用済み等価値はローカルの Token ログから直接計算します。総上限と未使用分は、実際の上限利用率が観測された枠だけで推定します。',
+    calendarFallback: '履歴を揃える週間リセットが観測されていないため、使用分のみの履歴は UTC の月曜から月曜の暦週で集計します。',
+    multiAccount: 'Codex の使用分のみの履歴は、この Codex home の全ログインを合算します。使用量を単一の上限観測に確実に帰属できない場合は使用済み等価値だけを表示し、アカウント分割や上限推定を作りません。',
+    boundaryApproximation: 'Codex の使用量は日単位で集計されます。公式リセットが記録日の途中にある場合、影響する期間は使用済み等価値だけを保持し、総上限や未使用分を推定しません。',
+    boundaryApproximate: '境界近似',
+    indexedSubtotal: '索引作成中のため、週間価値は保守的な小計です。',
+  },
+  ko: {
+    title: '주간 한도 등가 가치',
+    description: '현재 공식 API 단가를 로컬 토큰에 적용하고 각 재설정 창의 총한도를 마지막 관측 사용률로 추정합니다. 집계 로그에서 확인할 수 없는 요청 단위 추가 요금은 제외합니다. 청구 금액이 아닙니다.',
+    period: '기간', currentPeriod: '현재 기간', currentPeriodShort: '현재', resetsAt: '재설정',
+    usedValue: '사용 등가치', fullValue: '총한도 추정', unusedValue: '미사용 추정',
+    reset: '주 / 재설정', utilization: '마지막 관측', confidence: '신뢰도', pricingCoverage: '가격 적용률',
+    current: '진행 중', high: '높음', medium: '보통', low: '낮음', usageOnly: '사용분만',
+    noData: '주간 계산에 사용할 로컬 사용 기록이 아직 없습니다.',
+    historyFromLogs: '과거 사용 등가치는 로컬 Token 로그에서 직접 계산합니다. 실제 한도 사용률 관측이 있는 창에서만 총한도와 미사용분을 추정합니다.',
+    calendarFallback: '과거를 정렬할 주간 재설정이 관측되지 않아 사용분 전용 기록은 UTC 월요일부터 월요일까지의 달력 주로 묶습니다.',
+    multiAccount: 'Codex 사용분 전용 기록은 이 Codex home의 모든 로그인을 합산합니다. 사용량을 단일 할당량 관측에 안정적으로 귀속할 수 없으면 사용 등가치만 표시하며 계정 분리나 한도 추정을 만들어 내지 않습니다.',
+    boundaryApproximation: 'Codex 사용량은 일별로 집계됩니다. 공식 재설정이 기록된 하루 중간에 발생하면 영향을 받는 기간에는 사용 등가치만 유지하고 총한도나 미사용분을 추정하지 않습니다.',
+    boundaryApproximate: '경계 근사',
+    indexedSubtotal: '인덱싱이 끝나지 않아 주간 가치는 보수적인 소계입니다.',
+  },
+  'pt-BR': {
+    title: 'Valor equivalente semanal',
+    description: 'Aplica os preços oficiais atuais da API aos tokens locais e infere o limite total pela última utilização observada em cada janela. Sobretaxas por solicitação ausentes dos logs agregados não são incluídas. É uma estimativa, não uma fatura.',
+    period: 'Período', currentPeriod: 'Período atual', currentPeriodShort: 'Atual', resetsAt: 'reinicia em',
+    usedValue: 'Equivalente usado', fullValue: 'Limite total est.', unusedValue: 'Não usado est.',
+    reset: 'Semana / reset', utilization: 'Última observação', confidence: 'Confiança', pricingCoverage: 'Cobertura de preços',
+    current: 'Em andamento', high: 'Alta', medium: 'Média', low: 'Baixa', usageOnly: 'Somente uso',
+    noData: 'Ainda não há uso local registrado para o cálculo semanal.',
+    historyFromLogs: 'Os equivalentes usados no histórico vêm diretamente dos logs locais de Token. O limite total e o não usado só são estimados quando há uma observação real da utilização da cota.',
+    calendarFallback: 'Nenhuma redefinição semanal histórica foi observada; o histórico somente de uso é agrupado em semanas UTC de segunda a segunda.',
+    multiAccount: 'O histórico somente de uso do Codex combina todos os logins deste Codex home. Quando o uso não pode ser atribuído com segurança a uma única observação de cota, só o equivalente usado é mostrado; nenhuma divisão por conta ou estimativa de limite é inventada.',
+    boundaryApproximation: 'O uso do Codex é agregado por dia. Se uma redefinição oficial ocorrer dentro de um dia registrado, o período afetado mantém apenas o equivalente usado; o limite total e o não usado não são inferidos.',
+    boundaryApproximate: 'Fronteira aprox.',
+    indexedSubtotal: 'A indexação está incompleta; os valores semanais são subtotais conservadores.',
+  },
+  'de-DE': {
+    title: 'Wöchentlicher Gegenwert',
+    description: 'Aktuelle offizielle API-Preise werden auf lokale Token angewandt; das Gesamtlimit wird aus der letzten beobachteten Auslastung je Reset-Fenster geschätzt. Anfragebezogene Aufpreise, die in aggregierten Logs fehlen, sind ausgeschlossen. Keine Rechnung.',
+    period: 'Zeitraum', currentPeriod: 'Aktueller Zeitraum', currentPeriodShort: 'Aktuell', resetsAt: 'Reset',
+    usedValue: 'Genutzter Gegenwert', fullValue: 'Gesamtlimit geschätzt', unusedValue: 'Ungenutzt geschätzt',
+    reset: 'Woche / Reset', utilization: 'Letzte Beobachtung', confidence: 'Vertrauen', pricingCoverage: 'Preisabdeckung',
+    current: 'Laufend', high: 'Hoch', medium: 'Mittel', low: 'Niedrig', usageOnly: 'Nur Nutzung',
+    noData: 'Noch keine lokal erfasste Nutzung für die Wochenberechnung verfügbar.',
+    historyFromLogs: 'Historische genutzte Gegenwerte stammen direkt aus lokalen Token-Logs. Gesamtlimit und ungenutzter Anteil werden nur bei real beobachteter Quotenauslastung geschätzt.',
+    calendarFallback: 'Kein historischer Wochen-Reset wurde beobachtet; reine Nutzungsverläufe werden in UTC-Kalenderwochen von Montag bis Montag gruppiert.',
+    multiAccount: 'Der reine Codex-Nutzungsverlauf kombiniert alle Anmeldungen in diesem Codex home. Lässt sich die Nutzung nicht zuverlässig einer einzelnen Kontingentbeobachtung zuordnen, wird nur der genutzte Gegenwert angezeigt; weder Kontotrennung noch Limitschätzung werden erfunden.',
+    boundaryApproximation: 'Die Codex-Nutzung wird tageweise aggregiert. Fällt ein offizieller Reset in einen erfassten Tag, behält der betroffene Zeitraum nur den genutzten Gegenwert; Gesamtlimit und ungenutzter Anteil werden nicht geschätzt.',
+    boundaryApproximate: 'Grenznäherung',
+    indexedSubtotal: 'Die Indizierung ist unvollständig; Wochenwerte sind konservative Zwischensummen.',
+  },
+  id: {
+    title: 'Nilai ekuivalen mingguan',
+    description: 'Harga API resmi saat ini diterapkan pada token lokal; total batas disimpulkan dari pemakaian terakhir yang diamati pada tiap jendela reset. Biaya tambahan per permintaan yang tidak ada dalam log agregat tidak dihitung. Ini perkiraan, bukan tagihan.',
+    period: 'Periode', currentPeriod: 'Periode saat ini', currentPeriodShort: 'Saat ini', resetsAt: 'reset',
+    usedValue: 'Ekuivalen terpakai', fullValue: 'Total batas estimasi', unusedValue: 'Tak terpakai estimasi',
+    reset: 'Minggu / reset', utilization: 'Pengamatan akhir', confidence: 'Keyakinan', pricingCoverage: 'Cakupan harga',
+    current: 'Berjalan', high: 'Tinggi', medium: 'Sedang', low: 'Rendah', usageOnly: 'Hanya pemakaian',
+    noData: 'Belum ada penggunaan lokal yang tercatat untuk perhitungan mingguan.',
+    historyFromLogs: 'Ekuivalen terpakai historis dihitung langsung dari log Token lokal. Total batas dan sisa hanya diestimasi jika ada pengamatan nyata atas persentase kuota.',
+    calendarFallback: 'Tidak ada reset mingguan historis yang teramati; riwayat khusus pemakaian dikelompokkan dalam minggu UTC Senin-ke-Senin.',
+    multiAccount: 'Riwayat khusus pemakaian Codex menggabungkan semua login di Codex home ini. Jika penggunaan tidak dapat dikaitkan secara andal ke satu pengamatan kuota, hanya ekuivalen terpakai yang ditampilkan; pemisahan akun atau perkiraan batas tidak direka.',
+    boundaryApproximation: 'Penggunaan Codex diagregasi per hari. Jika reset resmi terjadi di tengah hari yang tercatat, periode yang terdampak hanya mempertahankan ekuivalen terpakai; total batas dan sisa tidak diperkirakan.',
+    boundaryApproximate: 'Perkiraan batas',
+    indexedSubtotal: 'Pengindeksan belum selesai; nilai mingguan masih berupa subtotal konservatif.',
+  },
+};
+
 const translations: Record<SupportedLanguage, Translations> = {
   en: {
     statusBar: {
@@ -213,6 +1036,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: 'Usage refresh failed. Retry or check diagnostic logs.',
       currentSession: 'Session',
     },
+    releaseAnnouncement: {
+      v230: "What's new — Codex Beta usage and local optimization guidance, exact-version release notes, and removal of the obsolete model-specific weekly Opus option.",
+    },
+    providers: PROVIDERS.en,
+    weeklyValue: WEEKLY_VALUE_COPY.en,
     popup: {
       title: 'Claude Code Usage',
       currentSession: 'Current Session',
@@ -228,6 +1056,7 @@ const translations: Record<SupportedLanguage, Translations> = {
         'Settings live here now. Only language, data directory and API key remain in VS Code Settings (so they sync). Changes apply immediately.',
       settingsResetAll: 'Reset all to defaults',
       settingsGroupGeneral: 'General',
+      settingsGroupProviders: 'Providers',
       settingsGroupFeatures: 'Optional features',
       settingsGroupStatusBar: 'Status bar',
       settingsGroupData: 'Data & refresh',
@@ -442,6 +1271,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: "Aktualisierung fehlgeschlagen. Erneut versuchen oder Diagnoselogs prüfen.",
       currentSession: "Session",
     },
+    releaseAnnouncement: {
+      v230: 'Neu: Codex-Beta-Nutzung und lokale Optimierungshinweise, versionsgenaue Release-Hinweise und Entfernung der veralteten modellspezifischen wöchentlichen Opus-Option.',
+    },
+    providers: PROVIDERS['de-DE'],
+    weeklyValue: WEEKLY_VALUE_COPY['de-DE'],
     popup: {
       title: "Claude Code Nutzung",
       currentSession: "Aktuelle Sitzung",
@@ -457,6 +1291,7 @@ const translations: Record<SupportedLanguage, Translations> = {
         "Die Einstellungen sind jetzt hier. Nur Sprache, Datenverzeichnis und API-Schlüssel bleiben in den VS-Code-Einstellungen (damit sie synchronisiert werden). Änderungen wirken sofort.",
       settingsResetAll: "Alle zurücksetzen",
       settingsGroupGeneral: "Allgemein",
+      settingsGroupProviders: "Anbieter",
       settingsGroupFeatures: "Optionale Funktionen",
       settingsGroupStatusBar: "Statusleiste",
       settingsGroupData: "Daten & Aktualisierung",
@@ -674,6 +1509,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: '使用量重新整理失敗。請重試或查看診斷日誌。',
       currentSession: '當前會話',
     },
+    releaseAnnouncement: {
+      v230: '新功能：Codex Beta 用量與本機優化建議、與安裝版本精確對應的更新說明，並移除已過時的特定模型每週 Opus 選項。',
+    },
+    providers: PROVIDERS['zh-TW'],
+    weeklyValue: WEEKLY_VALUE_COPY['zh-TW'],
     popup: {
       title: 'Claude Code 使用量',
       currentSession: '當前會話',
@@ -689,6 +1529,7 @@ const translations: Record<SupportedLanguage, Translations> = {
         '設定現在都在這裡。只有語言、資料目錄與 API 金鑰仍留在 VS Code 設定中(以便同步)。變更會立即生效。',
       settingsResetAll: '全部還原為預設',
       settingsGroupGeneral: '一般',
+      settingsGroupProviders: '供應商',
       settingsGroupFeatures: '選用功能',
       settingsGroupStatusBar: '狀態列',
       settingsGroupData: '資料與重新整理',
@@ -899,6 +1740,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: '用量刷新失败。请重试或查看诊断日志。',
       currentSession: '当前会话',
     },
+    releaseAnnouncement: {
+      v230: '新功能：Codex Beta 用量与本地优化建议、与安装版本精确对应的更新说明，并移除已过时的特定模型每周 Opus 选项。',
+    },
+    providers: PROVIDERS['zh-CN'],
+    weeklyValue: WEEKLY_VALUE_COPY['zh-CN'],
     popup: {
       title: 'Claude Code 使用量',
       currentSession: '当前会话',
@@ -914,6 +1760,7 @@ const translations: Record<SupportedLanguage, Translations> = {
         '设置现在都在这里。只有语言、数据目录和 API key 仍留在 VS Code 设置中(便于同步)。更改即时生效。',
       settingsResetAll: '全部恢复默认',
       settingsGroupGeneral: '常规',
+      settingsGroupProviders: '供应商',
       settingsGroupFeatures: '可选功能',
       settingsGroupStatusBar: '状态栏',
       settingsGroupData: '数据与刷新',
@@ -1124,6 +1971,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: '使用量の更新に失敗しました。再試行するか診断ログを確認してください。',
       currentSession: '現在のセッション',
     },
+    releaseAnnouncement: {
+      v230: '新機能：Codex Beta の使用量とローカル最適化ガイド、完全なバージョンに対応するリリース通知、および古いモデル別の週間 Opus オプションの削除。',
+    },
+    providers: PROVIDERS.ja,
+    weeklyValue: WEEKLY_VALUE_COPY.ja,
     popup: {
       title: 'Claude Code 使用量',
       currentSession: '現在のセッション',
@@ -1139,6 +1991,7 @@ const translations: Record<SupportedLanguage, Translations> = {
         '設定はここにまとまりました。言語・データディレクトリ・API キーのみ VS Code 設定に残ります(同期のため)。変更は即時反映されます。',
       settingsResetAll: 'すべて既定値に戻す',
       settingsGroupGeneral: '一般',
+      settingsGroupProviders: 'プロバイダー',
       settingsGroupFeatures: 'オプション機能',
       settingsGroupStatusBar: 'ステータスバー',
       settingsGroupData: 'データと更新',
@@ -1354,6 +2207,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: '사용량 새로 고침에 실패했습니다. 다시 시도하거나 진단 로그를 확인하세요.',
       currentSession: '현재 세션',
     },
+    releaseAnnouncement: {
+      v230: '새 기능: Codex Beta 사용량과 로컬 최적화 안내, 설치된 전체 버전에 맞는 릴리스 알림, 그리고 오래된 모델별 주간 Opus 옵션 제거.',
+    },
+    providers: PROVIDERS.ko,
+    weeklyValue: WEEKLY_VALUE_COPY.ko,
     popup: {
       title: 'Claude Code 사용량',
       currentSession: '현재 세션',
@@ -1369,6 +2227,7 @@ const translations: Record<SupportedLanguage, Translations> = {
         '설정이 이제 여기로 모였습니다. 언어, 데이터 디렉터리, API 키만 VS Code 설정에 남습니다(동기화를 위해). 변경은 즉시 적용됩니다.',
       settingsResetAll: '모두 기본값으로',
       settingsGroupGeneral: '일반',
+      settingsGroupProviders: '공급자',
       settingsGroupFeatures: '선택 기능',
       settingsGroupStatusBar: '상태 표시줄',
       settingsGroupData: '데이터 및 새로고침',
@@ -1584,6 +2443,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: 'Falha ao atualizar o uso. Tente novamente ou verifique os logs de diagnóstico.',
       currentSession: 'Sessão',
     },
+    releaseAnnouncement: {
+      v230: 'Novidades: uso do Codex Beta e orientações locais de otimização, avisos da versão exata instalada e remoção da opção semanal obsoleta do Opus por modelo.',
+    },
+    providers: PROVIDERS['pt-BR'],
+    weeklyValue: WEEKLY_VALUE_COPY['pt-BR'],
     popup: {
       title: 'Uso do Claude Code',
       currentSession: 'Sessão atual',
@@ -1599,6 +2463,7 @@ const translations: Record<SupportedLanguage, Translations> = {
         'As configurações agora ficam aqui. Apenas idioma, diretório de dados e chave de API permanecem nas Configurações do VS Code (para sincronizar). As alterações são aplicadas imediatamente.',
       settingsResetAll: 'Restaurar tudo para os padrões',
       settingsGroupGeneral: 'Geral',
+      settingsGroupProviders: 'Provedores',
       settingsGroupFeatures: 'Recursos opcionais',
       settingsGroupStatusBar: 'Barra de status',
       settingsGroupData: 'Dados e atualização',
@@ -1813,6 +2678,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       refreshFailed: 'Gagal menyegarkan penggunaan. Coba lagi atau periksa log diagnostik.',
       currentSession: 'Sesi',
     },
+    releaseAnnouncement: {
+      v230: 'Yang baru: penggunaan Codex Beta dan panduan optimasi lokal, catatan rilis yang sesuai dengan versi lengkap terpasang, serta penghapusan opsi Opus mingguan khusus model yang sudah usang.',
+    },
+    providers: PROVIDERS.id,
+    weeklyValue: WEEKLY_VALUE_COPY.id,
     popup: {
       title: 'Claude Code Usage',
       currentSession: 'Sesi Saat Ini',
@@ -1828,6 +2698,7 @@ const translations: Record<SupportedLanguage, Translations> = {
         'Pengaturan sekarang ada di sini. Hanya bahasa, direktori data, dan API key yang tetap berada di Pengaturan VS Code (agar dapat disinkronkan). Perubahan langsung diterapkan.',
       settingsResetAll: 'Kembalikan semua ke default',
       settingsGroupGeneral: 'Umum',
+      settingsGroupProviders: 'Penyedia',
       settingsGroupFeatures: 'Fitur opsional',
       settingsGroupStatusBar: 'Status bar',
       settingsGroupData: 'Data & penyegaran',
@@ -2047,7 +2918,15 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: 'Kosten-Dezimalstellen', help: '' },
     'tokenDecimalPlaces': { label: 'Token-Dezimalstellen', help: 'Dezimalstellen für kompakte Token-Anzeige (1.2M / 345.6K). Volle Ganzzahlen bleiben unberührt.' },
     'compactNumbers': { label: 'Kompakte Token-Zahlen', help: 'Zeige 1.2M / 345K statt voller Zahlen.' },
+    'releaseAnnouncements': { label: 'Release-Hinweise', help: 'Nach einem Erweiterungs-Upgrade einmal die Neuerungen anzeigen.' },
+    'codex.enabled': { label: 'Codex Beta aktivieren', help: 'Datenschutzfreundliche Nutzungsaggregate aus lokalen Codex-Sitzungslogs lesen.' },
+    'codex.dataDirectory': { label: 'Benutzerdefiniertes Codex-Datenverzeichnis', help: 'Leer = CODEX_HOME, dann ~/.codex. Authentifizierungsdateien werden nie gelesen.' },
+    'codex.fileWatchSeconds': { label: 'Codex-Live-Aktualisierungsverzögerung', help: 'Ruhe-Debounce nach lokalen Codex-JSONL-Änderungen. Aus deaktiviert die Überwachung.' },
+    'codex.optimization.enabled': { label: 'Codex-Verhaltensoptimierung anzeigen', help: 'Lokale, deterministische Codex-Verhaltensmetriken und Empfehlungen anzeigen.' },
+    'statusBarProvider': { label: 'Statusleisten-Anbieter', help: 'Auto bevorzugt Claude, wenn beide Anbieter Daten haben.' },
+    'codex.statusMetric': { label: 'Codex-Statusmetrik', help: 'Nutzung ohne Cache, verarbeitete Token oder Ausgabe-Token.' },
     'timezone': { label: 'Zeitzone für Daten', help: 'Gängige Zone oder UTC-Offset (jeder Offset abgedeckt) oder Systemstandard. Labels zeigen den aktuellen UTC-Offset.' },
+    'showWeeklyEquivalentValue': { label: 'Wöchentlichen API-Gegenwert anzeigen', help: 'Standardmäßig an. Zeigt den historischen wöchentlichen API-Gegenwert in „Seit Aufzeichnungsbeginn“ und „Vergleich“. Dies ist eine Schätzung, keine Rechnung und kein Abonnementkontingent.' },
     'showHeatmap': { label: 'Token-Heatmap zeigen (Tab „Seit Aufzeichnungsbeginn“)', help: 'Standardmäßig aus. GitHub-artige Jahres-Heatmap; als SVG exportieren oder auf dein GitHub-Profil veröffentlichen.' },
     'showEfficiency': { label: 'Effizienz-Einblicke zeigen', help: 'Standardmäßig aus. Kosten/Nachricht, Token/Nachricht, Cache-Ersparnis und die Cache-Warmzeit-Schätzung.' },
     'showCostliestMessages': { label: '„Top 10 teuerste Nachrichten“ zeigen', help: 'Standardmäßig aus. Reiht deine teuersten Einzel-Turns; das Aufklappen zeigt den Prompt (dein eigener Text).' },
@@ -2086,7 +2965,15 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: '費用小數位數', help: '' },
     'tokenDecimalPlaces': { label: 'Token 小數位數', help: '緊湊 token 顯示（1.2M / 345.6K）的小數位數。完整整數值不受影響。' },
     'compactNumbers': { label: '簡潔的 Token 計數', help: '顯示 1.2M / 345K 而非完整數字。' },
+    'releaseAnnouncements': { label: '版本更新通知', help: '擴充套件升級後顯示一次「新功能」通知。' },
+    'codex.enabled': { label: '啟用 Codex Beta', help: '從本機 Codex 工作階段日誌讀取隱私安全的用量彙總。' },
+    'codex.dataDirectory': { label: '自訂 Codex 資料目錄', help: '留空時使用 CODEX_HOME，再使用 ~/.codex；不會讀取認證檔案。' },
+    'codex.fileWatchSeconds': { label: 'Codex 即時重新整理延遲', help: '本機 Codex JSONL 變更後的靜默防抖；關閉即停用監看。' },
+    'codex.optimization.enabled': { label: '顯示 Codex 行為最佳化', help: '顯示本機、確定性的 Codex 行為指標與建議。' },
+    'statusBarProvider': { label: '狀態列供應商', help: '兩個供應商都有資料時，自動模式優先顯示 Claude。' },
+    'codex.statusMetric': { label: 'Codex 狀態列指標', help: '未快取用量、已處理 Token 或輸出 Token。' },
     'timezone': { label: '日期時區', help: '常用時區或 UTC 偏移（涵蓋所有偏移），或系統預設。標籤顯示目前的 UTC 偏移。' },
+    'showWeeklyEquivalentValue': { label: '顯示每週 API 等效價值', help: '預設開啟。在「所有」與「比較」中顯示歷史每週 API 等效價值；屬於估算，不是帳單或訂閱額度。' },
     'showHeatmap': { label: '顯示 Token 熱力圖（「所有」分頁）', help: '預設關閉。全部分頁上的 GitHub 風格年度熱力圖；可匯出 SVG 或發佈到你的 GitHub 首頁。' },
     'showEfficiency': { label: '顯示效率洞察', help: '預設關閉。加入每則成本、每則 token、快取節省與快取保溫估計。' },
     'showCostliestMessages': { label: '顯示「最貴 10 則訊息」', help: '預設關閉。列出最貴的單則對話；展開會顯示 prompt（隱私：你自己的文字）。' },
@@ -2125,7 +3012,15 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: '费用小数位数', help: '' },
     'tokenDecimalPlaces': { label: 'Token 小数位数', help: '紧凑 token 显示（1.2M / 345.6K）的小数位数。完整整数值不受影响。' },
     'compactNumbers': { label: '简洁的 token 计数', help: '显示 1.2M / 345K 而非完整数字。' },
+    'releaseAnnouncements': { label: '版本更新通知', help: '扩展升级后显示一次“新功能”通知。' },
+    'codex.enabled': { label: '启用 Codex Beta', help: '从本地 Codex 会话日志读取隐私安全的用量汇总。' },
+    'codex.dataDirectory': { label: '自定义 Codex 数据目录', help: '留空时使用 CODEX_HOME，再使用 ~/.codex；不会读取认证文件。' },
+    'codex.fileWatchSeconds': { label: 'Codex 实时刷新延迟', help: '本地 Codex JSONL 变更后的静默防抖；关闭即停用监视。' },
+    'codex.optimization.enabled': { label: '显示 Codex 行为优化', help: '显示本地、确定性的 Codex 行为指标与建议。' },
+    'statusBarProvider': { label: '状态栏供应商', help: '两个供应商都有数据时，自动模式优先显示 Claude。' },
+    'codex.statusMetric': { label: 'Codex 状态栏指标', help: '未缓存用量、已处理 Token 或输出 Token。' },
     'timezone': { label: '日期时区', help: '常用时区或 UTC 偏移（涵盖所有偏移），或系统默认。标签显示当前的 UTC 偏移。' },
+    'showWeeklyEquivalentValue': { label: '显示每周 API 等效价值', help: '默认开启。在“全部时间”和“对比”中显示历史每周 API 等效价值；属于估算，不是账单或订阅额度。' },
     'showHeatmap': { label: '显示 Token 热力图（“所有”选项卡）', help: '默认关闭。全部标签上的 GitHub 风格年度热力图；可导出 SVG 或发布到你的 GitHub 主页。' },
     'showEfficiency': { label: '显示效率洞察', help: '默认关闭。加入每条成本、每条 token、缓存节省与缓存保温估计。' },
     'showCostliestMessages': { label: '显示“最贵 10 条消息”', help: '默认关闭。列出最贵的单条对话；展开会显示 prompt（隐私：你自己的文字）。' },
@@ -2164,7 +3059,15 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: 'コストの小数点以下桁数', help: '' },
     'tokenDecimalPlaces': { label: 'トークンの小数点以下桁数', help: 'トークンの短縮表示（1.2M / 345.6K）の小数桁数。完全な整数値には影響しません。' },
     'compactNumbers': { label: 'トークン数を短縮表記', help: '完全な数値の代わりに 1.2M / 345K と表示します。' },
+    'releaseAnnouncements': { label: 'リリース通知', help: '拡張機能のアップグレード後に新機能を一度通知します。' },
+    'codex.enabled': { label: 'Codex Beta を有効化', help: 'ローカルの Codex セッションログからプライバシー安全な使用量集計を読み取ります。' },
+    'codex.dataDirectory': { label: 'カスタム Codex データディレクトリ', help: '空欄の場合は CODEX_HOME、次に ~/.codex。認証ファイルは読みません。' },
+    'codex.fileWatchSeconds': { label: 'Codex ライブ更新遅延', help: 'ローカル Codex JSONL 変更後の静かなデバウンス。オフで監視を無効化します。' },
+    'codex.optimization.enabled': { label: 'Codex の行動最適化を表示', help: 'ローカルで決定論的な Codex の行動指標と提案を表示します。' },
+    'statusBarProvider': { label: 'ステータスバーのプロバイダー', help: '両方にデータがある場合、自動は Claude を優先します。' },
+    'codex.statusMetric': { label: 'Codex ステータスメトリック', help: '非キャッシュ使用量、処理済みトークン、または出力トークン。' },
     'timezone': { label: '日付のタイムゾーン', help: '一般的なゾーンまたは UTC オフセット（全オフセット対応）、あるいはシステム既定。ラベルは現在の UTC オフセットを表示。' },
+    'showWeeklyEquivalentValue': { label: '週間 API 等価価値を表示', help: '既定でオン。「すべて」と「比較」に過去の週間 API 等価価値を表示します。これは推定値であり、請求額やサブスクリプション利用枠ではありません。' },
     'showHeatmap': { label: 'トークンヒートマップを表示（「すべて」タブ）', help: '既定でオフ。GitHub 風の年間ヒートマップ。SVG 書き出しや GitHub プロフィールへの公開が可能。' },
     'showEfficiency': { label: '効率インサイトを表示', help: '既定でオフ。メッセージ単価、メッセージ当たりトークン、キャッシュ節約、キャッシュ保温推定を追加。' },
     'showCostliestMessages': { label: '「最も高価なメッセージ Top 10」を表示', help: '既定でオフ。最も高価な単一ターンを順位付け。展開でプロンプト表示（自分の文章）。' },
@@ -2203,7 +3106,15 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: '비용 소수점 자리수', help: '' },
     'tokenDecimalPlaces': { label: '토큰 소수점 자리수', help: '간략한 토큰 표시(1.2M / 345.6K)의 소수 자리수. 전체 정수 값에는 영향을 주지 않습니다.' },
     'compactNumbers': { label: '간략한 토큰 수 표시', help: '전체 숫자 대신 1.2M / 345K로 표시합니다.' },
+    'releaseAnnouncements': { label: '릴리스 알림', help: '확장 업그레이드 후 새 기능 알림을 한 번 표시합니다.' },
+    'codex.enabled': { label: 'Codex Beta 사용', help: '로컬 Codex 세션 로그에서 개인정보 보호형 사용량 집계를 읽습니다.' },
+    'codex.dataDirectory': { label: '사용자 지정 Codex 데이터 디렉터리', help: '비우면 CODEX_HOME, 그다음 ~/.codex를 사용하며 인증 파일은 읽지 않습니다.' },
+    'codex.fileWatchSeconds': { label: 'Codex 실시간 새로고침 지연', help: '로컬 Codex JSONL 변경 후 조용한 디바운스입니다. 끄면 감시를 중지합니다.' },
+    'codex.optimization.enabled': { label: 'Codex 행동 최적화 표시', help: '로컬의 결정론적 Codex 행동 지표와 권장 사항을 표시합니다.' },
+    'statusBarProvider': { label: '상태 표시줄 공급자', help: '두 공급자 모두 데이터가 있으면 자동은 Claude를 우선합니다.' },
+    'codex.statusMetric': { label: 'Codex 상태 지표', help: '캐시되지 않은 사용량, 처리된 토큰 또는 출력 토큰.' },
     'timezone': { label: '날짜 시간대', help: '일반 지역 또는 UTC 오프셋(모든 오프셋 지원), 또는 시스템 기본값. 라벨에 현재 UTC 오프셋 표시.' },
+    'showWeeklyEquivalentValue': { label: '주간 API 등가 가치 표시', help: '기본값 켜짐. 전체 및 비교 화면에 과거 주간 API 등가 가치를 표시합니다. 이는 추정치이며 청구서나 구독 할당량이 아닙니다.' },
     'showHeatmap': { label: '토큰 히트맵 표시(전체 탭)', help: '기본 꺼짐. GitHub 스타일 연간 히트맵. SVG 내보내기 또는 GitHub 프로필에 게시 가능.' },
     'showEfficiency': { label: '효율 인사이트 표시', help: '기본 꺼짐. 메시지당 비용/토큰, 캐시 절감, 캐시 보온 추정치를 추가.' },
     'showCostliestMessages': { label: '“가장 비싼 메시지 Top 10” 표시', help: '기본 꺼짐. 가장 비싼 단일 턴을 순위화. 펼치면 프롬프트 표시(본인 텍스트).' },
@@ -2242,7 +3153,15 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: 'Casas decimais do custo', help: '' },
     'tokenDecimalPlaces': { label: 'Casas decimais de tokens', help: 'Casas decimais para a exibição compacta de tokens (1.2M / 345.6K). As contagens inteiras completas não são afetadas.' },
     'compactNumbers': { label: 'Contagem de tokens compacta', help: 'Mostra 1.2M / 345K em vez dos números completos.' },
+    'releaseAnnouncements': { label: 'Avisos de versão', help: 'Mostra uma vez as novidades após atualizar a extensão.' },
+    'codex.enabled': { label: 'Ativar Codex Beta', help: 'Lê agregados de uso com privacidade a partir dos logs locais de sessão do Codex.' },
+    'codex.dataDirectory': { label: 'Diretório de dados Codex personalizado', help: 'Vazio = CODEX_HOME, depois ~/.codex. Arquivos de autenticação nunca são lidos.' },
+    'codex.fileWatchSeconds': { label: 'Atraso da atualização ao vivo do Codex', help: 'Debounce silencioso após mudanças locais em JSONL do Codex. Desligado desativa a observação.' },
+    'codex.optimization.enabled': { label: 'Mostrar otimização de comportamento do Codex', help: 'Mostra métricas e recomendações locais e determinísticas de comportamento do Codex.' },
+    'statusBarProvider': { label: 'Provedor da barra de status', help: 'Auto prioriza Claude quando ambos têm dados.' },
+    'codex.statusMetric': { label: 'Métrica de status do Codex', help: 'Uso sem cache, tokens processados ou tokens de saída.' },
     'timezone': { label: 'Fuso horário das datas', help: 'Zona comum ou deslocamento UTC (todos cobertos), ou padrão do sistema. Os rótulos mostram o deslocamento UTC atual.' },
+    'showWeeklyEquivalentValue': { label: 'Mostrar valor equivalente semanal da API', help: 'Ligado por padrão. Mostra o valor equivalente semanal histórico da API em Todo o período e Comparar. É uma estimativa, não uma fatura nem uma franquia de assinatura.' },
     'showHeatmap': { label: 'Mostrar heatmap de tokens (aba Todo o período)', help: 'Desligado por padrão. Heatmap anual estilo GitHub; exporte SVG ou publique no seu perfil do GitHub.' },
     'showEfficiency': { label: 'Mostrar insights de eficiência', help: 'Desligado por padrão. Custo/mensagem, tokens/mensagem, economia de cache e a estimativa de aquecimento do cache.' },
     'showCostliestMessages': { label: 'Mostrar "10 mensagens mais caras"', help: 'Desligado por padrão. Ranqueia seus turnos mais caros; ao expandir mostra o prompt (seu próprio texto).' },
@@ -2282,7 +3201,15 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'decimalPlaces': { label: 'Angka desimal biaya', help: '' },
     'tokenDecimalPlaces': { label: 'Angka desimal token', help: 'Angka desimal untuk tampilan token ringkas (1.2M / 345.6K). Jumlah bilangan bulat penuh tidak terpengaruh.' },
     'compactNumbers': { label: 'Jumlah token ringkas', help: 'Tampilkan 1.2M / 345K, bukan angka penuh.' },
+    'releaseAnnouncements': { label: 'Pengumuman rilis', help: 'Tampilkan sekali hal baru setelah ekstensi ditingkatkan.' },
+    'codex.enabled': { label: 'Aktifkan Codex Beta', help: 'Baca agregat penggunaan yang aman untuk privasi dari log sesi Codex lokal.' },
+    'codex.dataDirectory': { label: 'Direktori data Codex kustom', help: 'Kosong = CODEX_HOME, lalu ~/.codex. Berkas autentikasi tidak pernah dibaca.' },
+    'codex.fileWatchSeconds': { label: 'Jeda penyegaran langsung Codex', help: 'Debounce tenang setelah perubahan JSONL Codex lokal. Mati menonaktifkan pemantauan.' },
+    'codex.optimization.enabled': { label: 'Tampilkan optimasi perilaku Codex', help: 'Tampilkan metrik dan rekomendasi perilaku Codex yang lokal dan deterministik.' },
+    'statusBarProvider': { label: 'Penyedia status bar', help: 'Otomatis memprioritaskan Claude saat keduanya memiliki data.' },
+    'codex.statusMetric': { label: 'Metrik status Codex', help: 'Penggunaan tanpa cache, token diproses, atau token output.' },
     'timezone': { label: 'Zona waktu untuk tanggal', help: 'Pilih zona umum atau offset UTC (semua offset tersedia), atau default sistem. Label menampilkan offset UTC saat ini.' },
+    'showWeeklyEquivalentValue': { label: 'Tampilkan nilai ekuivalen API mingguan', help: 'Aktif secara default. Tampilkan riwayat nilai ekuivalen API mingguan di Sepanjang Waktu dan Perbandingan. Ini perkiraan, bukan tagihan atau jatah langganan.' },
     'showHeatmap': { label: 'Tampilkan heatmap token (tab Sepanjang Waktu)', help: 'Nonaktif secara default. Heatmap token tahunan bergaya GitHub di tab All; ekspor sebagai SVG atau publikasikan ke profil GitHub Anda.' },
     'showEfficiency': { label: 'Tampilkan wawasan efisiensi', help: 'Nonaktif secara default. Menambahkan biaya/pesan, token/pesan, penghematan cache, dan perkiraan cache warmth.' },
     'showCostliestMessages': { label: 'Tampilkan "10 pesan termahal"', help: 'Nonaktif secara default. Menampilkan giliran termahal; membuka detail menampilkan prompt-nya (teks Anda sendiri).' },

@@ -4,26 +4,32 @@
 [![Open VSX Registry](https://img.shields.io/open-vsx/v/GrowthJack/claude-code-usage?style=flat-square&logo=eclipseide&label=Open%20VSX)](https://marketplace.cursorapi.com/items/?itemName=GrowthJack.claude-code-usage)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square)](https://opensource.org/licenses/MIT)
 
-**The Claude Code coach in your status bar.** Not a billing tool. Not a
-multi-provider monitor. A focused token tracker that uses AI to help you
-use Claude Code better.
+**The local Claude Code and Codex usage coach in your status bar.** Not a
+billing tool. Claude keeps its cost and quota views; the v2.3 Codex Beta adds
+provider-specific token and behaviour insights through the same dashboard tabs,
+render functions, and visual system without pretending both providers expose
+the same data.
 
 > **What this is:** A VS Code status-bar monitor that reads your local
-> Claude Code conversation logs and shows **token-derived** usage and cost
-> estimates — plus an optional AI advisor that suggests how to improve
-> your prompts and reduce waste.
+> Claude Code and Codex logs and shows provider-appropriate usage views — plus
+> optional guidance that helps reduce avoidable token and workflow overhead.
 >
-> **What this is _not_:** a billing tool. All amounts are estimates based
-> on public per-million-token rates. Refer to your Anthropic account for
-> actual charges.
+> **What this is _not_:** a billing tool. Claude dollar amounts are estimates
+> based on public per-million-token rates. Codex has no billing-cost card; its
+> first summary card is an explicitly labelled API-equivalent cost estimate,
+> and its weekly allowance panel uses the same proxy rather than billing data.
+> Refer to the provider account for billing truth.
 
-> **看清你的 Claude Code 用量，让 AI 帮你用得更好。**
+> **看清 Claude Code 与 Codex 的本地用量，让 AI 帮你用得更好。**
 >
-> **简介**：一个 VS Code 状态栏小工具，读取本地 Claude Code 对话日志，
-> 按 token × 公开单价估算用量与成本；并提供可选的 AI 建议功能，帮你优化
-> 提示词、减少不必要的 token 消耗。
+> **简介**：一个 VS Code 状态栏小工具。Claude 保留成本与配额视图；
+> v2.3 的 Codex Beta 则按 Codex 自身的数据语义展示 token、effort、任务结构
+> 和本地优化建议，同时复用 Claude 仪表盘的标签页、渲染函数和视觉体系，
+> 而不是另做一套页面或强行套用 Claude 的统计口径。
 >
-> **它不是什么**：账单工具。显示金额均为估算值，实际费用请以官方账单为准。
+> **它不是什么**：账单工具。Claude 金额为估算值；Codex 首张汇总卡仅显示
+> 明确标注的 API 等效成本估算，每周额度面板也使用同一代理口径，而非账单数据。
+> 实际费用请以相应供应商的官方账单为准。
 
 🌐 **Multi-language documentation**:
 [English](README-en.md) ·
@@ -99,6 +105,104 @@ text you paste is sent** — never your files or the terminal — behind a one-t
 consent prompt.
 
 ---
+
+## What's new in 2.3
+
+- **Codex Beta, enabled by default** — usage records are discovered only from
+  `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; credential,
+  database, and unknown files stay excluded. Separately, the extension streams
+  exactly `$CODEX_HOME/session_index.jsonl` to map `id` to `thread_name` for
+  truthful thread titles. Absolute paths are redacted and titles stay memory-only.
+  Usage-record JSONL lines are streamed and temporarily parsed only to extract
+  allowlisted usage and structural metadata; prompt, response, command, and
+  tool-argument fields are not inspected or used for analysis, and are never
+  retained or persisted.
+  Disable Codex at any time in **Settings → Providers**.
+- **Codex-native metrics** — **processed** = input + output; **uncached usage** =
+  uncached input + output; **cached input** is a subset of input; **reasoning**
+  is a subset of output. The overview also shows input cache hit rate as cached
+  input / input. No Codex billing cost is shown. The first Codex summary card is
+  a clearly labelled API-equivalent cost estimate for the selected scope; the
+  All-time view also shows the weekly trend using the same pricing basis.
+- **Calendar-day Today and cost trends** — Codex Today means the current day in
+  your configured timezone and adds exact hourly API-equivalent cost beside a
+  separate token-composition view. Daily and monthly primary charts default to
+  API-equivalent cost while token composition stays separately visible. Only
+  exact known-model prices contribute; unknown models remain unpriced and every
+  row keeps pricing coverage visible. The schema-3-compatible hourly sidecar
+  processes only canonical files already known to contain today, is checkpointed
+  and resumable, and does not force a full-history reindex.
+- **Request-level token attribution** — valid `last_token_usage` components are
+  preferred, while its `total_tokens` remains an active-context measurement,
+  not request usage. A full numeric total-plus-last signature suppresses only
+  proven replay; missing last snapshots fall back to cumulative lineage
+  high-water. Upgrading triggers one automatic reindex, with the indexed
+  subtotal still visible throughout the pass.
+- **Weekly allowance-value trend** — Claude and Codex All-time / Compare views
+  calculate historical used equivalents directly from local token logs. The
+  newest valid official reset observation anchors one sequence of unique,
+  non-overlapping weekly periods, and each usage event belongs to exactly one
+  period; without a usable observation, usage-only rows fall back to
+  Monday-to-Monday UTC calendar weeks. Any overlapping, non-aligned future reset
+  is a conflict even if its series name differs; it cannot create a second current
+  period, and period ranges are shown separately from reset times. Codex usage is
+  stored in daily slices: when one crosses an official intraday reset, its tokens
+  are still counted once, the affected period is labelled a boundary
+  approximation, and only used equivalent is shown. This display rule neither
+  changes the index schema nor triggers a rebuild. Codex historical periods are
+  always used-value-only. Only the newest current period may infer a total when
+  the reset is unambiguous and indexed usage can be attributed to one observation
+  source; current unused value is still withheld. Multi-sign-in usage that cannot
+  be attributed reliably also remains used-only, without inventing an account
+  split. Current official API rates are applied consistently across history. This
+  is a proxy, not a bill or an official subscription price. The panel is enabled
+  by default and can be hidden in Settings with `showWeeklyEquivalentValue`.
+- **One dashboard render stack** — switching to Codex keeps the established
+  Today / Month / All time / Sessions / Projects / Content / Settings structure,
+  relabelled where Codex semantics differ. The same render functions, HTML
+  classes, charts, tables, spacing, and responsive rules are used for both
+  providers. Claude and Codex time-series charts stay width-aligned while dense
+  content scrolls within its own region; Codex recommendations use indexed
+  30-day structural evidence.
+- **Truthful names, no invented concepts** — root tasks use the latest real
+  thread title after path redaction. Child rows prefer their own real thread
+  title; when it is missing, they use the reported nickname and display the
+  parent/root title; if those are also missing, they receive a localized neutral
+  fallback. Projects use the Git repository name or, outside Git, the directory
+  basename. The Codex view does not manufacture Branches or Workflows that
+  cannot be measured reliably.
+- **Claude / Codex / Compare modes** — keep each provider's meaning intact.
+  Compare shows input, output, and cache side by side; it never adds unrelated
+  costs or quota windows together.
+- **Auditable time and coverage** — rolling 7-day and 30-day totals use exact
+  event-day slices in your configured timezone. During an incomplete migration
+  or rebuild, every Codex card, table, project, session, recommendation, and
+  status value is visibly an **indexed subtotal**; unverified legacy totals are
+  excluded. Once a Codex home is detected, its provider tab appears immediately;
+  the page shows exact indexed-file, percentage, and byte progress during the
+  first build, while Compare waits until both providers have real data. After
+  the first atomic checkpoint, the complete subtotal dashboard stays usable
+  while indexing continues; progress never replaces its cards or tables. A selected Codex home is account-agnostic,
+  so logs left by multiple
+  sign-ins in that same home are combined. Local logs expose no reliable account
+  identity, so limit cards remain **last-observed** and are never summed.
+- **Private, scalable local index** — stores machine-salted pseudonymous keys;
+  numeric and structural aggregates; and sanitized project, directory, agent,
+  model, effort, role, time, and quality metadata. It never persists raw IDs,
+  full paths or repository URLs, thread titles, or conversation bodies. A
+  background worker scans large histories with a default 30-second watcher delay
+  (Off / 10 / 30 / 60 / 120 / 300 seconds).
+  A first-time index or incomplete legacy migration gets one bounded 64 GiB /
+  16,384-file-pass streaming ceiling; it does not reserve that amount of memory
+  and remains cancellable and resumable. After convergence, background work
+  returns to 128 MiB / 64 file passes and the always-visible Refresh action uses
+  2 GiB / 512 file passes. Unchanged warm refreshes still read zero usage-record
+  JSONL body bytes.
+- **Provider-aware controls** — the shared Settings tab shows only common and
+  Codex-effective controls when Codex is selected. Codex collection and local
+  Codex recommendations can each be disabled.
+- **Exact-version release notice** — the upgrade message only describes the
+  installed release. It is on by default and can be disabled in Settings.
 
 ## What's new in 2.2
 
@@ -176,9 +280,10 @@ consent prompt.
   icon as a way back into the dashboard.
 - **Status-bar metric** (`statusBarMetric`) — keep showing today's cost, or
   switch the first item to today's total **token** count (compact k/M).
-- **Weekly Opus limit** (`showOpusWeekly`, opt-in) — append `opus:NN%` to the
-  quota item for heavy Opus users. (PR #38, [@wheelbarrel00](https://github.com/wheelbarrel00).)
-  *Since renamed `showScopedWeekly`, and it now names whichever model your plan caps.*
+- **Model-scoped weekly limit** (`showScopedWeekly`, opt-in) — adds the weekly
+  cap actually named by Anthropic, such as `fable 17%`; migrated from the
+  original model-specific contribution in PR #38 by
+  [@wheelbarrel00](https://github.com/wheelbarrel00).
 - **AI advice 2.0** — bring your own key: **Anthropic** (`/v1/messages`) by
   default, or any OpenAI-compatible endpoint (`advice.apiFormat`). Fed with the
   new signals (runs, cache hit rates, attribution, thinking share); optional
@@ -199,9 +304,10 @@ consent prompt.
 
 ## What's new in 2.0
 
-- **Real 5-hour and weekly quota** in the status bar — reads Claude Code's
-  existing OAuth session from `~/.claude/.credentials.json` or the macOS
-  Keychain, zero config.
+- **Real 5-hour and weekly quota** in the status bar — reads the OAuth session
+  from the same Claude profile as the window: explicit `dataDirectory`, then
+  the first valid `CLAUDE_CONFIG_DIR`, then `~/.claude`. The macOS Keychain is
+  used only for the default profile.
   Adapted from upstream [PR #9](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/9)
   by [@Dobidop](https://github.com/Dobidop).
 - **Four new tabs**: Sessions, Projects, Content, Branches — all sortable.
@@ -257,7 +363,7 @@ downloaded `.vsix`.
 tab — grouped into General, Status bar, Data & refresh, and AI advice &
 Optimizer. Changes apply immediately.
 
-To keep VS Code's own Settings UI uncluttered, only three settings stay there
+To keep VS Code's own Settings UI uncluttered, only four settings stay there
 (so they still travel with Settings Sync). Open Settings (`Ctrl+,`) and search
 for **`Claude Code Usage`**:
 
@@ -265,6 +371,7 @@ for **`Claude Code Usage`**:
 |---|---|---|
 | `language` | `"auto"` | UI language: `auto` / `en` / `de-DE` / `zh-TW` / `zh-CN` / `ja` / `ko` / `pt-BR` / `id`. |
 | `dataDirectory` | `""` | Custom Claude data dir; empty = auto-detect. |
+| `codex.dataDirectory` | `""` | Custom Codex home; empty = `CODEX_HOME` or `~/.codex`. |
 | `advice.apiKey` | `""` | API key for AI advice + the Usage Optimizer (empty = advice opens a demo instead). |
 
 Everything else — refresh interval, status-bar items, number/date formatting,
@@ -290,6 +397,12 @@ output, cache-write and cache-read, summed by model.
   their detected family (Opus / Sonnet / Haiku / GPT / Gemini /
   DeepSeek / Kimi / GLM / Qwen) instead of falling back blindly.
 
+Claude transcript totals are counted by **response identity**, not by JSONL
+row. One response can produce both a `thinking` row and a `text` row carrying
+the same `messageId`, `requestId`, and complete `usage` vector. The extension
+keeps the largest vector for that response once; Claude Code's `stats-cache`
+adds the rows. The two totals can therefore differ.
+
 What the status bar does **not** know:
 - Your actual Anthropic invoice (discounts, free credits, plan caps).
 - Whether your proxy provider charges different rates.
@@ -304,8 +417,21 @@ authoritative.
 
 ## Privacy
 
-- All token / cost / session analysis runs **locally** by reading your
+- All **Claude** token / cost / session analysis runs locally by reading your
   `~/.claude/projects/**/*.jsonl` files.
+- Codex usage records are discovered only from `sessions/**/*.jsonl` and
+  `archived_sessions/**/*.jsonl` below your Codex home. Separately, the extension
+  streams exactly `$CODEX_HOME/session_index.jsonl` for the `id` → `thread_name`
+  mapping used by truthful thread titles. Absolute paths in those titles are
+  redacted and the titles remain memory-only. Credentials, databases, and unknown
+  files are not read. Usage-record JSONL lines are streamed and temporarily
+  parsed only for allowlisted metadata; prompt, response, command, and
+  tool-argument fields are not inspected or used for analysis and are never
+  retained. Deterministic insights make no network request.
+- The Codex persistent index stores machine-salted pseudonymous keys, numeric
+  and structural aggregates, and sanitized project, directory, agent, model,
+  effort, role, time, and quality metadata. It never stores raw IDs, full paths
+  or repository URLs, thread titles, or conversation bodies.
 - The quota indicator calls **`api.anthropic.com/api/oauth/usage`** using
   Claude Code's existing OAuth token. No additional credentials are sent.
 - **AI advice** and the **Usage Optimizer** are the only features that call a
@@ -327,10 +453,10 @@ authoritative.
   `~/.claude/projects` and `~/.config/claude/projects`.
 
 **Quota row shows `5h:--% wk:--%`**
-- Claude Code's OAuth token is missing or expired. Log in to Claude Code
-  once; the extension reads `~/.claude/.credentials.json` where present, or
-  the macOS Keychain entry used by Claude Code, and refreshes the bearer if
-  needed.
+- Claude Code's OAuth token is missing or expired. Log in to the active Claude
+  profile once. Credentials follow explicit `dataDirectory`, then the first
+  valid `CLAUDE_CONFIG_DIR`, then `~/.claude`; the single global macOS Keychain
+  item is never substituted for a selected custom profile.
 
 **`Get AI Usage Advice` returns 404**
 - DeepSeek's current endpoint does **not** use a `/v1` prefix. Use
@@ -363,6 +489,13 @@ authoritative.
   This only affects logs kept from now on; already-deleted logs cannot be
   restored. Thanks to [@nickearnshaw](https://github.com/nickearnshaw) for
   documenting this ([PR #21](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/21)).
+
+**Token counts are lower than Claude Code's `stats-cache`**
+- A single response can be written as separate `thinking` and `text` transcript
+  rows with the same `messageId`, `requestId`, and complete `usage` vector. The
+  extension counts that response identity once and keeps its largest vector;
+  Claude Code's `stats-cache` sums the rows. The extension does not apply a
+  multiplier to make these different mechanisms agree.
 
 **Token counts appear lower than the model provider's own dashboard**
 - If you use Claude Code with a third-party proxy that routes requests
@@ -414,7 +547,7 @@ Contributors whose upstream PRs / issues are incorporated here:
   original status-bar context-window indicator and the `showCost` toggle.
 - [@wheelbarrel00](https://github.com/wheelbarrel00) —
   [PR #38](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/38), the opt-in
-  weekly Opus limit in the status bar, which grew into today's
+  weekly Opus limit in the status bar, which grew into today's API-named
   `showScopedWeekly`.
 - [@brenoneill](https://github.com/brenoneill) —
   [PR #14](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/pull/14), custom

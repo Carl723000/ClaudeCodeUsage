@@ -1,3 +1,6 @@
+// Shared dashboard time range used by Codex usage and insight views.
+export type CodexScope = 'recent' | '7d' | '30d' | 'all';
+
 export interface ClaudeUsageRecord {
   timestamp: string;
   version?: string;
@@ -265,14 +268,22 @@ export interface UsageAttribution {
 export interface ExtensionConfig {
   refreshInterval: number;
   dataDirectory: string;
+  codexEnabled: boolean;
+  codexDataDirectory: string;
+  codexFileWatchSeconds: number;
+  codexOptimizationEnabled: boolean;
+  statusBarProvider: 'auto' | 'claude' | 'codex';
+  codexStatusMetric: 'fresh' | 'processed' | 'output';
   language: string;
   decimalPlaces: number;
   // Decimals for compact token display only (1.2M / 345.6K).
   tokenDecimalPlaces: number;
   compactNumbers: boolean;
-  // IANA timezone name (e.g. "Asia/Hong_Kong") used for date display, or ''
-  // to use the system timezone. Useful for users in devcontainers or
-  // sandboxes whose system zone doesn't match their actual zone.
+  // Show one exact-version What's New notification after an upgrade.
+  releaseAnnouncements: boolean;
+  // IANA timezone name (e.g. "Asia/Hong_Kong") used for date display and
+  // provider period boundaries, or '' to use the system timezone. Useful for
+  // users in devcontainers or sandboxes whose system zone differs from theirs.
   timezone: string;
   // Show today's cost item in the status bar.
   showCost: boolean;
@@ -400,8 +411,8 @@ export interface ContextWindowInfo {
   cacheCreationTokens: number;
 }
 
-// OAuth credentials stored by Claude Code at ~/.claude/.credentials.json or in
-// the macOS Keychain.
+// OAuth credentials stored in the selected Claude profile's .credentials.json,
+// or in the macOS Keychain for the default profile.
 export interface ClaudeCredentials {
   claudeAiOauth: {
     accessToken: string;

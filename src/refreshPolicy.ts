@@ -2,6 +2,10 @@ export const LIVE_REFRESH_SECONDS = [
   '0', '1', '2', '5', '10', '20', '30', '60', '120', '300',
 ] as const;
 
+export const CODEX_LIVE_REFRESH_SECONDS = [
+  '0', '10', '30', '60', '120', '300',
+] as const;
+
 export type RefreshTrigger =
   | 'startup'
   | 'poll'
@@ -12,6 +16,14 @@ export type RefreshTrigger =
   | 'settings'
   | 'pricing'
   | 'manual';
+
+/** Keep recurring Codex work small; a direct user refresh receives the larger
+ * steady-state ceiling. First-time/migration backfill is selected by the worker. */
+export function codexRefreshProfileForTrigger(
+  trigger: RefreshTrigger,
+): 'background' | 'foreground' {
+  return trigger === 'manual' ? 'foreground' : 'background';
+}
 
 export type WindowActivityTransition = 'none' | 'resume' | 'suspend';
 

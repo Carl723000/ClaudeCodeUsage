@@ -153,6 +153,12 @@ function priced(inputPerM: number, outputPerM: number, cachedInputPerM?: number)
 // =====================================================================
 const NON_CLAUDE_PRICING: Record<string, ModelPricing> = {
   // --- OpenAI --- https://openai.com/api/pricing/
+  // GPT-5.6 Codex tiers — verified 2026-08-22 against the official model
+  // catalog. These exact entries are also used by the weekly API-equivalent
+  // value audit; unknown Codex model labels are intentionally not inferred.
+  'gpt-5.6-sol': priced(5, 30, 0.5),
+  'gpt-5.6-terra': priced(2, 12, 0.2),
+  'gpt-5.6-luna': priced(0.2, 1.2, 0.02),
   'gpt-5.5': priced(5, 30, 0.5),
   'gpt-5.4': priced(2.5, 15, 0.25),
   'gpt-5': priced(1.25, 10, 0.125),
@@ -394,6 +400,35 @@ export function getModelPricing(modelName: string | undefined): ModelPricing | n
   // Truly unknown model (no family keyword) — fall back to Sonnet, the most common default.
   console.warn(`Unknown model: ${modelName}, using Sonnet pricing as fallback`);
   return SONNET;
+}
+
+/**
+ * Resolve only a model id explicitly present in the built-in table.
+ *
+ * The regular dashboard deliberately has family fallbacks for newly released
+ * models. An allowance-value audit cannot use those fallbacks: silently pricing
+ * an unknown Codex label as a different GPT model would create a plausible but
+ * unauditable dollar figure. Runtime LiteLLM overrides are also excluded so a
+ * historical trend is recalculated against one reviewable built-in rate table.
+ */
+export function getExactModelPricing(modelName: string | undefined): ModelPricing | null {
+  if (!modelName) {
+    return null;
+  }
+  const base = modelName.replace(/\[[^\]]*\]\s*$/, '');
+  const variations = [
+    base,
+    `anthropic/${base}`,
+    `claude-3-5-${base}`,
+    `claude-3-${base}`,
+    `claude-${base}`,
+  ];
+  for (const variation of variations) {
+    if (MODEL_PRICING[variation]) {
+      return MODEL_PRICING[variation];
+    }
+  }
+  return null;
 }
 
 /**

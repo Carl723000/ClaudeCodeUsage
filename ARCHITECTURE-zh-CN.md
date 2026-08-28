@@ -1,134 +1,218 @@
 # 架构说明
 
-> 本扩展的简明技术地图——它是什么、数据如何流动、以及那些"精确的" token / 成本
-> 数字是怎么算出来的。刻意写得简短：它是给贡献者（或自动化的 issue/PR 助手）
-> 读的参考，让他们**不必**重新通读 `src/`。如果你改变了某个模块的职责或数据
-> 流，请同步更新本文件。英文版见
+> 本文简要说明扩展的 provider 边界、数据流与用量语义。模块职责或
+> provider 行为变化时必须同步更新。英文版见
 > [`ARCHITECTURE.md`](ARCHITECTURE.md)。
 
-## 它是什么（以及不是什么）
+## 产品边界
 
-**Claude Code Usage** 是一个 VS Code 扩展，通过读取 Claude Code 自己的本地日志，
-在状态栏和仪表盘 webview 中报告 Claude Code 的 token 用量与成本。它刻意保持：
+**Claude Code Usage** 继续保持 local-first、无 runtime dependency 和 read-mostly。
+v2.3.0 保留完整 Claude 体验，并增加 provider-specific 的 Codex Beta 用量与优化视图。
 
-- **只服务 Claude**——围绕 Claude Code 的日志格式和 Anthropic 的 OAuth 额度构建。
-  （为方便 CC-Switch 用户，也给 DeepSeek 等做了定价，但 Claude 是核心。）
-- **轻量**——界面精简、无运行时依赖、次要视图默认折叠。
-- **聚焦 token 归因**——头部的核心数字是**精确的**，直接读自每次请求自带的用量
-  记账，而非估算。
-- 对 `~/.claude` **只读**——绝不写入 Claude Code 的数据。
+- Claude：精确的本地 token bucket、模型成本估算和 Anthropic OAuth 5 小时/每周配额。
+- Codex Beta：本地 processed/fresh/cache/output/reasoning 指标、模型与 effort 拆分、
+  thread 结构、索引 coverage、quality flag 与结构化优化建议。已知模型还会显示明确限定的
+  API 等效成本估算；它绝不是账单或订阅扣费，未知模型保持未定价。
+- Compare：只并列可比指标，绝不把不同 provider 的成本、配额或 token 求和为误导性总量。
 
-**范围之外**（用这张清单做 issue 初筛）：把多供应商/多厂商仪表盘当作一等功能；
-完整的账单/发票对账；写入或驱动 Claude Code；与用量无关的分析。能让 token 洞察、
-归因或建议体验更锋利的需求，才是合适的方向。
+完整账单/发票对账、驱动任一 coding agent 与后台 telemetry 不在范围内。
+Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做隐私审阅。
 
 ## 模块地图（`src/`）
 
 | 模块 | 职责 |
 |---|---|
-| `extension.ts` | 激活、命令注册，以及刷新编排：一个"感知活跃度"、会自我重排的定时器（你活跃时更快、空闲时更缓），带 generation 守卫与合并去重，外加 `pauseDashboardRefresh`。配置经 `SettingsStore` 读取，启动时跑一次设置迁移，监听 workspace 文件夹切换（重取额度），并持有 `runOptimizer`（用量优化器往返）。把 loader + 状态栏 + webview + 额度客户端串起来。 |
-| `dataLoader.ts` | 数据管线。读取 `~/.claude/projects/**/*.jsonl`，解析/校验/去重记录，提取会话标题与用户提示标记，并完成全部聚合（`calculateUsageData` + 今日/本月/会话/项目/分组/分支等口径）。v2.1 还有：`getWorkflowBreakdown`（从 `subagents/` 日志识别多 agent 运行 + 临时批次）、`getUsageAttribution`（用量构成面板）、`getCurrentContextInfo` + `contextWindowFor`（按模型上下文窗口、取主线程记录、`estimated` 标记）、内容/校准分析（`windowDays` 可配）。逻辑量最大的一块。 |
-| `settings.ts` | **（v2.1）** 所有用户设置的单一真源：`SETTINGS` 目录（类型/默认/存储/分组）+ `SettingsStore`。核心三项（`language`、`dataDirectory`、`advice.apiKey`）留 VS Code 配置；其余进 `globalState`，由 dashboard 的 ⚙ 设置标签页编辑。`migrateOnce()` 把 2.1 前 `settings.json` 的值搬进存储。 |
-| `pricing.ts` | 按模型、按 token 的费率表（input / output / 缓存写 / 缓存读分别计价），模型家族推断，以及 `[1m]` 上下文后缀的剥离。`calculateCostBreakdown` 把一条用量记录变成四部分成本。 |
-| `statusBar.ts` | 三个状态栏条目：主条目（今日成本**或** token 量，`statusBarMetric`；三项全隐藏时退化为只剩图标的入口）、额度条目（5h / 每周，可选 `opus:NN%`）、实验性上下文窗口指示器（条形 + 明细 tooltip，窗口为猜测时标 `~`）。 |
-| `webview.ts` | 仪表盘：分页视图（今日、会话、项目、内容、分支、工作流、**⚙ 设置**）、AI 建议 + 用量优化器操作卡、图表与可排序表格。跨重渲染保留优化器状态，并跳过完全相同的重渲染。体量最大的文件——几乎所有 UI 都在这里。 |
-| `claudeApiClient.ts` | Anthropic OAuth 额度：读取 `~/.claude/.credentials.json`，刷新 token（先重读磁盘），从 `api.anthropic.com/api/oauth/usage` 拉取真实用量。走 `httpClient`（fetch → curl）；HTTP 429 冷却 60 秒。 |
-| `httpClient.ts` | **（v2.1）** 共享传输层：`requestViaFetch` 与 `requestViaCurl`（curl 的 `cwd` 钉到 home，避免切 workspace 后陈旧 cwd 触发 ENOENT）。curl 是 Anthropic TLS 指纹门 `403 "Request not allowed"` 的兜底。 |
-| `advisor.ts` | AI 建议 + **用量优化器**传输层：`callModel`（Anthropic `/v1/messages` 或 OpenAI chat-completions，带 curl 403 兜底）、`getUsageAdvice`，以及优化器纯函数 `buildOptimizerSystemPrompt` / `parseOptimizerOutput`。只支持 API（订阅分支留休眠）。需手动开启。 |
-| `adviceSummary.ts` | **（v2.1）** 构建发给建议模型的用量摘要——聚合 + 多 agent 运行 + 思考占比 + 归因 + 一段按窗口取的用户自己的 prompt 样本。 |
-| `adviceDemoSample.ts` | 在配置 key 之前展示的静态示例建议（六种语言全覆盖），让功能可被发现。 |
-| `i18n.ts` | 六种语言的字符串表（`en`、`de-DE`、`zh-TW`、`zh-CN`、`ja`、`ko`）+ `SETTINGS_I18N`（⚙ 设置面板每项的标签/帮助）与 `settingText()`。所有面向用户的字符串都经过这里。 |
-| `types.ts` | 共享接口（`ClaudeUsageRecord`、`UsageData`、`SessionUsage`、`SupportedLanguage`、`ExtensionConfig`、`ContextWindowInfo`、额度 + 归因 + 工作流类型……）。 |
+| `extension.ts` | 激活、命令、设置、provider 生命周期、刷新编排、watcher、状态栏/webview 接线和匿名诊断。 |
+| `dataLoader.ts` | 为精确兼容保留的 Claude 解析、校验、归因和内容分析 primitive。 |
+| `claudeIncrementalIndex.ts` | 生产环境 Claude 内存 per-file 索引：append-tail 解析、精确跨文件 response 去重、受影响 group 聚合、内容分析 contribution 和已物化 dashboard row。 |
+| `providers/providerTypes.ts` | Provider-neutral token、event、confidence、outcome、coverage 和 limit contract。 |
+| `providers/claudeProvider.ts` | 薄兼容 adapter，不改变既有 Claude 聚合结果。 |
+| `providers/codex/codexSchema.ts` | 最小安全 JSON guard，不展开或返回 message/command/tool body。 |
+| `providers/codex/codexParser.ts` | Codex 精确单次请求解析及 cumulative high-water 回退、伪名 lineage metadata、结构计数、quality flag 和 last-observed limit。 |
+| `providers/codex/codexManifest.ts` | Codex 允许目录发现、HMAC file key、fingerprint 和 manifest diff。 |
+| `providers/codex/codexIndex.ts` | schema-3 的 per-file 数字聚合与重放证据持久化、有界 cold/tail parse、独立 aggregate/period/current-day coverage 和原子存取。 |
+| `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | 后台协调器、recent-first progress、cancel、resume、checkpoint 持久化和 single-flight client。 |
+| `providers/codex/codexFilePassPool.ts` / `codexFilePassWorker.ts` | 未完成回填期间，用于独立 main、lineage、period、current-day 和 identity per-file pass 的自适应受限本地 pool。 |
+| `providers/codex/codexProvider.ts` | 面向 extension 的 Codex snapshot facade 与 partial/unavailable/error outcome。 |
+| `providers/codex/codexUsage.ts` | Codex 自然日 Today/小时、7 天、30 天、月度、task 与项目 view model 聚合，以及精确模型 API 等效成本。 |
+| `providers/codex/codexInsights.ts` | 确定性的结构用量建议，不读 prompt/body。 |
+| `codexView.ts` / `codexViewComponents.ts` | Codex 本地化文案与默认 provider contract；不负责 HTML renderer、client script 或 CSS。 |
+| `settings.ts` | 权威 `SETTINGS` catalog 和 `SettingsStore`；不得散落直接读取。 |
+| `statusBar.ts` / `codexStatus.ts` | Provider-specific 状态展示和通用 Claude 配额格式化。 |
+| `webview.ts` | Claude/Codex 唯一一套 provider-aware dashboard shell、共享 render function、共享 client 行为、provider tab 与 Compare 展示。 |
+| `i18n.ts` | 八个 UI locale 的全部用户可见文案。 |
+| `types.ts` | 共享 extension 和 Claude contract。 |
 
-## 数据流
+`quotaFormat.ts`、`dateKeys.ts`、`shareCard.ts`、`heatmap.ts`、`conversationLog.ts`、
+`miniMarkdown.ts` 等既有纯模块保持当前职责与测试。
 
+## Provider 数据流
+
+```text
+Claude JSONL
+  ──> manifest metadata
+  ──> 内存 per-file 增量索引
+  ──> 精确全局 response identity + 受影响 aggregate group
+  ──> 已物化 Claude 状态栏/dashboard input
+  ──> Claude adapter
+
+允许的 Codex JSONL
+  ──> manifest metadata
+  ──> background worker
+  ──> schema guard + 精确单次请求 parser（lineage high-water 回退）
+  ──> per-file 数字聚合索引 + 定向的当日小时 sidecar
+  ──> CodexProviderSnapshot
+  ──> Codex scope + insight
+  ──> Codex 状态栏 + provider-aware dashboard render input
+
+Claude aggregate + Codex scope ──> 同一套 `webview.ts` dashboard render stack
+Claude aggregate + Codex scope ──> 并列 Compare（不跨 provider 求和）
 ```
-~/.claude/projects/<编码后的cwd>/<会话>.jsonl       （一个文件 = 一段对话）
-        │  逐行读取，对每行 JSON.parse
-        ▼
-校验（是用量记录吗？）─► 去重（messageId+requestId，保留 token 更高的那条）
-        │  给每条记录打上 会话 id + 项目（优先用真实 cwd）
-        ▼
-ClaudeUsageRecord[]  ──►  calculateUsageData()  ──►  UsageData
-        │                  （对 4 个 token 桶求和并各自计价）          │
-        │                                                             ├─► 状态栏（今日 + 额度）
-        └─ 会话标题、用户提示标记                                      └─► webview（各口径明细 + 图表）
-```
 
-额度是一条**独立**路径：`claudeApiClient` 调用 OAuth 用量接口，独立于本地日志地
-返回 5 小时 / 7 天 / 7 天 Opus 的用量占比（日志无从得知你套餐的上限，只有
-Anthropic 知道）。
+任一 provider unavailable 或 partial 时，不清空另一 provider 最近验证的 snapshot。
+Claude-only 保持 v2.2.1 行为；Codex-only 默认显示 Codex；两者都有时 dashboard 默认 Claude。
+Codex 数据源可用性与已索引数据可用性分开判断：只要检测到允许的本地 home，Codex 标签
+就立即出现，首次建立索引期间由页面实时显示精确文件数、百分比与已处理容量；只有两个
+provider 都已有真实数据时才显示「对比」。worker 启动前先装载最近一次原子检查点；全新
+索引生成第一个检查点后也会在 worker 继续运行时立即采用。因此，进度只是完整「已索引小计」
+仪表盘上的状态说明，不会替代卡片和表格。worker 进度最多每 250 ms 触发一次重绘，且只有
+选中 Codex 时才重绘 Webview；refresh 返回后仍会用已验证 snapshot 做最后一次渲染。
 
-## token 与成本如何计算（精确，而非估算）
+Codex 的「今天」指配置时区中的当前自然日，而不是最近任务。汇总来自该日已验证的 period slice；
+精确小时行来自下文所述的独立当日 sidecar。小时、每日与每月主图默认使用 API 等效成本，Token 构成图
+仍独立展示。未知模型计入 Token 分母但保持未定价，因此定价 coverage 始终可见。Claude 与 Codex 的
+时间序列布局使用对齐的响应式宽度，较密集的图表和表格在各自可键盘聚焦的区域内滚动。
 
-JSONL 里每一行助手回复都带一个 `message.usage` 对象——这是 **Anthropic API 自己
-的 token 记账**，与 Anthropic 计费所依据的数字相同。扩展不去估算它们，而是读取、
-校验、去重、求和、计价：
+## Token 与 limit 语义
 
-1. **校验**——只保留 `usage.input_tokens` 为数字的记录（真实 API 响应）；跳过
-   合成 / 报错 / `<synthetic>` 模型条目。
-2. **去重**——哈希 = `messageId + requestId`；冲突时保留 token 更高的那条（应对
-   某些代理会先记一行占位、再记真实数值的情况）。
-3. **求和**，把四个桶累加进总数：
-   - `input_tokens`——新鲜的 prompt，全价
-   - `cache_read_input_tokens`——从缓存命中的前缀，约为 input 价的 10%
-   - `cache_creation_input_tokens`——**写入**缓存的前缀（即"输入缓存（未命中）"
-     那根条），约为 input 价的 125%；在切换模型或间隔 >5 分钟后会飙升（prompt
-     缓存按模型隔离，TTL 约 5 分钟）
-   - `output_tokens`——生成内容，output 价
-4. **计价**——每个桶 × 其按模型的费率（`pricing.ts`）；成本 = 求和。
+Claude record 带 Anthropic 的四个 token bucket。扩展对其校验、去重、求和并按模型计价。
+Claude 成本仍是根据费率表的估算，不是发票。
 
-产品中**唯一**的估算，是"内容"标签页里基于字符数的"什么在吃 token"拆解（以及计划
-中的 v2.2 模型匹配 / 缓存浪费功能）——它们始终标注为估算，绝不并入精确总数。
-"消息数"只统计用户手敲的 prompt，靠合成的零 token 标记记录实现，因此永不影响 token
-求和。
+Codex 使用以下规则：
 
-## 模型核心功能的日志格式事实（2026-06-13 在磁盘上验证）
+- processed = `input total + output total`
+- fresh input + output = `max(0, input total - cached input) + output total`
+- cached input 是 input 子集，reasoning output 是 output 子集
+- 两个子集都不再次加入 processed total
+- fresh input + output 是优化行为的辅助指标，不与成本/配额等价
 
-JSONL 日志里*有*和*没有*什么——任何要推理运行、模型、effort 的功能的参考。当 Claude
-Code 格式漂移时，用 JSON 键探查重新验证（绝不要用子串 grep——见下方的坑）。
+每条有效的 Codex `token_count` 通常都带 `last_token_usage`；其中 input、cached input、
+output 与 reasoning component 是精确的单次请求归因。`last_token_usage.total_tokens` 表示
+活跃上下文大小，不作为该请求用量。只有 total 与 last 两份 snapshot 的完整数字签名与
+同一伪名 rate-limit 来源或紧邻的上一条记录一致时，才判定为重放。这个窄证明不会把另一条
+交错来源在合法 reset 后的记录静默合并掉。
 
-- **运行配置（effort / thinking 预算）不被记录。** 任何用量行上都没有 `effort` /
-  `ultracode` / `maxThinking` / 推理预算字段。唯一的 mode 记录是一条 `type:"mode"` 行，
-  带 `permissionMode`（如 `"normal"`）。**我们无法得知一次运行用的是什么 effort 等级。**
-  ⇒ 唯一可靠的"动态工作流已启用"信号是 **`subagents/workflows/wf_<id>/` 目录的存在**，
-  而非 effort。普通 Task 工具扇出（无 `wf_` 目录）是"临时批次"，不是工作流。
-  - **坑：** 子串 grep `effort`/`ultracode` *看起来*命中了——但只在 prompt 正文和工具调用
-    日志里（包括本插件自己的命令一旦被记录）。解析 JSON 键；绝不为配置去 grep。
-- **skill / 插件归因是一等的。** 助手用量行带 `attributionSkill`（如
-  `"superpowers:executing-plans"`）和 `attributionPlugin`（如 `"superpowers"`）。它们是
-  权威的——优先用它们而非旧的 `<command-name>` / `Skill` tool_use 启发式，并用 skill/插件
-  自身行的*精确* `message.usage` 来加权。
-- **为什么原生 Claude 的"工作流"在工作流 tab 里看起来缺失。** Claude 子代理日志*确实*
-  存在（某些 `subagents/` 目录下有 haiku/opus）。但当原生 Claude 运行用 ultracode 时，
-  昂贵的 **Opus/Fable 编排留在主会话日志里**，只有便宜的 **haiku** 子代理（或没有）写
-  `agent-*.jsonl`。一个重度 Fable/Opus 的主线程可能**根本没有 `subagents/` 目录**。工作流
-  tab 按*子代理文件*分组，所以它显示便宜模型、漏掉主线程成本——这正是 v2.1-PartII 要修的
-  （关联运行的编排主会话并显示其成本/模型）。**通则：** *昂贵*模型通常是主线程编排者；
-  子代理文件偏便宜。永远不要只凭子代理文件推断"我主要用哪个模型"。
-- **较新的字段（Claude Code ≥ 2.1）** 值得知道：顶层 `entrypoint`（如 `claude-vscode`）、
-  `permissionMode`、`version`、`context_management`；行 `type`：`mode`、`last-prompt`
-  （逐字的最后一条用户 prompt）、`queue-operation`、`file-history-snapshot`、`attachment`、
-  `system`（hook 摘要）；`message.usage` 上：`service_tier`、`iterations`、`speed`、
-  `inference_geo`、`cache_creation`（对象）。总量（`input/output/cache_*`）仍然精确。
+若缺少 `last_token_usage`，则把 cumulative `total_token_usage` 作为回退；它可能包含继承的
+parent baseline，因此该路径按 component 与 lineage 维护 high-water。Unknown parent、counter
+regression 和 schema drift 产生 quality flag，不生成负用量或伪造精度。
 
-## 关键不变量（别破坏它们）
+本地日志中的 Codex `rate_limits.primary` 只是 last-observed snapshot，到 reset 时间后隐藏。
+v2.3.0 不读 Codex credential，也不发网络请求刷新它。
 
-- 对 `~/.claude` **只读**（唯一的写是 `claudeApiClient` 刷新 `advice.apiKey` 的 token；绝不动用户日志）。
-- 所有面向用户的字符串都要走 `i18n.ts`、**六种语言齐全**；设置面板的标签/帮助走 `SETTINGS_I18N`（英文回退到目录）。
-- **设置统一走 `SettingsStore`，不要散读。** 只有核心三项（`language`、`dataDirectory`、`advice.apiKey`）声明在 `package.json` / VS Code 配置；其余在 `globalState`，必须经 store 读（`config.get` 找不到）。加一个设置 = `settings.ts` 目录里一条 +（其 `SETTINGS_I18N` 行）。
-- 新设置**默认维持现有行为**（opt-in）；实验性/近似功能默认关闭（上下文指示器、用量优化器）。
-- **不新增运行时依赖。** 对外调用（额度、建议/优化器）走 `httpClient` 的 fetch→curl 403 兜底；spawn `curl` 时 `cwd: os.homedir()`。
-- 精确总数与标注过的估算，永不混在一起。
-- 建议/优化器**只**发送用量摘要 / 粘贴的草稿——绝不发送用户的文件。
+## 隐私与持久化
 
-## 刷新模型
+Codex 发现仅限：
 
-仪表盘 / 状态栏靠 `extension.ts` 里一个感知活跃度的循环保持最新：一个自我重排的
-定时器，你活跃时间隔缩短、空闲时拉长，由 `refreshGen` generation 计数器与合并去重
-守护，避免重叠刷新堆叠。对 `~/.claude/projects` 的文件监听（可关闭）带来约 1.5 秒
-延迟；定时器是兜底。面板打开查看时，`pauseDashboardRefresh` 会冻结更新。
+- `$CODEX_HOME/sessions/**/*.jsonl`
+- `$CODEX_HOME/archived_sessions/**/*.jsonl`
+- 默认 `$CODEX_HOME`：`~/.codex`
 
-## 发布
+绝不读取 `auth.json`、SQLite、config secret、keychain、浏览器状态或未知文件。
+Raw path/session/parent ID 只留在本地 worker 的短期内存。磁盘只持久化 machine-salted 伪名 key
+和按 day/model/effort/session 聚合的数字，绝不存 prompt、response、command、tool arguments、
+raw line 或 raw path。
 
-TypeScript strict、干净编译（`node ./node_modules/typescript/bin/tsc -p ./`——F5/调试任务用它而非 `npm`，绕开 Windows 的 `npm.ps1` 执行策略拦截）、`node:test` 全绿。仓库在组织 **`ClaudeCodeUsage/ClaudeCodeUsage`**，`main` 有分支保护（PR + `test` 检查）。流程（Release Drafter，v2.0.3 搭好）：贡献者提 PR；维护者带版本标签（`patch`/`minor`/`major`，默认 patch）**squash-merge**——这就是每个 PR 的全部操作；草稿 Release 自动攒好分类发布说明；点 **Publish** 打 `v*` 标签，`publish.yml` 盖好 `package.json`、用 `@vscode/vsce` 打包，发到 VS Code Marketplace + Open VSX 并附 `.vsix`。跨 fork PR 的署名由 squash-merge 保住；个别手动重落用 `git merge -s ours` 把贡献者提交留作已合并祖先。关 issue 的 PR 用 `Closes #N`。
+Machine salt 存在 VS Code `globalState`，不写入索引。Worker progress/result/error 与 diagnostics
+只含匿名计数与时间，不含 path 或 ID。
+
+### Schema 3 索引契约
+
+内部 schema 3 继续使用既有的 `globalStorage` 文件名 `codex-index-v1.json`；文件名是兼容路径，
+不是 JSON schema 版本声明。持久化 DTO 使用明确的 allowlist：只能写入数字 aggregate、enum、
+伪名 key、清洗后的 label，以及仅由数字 token 计数向量生成的不透明指纹。v3 不保存未完成原始行，
+也不保存 carry buffer。旧字段只在明确命名的 schema-1 legacy migration 边界被读取；该迁移会先
+丢弃 carry，之后才保存 v3 索引。schema 1 与 schema 2 索引都会被标记为需要执行有界 lineage 重扫；
+旧总量不会保留后再叠加到重建结果。若 schema 3 容器里的 per-file parser state 仍早于精确单次请求
+语义，也会执行一次 reset，绝不混合不兼容 aggregate。Parser state 只允许持久化有界的 total-plus-last
+数字签名、对应的 machine-salted 伪名 key，以及紧邻的上一条数字签名。
+
+每个物理 rollout 锁定首个可靠的 session 与 tree 身份。随后用有序的数字事件指纹，在已验证父节点
+中定位 child 复制的前缀，同时保留每个独立 sibling 的后缀。多层 fork 与不同 fork epoch 各自只扣除
+一次复制前缀。若声明的 parent 缺失，child 会保守地按全量计入，并在 UI 显示 `missing-parent` 质量警告，
+不会静默扣除。计数器回退仍按精确 last usage 计入并标为 partial；cumulative 回退路径使用按 component
+的 high-water containment，不产生负 delta，也不会重复计入 reset gap。同一伪名 session 的
+active/archive 副本若存在已验证的有序重叠，该段也只计一次；若身份元数据
+互相冲突，identity coverage 仍保持 incomplete。
+
+这里有两个相互独立的可信度层。all-time 视图来自 canonical file contribution 的已验证的
+aggregate；按日的期间切片则独立晋升，因此 partial migration 不能覆盖、放大或替代 all-time 的
+已验证 aggregate。期间 coverage 以目标时区的 `asOfDay` 为锚点，分别报告 7 天、30 天和
+all-time 的状态。7 天与 30 天只累加自然日内发生的 event；不会因为 Session 的最后活动落在范围内，
+就把该 Session 的整段较早历史吸收进来。
+
+当日小时索引是 schema 3 的增量 sidecar，不是第三份 all-time 事实来源。只有经重复分类选为 canonical，
+且已验证 period slice 已包含 `asOfDay` 的文件才会进入候选集。每个文件的小时晋升状态与处理中 cursor
+都会写入 checkpoint，因此取消后可从已验证 offset 续传。日期或时区变化时会丢弃过期 sidecar，改为
+目标新自然日；该路径既不使主 aggregate 失效，也不会触发全历史重建。
+
+Identity 同样是一份 coverage 契约。Git 的 SCP 形式 SSH URL 与 HTTPS URL 在 host/path 一致时
+会规范化为同一个 repository identity。Root title 采用可信的最新 `updated_at` title；subagent
+保留其报告的 nickname 及 parent title；project 优先显示 canonical repository name，才回退到目录名；
+最近任务排序使用完整 lineage 上观察到的最大活动时间。只有 active/archive 的严格精确副本——两侧
+都已验证且安全 signature 完全一致——才去重；任何其他重复 Session 都标为歧义，并使 identity
+coverage 保持 incomplete，而不是猜测。
+这种稳定歧义属于数据质量状态，不是未完成 I/O：base 与必要 period coverage 完成后，
+dashboard 不再因此一直标为「仍在索引」。
+
+五个结构调用代理量是 `patchCalls`、`toolCalls`、`postPatchToolCalls`、`compactCount` 与
+`taskCompleteCount`。它们只描述观察到的结构 envelope，不是文件、命令或审阅次数；不会产生美元成本，
+也绝不由 prompt、response、command body 或 tool argument 内容推导。
+
+## 刷新与规模
+
+Claude polling 始终遵守 `refreshInterval`，file watcher 使用配置的 quiet debounce。
+生产 Claude 路径维护内存 per-file 索引：unchanged refresh 的 JSONL body read 为 0，
+append 只读已验证 tail，truncate/replace/move/delete 只重建受影响文件和 aggregate group。
+内容分析 contribution 与既有跨文件 response-identity 规则通过同一原子路径更新。新的
+Extension Host 会执行一次冷内存建索引；watcher 驱动的刷新不会重读、重聚合整个语料。
+Codex 使用独立 quiet debounce（默认 30 秒，可选 Off/10/30/60/120/300）。
+
+Codex 按多 GiB 本地历史设计：
+
+- 发现与解析在 Extension Host 之外的 worker 中执行；
+- recent-first 索引，支持 progress 与 cancel；未完成回填最多使用可用逻辑 CPU 的一半，
+  并把本地 file-pass worker 上限设为 6；索引完成后回到单一低功耗协调路径；
+- unchanged warm refresh 不读 JSONL body；
+- 首次非空索引或尚未完成的旧索引迁移会获得一次受限的 16,384 次文件遍历 / 64 GiB
+  流式上限；这不是预先分配的内存，并保留取消与原子续传 checkpoint。收敛后，自动任务使用
+  64 次文件遍历 / 128 MiB，始终可见的手动「刷新」使用 512 次文件遍历 / 2 GiB。
+  安全下限为 1 MiB + 1 byte，读取 chunk 为 1 MiB，单条 Codex JSONL line 上限为 1 MiB；
+- 实时 progress 保持高频，但大型持久 snapshot 最多约每 10 秒、2 GiB 或 256 个完成的
+  file pass 写入一次，并在最终阶段边界保存。这样既限制崩溃后的重做量，也避免反复写入
+  数十 MB snapshot 主导高速回填耗时；
+- 只有可能改变 lineage 的阶段才重新 reconcile；period 和稳定阶段复用已验证关系，
+  不再反复扫描完整索引；
+- 当日小时任务仅处理 period slice 已证明包含 `asOfDay` 的 canonical 文件；它独立 checkpoint/续传，
+  不会重置主索引；
+- append refresh 只读新 tail；未完成行只留在 scanner 的短期内存，从 safe cursor 重试，绝不写入 v3；
+- truncate/replacement 只重解析受影响文件；
+- cancel checkpoint 会原子保存 per-file contribution 与 migration progress，下一轮从已验证 cursor resume；
+- 并发 refresh 共享同一 worker run。
+
+每周 API 等效价值历史只从已经聚合的 Token 用量生成。有真实每周重置观测时，七天窗口按该重置
+对齐；没有时，仅已用历史按 UTC 周一至周一的自然周分组。Token 日志能够证明已用价值，但不能证明
+历史订阅总额度，因此总额度与未用额度仅在存在真实额度用量比例观测时生成。Codex 的仅已用历史可能
+合并同一 home 中的多个登录，而额度推算行仍绑定其实际观测的重置序列。
+
+v2.3.0 不推断 20、100 或 200 美元的订阅档位。本地 Codex 日志没有可靠的账号与套餐身份，
+后续比较必须采用用户明确选择的 opt-in 账号映射，不能猜测后绑定价格。
+
+## 发布不变量
+
+- 根据变更风险执行 strict TypeScript、red-green TDD、完整 `node:test`、F5 smoke test
+  和安装 VSIX smoke test。
+- 用户可见字符串覆盖 `en`、`de-DE`、`zh-TW`、`zh-CN`、`ja`、`ko`、`pt-BR`、`id`；
+  七份 README 同步。
+- 不手工修改 `package.json` 版本。发布已审阅的 Release Drafter draft 后才创建 tag，
+  publish workflow 再从 tag 写入包版本。
+- 通过合并贡献者原 PR，或经授权先修改该 PR 分支再合并，保留贡献归属。

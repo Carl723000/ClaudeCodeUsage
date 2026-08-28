@@ -2,6 +2,8 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   commitRefreshSnapshot,
+  codexRefreshProfileForTrigger,
+  CODEX_LIVE_REFRESH_SECONDS,
   LIVE_REFRESH_SECONDS,
   mergeRefreshTrigger,
   pollIntervalMs,
@@ -40,6 +42,35 @@ test('poll interval always honors refreshInterval and never applies an active ov
 
 test('live refresh keeps the 2-second default choices and adds long quiet delays', () => {
   assert.deepEqual(LIVE_REFRESH_SECONDS, ['0', '1', '2', '5', '10', '20', '30', '60', '120', '300']);
+});
+
+test('Codex watcher defaults to quiet low-CPU delay choices', () => {
+  assert.deepEqual(CODEX_LIVE_REFRESH_SECONDS, ['0', '10', '30', '60', '120', '300']);
+});
+
+test('only explicit foreground actions use the accelerated Codex index profile', () => {
+  assert.equal(codexRefreshProfileForTrigger('manual'), 'foreground');
+  for (const trigger of [
+    'startup', 'poll', 'credentials', 'watch', 'focus', 'workspace', 'settings', 'pricing',
+  ] as const) {
+    assert.equal(codexRefreshProfileForTrigger(trigger), 'background', trigger);
+  }
+});
+
+test('window activity emits one suspend and one resume transition', () => {
+  const gate = new WindowActivityGate(true);
+  assert.equal(gate.update(false), 'suspend');
+  assert.equal(gate.update(false), 'none');
+  assert.equal(gate.update(true), 'resume');
+  assert.equal(gate.update(true), 'none');
+});
+
+test('quota failure backoff grows exponentially and caps at one hour', () => {
+  assert.equal(quotaFailureBackoffMs(0), 0);
+  assert.equal(quotaFailureBackoffMs(1), 60_000);
+  assert.equal(quotaFailureBackoffMs(2), 120_000);
+  assert.equal(quotaFailureBackoffMs(7), 3_600_000);
+  assert.equal(quotaFailureBackoffMs(100), 3_600_000);
 });
 
 test('coalescing retains the strongest pending trigger', () => {

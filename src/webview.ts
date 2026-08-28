@@ -2,7 +2,13 @@ import * as vscode from 'vscode';
 import { ClaudeDataLoader } from './dataLoader';
 import { I18n } from './i18n';
 import { getModelRatesPerMillion } from './pricing';
-import { SETTINGS, SettingsStore, SettingView } from './settings';
+import {
+  SETTINGS,
+  SettingsStore,
+  SettingProvider,
+  SettingView,
+  settingAppliesToProvider,
+} from './settings';
 import { buildResumeCommand, isUsableCwd, isValidSessionId, isUnderDir } from './sessionResume';
 import { renderHeatmapSvg } from './heatmapSvg';
 import { DEFAULT_SECTIONS, ShareSections, buildShareCardData, shareCardFilename } from './shareCard';
@@ -11,6 +17,33 @@ import { parseConversation } from './conversationLog';
 import { renderConversationViewer } from './conversationViewerHtml';
 import { formatUsageDate, shortUsageDate } from './usageDateLabels';
 import { normalizeQuotaWindows } from './quotaWindows';
+import {
+  buildWeeklyValueTimeline,
+  claudeWeeklyEquivalentUsage,
+  EquivalentCostBreakdown,
+  equivalentUsageFromProviderTokens,
+  summarizeEquivalentUsage,
+  WeeklyQuotaObservation,
+  WeeklyValuePoint,
+} from './weeklyValue';
+import {
+  defaultDashboardProvider,
+} from './codexView';
+import {
+  CodexScopedInsights,
+  emptyCodexScopedInsights,
+} from './providers/codex/codexInsights';
+import {
+  CodexMetricTotals,
+  CodexHourlyUsageView,
+  CodexProjectUsageView,
+  CodexThreadUsageView,
+  CodexUsageScopeView,
+  CodexUsageView,
+  tokenComposition,
+} from './providers/codex/codexUsage';
+import { createCodexLocalizedFormatters } from './codexFormat';
+import { getProviderNavClientScript } from './providerNavClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -29,6 +62,13 @@ import {
   WorkflowUsage,
 } from './types';
 
+interface CodexRenderProgress {
+  scannedFiles: number;
+  totalFiles: number;
+  indexedBytes: number;
+  totalBytes: number;
+}
+
 export class UsageWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
   private currentSessionData: SessionData | null = null;
@@ -42,6 +82,13 @@ export class UsageWebviewProvider {
   private error: string | null = null;
   private dataDirectory: string | null = null;
   private currentTab: string = 'today';
+  private currentProvider: 'claude' | 'codex' | 'compare' = 'claude';
+  private codexView: CodexUsageView | null = null;
+  private codexInsights: CodexScopedInsights = emptyCodexScopedInsights();
+  private providerAvailability = { claude: false, codex: false, codexData: false };
+  private codexLoading = false;
+  private codexProgress: CodexRenderProgress | null = null;
+  private providerSelectionInitialized = false;
   private hourlyDataCache: Map<string, { hour: string; data: UsageData }[]> = new Map();
   private allRecords: any[] = [];
   private sessionBreakdown: SessionUsage[] = [];
@@ -82,6 +129,7 @@ export class UsageWebviewProvider {
   // Real quota utilisation (pushed asynchronously) for the workflow quota
   // guard banner; dismissal lasts for the lifetime of this window.
   private usageLimits: ClaudeApiUsageResponse | null = null;
+  private claudeWeeklyQuotaHistory: WeeklyQuotaObservation[] = [];
   private quotaWarnDismissed: boolean = false;
   // Set by extension.ts: runs the Usage Optimizer round-trip (model lives there
   // with the config + OAuth client). Returns the optimised prompt + settings
@@ -234,6 +282,30 @@ export class UsageWebviewProvider {
         case 'tabChanged':
           this.currentTab = message.tab;
           break;
+        case 'providerChanged': {
+          const requested = String(message.provider ?? '');
+          const allowed =
+            (requested === 'claude' &&
+              (this.providerAvailability.claude || message.tab === 'settings')) ||
+            (requested === 'codex' && this.providerAvailability.codex) ||
+            (requested === 'compare' &&
+              this.providerAvailability.claude &&
+              this.providerAvailability.codexData);
+          if (allowed) {
+            this.currentProvider = requested as 'claude' | 'codex' | 'compare';
+            const sharedTabs = ['today', 'month', 'all', 'sessions', 'projects', 'content', 'settings'];
+            const allowedTabs = requested === 'claude'
+              ? [...sharedTabs, 'branches', 'workflows']
+              : sharedTabs;
+            if (typeof message.tab === 'string' && allowedTabs.includes(message.tab)) {
+              this.currentTab = message.tab;
+            } else if (requested === 'codex' && !allowedTabs.includes(this.currentTab)) {
+              this.currentTab = 'today';
+            }
+            this.updateWebview();
+          }
+          break;
+        }
         case 'resumeSession': {
           // Resume a past session via the official extension, or a terminal fallback.
           const sessionId = message.sessionId;
@@ -327,7 +399,13 @@ export class UsageWebviewProvider {
           break;
         case 'resetAllSettings':
           if (this.settings) {
+            const requested = Array.isArray(message.keys)
+              ? new Set(message.keys.filter((key: unknown) => typeof key === 'string'))
+              : null;
             for (const d of SETTINGS) {
+              if (requested && !requested.has(d.key)) {
+                continue;
+              }
               await this.settings.reset(d.key);
             }
             this.onSettingsChanged?.();
@@ -452,8 +530,60 @@ export class UsageWebviewProvider {
     this.branchBreakdown = branchBreakdown;
     this.workflowBreakdown = workflowBreakdown;
     this.costliestMessages = costliestMessages;
+    this.providerAvailability.claude = Boolean(
+      sessionData || todayData || monthData || allTimeData,
+    );
 
     if (this.panel) {
+      this.updateWebview();
+    }
+  }
+
+  updateProviderData(
+    codexView: CodexUsageView | null,
+    insights: CodexScopedInsights,
+    providerAvailability: {
+      claude: boolean;
+      codex: boolean;
+      codexData?: boolean;
+      codexLoading?: boolean;
+      codexProgress?: CodexRenderProgress | null;
+    },
+  ): void {
+    this.codexView = codexView;
+    this.codexInsights = codexView ? insights : emptyCodexScopedInsights();
+    this.codexLoading = providerAvailability.codexLoading ?? false;
+    this.codexProgress = providerAvailability.codexProgress ?? null;
+    this.providerAvailability = {
+      claude: providerAvailability.claude,
+      codex: providerAvailability.codex,
+      codexData: providerAvailability.codexData ?? providerAvailability.codex,
+    };
+    if (!this.providerSelectionInitialized) {
+      this.currentProvider = defaultDashboardProvider(
+        providerAvailability.claude,
+        providerAvailability.codex,
+      );
+      this.providerSelectionInitialized = true;
+    } else if (
+      (this.currentProvider === 'claude' && !providerAvailability.claude) ||
+      (this.currentProvider === 'codex' && !providerAvailability.codex) ||
+      (this.currentProvider === 'compare' &&
+        (!providerAvailability.claude || !this.providerAvailability.codexData))
+    ) {
+      this.currentProvider = defaultDashboardProvider(
+        providerAvailability.claude,
+        providerAvailability.codex,
+      );
+    }
+    if (this.panel) {
+      this.updateWebview();
+    }
+  }
+
+  updateCodexProgress(progress: CodexRenderProgress): void {
+    this.codexProgress = progress;
+    if (this.panel && this.currentProvider === 'codex') {
       this.updateWebview();
     }
   }
@@ -479,10 +609,23 @@ export class UsageWebviewProvider {
     }
   }
 
+  /** Sanitized weekly quota observations, persisted per Claude profile by the
+   * extension host. No OAuth data or account identity enters the webview. */
+  updateWeeklyQuotaHistory(history: WeeklyQuotaObservation[]): void {
+    const changed = JSON.stringify(history) !== JSON.stringify(this.claudeWeeklyQuotaHistory);
+    this.claudeWeeklyQuotaHistory = history.map((item) => ({ ...item }));
+    if (changed && this.panel && !this.isLoading) {
+      this.updateWebview();
+    }
+  }
+
   /** Quota-guard banner: warns before starting a workflow run on a nearly
    * exhausted 5-hour window. Threshold via workflowQuotaWarnPercent (0 = off);
    * dismissible per window-session. Status bar stays untouched. */
-  private renderQuotaBanner(): string {
+  private renderQuotaBanner(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      return '';
+    }
     if (this.quotaWarnDismissed) {
       return '';
     }
@@ -532,11 +675,16 @@ export class UsageWebviewProvider {
       return this.getLoadingContent();
     }
 
-    if (this.error) {
+    if (this.error && !this.providerAvailability.codex) {
       return this.getErrorContent();
     }
 
-    if (!this.currentSessionData && !this.todayData && !this.monthData) {
+    if (
+      !this.currentSessionData &&
+      !this.todayData &&
+      !this.monthData &&
+      !this.providerAvailability.codex
+    ) {
       return this.getNoDataContent();
     }
 
@@ -546,7 +694,7 @@ export class UsageWebviewProvider {
   private getLoadingContent(): string {
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
@@ -568,7 +716,7 @@ export class UsageWebviewProvider {
   private getErrorContent(): string {
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
@@ -592,7 +740,7 @@ export class UsageWebviewProvider {
   private getNoDataContent(): string {
     return `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
@@ -616,17 +764,123 @@ export class UsageWebviewProvider {
     `;
   }
 
+  private renderProviderTabs(): string {
+    const button = (
+      provider: 'claude' | 'codex' | 'compare',
+      label: string,
+    ): string => {
+      const selected = this.currentProvider === provider;
+      return `<button id="provider-tab-${provider}" class="provider-tab ${selected ? 'active' : ''}" role="tab" data-provider-target="${provider}" aria-controls="provider-panel" aria-selected="${selected}" tabindex="${selected ? '0' : '-1'}">${this.escapeHtml(label)}</button>`;
+    };
+    let html = `<nav class="provider-tabs" role="tablist" aria-label="${this.escapeHtml(I18n.t.popup.settingsGroupProviders)}">`;
+    const labels = I18n.t.providers;
+    if (this.providerAvailability.claude) {
+      html += button('claude', labels.claude);
+    }
+    if (this.providerAvailability.codex) {
+      html += button('codex', labels.codexBeta);
+    }
+    if (this.providerAvailability.claude && this.providerAvailability.codexData) {
+      html += button('compare', labels.compare);
+    }
+    return html + '</nav>';
+  }
+
+  private renderCodexCompare(): string {
+    const claude = this.allTimeData;
+    const updatedAt = Date.now();
+    const formatters = createCodexLocalizedFormatters(
+      I18n.getLocale(),
+      I18n.getTimezone(),
+    );
+    const codexTotals = (this.codexView?.projects ?? []).reduce(
+      (total, project) => ({
+        input: total.input + project.scope.total.input,
+        output: total.output + project.scope.total.output,
+        cache: total.cache + project.scope.total.cachedInput,
+      }),
+      { input: 0, output: 0, cache: 0 },
+    );
+    const copy = I18n.t.providers.codex;
+    const card = (
+      label: string,
+      accounting: string,
+      input: number,
+      cache: number,
+      output: number,
+    ): string =>
+      '<article class="summary-item"><h3>' + this.escapeHtml(label) + '</h3>' +
+      '<p class="model-details">' + this.escapeHtml(accounting) + '</p>' +
+      '<div class="model-details model-details-stacked">' +
+      '<span><span class="model-stat-label">' + this.escapeHtml(copy.input) + '</span><strong>' + I18n.formatNumber(input) + '</strong></span>' +
+      '<span><span class="model-stat-label">' + this.escapeHtml(copy.cachedInput) + '</span><strong>' + I18n.formatNumber(cache) + '</strong></span>' +
+      '<span><span class="model-stat-label">' + this.escapeHtml(copy.output) + '</span><strong>' + I18n.formatNumber(output) + '</strong></span>' +
+      '</div></article>';
+    return '<section class="usage-summary">' +
+      '<p class="model-details"><strong>' + this.escapeHtml(copy.indexedAllTime) + '</strong> · ' +
+      this.escapeHtml(copy.updatedAt) + ': ' + this.escapeHtml(formatters.formatDateTime(updatedAt)) + '</p>' +
+      '<div class="summary-grid">' +
+      card(
+        I18n.t.providers.claude,
+        copy.claudeTokenAccounting,
+        claude?.totalInputTokens ?? 0,
+        (claude?.totalCacheCreationTokens ?? 0) + (claude?.totalCacheReadTokens ?? 0),
+        claude?.totalOutputTokens ?? 0,
+      ) +
+      card(
+        I18n.t.providers.codexBeta,
+        copy.codexTokenAccounting,
+        codexTotals.input,
+        codexTotals.cache,
+        codexTotals.output,
+      ) +
+      '</div></section>' +
+      this.renderWeeklyValuePanel('claude') +
+      this.renderWeeklyValuePanel('codex');
+  }
+
+  private getAlternateProviderContent(): string {
+    const title = I18n.t.providers.codex.compareTitle;
+    return `
+      <!DOCTYPE html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
+      <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
+        <title>${this.escapeHtml(title)}</title>
+        <style>${this.getStyles()}</style>
+      </head>
+      <body class="${this.setting<boolean>('dashboardAutoRefresh', true) ? '' : 'auto-off'}">
+        <div class="container">
+          <header><h1>${this.escapeHtml(title)}</h1><div class="actions"><button onclick="refresh()" class="btn-secondary">↻ ${this.escapeHtml(I18n.t.popup.refresh)}</button></div></header>
+          ${this.renderProviderTabs()}
+          <div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">
+            ${this.renderCodexCompare()}
+          </div>
+        </div>
+        <script>${this.getScript()}</script>
+      </body>
+      </html>`;
+  }
+
   private getMainContent(): string {
+    if (this.currentProvider === 'compare') {
+      return this.getAlternateProviderContent();
+    }
+    const provider: SettingProvider = this.currentProvider;
+    const codexCopy = I18n.t.providers.codex;
     // Pre-resolve I18n values to avoid template literal issues
-    const title = I18n.t.popup.title;
+    const title = provider === 'codex' ? codexCopy.title : I18n.t.popup.title;
     const refresh = I18n.t.popup.refresh;
     const settings = I18n.t.popup.settings;
+    // Keep the navigation familiar across providers. Codex still renders the
+    // provider-native "Recent task" heading and aggregation inside this tab.
     const today = I18n.t.popup.today;
-    const thisMonth = I18n.t.popup.thisMonth;
-    const allTime = I18n.t.popup.allTime;
-    const sessions = I18n.t.popup.sessions;
-    const projects = I18n.t.popup.projects;
-    const contentTab = I18n.t.popup.contentAnalysis;
+    const thisMonth = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.thisMonth;
+    const allTime = provider === 'codex' ? codexCopy.allTime : I18n.t.popup.allTime;
+    const sessions = provider === 'codex' ? codexCopy.sessions : I18n.t.popup.sessions;
+    const projects = provider === 'codex' ? codexCopy.projects : I18n.t.popup.projects;
+    const contentTab = provider === 'codex' ? codexCopy.recommendations : I18n.t.popup.contentAnalysis;
     const branchesTab = I18n.t.popup.branches;
     const workflowsTab = I18n.t.popup.workflows;
     const settingsTab = I18n.t.popup.settingsTab;
@@ -643,19 +897,22 @@ export class UsageWebviewProvider {
 
     // The Content tab is hidden when content analysis is disabled via
     // claudeCodeUsage.enableContentAnalysis (the analyser returned null).
-    const contentEnabled = this.contentAnalysis !== null;
+    const contentEnabled = provider === 'codex'
+      ? Boolean(this.codexView && this.setting<boolean>('codex.optimization.enabled', true))
+      : this.contentAnalysis !== null;
     const contentTabButton = contentEnabled
       ? '<button id="tab-content" class="tab ' + contentActive +
         '" onclick="showTab(\'content\')">' + contentTab + '</button>'
       : '';
     const contentTabContent = contentEnabled
-      ? '<div id="content" class="tab-content ' + contentActive + '">' + this.renderContentData() + this.renderCacheWarmth() + this.renderInsights() + this.renderCostliestMessages() + '</div>'
+      ? '<div id="content" class="tab-content ' + contentActive + '">' + this.renderContentData(provider) +
+        (provider === 'claude' ? this.renderCacheWarmth() + this.renderInsights() + this.renderCostliestMessages() : '') + '</div>'
       : '';
 
     return (
       `
       <!DOCTYPE html>
-      <html>
+      <html lang="${this.escapeHtml(I18n.getLocale())}">
       <head>
         <meta charset="UTF-8">
         <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;">
@@ -678,15 +935,19 @@ export class UsageWebviewProvider {
               )}">↻ ` +
       refresh +
       `</button>
-              <button onclick="showTab('content')" class="btn-secondary">✨ ` +
-      I18n.t.popup.adviceCardTitle +
-      `</button>
+              ` +
+      (provider === 'claude' && contentEnabled
+        ? `<button onclick="showTab('content')" class="btn-secondary">✨ ${this.escapeHtml(contentTab)}</button>`
+        : '') +
+      `
               <button onclick="showTab('settings')" class="btn-secondary">⚙ ` +
       settings +
       `</button>
             </div>
           </header>` +
-      this.renderQuotaBanner() +
+      this.renderProviderTabs() +
+      `<div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">` +
+      this.renderQuotaBanner(provider) +
       `
           <div class="tabs">
             <button id="tab-today" class="tab ` +
@@ -717,7 +978,8 @@ export class UsageWebviewProvider {
             ` +
       contentTabButton +
       `
-            <button id="tab-branches" class="tab ` +
+            ` +
+      (provider === 'claude' ? `<button id="tab-branches" class="tab ` +
       branchesActive +
       `" onclick="showTab('branches')">` +
       branchesTab +
@@ -726,7 +988,8 @@ export class UsageWebviewProvider {
       workflowsActive +
       `" onclick="showTab('workflows')">` +
       workflowsTab +
-      `</button>
+      `</button>` : '') +
+      `
             <button id="tab-settings" class="tab ` +
       settingsActive +
       `" onclick="showTab('settings')">` +
@@ -738,7 +1001,7 @@ export class UsageWebviewProvider {
       todayActive +
       `">
             ` +
-      this.renderTodayData() +
+      this.renderTodayData(provider) +
       `
           </div>
 
@@ -746,7 +1009,7 @@ export class UsageWebviewProvider {
       monthActive +
       `">
             ` +
-      this.renderMonthData() +
+      this.renderMonthData(provider) +
       `
           </div>
 
@@ -754,7 +1017,7 @@ export class UsageWebviewProvider {
       allActive +
       `">
             ` +
-      this.renderAllTimeData() +
+      this.renderAllTimeData(provider) +
       `
           </div>
 
@@ -762,7 +1025,7 @@ export class UsageWebviewProvider {
       sessionsActive +
       `">
             ` +
-      this.renderSessionData() +
+      this.renderSessionData(provider) +
       `
           </div>
 
@@ -770,7 +1033,7 @@ export class UsageWebviewProvider {
       projectsActive +
       `">
             ` +
-      this.renderProjectData() +
+      this.renderProjectData(provider) +
       `
           </div>
 
@@ -778,7 +1041,8 @@ export class UsageWebviewProvider {
       contentTabContent +
       `
 
-          <div id="branches" class="tab-content ` +
+          ` +
+      (provider === 'claude' ? `<div id="branches" class="tab-content ` +
       branchesActive +
       `">
             ` +
@@ -792,15 +1056,17 @@ export class UsageWebviewProvider {
             ` +
       this.renderWorkflowData() +
       `
-          </div>
+          </div>` : '') +
+      `
 
           <div id="settings" class="tab-content ` +
       settingsActive +
       `">
             ` +
-      this.renderSettingsPanel() +
+      this.renderSettingsPanel(provider) +
       `
           </div>
+        </div>
         </div>
         <script>` +
       this.getScript() +
@@ -817,11 +1083,13 @@ export class UsageWebviewProvider {
    * config; the rest write to the dashboard-managed store. Setting labels/help
    * are English (technical); group headers + chrome are localised.
    */
-  private renderSettingsPanel(): string {
+  private renderSettingsPanel(provider: SettingProvider): string {
     const t = I18n.t.popup;
     const snap: SettingView[] = this.settings ? this.settings.snapshot() : [];
+    const visible = snap.filter((setting) => settingAppliesToProvider(setting, provider));
     const groups: { key: string; label: string }[] = [
       { key: 'general', label: t.settingsGroupGeneral },
+      { key: 'providers', label: t.settingsGroupProviders },
       { key: 'features', label: t.settingsGroupFeatures },
       { key: 'statusBar', label: t.settingsGroupStatusBar },
       { key: 'data', label: t.settingsGroupData },
@@ -831,11 +1099,13 @@ export class UsageWebviewProvider {
     html += '<p class="table-hint">' + t.settingsIntro + '</p>';
     html +=
       '<div class="settings-toolbar">' +
-      '<button class="btn-secondary btn-small" onclick="resetAllSettings()">' +
+      '<button class="btn-secondary btn-small" onclick="resetAllSettings(' +
+      this.escapeHtml(JSON.stringify(visible.map((setting) => setting.key))) +
+      ')">' +
       t.settingsResetAll +
       '</button></div>';
     for (const g of groups) {
-      const items = snap.filter((s) => s.group === g.key);
+      const items = visible.filter((s) => s.group === g.key);
       if (items.length === 0) {
         continue;
       }
@@ -937,12 +1207,79 @@ export class UsageWebviewProvider {
     );
   }
 
-  private renderTodayData(): string {
+  private renderTodayData(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      const view = this.codexView;
+      const copy = I18n.t.providers.codex;
+      if (!view) {
+        return this.renderCodexEmptyState();
+      }
+      const formatters = createCodexLocalizedFormatters(I18n.getLocale(), I18n.getTimezone());
+      let identity = '';
+      if (view.lastTaskIdentity) {
+        const task = view.lastTaskIdentity;
+        identity = '<div class="model-breakdown"><div class="section-header"><h3>' +
+          this.escapeHtml(copy.lastTask) + '</h3></div><div class="model-list"><div class="model-item">' +
+          '<div class="model-header"><span class="model-name">' +
+          this.escapeHtml(task.title ?? copy.unnamedSession) + '</span></div>' +
+          '<div class="model-details model-details-stacked">' +
+          '<span><span class="model-stat-label">' + this.escapeHtml(copy.projectLabel) + '</span><strong>' +
+          this.escapeHtml(task.projectName ?? copy.unidentifiedProject) + '</strong></span>' +
+          '<span><span class="model-stat-label">' + this.escapeHtml(copy.lastObserved) + '</span><strong>' +
+          this.escapeHtml(formatters.formatDateTime(task.lastActiveAt)) + '</strong></span>' +
+          (task.projectDirectoryName && task.projectDirectoryName !== task.projectName
+            ? '<span><span class="model-stat-label">' + this.escapeHtml(copy.localDirectory) + '</span><strong>' +
+              this.escapeHtml(task.projectDirectoryName) + '</strong></span>'
+            : '') +
+          '</div></div></div></div>';
+      }
+      const limits = view.limits.length > 0
+        ? '<div class="usage-summary"><div class="section-header"><h3>' + this.escapeHtml(copy.usageLimits) +
+          '</h3></div><p class="model-details">' + this.escapeHtml(copy.accountSnapshotLastObserved) +
+          '</p><div class="summary-grid">' + view.limits.map((limit) => {
+            const label = limit.limitName ?? (limit.windowMinutes === 300
+              ? copy.fiveHourWindow
+              : limit.windowMinutes === 10_080 ? copy.weeklyWindow : copy.usageLimits);
+            const value = limit.state === 'unlimited'
+              ? copy.unlimited
+              : limit.state === 'missing'
+                ? copy.limitMissing
+                : `${I18n.formatNumber(limit.usedPercent ?? 0)}% ${copy.used}`;
+            const reset = limit.resetsAt && limit.state === 'current'
+              ? '<div class="model-details">' + this.escapeHtml(copy.resets) + ': ' +
+                this.escapeHtml(formatters.formatDateTime(limit.resetsAt)) + '</div>'
+              : '';
+            return '<div class="summary-item"><div class="label">' + this.escapeHtml(label) +
+              '</div><div class="value">' + this.escapeHtml(value) + '</div>' + reset + '</div>';
+          }).join('') + '</div></div>'
+        : '';
+      const qualityFlags = view.qualityFlags.length > 0
+        ? '<ul class="model-details">' + view.qualityFlags.map(({ flag, count }) => {
+            const label = copy.qualityFlagLabels[flag as keyof typeof copy.qualityFlagLabels] ??
+              copy.qualityFlagUnknown;
+            const detail = flag === 'index-backfill-incomplete'
+              ? I18n.formatNumber(view.coverage.indexedFiles) + '/' +
+                I18n.formatNumber(view.coverage.totalFiles)
+              : I18n.formatNumber(count);
+            return '<li>' + this.escapeHtml(label) + ' · ' + detail + '</li>';
+          }).join('') + '</ul>'
+        : '';
+      const coverage = '<details class="model-item"><summary>' + this.escapeHtml(copy.coverage) +
+        ' · ' + this.escapeHtml(copy.quality) + '</summary><p class="model-details">' +
+        this.escapeHtml(copy.indexedLogEntries) + ': ' + I18n.formatNumber(view.coverage.indexedFiles) + '/' +
+        I18n.formatNumber(view.coverage.totalFiles) + ' · ' + this.escapeHtml(copy.indexedStorage) + ': ' +
+        this.escapeHtml(formatters.formatBytes(view.coverage.indexedBytes)) + '/' +
+        this.escapeHtml(formatters.formatBytes(view.coverage.totalBytes)) + ' · ' +
+        this.escapeHtml(view.coverage.complete ? copy.complete : copy.partial) + '</p>' +
+        qualityFlags + '</details>';
+      return this.renderUsageData(null, provider, view.today) +
+        this.renderCodexTodayHourly(view) + identity + limits + coverage;
+    }
     if (!this.todayData) {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
 
-    const todaySummary = this.renderUsageData(this.todayData) + this.renderTodayInsights();
+    const todaySummary = this.renderUsageData(this.todayData, provider) + this.renderTodayInsights(provider);
 
     let hourlyBreakdown = '';
     if (this.hourlyDataForToday.length > 0) {
@@ -1010,9 +1347,10 @@ export class UsageWebviewProvider {
         this.renderCompositionChart(
           [...this.hourlyDataForToday]
             .sort((a, b) => a.hour.localeCompare(b.hour))
-            .map((h) => ({ label: h.hour, data: h.data }))
+            .map((h) => ({ label: h.hour, data: h.data })),
+          provider,
         ) +
-        '<div class="daily-table-container">' +
+        '<div class="daily-table-container" tabindex="0">' +
         '<table class="daily-table">' +
         '<thead>' +
         '<tr>' +
@@ -1050,6 +1388,59 @@ export class UsageWebviewProvider {
     return todaySummary + hourlyBreakdown;
   }
 
+  private renderCodexTodayHourly(view: CodexUsageView): string {
+    const rows = view.todayHourly;
+    const coverage = view.todayCoverage;
+    if (rows.length === 0 && coverage.complete) {
+      return '';
+    }
+    const copy = I18n.t.providers.codex;
+    const partial = coverage.complete
+      ? ''
+      : '<p class="model-details">' + this.escapeHtml(copy.indexedLogEntries) + ': ' +
+        I18n.formatNumber(coverage.indexedFiles) + '/' + I18n.formatNumber(coverage.totalFiles) +
+        ' · ' + this.escapeHtml(copy.partial) + '</p>';
+    const tabs = '<div class="chart-tabs">' +
+      '<button class="chart-tab active" data-metric="cost">' + this.escapeHtml(copy.apiEquivalentCost) + '</button>' +
+      '<button class="chart-tab" data-metric="inputTokens">' + this.escapeHtml(copy.processed) + '</button>' +
+      '<button class="chart-tab" data-metric="outputTokens">' + this.escapeHtml(copy.fresh) + '</button>' +
+      '<button class="chart-tab" data-metric="cacheCreation">' + this.escapeHtml(copy.output) + '</button>' +
+      '<button class="chart-tab" data-metric="cacheRead">' + this.escapeHtml(copy.reasoning) + '</button>' +
+      '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
+      '</div>';
+    const chart = rows.length > 0
+      ? '<div class="chart-content" id="codexTodayHourlyChart">' +
+        this.renderCodexHourlyChart(rows) + '</div>' +
+        this.renderCompositionChart(
+          rows.map((row) => ({ label: row.hour, data: row.total })),
+          'codex',
+        )
+      : '<div class="no-chart-data">' + this.escapeHtml(copy.noDailyData) + '</div>';
+    const table = rows.length > 0
+      ? '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+        '<th>' + this.escapeHtml(I18n.t.popup.hour) + '</th>' +
+        '<th>' + this.escapeHtml(copy.apiEquivalentCost) + '</th>' +
+        '<th>' + this.escapeHtml(copy.processed) + '</th><th>' + this.escapeHtml(copy.fresh) + '</th>' +
+        '<th>' + this.escapeHtml(copy.input) + '</th><th>' + this.escapeHtml(copy.cachedInput) + '</th>' +
+        '<th>' + this.escapeHtml(copy.output) + '</th><th>' + this.escapeHtml(copy.reasoning) + '</th>' +
+        '<th>' + this.escapeHtml(copy.threads) + '</th></tr></thead><tbody>' +
+        rows.map((row) =>
+          '<tr><td class="date-cell">' + this.escapeHtml(row.hour) + '</td>' +
+          '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
+          (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
+        ).join('') + '</tbody></table></div>'
+      : '';
+    return '<div class="daily-breakdown" data-codex-time-series data-codex-today-hourly>' +
+      '<h3>' + this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '</h3>' + partial + tabs + chart + table + '</div>';
+  }
+
   /** Opt-in (showEfficiency) efficiency chips appended to a usage summary:
    * cost per message (exact: cost ÷ messages) and realised cache savings
    * (cacheRead tokens × the input−cacheRead price gap, per model). Off by
@@ -1082,7 +1473,172 @@ export class UsageWebviewProvider {
     return '<div class="eff-chips">' + chips + '</div>';
   }
 
-  private renderUsageData(data: UsageData | null): string {
+  private renderCodexIndexedSubtotal(indexedSubtotal?: boolean): string {
+    if (!indexedSubtotal && !(this.codexLoading && this.codexProgress)) {
+      return '';
+    }
+    const copy = I18n.t.providers.codex;
+    const coverage = this.codexView?.coverage;
+    const progress: CodexRenderProgress | null =
+      this.codexLoading && this.codexProgress
+        ? this.codexProgress
+        : coverage
+          ? {
+              scannedFiles: coverage.indexedFiles,
+              totalFiles: coverage.totalFiles,
+              indexedBytes: coverage.indexedBytes,
+              totalBytes: coverage.totalBytes,
+            }
+          : null;
+    const details = progress ? ' · ' + this.renderCodexProgressText(progress) : '';
+    const subtotal = indexedSubtotal
+      ? '<strong>' + this.escapeHtml(copy.indexedSubtotal) + '</strong> · '
+      : '';
+    return '<p class="model-details">' + subtotal +
+      this.escapeHtml(copy.indexingInProgress) + details + '</p>';
+  }
+
+  private renderCodexEmptyState(): string {
+    const copy = I18n.t.providers.codex;
+    const message = this.codexLoading
+      ? copy.indexingInProgress
+      : copy.noRecentTask;
+    const progress = this.codexLoading && this.codexProgress
+      ? '<p class="model-details">' +
+        this.renderCodexProgressText(this.codexProgress) + '</p>'
+      : '';
+    return '<div class="no-data"><p>' + this.escapeHtml(message) + '</p>' +
+      progress + '</div>';
+  }
+
+  private renderCodexProgressText(progress: CodexRenderProgress): string {
+    const copy = I18n.t.providers.codex;
+    const exactCount = new Intl.NumberFormat(I18n.getLocale(), {
+      maximumFractionDigits: 0,
+    });
+    const completedPercent = progress.totalFiles > 0
+      ? Math.min(
+          100,
+          Math.max(0, Math.round(
+            progress.scannedFiles / progress.totalFiles * 100,
+          )),
+        )
+      : 0;
+    const formatters = createCodexLocalizedFormatters(
+      I18n.getLocale(),
+      I18n.getTimezone(),
+    );
+    return this.escapeHtml(copy.indexedLogEntries) + ': ' +
+      exactCount.format(progress.scannedFiles) + '/' +
+      exactCount.format(progress.totalFiles) +
+      (progress.totalFiles > 0 ? ' (' + completedPercent + '%)' : '') + ' · ' +
+      this.escapeHtml(copy.indexedStorage) + ': ' +
+      this.escapeHtml(formatters.formatBytes(progress.indexedBytes)) + '/' +
+      this.escapeHtml(formatters.formatBytes(progress.totalBytes));
+  }
+
+  private renderUsageData(
+    data: UsageData | null,
+    provider: SettingProvider = 'claude',
+    codexScope: CodexUsageScopeView | null = null,
+  ): string {
+    if (provider === 'codex') {
+      const scope = codexScope;
+      if (!scope) {
+        return this.renderCodexEmptyState();
+      }
+      const copy = I18n.t.providers.codex;
+      const metric = (label: string, value: number | string): string =>
+        '<div class="summary-item"><div class="label">' + this.escapeHtml(label) +
+        '</div><div class="value">' + this.escapeHtml(
+          typeof value === 'number' ? I18n.formatNumber(value) : value,
+        ) + '</div></div>';
+      const equivalentRows = scope.models.map((row) =>
+        equivalentUsageFromProviderTokens(0, row.key, {
+          inputTotal: row.totals.input,
+          cachedInput: row.totals.cachedInput,
+          outputTotal: row.totals.output,
+          reasoningOutput: row.totals.reasoning,
+        }),
+      );
+      const equivalent = summarizeEquivalentUsage(
+        equivalentRows,
+        scope.total.processed,
+      );
+      const pricingCoverage = new Intl.NumberFormat(I18n.getLocale(), {
+        style: 'percent',
+        maximumFractionDigits: 0,
+      }).format(equivalent.pricingCoverage);
+      const equivalentHelp = copy.apiEquivalentCostHelp.replace(
+        '{coverage}',
+        pricingCoverage,
+      );
+      const equivalentCost = equivalent.pricedTokens > 0
+        ? I18n.formatCurrency(equivalent.equivalentUsd)
+        : '—';
+      const equivalentCostMetric =
+        '<div class="summary-item" title="' + this.escapeHtml(equivalentHelp) + '">' +
+        '<div class="label">' + this.escapeHtml(copy.apiEquivalentCost) + '</div>' +
+        '<div class="value cost">' + this.escapeHtml(equivalentCost) + '</div></div>';
+      const composition = tokenComposition(scope.total);
+      const compositionTotal = composition.freshInput + composition.cachedInput + composition.output;
+      const width = (value: number): string =>
+        (compositionTotal > 0 ? (value / compositionTotal) * 100 : 0).toFixed(2) + '%';
+      const legend = (className: string, label: string, value: number): string =>
+        '<span class="legend-item"><span class="legend-dot ' + className + '"></span>' +
+        this.escapeHtml(label) + ' ' + I18n.formatNumber(value) + '</span>';
+      const compositionHtml = '<div class="cost-composition"><div class="cost-comp-head">' +
+        this.escapeHtml(copy.tokenComposition) + '</div><div class="cost-comp-bar">' +
+        '<div class="cost-comp-seg seg-input" style="width:' + width(composition.freshInput) + '"></div>' +
+        '<div class="cost-comp-seg seg-cache-read" style="width:' + width(composition.cachedInput) + '"></div>' +
+        '<div class="cost-comp-seg seg-output" style="width:' + width(composition.output) + '"></div>' +
+        '</div><div class="cost-comp-legend">' +
+        legend('seg-input', copy.freshInput, composition.freshInput) +
+        legend('seg-cache-read', copy.cachedInput, composition.cachedInput) +
+        legend('seg-output', copy.output, composition.output) +
+        '</div><p class="model-details">' + this.escapeHtml(copy.reasoning) + ' ' +
+        I18n.formatNumber(composition.reasoningWithinOutput) + ' · ' +
+        this.escapeHtml(copy.reasoningSubset) + '</p></div>';
+      const dimension = (
+        title: string,
+        rows: Array<{ key: string; totals: CodexMetricTotals }>,
+      ): string => {
+        if (rows.length === 0) {
+          return '';
+        }
+        return '<div class="model-breakdown"><div class="section-header"><h3>' +
+          this.escapeHtml(title) + '</h3></div><div class="model-list">' + rows.map((row, index) =>
+            '<details class="model-item"' + (index === 0 ? ' open' : '') + '><summary class="model-header">' +
+            '<span class="model-name">' + this.escapeHtml(row.key) + '</span><span class="model-cost">' +
+            I18n.formatNumber(row.totals.fresh) + ' ' + this.escapeHtml(copy.fresh) + '</span></summary>' +
+            '<div class="model-details model-details-stacked">' +
+            '<span><span class="model-stat-label">' + this.escapeHtml(copy.processed) + '</span><strong>' +
+            I18n.formatNumber(row.totals.processed) + '</strong></span>' +
+            '<span><span class="model-stat-label">' + this.escapeHtml(copy.fresh) + '</span><strong>' +
+            I18n.formatNumber(row.totals.fresh) + '</strong></span>' +
+            '<span><span class="model-stat-label">' + this.escapeHtml(copy.output) + '</span><strong>' +
+            I18n.formatNumber(row.totals.output) + '</strong></span>' +
+            '<span><span class="model-stat-label">' + this.escapeHtml(copy.reasoning) + '</span><strong>' +
+            I18n.formatNumber(row.totals.reasoning) + '</strong></span></div></details>',
+          ).join('') + '</div></div>';
+      };
+      return '<div class="usage-summary">' +
+        this.renderCodexIndexedSubtotal(scope.indexedSubtotal) +
+        '<div class="summary-grid">' +
+        equivalentCostMetric +
+        metric(copy.processed, scope.total.processed) +
+        metric(copy.fresh, scope.total.fresh) +
+        metric(copy.input, scope.total.input) +
+        metric(copy.cachedInput, scope.total.cachedInput) +
+        metric(
+          I18n.t.popup.cacheHitRate,
+          this.formatPercent(scope.total.input > 0 ? scope.cacheShare : null),
+        ) +
+        metric(copy.output, scope.total.output) +
+        metric(copy.reasoning, scope.total.reasoning) +
+        '</div>' + compositionHtml + '</div>' +
+        dimension(copy.models, scope.models) + dimension(copy.efforts, scope.efforts);
+    }
     if (!data) {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
@@ -1284,12 +1840,51 @@ export class UsageWebviewProvider {
     return html;
   }
 
-  private renderMonthData(): string {
+  private renderMonthData(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      const view = this.codexView;
+      const copy = I18n.t.providers.codex;
+      if (!view) {
+        return this.renderCodexEmptyState();
+      }
+      const rows = view.last30DaysDaily;
+      const breakdown = rows.length === 0
+        ? '<div class="no-data"><p>' + this.escapeHtml(copy.noDailyData) + '</p></div>'
+        : '<div class="daily-breakdown" data-codex-time-series data-codex-last30-daily><h3>' + this.escapeHtml(copy.daily) + '</h3>' +
+          '<div class="chart-tabs">' +
+          '<button class="chart-tab active" data-metric="cost">' + this.escapeHtml(copy.apiEquivalentCost) + '</button>' +
+          '<button class="chart-tab" data-metric="inputTokens">' + this.escapeHtml(copy.processed) + '</button>' +
+          '<button class="chart-tab" data-metric="outputTokens">' + this.escapeHtml(copy.fresh) + '</button>' +
+          '<button class="chart-tab" data-metric="cacheCreation">' + this.escapeHtml(copy.output) + '</button>' +
+          '<button class="chart-tab" data-metric="cacheRead">' + this.escapeHtml(copy.reasoning) + '</button>' +
+          '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
+          '</div><div class="chart-content" id="dailyChart">' + this.renderDailyChart(provider) + '</div>' +
+          this.renderCompositionChart(rows.map((row) => ({ label: row.day, data: row.total })), provider) +
+          '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+          '<th>' + this.escapeHtml(copy.date) + '</th><th>' + this.escapeHtml(copy.apiEquivalentCost) + '</th>' +
+          '<th>' + this.escapeHtml(copy.processed) + '</th>' +
+          '<th>' + this.escapeHtml(copy.fresh) + '</th><th>' + this.escapeHtml(copy.input) + '</th>' +
+          '<th>' + this.escapeHtml(copy.cachedInput) + '</th><th>' + this.escapeHtml(copy.output) + '</th>' +
+          '<th>' + this.escapeHtml(copy.reasoning) + '</th><th>' + this.escapeHtml(copy.threads) + '</th>' +
+          '</tr></thead><tbody>' + rows.map((row) =>
+            '<tr><td class="date-cell">' + this.escapeHtml(row.day) + '</td>' +
+            '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
+            (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
+          ).join('') + '</tbody></table></div></div>';
+      return this.renderUsageData(null, provider, view.last30Days) + breakdown;
+    }
     if (!this.monthData) {
       return `<div class="no-data"><p>${I18n.t.popup.noDataMessage}</p></div>`;
     }
 
-    const monthSummary = this.renderUsageData(this.monthData);
+    const monthSummary = this.renderUsageData(this.monthData, provider);
 
     const dailyBreakdown =
       this.dailyDataForMonth.length > 0
@@ -1309,16 +1904,17 @@ export class UsageWebviewProvider {
 
         <!-- Chart Container (hc-wrap is self-contained: Y-axis + gridlines + scroll) -->
         <div class="chart-content" id="dailyChart">
-          ${this.renderDailyChart()}
+          ${this.renderDailyChart(provider)}
         </div>
 
         ${this.renderCompositionChart(
           [...this.dailyDataForMonth]
             .sort((a, b) => a.date.localeCompare(b.date))
-            .map((d) => ({ label: this.getShortDate(d.date), data: d.data }))
+            .map((d) => ({ label: this.getShortDate(d.date), data: d.data })),
+          provider,
         )}
 
-        <div class="daily-table-container">
+        <div class="daily-table-container" tabindex="0">
           <table class="daily-table">
             <thead>
               <tr>
@@ -1374,12 +1970,52 @@ export class UsageWebviewProvider {
     return monthSummary + dailyBreakdown;
   }
 
-  private renderAllTimeData(): string {
+  private renderAllTimeData(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      const view = this.codexView;
+      const copy = I18n.t.providers.codex;
+      if (!view) {
+        return this.renderCodexEmptyState();
+      }
+      const rows = view.monthly;
+      const breakdown = rows.length === 0
+        ? '<div class="no-data"><p>' + this.escapeHtml(copy.noMonthlyData) + '</p></div>'
+        : '<div class="daily-breakdown" data-codex-time-series><h3>' + this.escapeHtml(copy.monthly) + '</h3>' +
+          '<div class="chart-tabs">' +
+          '<button class="chart-tab active" data-metric="cost">' + this.escapeHtml(copy.apiEquivalentCost) + '</button>' +
+          '<button class="chart-tab" data-metric="inputTokens">' + this.escapeHtml(copy.processed) + '</button>' +
+          '<button class="chart-tab" data-metric="outputTokens">' + this.escapeHtml(copy.fresh) + '</button>' +
+          '<button class="chart-tab" data-metric="cacheCreation">' + this.escapeHtml(copy.output) + '</button>' +
+          '<button class="chart-tab" data-metric="cacheRead">' + this.escapeHtml(copy.reasoning) + '</button>' +
+          '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
+          '</div><div class="chart-content" id="allTimeChart">' + this.renderAllTimeChart(provider) + '</div>' +
+          this.renderCompositionChart(rows.map((row) => ({ label: row.period, data: row.total })), provider) +
+          '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+          '<th>' + this.escapeHtml(copy.date) + '</th><th>' + this.escapeHtml(copy.apiEquivalentCost) + '</th>' +
+          '<th>' + this.escapeHtml(copy.processed) + '</th>' +
+          '<th>' + this.escapeHtml(copy.fresh) + '</th><th>' + this.escapeHtml(copy.input) + '</th>' +
+          '<th>' + this.escapeHtml(copy.cachedInput) + '</th><th>' + this.escapeHtml(copy.output) + '</th>' +
+          '<th>' + this.escapeHtml(copy.reasoning) + '</th><th>' + this.escapeHtml(copy.threads) + '</th>' +
+          '</tr></thead><tbody>' + rows.map((row) =>
+            '<tr><td class="date-cell">' + this.escapeHtml(row.period) + '</td>' +
+            '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
+            (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
+            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
+          ).join('') + '</tbody></table></div></div>';
+      return this.renderUsageData(null, provider, view.allTime) +
+        this.renderWeeklyValuePanel(provider) + breakdown;
+    }
     if (!this.allTimeData) {
       return `<div class="no-data"><p>${I18n.t.popup.noDataMessage}</p></div>`;
     }
 
-    const allTimeSummary = this.renderUsageData(this.allTimeData);
+    const allTimeSummary = this.renderUsageData(this.allTimeData, provider);
 
     // Optional GitHub-style token heatmap (off by default; mainly a shareable
     // view). Inline SVG renders with working hover tooltips inside the webview.
@@ -1413,16 +2049,17 @@ export class UsageWebviewProvider {
 
         <!-- Chart Container (hc-wrap is self-contained: Y-axis + gridlines + scroll) -->
         <div class="chart-content" id="allTimeChart">
-          ${this.renderAllTimeChart()}
+          ${this.renderAllTimeChart(provider)}
         </div>
 
         ${this.renderCompositionChart(
           [...this.dailyDataForAllTime]
             .sort((a, b) => a.date.localeCompare(b.date))
-            .map((d) => ({ label: this.getShortDate(d.date, true), data: d.data, key: d.date }))
+            .map((d) => ({ label: this.getShortDate(d.date, true), data: d.data, key: d.date })),
+          provider,
         )}
 
-        <div class="daily-table-container">
+        <div class="daily-table-container" tabindex="0">
           <table class="daily-table">
             <thead>
               <tr>
@@ -1476,7 +2113,177 @@ export class UsageWebviewProvider {
         : '';
 
     // Heatmap sits right above the "monthly usage" breakdown, below the totals.
-    return allTimeSummary + this.renderShareCardPanel() + heatmapPanel + dailyBreakdown;
+    return allTimeSummary + this.renderWeeklyValuePanel(provider) +
+      this.renderShareCardPanel() + heatmapPanel + dailyBreakdown;
+  }
+
+  private weeklyValuePoints(provider: SettingProvider): WeeklyValuePoint[] {
+    const now = Date.now();
+    const inputs = provider === 'codex'
+      ? this.codexView?.weeklyValueInputs
+      : {
+          observations: this.claudeWeeklyQuotaHistory,
+          usage: claudeWeeklyEquivalentUsage(this.allRecords),
+        };
+    if (!inputs) {
+      return [];
+    }
+    return buildWeeklyValueTimeline(provider, inputs, { now });
+  }
+
+  /** Shared reset-aligned allowance-value renderer for Claude and Codex. The
+   * chart deliberately reuses the dashboard's existing stacked-bar classes:
+   * blue is observed use, green is the inferred unused share. */
+  private renderWeeklyValuePanel(provider: SettingProvider): string {
+    if (!this.setting<boolean>('showWeeklyEquivalentValue', true)) {
+      return '';
+    }
+    const copy = I18n.t.weeklyValue;
+    const points = this.weeklyValuePoints(provider);
+    const providerLabel = provider === 'codex'
+      ? I18n.t.providers.codexBeta
+      : I18n.t.providers.claude;
+    const heading = this.escapeHtml(`${copy.title} · ${providerLabel}`);
+    const notes = [
+      copy.description,
+      copy.historyFromLogs,
+      ...(points.some((point) => point.basis === 'calendar-usage')
+        ? [copy.calendarFallback]
+        : []),
+      ...(provider === 'codex' ? [copy.multiAccount] : []),
+      ...(provider === 'codex' && points.some((point) => point.boundaryUncertain)
+        ? [copy.boundaryApproximation]
+        : []),
+      ...(provider === 'codex' && this.codexView && !this.codexView.periodCoverage.allTime.complete
+        ? [copy.indexedSubtotal]
+        : []),
+    ].map((line) => this.escapeHtml(line)).join('<br>');
+    if (points.length === 0) {
+      return '<div class="daily-breakdown"><div class="section-header"><h3>' +
+        heading + '</h3></div><p class="table-hint">' + notes + '</p>' +
+        '<div class="no-data"><p>' + this.escapeHtml(copy.noData) + '</p></div></div>';
+    }
+
+    const dateLabel = (value: number, short = false, dateOnly = false): string => {
+      try {
+        return new Intl.DateTimeFormat(I18n.getLocale(), {
+          ...(short
+            ? { month: 'short' as const, day: 'numeric' as const }
+            : dateOnly
+              ? {
+                  year: 'numeric' as const,
+                  month: 'short' as const,
+                  day: 'numeric' as const,
+                }
+              : {
+                year: 'numeric' as const,
+                month: 'short' as const,
+                day: 'numeric' as const,
+                hour: '2-digit' as const,
+                minute: '2-digit' as const,
+              }),
+          timeZone: I18n.getTimezone(),
+        }).format(new Date(value));
+      } catch {
+        return new Date(value).toISOString().slice(0, 10);
+      }
+    };
+    const periodLabel = (point: WeeklyValuePoint, short = false): string => {
+      if (point.current) {
+        if (short) {
+          return copy.currentPeriodShort;
+        }
+        const range = dateLabel(point.windowStart, false, true) + ' – ' +
+          dateLabel(point.resetAt - 1, false, true);
+        return point.basis === 'quota-observation'
+          ? `${copy.currentPeriod} · ${range} (${copy.resetsAt} ${dateLabel(point.resetAt)})`
+          : `${copy.currentPeriod} · ${range}`;
+      }
+      return dateLabel(point.windowStart, short, true) + ' – ' +
+        dateLabel(point.resetAt - 1, short, true);
+    };
+    const confidenceLabel = (point: WeeklyValuePoint): string => {
+      if (point.boundaryUncertain) {
+        return `${copy.usageOnly} · ${copy.boundaryApproximate}`;
+      }
+      switch (point.confidence) {
+        case 'high': return copy.high;
+        case 'medium': return copy.medium;
+        case 'low': return copy.low;
+        default: return copy.usageOnly;
+      }
+    };
+    const chartPoints = points.slice(0, 8).reverse();
+    const maxValue = Math.max(
+      1,
+      ...chartPoints.map((point) =>
+        point.unusedEquivalentUsd !== null && point.fullEquivalentUsd !== null
+          ? point.fullEquivalentUsd
+          : point.usedEquivalentUsd,
+      ),
+    );
+    const maxHeight = 120;
+    const bars = chartPoints.map((point) => {
+      const total = point.unusedEquivalentUsd !== null && point.fullEquivalentUsd !== null
+        ? Math.max(point.usedEquivalentUsd, point.fullEquivalentUsd)
+        : point.usedEquivalentUsd;
+      const barHeight = total > 0 ? (total / maxValue) * maxHeight : 0;
+      const usedHeight = total > 0
+        ? Math.min(barHeight, (point.usedEquivalentUsd / total) * barHeight)
+        : 0;
+      const unusedHeight = Math.max(0, barHeight - usedHeight);
+      const usedLabel = point.usageAvailable === false
+        ? '—'
+        : I18n.formatCurrency(point.usedEquivalentUsd);
+      const title = `${periodLabel(point)} · ${copy.usedValue}: ${usedLabel}`;
+      return '<div class="hc-col"><div class="stack-bar" title="' +
+        this.escapeHtml(title) + '">' +
+        '<div class="stack-seg seg-input" style="height:' + usedHeight.toFixed(2) + 'px"></div>' +
+        (point.unusedEquivalentUsd !== null
+          ? '<div class="stack-seg seg-cache-read" style="height:' + unusedHeight.toFixed(2) + 'px"></div>'
+          : '') +
+        '</div></div>';
+    }).join('');
+    const xlabels = chartPoints.map((point) =>
+      '<div class="hc-xlabel">' + this.escapeHtml(periodLabel(point, true)) + '</div>',
+    ).join('');
+    const legend = (cls: string, label: string): string =>
+      '<span class="legend-item"><span class="legend-dot ' + cls + '"></span>' +
+      this.escapeHtml(label) + '</span>';
+    const chart = '<div class="composition-chart"><div class="stack-legend">' +
+      legend('seg-input', copy.usedValue) +
+      (chartPoints.some((point) => point.unusedEquivalentUsd !== null)
+        ? legend('seg-cache-read', copy.unusedValue)
+        : '') +
+      '</div><div class="hc-wrap"><div class="hc-yaxis"><span class="hc-yval">' +
+      I18n.formatCurrency(maxValue) + '</span><span class="hc-yval">' +
+      I18n.formatCurrency(maxValue / 2) + '</span><span class="hc-yval">$0</span></div>' +
+      '<div class="hc-main"><div class="hc-scroll" tabindex="0"><div class="hc-plot">' +
+      '<div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div>' +
+      '<div class="hc-bars">' + bars + '</div></div><div class="hc-xlabels">' +
+      xlabels + '</div></div></div></div></div>';
+    const dash = '—';
+    const tableRows = points.map((point) =>
+      '<tr><td class="date-cell">' + this.escapeHtml(periodLabel(point)) + '</td>' +
+      '<td class="cost-cell">' +
+      (point.usageAvailable === false ? dash : I18n.formatCurrency(point.usedEquivalentUsd)) + '</td>' +
+      '<td class="number-cell">' +
+      (point.utilizationPercent === null ? dash : this.formatPercent(point.utilizationPercent / 100)) + '</td>' +
+      '<td class="cost-cell">' +
+      (point.fullEquivalentUsd === null ? dash : I18n.formatCurrency(point.fullEquivalentUsd)) + '</td>' +
+      '<td class="cost-cell">' +
+      (point.unusedEquivalentUsd === null ? dash : I18n.formatCurrency(point.unusedEquivalentUsd)) + '</td>' +
+      '<td>' + this.escapeHtml(confidenceLabel(point)) + '</td>' +
+      '<td class="number-cell">' + this.formatPercent(point.pricingCoverage) + '</td></tr>',
+    ).join('');
+    return '<div class="daily-breakdown"><div class="section-header"><h3>' + heading +
+      '</h3></div><p class="table-hint">' + notes + '</p>' + chart +
+      '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+      '<th>' + this.escapeHtml(copy.period) + '</th><th>' + this.escapeHtml(copy.usedValue) + '</th>' +
+      '<th>' + this.escapeHtml(copy.utilization) + '</th><th>' + this.escapeHtml(copy.fullValue) + '</th>' +
+      '<th>' + this.escapeHtml(copy.unusedValue) + '</th><th>' + this.escapeHtml(copy.confidence) + '</th>' +
+      '<th>' + this.escapeHtml(copy.pricingCoverage) + '</th></tr></thead><tbody>' +
+      tableRows + '</tbody></table></div></div>';
   }
 
   /** The "Share card" panel (All tab). Off by default (`enableShareCard`); when
@@ -1687,7 +2494,92 @@ export class UsageWebviewProvider {
     });
   }
 
-  private renderSessionData(): string {
+  private renderSessionData(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      const copy = I18n.t.providers.codex;
+      const sessions = this.codexView?.recentThreads ?? [];
+      const subtotal = this.renderCodexIndexedSubtotal(
+        this.codexView?.allTime.indexedSubtotal,
+      );
+      if (sessions.length === 0) {
+        return subtotal + '<div class="no-data"><p>' + this.escapeHtml(copy.noThreadData) + '</p></div>';
+      }
+      const formatters = createCodexLocalizedFormatters(I18n.getLocale(), I18n.getTimezone());
+      const role = (value: CodexThreadUsageView['role']): string => {
+        if (value === 'root') return copy.rootRole;
+        if (value === 'subagent') return copy.childRole;
+        if (value === 'approval-reviewer') return copy.approvalReviewerRole;
+        return copy.unknownRole;
+      };
+      const models = [...new Set(sessions.flatMap((session) => session.models))].sort();
+      const filterBar = '<div class="sess-filters"><div class="sess-filter" data-group="range">' +
+        '<button class="sess-filter-btn active" data-range="all" onclick="sessionRange(this)">' + this.escapeHtml(copy.all) + '</button>' +
+        '<button class="sess-filter-btn" data-range="7" onclick="sessionRange(this)">' + this.escapeHtml(copy.last7Days) + '</button>' +
+        '<button class="sess-filter-btn" data-range="30" onclick="sessionRange(this)">' + this.escapeHtml(copy.last30Days) + '</button>' +
+        '</div>' + (models.length > 0
+          ? '<select class="sess-model-select" title="' + this.escapeHtml(copy.models) +
+            '" aria-label="' + this.escapeHtml(copy.models) + '" onchange="sessionModel(this)">' +
+            '<option value="all">' + this.escapeHtml(copy.all + ' ' + copy.models) + '</option>' +
+            models.map((model) => '<option value="' + this.escapeHtml(model.toLowerCase()) + '">' + this.escapeHtml(model) + '</option>').join('') +
+            '</select>'
+          : '') + '</div>';
+      const rows = sessions.map((session) => {
+        const title = session.title ?? session.agentNickname ?? copy.unnamedSession;
+        const project = session.projectName ?? copy.unidentifiedProject;
+        const model = session.models.join(', ') || copy.unavailable;
+        const effort = session.efforts.join(', ') || copy.unavailable;
+        const detailId = 'session-detail-' + session.viewKey;
+        const detail = (label: string, value: string): string =>
+          '<span data-session-detail-item><span class="model-stat-label">' + this.escapeHtml(label) +
+          '</span><strong title="' + this.escapeHtml(value) + '">' + this.escapeHtml(value) + '</strong></span>';
+        const mainRow = '<tr class="sort-row" data-session-row data-sort-time="' + session.observedAt + '" ' +
+          'data-sort-session="' + this.escapeHtml(title.toLowerCase()) + '" ' +
+          'data-sort-project="' + this.escapeHtml(project.toLowerCase()) + '" ' +
+          'data-sort-role="' + this.escapeHtml(session.role) + '" ' +
+          'data-sort-processed="' + session.total.processed + '" data-sort-fresh="' + session.total.fresh + '" ' +
+          'data-sort-output="' + session.total.output + '" data-sort-reasoning="' + session.total.reasoning + '" ' +
+          'data-sort-duration="' + session.durationMs + '" data-models="' +
+          this.escapeHtml(session.models.join('|').toLowerCase()) + '">' +
+          '<td class="date-cell">' + this.escapeHtml(formatters.formatDateTime(session.observedAt)) + '</td>' +
+          '<td class="name-cell"><div class="model-header" data-session-thread-layout>' +
+          '<button class="session-action" data-session-detail-toggle type="button" aria-expanded="false" aria-controls="' +
+          this.escapeHtml(detailId) + '" title="' + this.escapeHtml(copy.expand) +
+          '" onclick="toggleSessionDetails(this)">▶</button><div class="model-details" data-session-thread-copy>' +
+          '<div class="model-name" data-session-thread-title title="' + this.escapeHtml(title) + '">' + this.escapeHtml(title) + '</div>' +
+          '<div class="model-details" data-session-thread-role>' + this.escapeHtml(role(session.role)) + '</div></div></div></td>' +
+          '<td class="project-cell"><div class="project-name" title="' +
+          this.escapeHtml(project) + '">' + this.escapeHtml(project) + '</div></td>' +
+          '<td data-session-model title="' + this.escapeHtml(model) + '">' + this.escapeHtml(model) + '</td>' +
+          '<td data-session-effort title="' + this.escapeHtml(effort) + '">' + this.escapeHtml(effort) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(session.total.processed) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(session.total.output) + '</td>' +
+          '<td class="number-cell">' + this.escapeHtml(formatters.formatDuration(session.durationMs)) + '</td></tr>';
+        const detailRow = '<tr data-sort-child data-session-detail id="' + this.escapeHtml(detailId) +
+          '" data-expanded="false" style="display:none"><td colspan="8"><div class="model-details" data-session-detail-grid>' +
+          detail(copy.parentThread, session.parentTitle ?? copy.unavailable) +
+          detail(copy.input, I18n.formatNumber(session.total.input)) +
+          detail(copy.freshInput, I18n.formatNumber(Math.max(0, session.total.input - session.total.cachedInput))) +
+          detail(copy.cachedInput, I18n.formatNumber(session.total.cachedInput)) +
+          detail(copy.fresh, I18n.formatNumber(session.total.fresh)) +
+          detail(copy.reasoning, I18n.formatNumber(session.total.reasoning)) +
+          '</div></td></tr>';
+        return mainRow + detailRow;
+      }).join('');
+      const th = (key: string, label: string, title?: string): string =>
+        '<th class="sortable" data-sortkey="' + key + '"' +
+        (title ? ' title="' + this.escapeHtml(title) + '"' : '') + '>' + this.escapeHtml(label) + '</th>';
+      return subtotal + '<div class="daily-breakdown"><h3>' + this.escapeHtml(copy.sessions) + '</h3>' +
+        '<p class="table-hint">' + this.escapeHtml(I18n.t.popup.sortHint) + '</p>' + filterBar +
+        '<div class="session-list" id="sessionList"><div class="daily-table-container" tabindex="0">' +
+        '<table class="daily-table sortable-table" data-provider-session-table>' +
+        '<colgroup><col style="width:14%"><col style="width:22%"><col style="width:16%"><col style="width:12%">' +
+        '<col style="width:8%"><col style="width:9%"><col style="width:8%"><col style="width:11%"></colgroup><thead><tr>' +
+        th('time', copy.lastActive) + th('session', copy.threadLabel) + th('project', copy.projectLabel) +
+        '<th>' + this.escapeHtml(copy.model) + '</th><th>' + this.escapeHtml(copy.efforts) + '</th>' +
+        th('processed', copy.processed) + th('output', copy.output) +
+        th('duration', copy.duration, copy.observedSessionDuration) +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div></div></div>';
+    }
     if (!this.sessionBreakdown || this.sessionBreakdown.length === 0) {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
@@ -1849,7 +2741,7 @@ export class UsageWebviewProvider {
       '<p class="table-hint">' + t.sortHint + '</p>' +
       filterBar +
       '<div class="session-list" id="sessionList">' +
-      '<div class="daily-table-container">' +
+      '<div class="daily-table-container" tabindex="0">' +
       '<table class="daily-table sortable-table">' +
       '<thead><tr>' +
       th('time', t.startTime) +
@@ -2013,7 +2905,46 @@ export class UsageWebviewProvider {
       '</div>';
   }
 
-  private renderProjectData(): string {
+  private renderProjectData(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      const copy = I18n.t.providers.codex;
+      const projects = this.codexView?.projects ?? [];
+      const subtotal = this.renderCodexIndexedSubtotal(
+        this.codexView?.allTime.indexedSubtotal,
+      );
+      if (projects.length === 0) {
+        return subtotal + this.renderCodexEmptyState();
+      }
+      const formatters = createCodexLocalizedFormatters(I18n.getLocale(), I18n.getTimezone());
+      const rows = projects.map((project: CodexProjectUsageView) => {
+        const name = project.name ?? copy.unidentifiedProject;
+        const directory = project.directoryName && project.directoryName !== project.name
+          ? '<div class="project-path"><span class="project-path-text">' +
+            this.escapeHtml(project.directoryName) + '</span></div>'
+          : '';
+        return '<tr class="sort-row" data-sort-name="' + this.escapeHtml(name.toLowerCase()) + '" ' +
+          'data-sort-sessions="' + project.threadCount + '" data-sort-lastactive="' + project.lastActiveAt + '" ' +
+          'data-sort-processed="' + project.scope.total.processed + '" data-sort-fresh="' + project.scope.total.fresh + '" ' +
+          'data-sort-output="' + project.scope.total.output + '" data-sort-reasoning="' + project.scope.total.reasoning + '">' +
+          '<td class="project-cell"><div class="project-name">' + this.escapeHtml(name) + '</div>' + directory + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(project.threadCount) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(project.scope.total.processed) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(project.scope.total.fresh) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(project.scope.total.cachedInput) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(project.scope.total.output) + '</td>' +
+          '<td class="number-cell">' + I18n.formatNumber(project.scope.total.reasoning) + '</td>' +
+          '<td class="date-cell">' + this.escapeHtml(formatters.formatDateTime(project.lastActiveAt)) + '</td></tr>';
+      }).join('');
+      const th = (key: string, label: string): string =>
+        '<th class="sortable" data-sortkey="' + key + '">' + this.escapeHtml(label) + '</th>';
+      return subtotal + '<div class="daily-breakdown"><h3>' + this.escapeHtml(copy.projects) + '</h3>' +
+        '<p class="table-hint">' + this.escapeHtml(I18n.t.popup.sortHint) + '</p>' +
+        '<div class="daily-table-container" tabindex="0"><table class="daily-table sortable-table"><thead><tr>' +
+        th('name', copy.projectLabel) + th('sessions', copy.threads) + th('processed', copy.processed) +
+        th('fresh', copy.fresh) + '<th>' + this.escapeHtml(copy.cachedInput) + '</th>' +
+        th('output', copy.output) + th('reasoning', copy.reasoning) + th('lastactive', copy.lastActive) +
+        '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
+    }
     if (!this.projectBreakdown || this.projectBreakdown.length === 0) {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
@@ -2097,7 +3028,7 @@ export class UsageWebviewProvider {
       '<div class="daily-breakdown">' +
       '<h3>' + t.projectBreakdown + '</h3>' +
       '<p class="table-hint">' + t.sortHint + '</p>' +
-      '<div class="daily-table-container">' +
+      '<div class="daily-table-container" tabindex="0">' +
       '<table class="daily-table sortable-table">' +
       '<thead><tr>' +
       th('name', t.project) +
@@ -2156,7 +3087,7 @@ export class UsageWebviewProvider {
       '<div class="daily-breakdown">' +
       '<h3>' + t.branchBreakdown + '</h3>' +
       '<p class="table-hint">' + t.sortHint + '</p>' +
-      '<div class="daily-table-container">' +
+      '<div class="daily-table-container" tabindex="0">' +
       '<table class="daily-table sortable-table">' +
       '<thead><tr>' +
       th('branch', t.branch) +
@@ -2184,7 +3115,10 @@ export class UsageWebviewProvider {
    * text-length thinking estimate is deliberately excluded here (it lives on
    * the Sessions tab, clearly marked as an estimate). Hidden on light days.
    */
-  private renderTodayInsights(): string {
+  private renderTodayInsights(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      return '';
+    }
     const t = I18n.t.popup;
     const rows: string[] = [];
     const barRow = (label: string, share: number, colorClass: string, tooltip: string): string =>
@@ -2433,7 +3367,7 @@ export class UsageWebviewProvider {
       '<h3>' + t.workflowBreakdown + '</h3>' +
       summaryStrip +
       '<p class="table-hint">' + t.sortHint + '</p>' +
-      '<div class="daily-table-container">' +
+      '<div class="daily-table-container" tabindex="0">' +
       '<table class="daily-table sortable-table">' +
       '<thead><tr>' +
       th('time', t.startTime) +
@@ -3031,7 +3965,56 @@ export class UsageWebviewProvider {
     );
   }
 
-  private renderContentData(): string {
+  private renderContentData(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      const view = this.codexView;
+      const copy = I18n.t.providers.codex;
+      if (!view) {
+        return this.renderCodexEmptyState();
+      }
+      const behavior = view.behaviorScopes.last30Days;
+      const percent = (value: number): string => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+      const metric = (label: string, value: string): string =>
+        '<div class="summary-item"><div class="label">' + this.escapeHtml(label) +
+        '</div><div class="value">' + this.escapeHtml(value) + '</div></div>';
+      const behaviorSummary = '<div class="usage-summary"><div class="summary-grid">' +
+        metric(copy.childThreadsPerRootTask, behavior.childThreadsPerRootTask.toFixed(1)) +
+        metric(copy.childFreshShare, percent(behavior.childFreshShare)) +
+        metric(copy.approvalFreshShare, percent(behavior.approvalReviewerFreshShare)) +
+        metric(copy.highEffortFreshShare, percent(behavior.highEffortFreshShare)) +
+        metric(copy.processedToFreshRatio, behavior.processedToFreshRatio.toFixed(1) + '×') +
+        metric(copy.reasoningOutputShare, percent(behavior.reasoningOutputShare)) +
+        metric(copy.postPatchToolCallsPerPatchCall, behavior.postPatchToolCallsPerPatchCall.toFixed(1)) +
+        metric(copy.compactions, I18n.formatNumber(behavior.compactCount)) +
+        '</div></div>';
+      const insights = this.codexInsights.last30Days;
+      const insightHtml = insights.length === 0
+        ? '<div class="model-item"><p class="table-hint">' + this.escapeHtml(copy.recommendationEmpty) + '</p></div>'
+        : '<div class="model-list">' + insights.map((insight) => {
+            const evidence = Object.entries(insight.evidence).map(([key, value]) => {
+              const label = copy.insightEvidenceLabels[key as keyof typeof copy.insightEvidenceLabels] ?? key;
+              const formattedValue = typeof value === 'number' ? I18n.formatNumber(value) : String(value);
+              return '<span><span class="model-stat-label">' + this.escapeHtml(label) + '</span><strong>' +
+                this.escapeHtml(formattedValue) + '</strong></span>';
+            }).join('');
+            return '<div class="model-item"><div class="model-header"><span class="model-name">' +
+              this.escapeHtml(copy.insightTitles[insight.kind]) + '</span></div>' +
+              '<p class="model-details"><strong>' + this.escapeHtml(copy.insightObservation) + ':</strong> ' +
+              this.escapeHtml(copy.insightObservations[insight.kind]) + '</p>' +
+              '<div class="model-details model-details-stacked">' + evidence + '</div>' +
+              '<p class="model-details"><strong>' + this.escapeHtml(copy.insightConditionalAction) + ':</strong> ' +
+              this.escapeHtml(copy.insightTips[insight.kind]) + '</p></div>';
+          }).join('') + '</div>';
+      const partial = view.periodCoverage.last30Days.complete
+        ? ''
+        : '<p class="table-hint">' + this.escapeHtml(copy.recommendationPartial) + '</p>';
+      return '<div class="action-card"><div class="action-card-head"><span class="action-icon">✨</span>' +
+        '<div class="action-card-titles"><h3>' + this.escapeHtml(copy.optimization) + '</h3>' +
+        '<p class="action-card-desc">' + this.escapeHtml(copy.structuralProxy) + '</p></div></div></div>' +
+        '<div class="daily-breakdown"><div class="section-header"><h3>' +
+        this.escapeHtml(copy.behavior + ' · ' + copy.last30Days) + '</h3></div>' +
+        partial + behaviorSummary + insightHtml + '</div>';
+    }
     const t = I18n.t.popup;
     const topCards = this.renderAdviceCard() + this.renderOptimizerCard();
     const analysis = this.contentAnalysis;
@@ -3155,22 +4138,41 @@ export class UsageWebviewProvider {
    * Static stacked-bar chart breaking each period into input / cache-read /
    * cache-write / output tokens — a finer view than the single-metric chart.
    */
-  private renderCompositionChart(items: { label: string; data: UsageData; key?: string }[]): string {
+  private renderCompositionChart(
+    items: { label: string; data: UsageData | CodexMetricTotals; key?: string }[],
+    provider: SettingProvider = 'claude',
+  ): string {
     if (!items || items.length === 0) {
       return '';
     }
 
     const t = I18n.t.popup;
+    const codexCopy = I18n.t.providers.codex;
     const maxHeight = 120;
-    const totals = items.map(
-      (it) =>
-        it.data.totalInputTokens + it.data.totalOutputTokens + it.data.totalCacheCreationTokens + it.data.totalCacheReadTokens
-    );
+    const values = items.map((item) => {
+      if (provider === 'codex') {
+        const composition = tokenComposition(item.data as CodexMetricTotals);
+        return {
+          input: composition.freshInput,
+          cacheRead: composition.cachedInput,
+          cacheCreation: 0,
+          output: composition.output,
+        };
+      }
+      const data = item.data as UsageData;
+      return {
+        input: data.totalInputTokens,
+        cacheRead: data.totalCacheReadTokens,
+        cacheCreation: data.totalCacheCreationTokens,
+        output: data.totalOutputTokens,
+      };
+    });
+    const totals = values.map((value) => value.input + value.cacheRead + value.cacheCreation + value.output);
     const maxTotal = Math.max(...totals, 1);
 
     let bars = '';
     items.forEach((it, idx) => {
-      const d = it.data;
+      const d = values[idx];
       const total = totals[idx];
       const barHeight = (total / maxTotal) * maxHeight;
       const seg = (value: number, cls: string, label: string): string => {
@@ -3190,7 +4192,7 @@ export class UsageWebviewProvider {
       // In the all-time view each bar is a month (it.key = its date); make it
       // click-to-expand that month's per-day composition (reuses the table's
       // month-detail round-trip).
-      const colOpen = it.key
+      const colOpen = provider === 'claude' && it.key
         ? '<div class="hc-col hc-col-clickable" onclick="toggleMonthlyDetail(\'' + it.key + '\')" title="' +
           this.escapeHtml(it.label) + ' — ' + I18n.formatNumber(total) + '">'
         : '<div class="hc-col">';
@@ -3201,10 +4203,10 @@ export class UsageWebviewProvider {
         ': ' +
         I18n.formatNumber(total) +
         '">' +
-        seg(d.totalInputTokens, 'seg-input', t.inputTokens) +
-        seg(d.totalCacheReadTokens, 'seg-cache-read', t.cacheRead) +
-        seg(d.totalCacheCreationTokens, 'seg-cache-creation', t.cacheCreation) +
-        seg(d.totalOutputTokens, 'seg-output', t.outputTokens) +
+        seg(d.input, 'seg-input', provider === 'codex' ? codexCopy.freshInput : t.inputTokens) +
+        seg(d.cacheRead, 'seg-cache-read', provider === 'codex' ? codexCopy.cachedInput : t.cacheRead) +
+        (provider === 'claude' ? seg(d.cacheCreation, 'seg-cache-creation', t.cacheCreation) : '') +
+        seg(d.output, 'seg-output', provider === 'codex' ? codexCopy.output : t.outputTokens) +
         '</div>' +
         '</div>';
     });
@@ -3217,13 +4219,13 @@ export class UsageWebviewProvider {
     return (
       '<div class="composition-chart">' +
       '<h4>' +
-      t.tokenComposition +
+      (provider === 'codex' ? codexCopy.tokenComposition : t.tokenComposition) +
       '</h4>' +
       '<div class="stack-legend">' +
-      dot('seg-input', t.inputTokens) +
-      dot('seg-cache-read', t.cacheRead) +
-      dot('seg-cache-creation', t.cacheCreation) +
-      dot('seg-output', t.outputTokens) +
+      dot('seg-input', provider === 'codex' ? codexCopy.freshInput : t.inputTokens) +
+      dot('seg-cache-read', provider === 'codex' ? codexCopy.cachedInput : t.cacheRead) +
+      (provider === 'claude' ? dot('seg-cache-creation', t.cacheCreation) : '') +
+      dot('seg-output', provider === 'codex' ? codexCopy.output : t.outputTokens) +
       '</div>' +
       '<div class="hc-wrap">' +
       '<div class="hc-yaxis">' +
@@ -3231,7 +4233,7 @@ export class UsageWebviewProvider {
       '<span class="hc-yval">' + I18n.formatNumber(Math.round(maxTotal / 2)) + '</span>' +
       '<span class="hc-yval">0</span>' +
       '</div>' +
-      '<div class="hc-main"><div class="hc-scroll">' +
+      '<div class="hc-main"><div class="hc-scroll" tabindex="0">' +
       '<div class="hc-plot">' +
       '<div class="hc-grid hc-grid-top"></div>' +
       '<div class="hc-grid hc-grid-mid"></div>' +
@@ -3248,14 +4250,36 @@ export class UsageWebviewProvider {
     );
   }
 
-  private renderDailyChart(): string {
+  private renderDailyChart(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      const rows = this.codexView?.last30DaysDaily ?? [];
+      return this.renderMainCostChart(
+        rows.map((row) => ({
+          date: row.day,
+          data: { total: row.total, apiEquivalent: row.apiEquivalent, threads: row.threads },
+        })),
+        false,
+        provider,
+      );
+    }
     const sortedData = [...this.dailyDataForMonth].sort((a, b) => a.date.localeCompare(b.date));
-    return this.renderMainCostChart(sortedData);
+    return this.renderMainCostChart(sortedData, false, provider);
   }
 
-  private renderAllTimeChart(): string {
+  private renderAllTimeChart(provider: SettingProvider = 'claude'): string {
+    if (provider === 'codex') {
+      const rows = this.codexView?.monthly ?? [];
+      return this.renderMainCostChart(
+        rows.map((row) => ({
+          date: row.period,
+          data: { total: row.total, apiEquivalent: row.apiEquivalent, threads: row.threads },
+        })),
+        true,
+        provider,
+      );
+    }
     const sortedData = [...this.dailyDataForAllTime].sort((a, b) => a.date.localeCompare(b.date));
-    return this.renderMainCostChart(sortedData, true);
+    return this.renderMainCostChart(sortedData, true, provider);
   }
 
   /**
@@ -3293,16 +4317,91 @@ export class UsageWebviewProvider {
     );
   }
 
-  private renderMainCostChart(sortedData: { date: string; data: UsageData }[], monthly = false): string {
+  private codexCostStackHtml(cost: EquivalentCostBreakdown, barHeight: number): string {
+    const copy = I18n.t.providers.codex;
+    const total = cost.freshInputUsd + cost.cachedInputUsd + cost.outputUsd;
+    const seg = (value: number, cls: string, label: string): string => {
+      const height = total > 0 ? (value / total) * barHeight : 0;
+      return '<div class="stack-seg ' + cls + '" style="height: ' + height + 'px;" title="' +
+        this.escapeHtml(label) + ': ' + I18n.formatCurrency(value) + '"></div>';
+    };
+    return seg(cost.freshInputUsd, 'seg-input', copy.freshInput) +
+      seg(cost.cachedInputUsd, 'seg-cache-read', copy.cachedInput) +
+      seg(cost.outputUsd, 'seg-output', copy.output);
+  }
+
+  private codexCostHelp(cost: EquivalentCostBreakdown): string {
+    const coverage = new Intl.NumberFormat(I18n.getLocale(), {
+      style: 'percent',
+      maximumFractionDigits: 0,
+    }).format(cost.pricingCoverage);
+    return I18n.t.providers.codex.apiEquivalentCostHelp.replace('{coverage}', coverage);
+  }
+
+  private renderMainCostChart(
+    sortedData: Array<{
+      date: string;
+      data: UsageData | {
+        total: CodexMetricTotals;
+        apiEquivalent: EquivalentCostBreakdown;
+        threads: number;
+      };
+    }>,
+    monthly = false,
+    provider: SettingProvider = 'claude',
+  ): string {
     if (sortedData.length === 0) {
       return '<div class="no-chart-data">No data available</div>';
     }
-    const maxCost = Math.max(...sortedData.map((d) => d.data.totalCost), 0);
+    if (provider === 'codex') {
+      const rows = sortedData as Array<{
+        date: string;
+        data: {
+          total: CodexMetricTotals;
+          apiEquivalent: EquivalentCostBreakdown;
+          threads: number;
+        };
+      }>;
+      const maxCost = Math.max(...rows.map((row) => row.data.apiEquivalent.equivalentUsd), 0);
+      const hasPricedCost = rows.some((row) => row.data.apiEquivalent.pricedTokens > 0);
+      const costAxisLabel = (value: number): string =>
+        hasPricedCost ? I18n.formatCurrency(value) : '—';
+      const maxHeight = 120;
+      const bars = rows.map(({ date, data }) => {
+        const cost = data.apiEquivalent;
+        const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
+        const costLabel = cost.pricedTokens > 0 ? I18n.formatCurrency(cost.equivalentUsd) : '—';
+        return '<div class="hc-col" data-date="' + this.escapeHtml(date) + '">' +
+          '<div class="hc-barval">' + costLabel + '</div>' +
+          '<div class="chart-bar cost-bar cost-stacked" style="height:' + height + 'px" ' +
+          'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
+          'data-input="' + data.total.processed + '" data-output="' + data.total.fresh + '" ' +
+          'data-cache-creation="' + data.total.output + '" data-cache-read="' + data.total.reasoning + '" ' +
+          'data-messages="' + data.threads + '" ' +
+          'data-cost-input="' + cost.freshInputUsd + '" data-cost-output="' + cost.outputUsd + '" ' +
+          'data-cost-cachewrite="0" data-cost-cacheread="' + cost.cachedInputUsd + '" ' +
+          'data-cost-help="' + this.escapeHtml(this.codexCostHelp(cost)) + '" ' +
+          'title="' + this.escapeHtml(date + ': ' + costLabel + ' · ' + this.codexCostHelp(cost)) + '">' +
+          this.codexCostStackHtml(cost, height) + '</div></div>';
+      }).join('');
+      const xlabels = rows.map(({ date }) =>
+        '<div class="hc-xlabel">' + this.escapeHtml(monthly ? this.getShortDate(date, true) : this.getShortDate(date)) + '</div>',
+      ).join('');
+      return '<div class="hc-wrap"><div class="hc-yaxis">' +
+        '<span class="hc-yval">' + costAxisLabel(maxCost) + '</span>' +
+        '<span class="hc-yval">' + costAxisLabel(maxCost / 2) + '</span>' +
+        '<span class="hc-yval">' + costAxisLabel(0) + '</span></div><div class="hc-main"><div class="hc-scroll" tabindex="0">' +
+        '<div class="hc-plot"><div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div>' +
+        '<div class="hc-bars">' + bars + '</div></div><div class="hc-xlabels">' + xlabels +
+        '</div></div></div></div>';
+    }
+    const claudeRows = sortedData as { date: string; data: UsageData }[];
+    const maxCost = Math.max(...claudeRows.map((d) => d.data.totalCost), 0);
     const maxHeight = 120;
 
     const costStack = (data: UsageData, barHeight: number): string => this.costStackHtml(data, barHeight);
 
-    const bars = sortedData
+    const bars = claudeRows
       .map(({ date, data }) => {
         const barHeight = maxCost > 0 ? (data.totalCost / maxCost) * maxHeight : 0;
         const cb = data.costBreakdown;
@@ -3328,7 +4427,7 @@ export class UsageWebviewProvider {
       })
       .join('');
 
-    const xlabels = sortedData
+    const xlabels = claudeRows
       .map(({ date }) => '<div class="hc-xlabel">' + this.getShortDate(date, monthly) + '</div>')
       .join('');
 
@@ -3339,7 +4438,7 @@ export class UsageWebviewProvider {
       '<span class="hc-yval">' + I18n.formatCurrency(maxCost / 2) + '</span>' +
       '<span class="hc-yval">' + I18n.formatCurrency(0) + '</span>' +
       '</div>' +
-      '<div class="hc-main"><div class="hc-scroll">' +
+      '<div class="hc-main"><div class="hc-scroll" tabindex="0">' +
       '<div class="hc-plot">' +
       '<div class="hc-grid hc-grid-top"></div>' +
       '<div class="hc-grid hc-grid-mid"></div>' +
@@ -3356,6 +4455,45 @@ export class UsageWebviewProvider {
    * reference lines and a value label on top of every bar, so figures are
    * readable without hovering.
    */
+  private renderCodexHourlyChart(rows: CodexHourlyUsageView[]): string {
+    if (rows.length === 0) {
+      return '<div class="no-chart-data">No data available</div>';
+    }
+    const maxCost = Math.max(...rows.map((row) => row.apiEquivalent.equivalentUsd), 0);
+    const hasPricedCost = rows.some((row) => row.apiEquivalent.pricedTokens > 0);
+    const costAxisLabel = (value: number): string =>
+      hasPricedCost ? I18n.formatCurrency(value) : '—';
+    const maxHeight = 120;
+    const bars = rows.map((row) => {
+      const cost = row.apiEquivalent;
+      const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
+      const costLabel = cost.pricedTokens > 0 ? I18n.formatCurrency(cost.equivalentUsd) : '—';
+      return '<div class="hc-col" data-hour="' + this.escapeHtml(row.hour) + '">' +
+        '<div class="hc-barval">' + costLabel + '</div>' +
+        '<div class="chart-bar cost-bar cost-stacked" style="height:' + height + 'px" ' +
+        'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
+        'data-input="' + row.total.processed + '" data-output="' + row.total.fresh + '" ' +
+        'data-cache-creation="' + row.total.output + '" data-cache-read="' + row.total.reasoning + '" ' +
+        'data-messages="' + row.threads + '" ' +
+        'data-cost-input="' + cost.freshInputUsd + '" data-cost-output="' + cost.outputUsd + '" ' +
+        'data-cost-cachewrite="0" data-cost-cacheread="' + cost.cachedInputUsd + '" ' +
+        'data-cost-help="' + this.escapeHtml(this.codexCostHelp(cost)) + '" ' +
+        'title="' + this.escapeHtml(costLabel + ' · ' + this.codexCostHelp(cost)) + '">' +
+        this.codexCostStackHtml(cost, height) + '</div></div>';
+    }).join('');
+    const labels = rows.map((row) =>
+      '<div class="hc-xlabel">' + this.escapeHtml(row.hour) + '</div>'
+    ).join('');
+    return '<div class="hc-wrap"><div class="hc-yaxis">' +
+      '<span class="hc-yval">' + costAxisLabel(maxCost) + '</span>' +
+      '<span class="hc-yval">' + costAxisLabel(maxCost / 2) + '</span>' +
+      '<span class="hc-yval">' + costAxisLabel(0) + '</span></div>' +
+      '<div class="hc-main"><div class="hc-scroll" tabindex="0">' +
+      '<div class="hc-plot"><div class="hc-grid hc-grid-top"></div>' +
+      '<div class="hc-grid hc-grid-mid"></div><div class="hc-bars">' + bars + '</div></div>' +
+      '<div class="hc-xlabels">' + labels + '</div></div></div></div>';
+  }
+
   private renderHourlyChart(): string {
     if (this.hourlyDataForToday.length === 0) {
       return '<div class="no-chart-data">No data available</div>';
@@ -3401,7 +4539,7 @@ export class UsageWebviewProvider {
       '<span class="hc-yval">' + I18n.formatCurrency(0) + '</span>' +
       '</div>' +
       '<div class="hc-main">' +
-      '<div class="hc-scroll">' +
+      '<div class="hc-scroll" tabindex="0">' +
       '<div class="hc-plot" id="hourlyChart">' +
       '<div class="hc-grid hc-grid-top"></div>' +
       '<div class="hc-grid hc-grid-mid"></div>' +
@@ -3771,12 +4909,8 @@ export class UsageWebviewProvider {
         background: #fff;
       }
 
-      /* Refresh-Now button is only relevant when auto-refresh is OFF — hide
-         it by default, show only when the body carries the .auto-off class. */
+      /* Manual refresh is also the explicit accelerated Codex catch-up path. */
       .btn-refresh-now {
-        display: none;
-      }
-      body.auto-off .btn-refresh-now {
         display: inline-block;
       }
 
@@ -3921,8 +5055,10 @@ export class UsageWebviewProvider {
       }
 
       .tab.active {
+        background: transparent;
         border-bottom-color: var(--vscode-focusBorder);
-        color: var(--vscode-focusBorder);
+        color: var(--vscode-foreground);
+        font-weight: 600;
       }
 
       .tab-content {
@@ -4057,7 +5193,7 @@ export class UsageWebviewProvider {
 
       .model-stat-label {
         color: var(--vscode-descriptionForeground);
-        opacity: 0.85;
+        opacity: 1;
       }
 
       .chart-tabs {
@@ -4104,6 +5240,12 @@ export class UsageWebviewProvider {
         display: flex;
         align-items: end;
         justify-content: center;
+      }
+
+      .chart-content > .hc-wrap {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
       }
 
       .chart-bars {
@@ -4157,7 +5299,7 @@ export class UsageWebviewProvider {
       }
 
       .output-bar {
-        background: linear-gradient(to top, var(--vscode-charts-orange), var(--vscode-charts-red));
+        background: linear-gradient(to top, var(--vscode-charts-yellow), var(--vscode-charts-red));
       }
 
       .cache-creation-bar {
@@ -4167,11 +5309,11 @@ export class UsageWebviewProvider {
       }
 
       .cache-read-bar {
-        background: linear-gradient(to top, var(--vscode-charts-yellow), var(--vscode-charts-orange));
+        background: linear-gradient(to top, var(--vscode-charts-yellow), var(--vscode-charts-green));
       }
 
       .messages-bar {
-        background: linear-gradient(to top, var(--vscode-charts-foreground), var(--vscode-charts-lines));
+        background: var(--vscode-charts-foreground);
       }
 
       .chart-label {
@@ -4244,6 +5386,59 @@ export class UsageWebviewProvider {
         /* Keep figures on one line: compact (k/M) numbers fit the panel with no
          * horizontal scroll; full integer numbers overflow so the table (only)
          * scrolls, while the chart above keeps its own independent scroll. */
+        white-space: nowrap;
+      }
+
+      [data-provider-session-table] {
+        table-layout: fixed;
+        min-width: 960px;
+      }
+
+      [data-provider-session-table] .date-cell,
+      [data-provider-session-table] [data-session-model],
+      [data-provider-session-table] [data-session-effort],
+      [data-provider-session-table] .project-name {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      [data-session-thread-layout] {
+        min-width: 0;
+        margin-bottom: 0;
+      }
+
+      [data-session-thread-copy] {
+        flex: 1 1 auto;
+        min-width: 0;
+      }
+
+      [data-session-thread-title],
+      [data-session-thread-role] {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      [data-session-detail] td {
+        background: var(--vscode-editorWidget-background, var(--vscode-input-background));
+      }
+
+      [data-session-detail-grid] {
+        display: grid;
+        grid-template-columns: repeat(6, minmax(0, 1fr));
+        gap: 8px 16px;
+      }
+
+      [data-session-detail-item] {
+        min-width: 0;
+      }
+
+      [data-session-detail-item] > span,
+      [data-session-detail-item] > strong {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
         white-space: nowrap;
       }
 
@@ -4483,7 +5678,7 @@ export class UsageWebviewProvider {
         font-weight: 800;
         line-height: 1.1;
         margin: 8px 0 2px;
-        color: var(--vscode-charts-orange, var(--vscode-foreground));
+        color: var(--vscode-charts-yellow, var(--vscode-foreground));
       }
       .insight-sub { font-size: 12px; color: var(--vscode-descriptionForeground); margin-bottom: 10px; }
       .insight-split { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
@@ -4512,7 +5707,7 @@ export class UsageWebviewProvider {
       .hr-spark { display: flex; align-items: flex-end; gap: 2px; height: 64px; margin: 10px 0 2px; }
       .hr-col { flex: 1 1 0; display: flex; flex-direction: column; align-items: stretch; height: 100%; justify-content: flex-end; }
       .hr-bar { width: 100%; border-radius: 2px 2px 0 0; background: var(--vscode-panel-border); min-height: 2px; }
-      .hr-bar.pk { background: var(--vscode-charts-orange, var(--vscode-badge-background)); }
+      .hr-bar.pk { background: var(--vscode-charts-yellow, var(--vscode-badge-background)); }
       .hr-lab { font-size: 8px; line-height: 10px; text-align: center; color: var(--vscode-descriptionForeground); height: 10px; }
       .cbm-list { margin: 6px 0 4px; }
       .cbm-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
@@ -4533,7 +5728,7 @@ export class UsageWebviewProvider {
         background: var(--vscode-panel-border);
         overflow: hidden;
       }
-      .cbm-fill { height: 100%; background: var(--vscode-charts-orange, var(--vscode-badge-background)); }
+      .cbm-fill { height: 100%; background: var(--vscode-charts-yellow, var(--vscode-badge-background)); }
       .cbm-sub { font-size: 10px; color: var(--vscode-descriptionForeground); margin-top: 3px; }
       .cbm-pct { flex: 0 0 72px; text-align: right; font-size: 12px; font-weight: 700; color: var(--vscode-foreground); }
       .cbm-unit { font-size: 10px; font-weight: 400; color: var(--vscode-descriptionForeground); margin-left: 1px; }
@@ -4765,7 +5960,7 @@ export class UsageWebviewProvider {
       }
 
       .seg-output {
-        background: var(--vscode-charts-orange);
+        background: var(--vscode-charts-yellow);
       }
 
       .seg-cache-creation {
@@ -4894,7 +6089,8 @@ export class UsageWebviewProvider {
       }
 
       th.sortable:hover {
-        color: var(--vscode-focusBorder);
+        color: var(--vscode-foreground);
+        text-decoration: underline;
       }
 
       th.sortable.sorted-asc::after {
@@ -5035,6 +6231,80 @@ export class UsageWebviewProvider {
         color: var(--vscode-descriptionForeground);
       }
 
+      [data-codex-time-series],
+      [data-codex-time-series] .chart-content,
+      [data-codex-time-series] .chart-content > .hc-wrap,
+      [data-codex-time-series] .composition-chart,
+      [data-codex-time-series] .hc-wrap,
+      [data-codex-time-series] .hc-main {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+      }
+
+      [data-codex-time-series] .hc-scroll,
+      [data-codex-time-series] .daily-table-container {
+        max-width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        touch-action: pan-x pan-y;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      [data-codex-time-series] .daily-table {
+        width: 100%;
+        min-width: 1080px;
+      }
+
+      [data-codex-time-series] .daily-table th {
+        white-space: nowrap;
+      }
+
+      /* Codex always renders a complete rolling 30-day track. Keep those
+         dense charts and their table inside independent, keyboard-focusable
+         horizontal scrollers instead of widening the entire dashboard. The
+         explicit max-content track also keeps grid lines and labels aligned
+         after scrolling in Chromium. */
+      [data-codex-last30-daily] {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+      }
+
+      [data-codex-last30-daily] .chart-content,
+      [data-codex-last30-daily] .chart-content > .hc-wrap,
+      [data-codex-last30-daily] .composition-chart,
+      [data-codex-last30-daily] .hc-wrap,
+      [data-codex-last30-daily] .hc-main {
+        width: 100%;
+        max-width: 100%;
+        min-width: 0;
+      }
+
+      [data-codex-last30-daily] .hc-scroll,
+      [data-codex-last30-daily] .daily-table-container {
+        max-width: 100%;
+        overflow-x: auto;
+        overscroll-behavior-inline: contain;
+        touch-action: pan-x pan-y;
+        -webkit-overflow-scrolling: touch;
+      }
+
+      [data-codex-last30-daily] .hc-plot,
+      [data-codex-last30-daily] .hc-xlabels {
+        width: max-content;
+        min-width: 100%;
+      }
+
+      [data-codex-last30-daily] .daily-table {
+        width: 100%;
+        min-width: 960px;
+      }
+
+      [data-codex-last30-daily] .daily-table th {
+        white-space: nowrap;
+      }
+
       .git-badge {
         display: inline-block;
         font-size: 9px;
@@ -5114,7 +6384,7 @@ export class UsageWebviewProvider {
       }
 
       .cf-2 {
-        background: var(--vscode-charts-orange);
+        background: var(--vscode-charts-yellow);
       }
 
       .cf-3 {
@@ -5128,16 +6398,66 @@ export class UsageWebviewProvider {
       .cf-5 {
         background: var(--vscode-charts-red);
       }
+
+      .provider-tabs {
+        display: flex;
+        gap: 6px;
+        margin: 4px 0 18px;
+        padding-bottom: 10px;
+        border-bottom: 1px solid var(--vscode-panel-border);
+      }
+      .provider-tab {
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 999px;
+        padding: 5px 13px;
+        background: transparent;
+        color: var(--vscode-foreground);
+        cursor: pointer;
+      }
+      .provider-tab.active {
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border-color: var(--vscode-button-background);
+      }
+      .sr-only {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        padding: 0;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
+        border: 0;
+      }
     `;
   }
 
   private getScript(): string {
     return `
-console.log("[DEBUG] === JAVASCRIPT INITIALIZATION START ===");
-
 // Get VSCode API
 const vscode = acquireVsCodeApi();
-console.log("[DEBUG] VSCode API acquired");
+
+function ccuReadUiState() {
+  try { return vscode.getState() || {}; } catch (e) { return {}; }
+}
+function ccuWriteUiState(key, value) {
+  try {
+    var st = ccuReadUiState();
+    st[key] = value;
+    vscode.setState(st);
+  } catch (e) {}
+}
+function ccuProviderName() {
+  var selected = document.querySelector('.provider-tab[aria-selected="true"]');
+  return selected ? (selected.getAttribute('data-provider') || selected.id.replace('provider-tab-', '')) : 'claude';
+}
+function ccuElementStateKey(element, kind) {
+  var tab = element && element.closest ? element.closest('.tab-content') : null;
+  var root = tab || document;
+  var elements = Array.prototype.slice.call(root.querySelectorAll(kind === 'table' ? 'table' : '.daily-breakdown, .hourly-breakdown'));
+  return ccuProviderName() + ':' + (tab ? tab.id : 'page') + ':' + kind + ':' + Math.max(0, elements.indexOf(element));
+}
 
 // Keep expanded <details data-persist> open across auto-refresh re-renders — a
 // data refresh shouldn't collapse something you're reading. Only a tab switch
@@ -5148,14 +6468,14 @@ function savePersistedDetails() {
     document.querySelectorAll('details[data-persist]').forEach(function(d){
       if (d.open) { open.push(d.getAttribute('data-persist')); }
     });
-    var st = vscode.getState() || {};
+    var st = ccuReadUiState();
     st.openDetails = open;
     vscode.setState(st);
   } catch (e) {}
 }
 function restorePersistedDetails() {
   try {
-    var st = vscode.getState() || {};
+    var st = ccuReadUiState();
     var open = st.openDetails || [];
     if (!open.length) { return; }
     document.querySelectorAll('details[data-persist]').forEach(function(d){
@@ -5164,7 +6484,7 @@ function restorePersistedDetails() {
   } catch (e) {}
 }
 function clearPersistedDetails() {
-  try { var st = vscode.getState() || {}; st.openDetails = []; vscode.setState(st); } catch (e) {}
+  try { var st = ccuReadUiState(); st.openDetails = []; vscode.setState(st); } catch (e) {}
 }
 // 'toggle' doesn't bubble — listen in the capture phase.
 document.addEventListener('toggle', function(e){
@@ -5176,11 +6496,49 @@ function restoreActiveTab() {
   try {
     var t = localStorage.getItem('ccu.activeTab');
     if (t && document.getElementById('tab-' + t) && document.getElementById(t)) {
-      showTab(t);
+      showTab(t, true);
     }
   } catch (e) {}
 }
-function restoreUi() { restoreActiveTab(); restoreSessionFilter(); restorePersistedDetails(); }
+var __ccuUiReady = false;
+function restoreUi() {
+  restoreActiveTab();
+  restoreSessionFilter();
+  restorePersistedDetails();
+  restoreSessionDetails();
+  restoreTableSorts();
+  restoreChartMetrics();
+  restoreScrollPosition();
+}
+function ccuScrollStateKey() {
+  var active = document.querySelector('.tab.active');
+  return ccuProviderName() + ':' + (active ? active.id.replace('tab-', '') : 'today');
+}
+function saveScrollPosition() {
+  if (!__ccuUiReady) { return; }
+  var positions = ccuReadUiState().scrollPositions || {};
+  positions[ccuScrollStateKey()] = window.scrollY;
+  ccuWriteUiState('scrollPositions', positions);
+}
+function restoreScrollPosition() {
+  var positions = ccuReadUiState().scrollPositions || {};
+  var y = positions[ccuScrollStateKey()];
+  if (typeof y !== 'number') { __ccuUiReady = true; return; }
+  requestAnimationFrame(function() {
+    requestAnimationFrame(function() {
+      window.scrollTo(0, y);
+      __ccuUiReady = true;
+    });
+  });
+}
+var __ccuScrollFrame = 0;
+window.addEventListener('scroll', function() {
+  if (!__ccuUiReady || __ccuScrollFrame) { return; }
+  __ccuScrollFrame = requestAnimationFrame(function() {
+    __ccuScrollFrame = 0;
+    saveScrollPosition();
+  });
+}, { passive: true });
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreUi);
 } else {
@@ -5199,6 +6557,12 @@ const __dateOpts = (extra) => {
 };
 
 // Define basic functions
+function showProvider(provider, tab) {
+  vscode.postMessage({ command: 'providerChanged', provider: provider, tab: tab || '' });
+}
+
+${getProviderNavClientScript()}
+
 function scReadConfig() {
   var rangeEl = document.getElementById('scRange');
   var scopeEl = document.getElementById('scScope');
@@ -5238,22 +6602,18 @@ function publishHeatmap() {
   vscode.postMessage({ command: 'publishHeatmap' });
 }
 function refresh() {
-  console.log("[DEBUG] refresh called");
   vscode.postMessage({ command: 'refresh' });
 }
 
 function openSettings() {
-  console.log("[DEBUG] openSettings called");
   vscode.postMessage({ command: 'openSettings' });
 }
 
 function refreshPricing() {
-  console.log("[DEBUG] refreshPricing called");
   vscode.postMessage({ command: 'refreshPricing' });
 }
 
 function getAdvice() {
-  console.log("[DEBUG] getAdvice called");
   vscode.postMessage({ command: 'getAdvice' });
 }
 
@@ -5266,8 +6626,8 @@ function setSetting(key, value, type) {
   vscode.postMessage({ command: 'updateSetting', key: key, value: value });
 }
 
-function resetAllSettings() {
-  vscode.postMessage({ command: 'resetAllSettings' });
+function resetAllSettings(keys) {
+  vscode.postMessage({ command: 'resetAllSettings', keys: Array.isArray(keys) ? keys : undefined });
 }
 
 function runOptimizer() {
@@ -5427,6 +6787,38 @@ function ccuSessState() {
     model: ms ? ms.value : 'all'
   };
 }
+function toggleSessionDetails(btn) {
+  if (!btn) { return; }
+  var row = btn.closest('tr');
+  var detail = row ? row.nextElementSibling : null;
+  if (!detail || !detail.hasAttribute('data-session-detail')) { return; }
+  var expanded = btn.getAttribute('aria-expanded') === 'true';
+  btn.setAttribute('aria-expanded', expanded ? 'false' : 'true');
+  btn.textContent = expanded ? '▶' : '▼';
+  detail.setAttribute('data-expanded', expanded ? 'false' : 'true');
+  detail.style.display = expanded ? 'none' : 'table-row';
+  saveSessionDetails();
+}
+function saveSessionDetails() {
+  var all = ccuReadUiState().sessionDetails || {};
+  all[ccuProviderName()] = Array.prototype.slice.call(document.querySelectorAll('[data-session-detail][data-expanded="true"]'))
+    .map(function(row) { return row.id; }).filter(Boolean);
+  ccuWriteUiState('sessionDetails', all);
+}
+function restoreSessionDetails() {
+  var all = ccuReadUiState().sessionDetails || {};
+  var open = all[ccuProviderName()] || [];
+  open.forEach(function(id) {
+    var detail = document.getElementById(id);
+    var btn = document.querySelector('[data-session-detail-toggle][aria-controls="' + id + '"]');
+    var row = btn ? btn.closest('tr') : null;
+    if (!detail || !btn) { return; }
+    btn.setAttribute('aria-expanded', 'true');
+    btn.textContent = '▼';
+    detail.setAttribute('data-expanded', 'true');
+    detail.style.display = row && row.style.display === 'none' ? 'none' : 'table-row';
+  });
+}
 function applySessionFilters() {
   var list = document.getElementById('sessionList');
   if (!list) { return; }
@@ -5440,7 +6832,12 @@ function applySessionFilters() {
     var okProject = st.project === 'all' || !tr.classList.contains('session-foreign');
     var okTime = st.range === 'all' || Number(tr.getAttribute('data-sort-time')) >= threshold;
     var okModel = st.model === 'all' || (tr.getAttribute('data-models') || '').split('|').indexOf(st.model) !== -1;
-    tr.style.display = (okProject && okTime && okModel) ? '' : 'none';
+    var visible = okProject && okTime && okModel;
+    tr.style.display = visible ? '' : 'none';
+    var detail = tr.nextElementSibling;
+    if (detail && detail.hasAttribute('data-session-detail')) {
+      detail.style.display = visible && detail.getAttribute('data-expanded') === 'true' ? 'table-row' : 'none';
+    }
   });
 }
 // One handler per filter group; all persist and re-apply the combined filter.
@@ -5554,7 +6951,7 @@ function toggleProjectGroup(groupId) {
 
 // Sort a table by a column key. Rows with class "sort-child" travel with the
 // preceding "sort-row" (used for expandable project groups).
-function sortTable(table, key, th) {
+function sortTable(table, key, th, restoring) {
   var tbody = table.querySelector('tbody');
   if (!tbody) { return; }
   var allRows = Array.prototype.slice.call(tbody.children);
@@ -5562,7 +6959,7 @@ function sortTable(table, key, th) {
   var units = [];
   var current = null;
   allRows.forEach(function(row) {
-    if (row.classList.contains('sort-child') && current) {
+    if ((row.classList.contains('sort-child') || row.hasAttribute('data-sort-child')) && current) {
       current.rows.push(row);
     } else {
       current = { lead: row, rows: [row] };
@@ -5599,11 +6996,27 @@ function sortTable(table, key, th) {
   units.forEach(function(u) {
     u.rows.forEach(function(r) { tbody.appendChild(r); });
   });
+
+  if (!restoring) {
+    var sorts = ccuReadUiState().tableSorts || {};
+    sorts[ccuElementStateKey(table, 'table')] = { key: key, direction: ascending ? 'asc' : 'desc' };
+    ccuWriteUiState('tableSorts', sorts);
+  }
+}
+function restoreTableSorts(root) {
+  var scope = root || document;
+  var sorts = ccuReadUiState().tableSorts || {};
+  scope.querySelectorAll('table').forEach(function(table) {
+    var saved = sorts[ccuElementStateKey(table, 'table')];
+    if (!saved) { return; }
+    var th = table.querySelector('th.sortable[data-sortkey="' + saved.key + '"]');
+    if (!th) { return; }
+    th.setAttribute('data-sortdir', saved.direction === 'asc' ? 'desc' : 'asc');
+    sortTable(table, saved.key, th, true);
+  });
 }
 
-function showTab(tabName) {
-  console.log("[DEBUG] showTab called:", tabName);
-
+function showTab(tabName, restoring) {
   try {
     // Remove active from all tabs and contents
     document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
@@ -5616,36 +7029,28 @@ function showTab(tabName) {
     if (selectedTab && selectedContent) {
       selectedTab.classList.add('active');
       selectedContent.classList.add('active');
-      console.log("[DEBUG] Tab switched successfully to:", tabName);
 
-      vscode.postMessage({ command: 'tabChanged', tab: tabName });
-      // Switching tabs resets expanded rows to their default (Carl's rule).
-      clearPersistedDetails();
-      // Persist in localStorage too — survives the reload, restored before paint.
-      try { localStorage.setItem('ccu.activeTab', tabName); } catch (e) {}
+      if (!restoring) {
+        vscode.postMessage({ command: 'tabChanged', tab: tabName });
+        // Switching tabs resets expanded rows to their default (Carl's rule).
+        clearPersistedDetails();
+        // Persist in localStorage too — survives the reload, restored before paint.
+        try { localStorage.setItem('ccu.activeTab', tabName); } catch (e) {}
+      }
     } else {
-      console.error("[DEBUG] Tab or content not found:", tabName);
+      console.error("Tab or content not found:", tabName);
     }
   } catch (error) {
-    console.error("[DEBUG] Error switching tabs:", error);
+    console.error("Error switching tabs:", error);
   }
 }
 
 function toggleHourlyDetail(date) {
-  console.log("[DEBUG] toggleHourlyDetail called for date:", date);
-
   try {
     const detailRow = document.querySelector('.hourly-detail-row[data-date="' + date + '"]');
     const button = document.querySelector('.daily-row[data-date="' + date + '"] .detail-button');
     const container = document.getElementById('hourly-detail-' + date);
     const chartBar = document.querySelector('.chart-bar-container[data-date="' + date + '"] .chart-bar');
-
-    console.log("[DEBUG] Found elements:", {
-      detailRow: !!detailRow,
-      button: !!button,
-      container: !!container,
-      chartBar: !!chartBar
-    });
 
     if (detailRow && button && container) {
       const isExpanded = detailRow.style.display !== 'none' && detailRow.style.display !== '';
@@ -5661,14 +7066,10 @@ function toggleHourlyDetail(date) {
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.add('selected');
-          console.log("[DEBUG] Chart bar selected for date:", date);
         }
-
-        console.log("[DEBUG] Showing hourly detail for date:", date);
 
         // Request hourly data if not loaded
         if (!container.dataset.loaded) {
-          console.log("[DEBUG] Requesting hourly data for date:", date);
           vscode.postMessage({ command: 'getHourlyData', date: date });
           container.dataset.loaded = 'true';
         }
@@ -5685,23 +7086,18 @@ function toggleHourlyDetail(date) {
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.remove('selected');
-          console.log("[DEBUG] Chart bar deselected for date:", date);
         }
-
-        console.log("[DEBUG] Hiding hourly detail for date:", date);
       }
 
     } else {
-      console.error("[DEBUG] Could not find required elements for date:", date);
+      console.error("Could not find required elements for date:", date);
     }
   } catch (error) {
-    console.error("[DEBUG] Error in toggleHourlyDetail:", error);
+    console.error("Error in toggleHourlyDetail:", error);
   }
 }
 
 function closeAllHourlyDetails() {
-  console.log("[DEBUG] closeAllHourlyDetails called");
-
   // Close all expanded detail rows
   const allDetailRows = document.querySelectorAll('.hourly-detail-row');
   const allButtons = document.querySelectorAll('.detail-button.expanded');
@@ -5719,24 +7115,14 @@ function closeAllHourlyDetails() {
     bar.classList.remove('selected');
   });
 
-  console.log("[DEBUG] Closed all detail rows");
 }
 
 function toggleMonthlyDetail(monthDate) {
-  console.log("[DEBUG] toggleMonthlyDetail called for month:", monthDate);
-
   try {
     const detailRow = document.querySelector('.monthly-detail-row[data-date="' + monthDate + '"]');
     const button = document.querySelector('.daily-row[data-date="' + monthDate + '"] .detail-button');
     const container = document.getElementById('monthly-detail-' + monthDate);
     const chartBar = document.querySelector('.chart-bar-container[data-date="' + monthDate + '"] .chart-bar');
-
-    console.log("[DEBUG] Found elements:", {
-      detailRow: !!detailRow,
-      button: !!button,
-      container: !!container,
-      chartBar: !!chartBar
-    });
 
     if (detailRow && button && container) {
       const isExpanded = detailRow.style.display !== 'none' && detailRow.style.display !== '';
@@ -5752,14 +7138,10 @@ function toggleMonthlyDetail(monthDate) {
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.add('selected');
-          console.log("[DEBUG] Chart bar selected for month:", monthDate);
         }
-
-        console.log("[DEBUG] Showing monthly detail for month:", monthDate);
 
         // Request monthly data if not loaded
         if (!container.dataset.loaded) {
-          console.log("[DEBUG] Requesting daily data for month:", monthDate);
           vscode.postMessage({ command: 'getDailyData', month: monthDate });
           container.dataset.loaded = 'true';
         }
@@ -5774,23 +7156,18 @@ function toggleMonthlyDetail(monthDate) {
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.remove('selected');
-          console.log("[DEBUG] Chart bar deselected for month:", monthDate);
         }
-
-        console.log("[DEBUG] Hiding monthly detail for month:", monthDate);
       }
 
     } else {
-      console.error("[DEBUG] Could not find required elements for month:", monthDate);
+      console.error("Could not find required elements for month:", monthDate);
     }
   } catch (error) {
-    console.error("[DEBUG] Error in toggleMonthlyDetail:", error);
+    console.error("Error in toggleMonthlyDetail:", error);
   }
 }
 
 function closeAllMonthlyDetails() {
-  console.log("[DEBUG] closeAllMonthlyDetails called");
-
   // Close all expanded monthly detail rows
   const allDetailRows = document.querySelectorAll('.monthly-detail-row');
   const allButtons = document.querySelectorAll('.detail-button.expanded');
@@ -5808,12 +7185,9 @@ function closeAllMonthlyDetails() {
     bar.classList.remove('selected');
   });
 
-  console.log("[DEBUG] Closed all monthly detail rows");
 }
 
 function updateHourlyChart(date, metric) {
-  console.log("[DEBUG] updateHourlyChart called with date:", date, "metric:", metric);
-
   const container = document.getElementById('hourly-detail-' + date);
   if (!container) return;
 
@@ -5837,8 +7211,6 @@ function updateHourlyChart(date, metric) {
 
 // Sync chart bar selection state
 function syncChartBarSelection(date, isSelected) {
-  console.log("[DEBUG] syncChartBarSelection called for date:", date, "selected:", isSelected);
-
   const chartBar = document.querySelector('.chart-bar-container[data-date="' + date + '"] .chart-bar');
   if (chartBar) {
     if (isSelected) {
@@ -5857,6 +7229,7 @@ window.getAdvice = getAdvice;
 window.toggleProjectGroup = toggleProjectGroup;
 window.sortTable = sortTable;
 window.dismissQuotaWarn = dismissQuotaWarn;
+window.toggleSessionDetails = toggleSessionDetails;
 window.attrSetScope = attrSetScope;
 window.requestAttribution = requestAttribution;
 window.showTab = showTab;
@@ -5883,22 +7256,22 @@ window.addEventListener('message', function(event) {
   if (message.command === 'hourlyDataResponse') {
     const container = document.getElementById('hourly-detail-' + message.date);
     if (container && message.data) {
-      console.log("[DEBUG] Rendering hourly data for date:", message.date);
       container.innerHTML = renderHourlyData(message.data, message.date);
 
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
+      restoreChartMetrics(container);
     }
   }
 
   if (message.command === 'dailyDataResponse') {
     const container = document.getElementById('monthly-detail-' + message.month);
     if (container && message.data) {
-      console.log("[DEBUG] Rendering daily data for month:", message.month);
       container.innerHTML = renderDailyData(message.data, message.month);
 
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
+      restoreChartMetrics(container);
     }
   }
 
@@ -5917,6 +7290,40 @@ window.addEventListener('message', function(event) {
 // Format any optimiser settings restored into the DOM by a re-render.
 formatOptSettings();
 
+function ccuChartStateKey(container) {
+  var content = container.querySelector('.chart-content[id]');
+  return ccuProviderName() + ':chart:' + (content ? content.id : ccuElementStateKey(container, 'chart'));
+}
+function saveChartMetric(container, metric) {
+  var metrics = ccuReadUiState().chartMetrics || {};
+  metrics[ccuChartStateKey(container)] = metric;
+  ccuWriteUiState('chartMetrics', metrics);
+}
+function applyChartMetric(container, metric, persist) {
+  var tab = container.querySelector('.chart-tab[data-metric="' + metric + '"]');
+  if (!tab) { return; }
+  container.querySelectorAll('.chart-tab').forEach(function(item) { item.classList.remove('active'); });
+  tab.classList.add('active');
+  if (container.classList.contains('hourly-breakdown')) {
+    var chartContent = container.querySelector('[id^="hourly-chart-"]');
+    if (chartContent) { updateHourlyChart(chartContent.id.replace('hourly-chart-', ''), metric); }
+  } else {
+    updateMainChart(metric, container);
+  }
+  if (persist) { saveChartMetric(container, metric); }
+}
+function restoreChartMetrics(root) {
+  var scope = root || document;
+  var containers = [];
+  if (scope.matches && scope.matches('.daily-breakdown, .hourly-breakdown')) { containers.push(scope); }
+  scope.querySelectorAll('.daily-breakdown, .hourly-breakdown').forEach(function(item) { containers.push(item); });
+  var metrics = ccuReadUiState().chartMetrics || {};
+  containers.forEach(function(container) {
+    var metric = metrics[ccuChartStateKey(container)];
+    if (metric) { applyChartMetric(container, metric, false); }
+  });
+}
+
 // Global event delegation for chart tabs and chart bars
 document.addEventListener('click', function(event) {
   // Handle sortable table header clicks
@@ -5931,46 +7338,21 @@ document.addEventListener('click', function(event) {
   }
 
   // Handle chart tab clicks
-  if (event.target.classList.contains('chart-tab')) {
-    console.log("[DEBUG] Chart tab clicked:", event.target);
-
+  var chartTab = event.target.closest ? event.target.closest('.chart-tab[data-metric]') : null;
+  if (chartTab) {
     event.preventDefault();
-    const metric = event.target.dataset.metric;
-    console.log("[DEBUG] Chart tab metric:", metric);
+    const metric = chartTab.dataset.metric;
 
     // Find the container and determine the context
-    const container = event.target.closest('.daily-breakdown') || event.target.closest('.hourly-breakdown');
-    console.log("[DEBUG] Chart tab container:", container);
+    const container = chartTab.closest('.daily-breakdown') || chartTab.closest('.hourly-breakdown');
 
     if (container) {
-      // Update active tab
-      const tabs = container.querySelectorAll('.chart-tab');
-      tabs.forEach(function(tab) {
-        tab.classList.remove('active');
-      });
-      event.target.classList.add('active');
-
-      // Determine chart type and update accordingly
-      if (container.classList.contains('hourly-breakdown')) {
-        // This is an hourly detail chart - extract date from the chart content ID
-        const chartContent = container.querySelector('[id^="hourly-chart-"]');
-        if (chartContent) {
-          const date = chartContent.id.replace('hourly-chart-', '');
-          console.log("[DEBUG] Updating hourly chart for date:", date, "metric:", metric);
-          updateHourlyChart(date, metric);
-        }
-      } else {
-        // This is a main chart (daily/monthly)
-        console.log("[DEBUG] Updating main chart with metric:", metric);
-        updateMainChart(metric, container);
-      }
+      applyChartMetric(container, metric, true);
     }
   }
 
   // Handle chart bar clicks - only for clickable charts
   if (event.target.classList.contains('chart-bar') && event.target.classList.contains('clickable')) {
-    console.log("[DEBUG] Clickable chart bar clicked:", event.target);
-
     event.preventDefault();
     // Daily/monthly charts now use .hc-col; the JS-rendered drill-downs still
     // use .chart-bar-container — support both.
@@ -5978,8 +7360,6 @@ document.addEventListener('click', function(event) {
     if (container) {
       const date = container.dataset.date;
       if (date) {
-        console.log("[DEBUG] Chart bar clicked for date:", date);
-
         // Determine if this is a monthly chart or daily chart based on current tab
         const activeTab = document.querySelector('.tab.active');
         if (activeTab && activeTab.id === 'tab-all') {
@@ -5995,14 +7375,9 @@ document.addEventListener('click', function(event) {
 });
 
 function bindChartTabEvents(container) {
-  console.log("[DEBUG] Binding chart tab events for container:", container);
+  const chartTabs = container.querySelectorAll('.chart-tab[data-metric]');
 
-  const chartTabs = container.querySelectorAll('.chart-tab');
-  console.log("[DEBUG] Found chart tabs:", chartTabs.length);
-
-  chartTabs.forEach(function(tab, index) {
-    console.log("[DEBUG] Processing chart tab", index, ":", tab.dataset.metric);
-
+  chartTabs.forEach(function(tab) {
     // Remove existing event listeners to prevent duplicates
     tab.removeEventListener('click', handleChartTabClick);
 
@@ -6012,42 +7387,28 @@ function bindChartTabEvents(container) {
 }
 
 function handleChartTabClick(event) {
-  console.log("[DEBUG] handleChartTabClick called");
   event.preventDefault();
 
   const metric = this.dataset.metric;
+  if (!metric) { return; }
   const container = this.closest('.daily-breakdown') || this.closest('.hourly-breakdown');
 
   if (container) {
-    // Update active tab
-    const tabs = container.querySelectorAll('.chart-tab');
-    tabs.forEach(function(tab) {
-      tab.classList.remove('active');
-    });
-    this.classList.add('active');
-
-    // Update chart based on context
-    if (container.classList.contains('hourly-breakdown')) {
-      const chartContent = container.querySelector('[id^="hourly-chart-"]');
-      if (chartContent) {
-        const date = chartContent.id.replace('hourly-chart-', '');
-        updateHourlyChart(date, metric);
-      }
-    } else {
-      updateMainChart(metric, null);
-    }
+    applyChartMetric(container, metric, true);
   }
 }
 
 function updateMainChart(metric, container) {
-  console.log("[DEBUG] updateMainChart called with metric:", metric, "container:", container);
-
+  if (typeof metric !== 'string' ||
+      ['cost', 'inputTokens', 'outputTokens', 'cacheCreation', 'cacheRead', 'messages'].indexOf(metric) === -1) {
+    return;
+  }
   // If container is provided, use it; otherwise find the active tab content
   let targetContainer = container;
   if (!targetContainer) {
     targetContainer = document.querySelector('.tab-content.active');
     if (!targetContainer) {
-      console.error("[DEBUG] No active tab content found");
+      console.error("No active tab content found");
       return;
     }
   }
@@ -6055,11 +7416,8 @@ function updateMainChart(metric, container) {
   // Update chart in the target container
   const chartBars = targetContainer.querySelectorAll('.chart-bar');
   if (chartBars.length === 0) {
-    console.log("[DEBUG] No chart bars found in target container");
     return;
   }
-
-  console.log("[DEBUG] Updating", chartBars.length, "chart bars with metric:", metric);
 
   // Calculate max values for the metric
   const values = Array.from(chartBars).map(function(bar) {
@@ -6069,8 +7427,6 @@ function updateMainChart(metric, container) {
 
   const maxValue = Math.max(...values);
   const maxHeight = 120;
-
-  console.log("[DEBUG] Max value for metric", metric, ":", maxValue);
 
   // Update each bar
   chartBars.forEach(function(bar, index) {
@@ -6101,17 +7457,21 @@ function updateMainChart(metric, container) {
     }
 
     // Update tooltip + on-bar value label
-    const formattedValue = formatValue(value, metric);
+    const formattedValue = metric === 'cost' && bar.dataset.pricedTokens === '0'
+      ? '—'
+      : formatValue(value, metric);
     const container = bar.parentElement;
     const date = container.dataset.date;
     const hour = container.dataset.hour;
+    const costHelp = metric === 'cost' ? bar.dataset.costHelp : '';
+    const valueWithHelp = costHelp ? formattedValue + ' · ' + costHelp : formattedValue;
 
     if (hour) {
       // Hourly chart: tooltip shows the value only (the hour is on the x-axis).
-      bar.title = formattedValue;
+      bar.title = valueWithHelp;
     } else if (date) {
       const dateObj = new Date(date);
-      bar.title = dateObj.toLocaleDateString() + ': ' + formattedValue;
+      bar.title = dateObj.toLocaleDateString() + ': ' + valueWithHelp;
     }
 
     const barVal = container.querySelector('.hc-barval');
@@ -6129,9 +7489,12 @@ function updateMainChart(metric, container) {
   const wrap = firstBar && firstBar.closest ? firstBar.closest('.hc-wrap') : null;
   const yvals = wrap ? wrap.querySelectorAll('.hc-yaxis .hc-yval') : [];
   if (yvals.length === 3) {
-    yvals[0].textContent = formatValue(maxValue, metric);
-    yvals[1].textContent = formatValue(maxValue / 2, metric);
-    yvals[2].textContent = formatValue(0, metric);
+    const hasPricedCost = metric !== 'cost' || Array.from(chartBars).some(function(bar) {
+      return bar.dataset.pricedTokens !== '0';
+    });
+    yvals[0].textContent = hasPricedCost ? formatValue(maxValue, metric) : '—';
+    yvals[1].textContent = hasPricedCost ? formatValue(maxValue / 2, metric) : '—';
+    yvals[2].textContent = hasPricedCost ? formatValue(0, metric) : '—';
   }
 }
 
@@ -6223,7 +7586,7 @@ function compositionHtml(items) {
     + '</div>'
     + '<div class="hc-wrap"><div class="hc-yaxis">'
     + '<span class="hc-yval">' + fmt(maxTotal) + '</span><span class="hc-yval">' + fmt(Math.round(maxTotal / 2)) + '</span><span class="hc-yval">0</span>'
-    + '</div><div class="hc-main"><div class="hc-scroll"><div class="hc-plot">'
+    + '</div><div class="hc-main"><div class="hc-scroll" tabindex="0"><div class="hc-plot">'
     + '<div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div>'
     + '<div class="hc-bars">' + bars + '</div></div>'
     + '<div class="hc-xlabels">' + xlabels + '</div></div></div></div></div>';
@@ -6252,7 +7615,7 @@ function renderHourlyData(hourlyData, date) {
   html += renderHourlyChart(hourlyData, 'cost');
   html += '</div>';
 
-  html += '<div class="daily-table-container"><table class="daily-table"><thead><tr>';
+  html += '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>';
   html += '<th>${I18n.t.popup.hour}</th>';
   html += '<th>${I18n.t.popup.cost}</th>';
   html += '<th>${I18n.t.popup.inputTokens}</th>';
@@ -6313,7 +7676,7 @@ function renderDailyData(dailyData, monthDate) {
     };
   }));
 
-  html += '<div class="daily-table-container"><table class="daily-table"><thead><tr>';
+  html += '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>';
   html += '<th>${I18n.t.popup.date}</th>';
   html += '<th>${I18n.t.popup.cost}</th>';
   html += '<th>${I18n.t.popup.inputTokens}</th>';
@@ -6413,7 +7776,7 @@ function griddedChart(items, metric, opts) {
     '<span class="hc-yval">' + formatValue(maxValue / 2, metric) + '</span>' +
     '<span class="hc-yval">' + formatValue(0, metric) + '</span>' +
     '</div>' +
-    '<div class="hc-main"><div class="hc-scroll">' +
+    '<div class="hc-main"><div class="hc-scroll" tabindex="0">' +
     '<div class="hc-plot"><div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div>' +
     '<div class="hc-bars">' + bars + '</div></div>' +
     '<div class="hc-xlabels">' + xlabels + '</div>' +
@@ -6447,16 +7810,7 @@ function renderHourlyChart(hourlyData, metric) {
   });
 }
 
-// Initialize chart tab events for existing elements
-setTimeout(function() {
-  console.log("[DEBUG] Initializing chart tab events for existing elements");
-  const existingChartContainers = document.querySelectorAll('.daily-breakdown');
-  existingChartContainers.forEach(function(container) {
-    bindChartTabEvents(container);
-  });
-}, 1000);
-
-console.log("[DEBUG] All functions defined and ready");`;
+`;
   }
 
   dispose(): void {

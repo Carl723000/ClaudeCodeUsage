@@ -4,15 +4,22 @@
 .agents/**
 .codex/**
 .worktrees/**
+.superpowers/**
 .github/**
 src/**
 out/test/**
+tests/**
+playwright.config.mjs
+test-results/**
+playwright-report/**
 AGENTS.md
 AGENTS.zh-CN.md
 CLAUDE.md
 CLAUDE.local.md
 CONTRIBUTING.md
 probe-*.mjs
+issue87-*.cjs
+out/claudeIncrementalPrototype.js
 docs/**
 
 .gitignore

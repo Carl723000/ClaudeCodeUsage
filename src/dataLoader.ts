@@ -59,7 +59,7 @@ const DEFAULT_CLAUDE_CONFIG_PATH = path.join(XDG_CONFIG_DIR, 'claude');
 //
 // The companion function `validationDropReason` lets the loader log *why* a
 // record was rejected so users can spot format drift without us guessing.
-function validateUsageRecord(data: any): data is ClaudeUsageRecord {
+export function validateUsageRecord(data: any): data is ClaudeUsageRecord {
   if (!data || typeof data !== 'object') return false;
   if (typeof data.timestamp !== 'string') return false;
   if (!data.message || typeof data.message !== 'object') return false;
@@ -89,13 +89,13 @@ function validationDropReason(data: any): string {
 // derived from character counts, so they are approximate; the relative shares
 // between categories are the dependable signal.
 
-interface AnalysisBucket {
+export interface AnalysisBucket {
   tokens: number;
   chars: number;
   count: number;
 }
 
-interface AnalysisAcc {
+export interface AnalysisAcc {
   cat: Record<string, AnalysisBucket>;
   tools: Record<string, AnalysisBucket>;
   toolIdToName: Record<string, string>;
@@ -113,7 +113,7 @@ interface AnalysisAcc {
 }
 
 // cutoffMs: ignore log lines older than this (0 = no cutoff).
-function newAnalysisAcc(cutoffMs: number): AnalysisAcc {
+export function newAnalysisAcc(cutoffMs: number): AnalysisAcc {
   return {
     cat: {},
     tools: {},
@@ -249,7 +249,7 @@ function addToBucket(map: Record<string, AnalysisBucket>, key: string, text: str
 // token-consumption buckets, but their "user" lines are agent-framework task
 // dispatches — never harvest them as prompt samples for the AI-advice feature.
 // sessionId: parent session of the source file (for the thinking-share maps).
-function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = false, sessionId = ''): void {
+export function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = false, sessionId = ''): void {
   if (!parsed || typeof parsed !== 'object') {
     return;
   }
@@ -386,7 +386,7 @@ function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = false, sess
   }
 }
 
-function finalizeAnalysis(acc: AnalysisAcc): ContentAnalysis {
+export function finalizeAnalysis(acc: AnalysisAcc): ContentAnalysis {
   const toSlices = (map: Record<string, AnalysisBucket>): ContentSlice[] =>
     Object.keys(map)
       .map((key) => ({ key, estimatedTokens: map[key].tokens, charCount: map[key].chars, count: map[key].count }))
@@ -402,6 +402,73 @@ function finalizeAnalysis(acc: AnalysisAcc): ContentAnalysis {
     thinkingByDay: acc.thinkingByDay,
     skillUses: acc.skillUses,
   };
+}
+
+/** Merge one already-parsed file's content-analysis contribution. The maps
+ * used only while parsing a stream (toolIdToName / skillByToolId) deliberately
+ * stay file-local; the user-visible buckets, prompts, thinking and skill uses
+ * are additive and retain the same global caps as the legacy full scan. */
+export function mergeAnalysisAcc(target: AnalysisAcc, source: AnalysisAcc): void {
+  const mergeBuckets = (
+    into: Record<string, AnalysisBucket>,
+    from: Record<string, AnalysisBucket>,
+  ): void => {
+    for (const [key, value] of Object.entries(from)) {
+      const bucket = into[key] ?? { tokens: 0, chars: 0, count: 0 };
+      bucket.tokens += value.tokens;
+      bucket.chars += value.chars;
+      bucket.count += value.count;
+      into[key] = bucket;
+    }
+  };
+  mergeBuckets(target.cat, source.cat);
+  mergeBuckets(target.tools, source.tools);
+  for (const uuid of source.seenUuids) target.seenUuids.add(uuid);
+  for (const prompt of source.prompts) {
+    target.prompts.push(prompt);
+    if (target.prompts.length > 600) target.prompts.shift();
+  }
+  const mergeThinking = (
+    into: Record<string, ThinkingShare>,
+    from: Record<string, ThinkingShare>,
+  ): void => {
+    for (const [key, value] of Object.entries(from)) {
+      const current = into[key] ?? { thinking: 0, assistantTotal: 0 };
+      current.thinking += value.thinking;
+      current.assistantTotal += value.assistantTotal;
+      if (value.hiddenThinking) current.hiddenThinking = true;
+      into[key] = current;
+    }
+  };
+  mergeThinking(target.thinkingBySession, source.thinkingBySession);
+  mergeThinking(target.thinkingByDay, source.thinkingByDay);
+  for (const use of source.skillUses) {
+    if (target.skillUses.length >= MAX_SKILL_USES) break;
+    target.skillUses.push({ ...use });
+  }
+}
+
+export function finalizeAnalysisWithCalibration(
+  acc: AnalysisAcc,
+  records: readonly ClaudeUsageRecord[],
+  cutoffMs: number,
+): ContentAnalysis {
+  const contentAnalysis = finalizeAnalysis(acc);
+  let realOutputTokens = 0;
+  let realInputSideTokens = 0;
+  for (const record of records) {
+    if (record._isUserPrompt) continue;
+    const timestamp = Date.parse(record.timestamp);
+    if (isNaN(timestamp) || timestamp < cutoffMs) continue;
+    const usage = record.message.usage;
+    realOutputTokens += usage.output_tokens || 0;
+    realInputSideTokens += (usage.input_tokens || 0) +
+      (usage.cache_creation_input_tokens || 0);
+  }
+  if (realOutputTokens > 0 || realInputSideTokens > 0) {
+    contentAnalysis.calibration = { realOutputTokens, realInputSideTokens };
+  }
+  return contentAnalysis;
 }
 
 export class ClaudeDataLoader {
@@ -536,13 +603,14 @@ export class ClaudeDataLoader {
       const sorted = await sortUsageFilesByEarliestTimestamp([...manifest.entries.values()]);
       bytesRead += sorted.bytesRead;
       const sortedFiles = sorted.files;
-      // hash → records[] index. Some proxies (mimo / CC Switch) write two
-      // records per message: a tokens=0 placeholder when streaming starts,
-      // and the real values when the response finishes. Both records share
-      // the same messageId, so they hash identically. We keep whichever
-      // record has the higher total token sum (issue #18).
-      const processedHashes = new Map<string, number>();
-      const records: ClaudeUsageRecord[] = [];
+      // Usage identities are resolved after every file has been read. Claude
+      // normally writes both messageId and requestId, but some transcript rows
+      // omit requestId. Waiting until the full load is known lets a missing ID
+      // join the sole request for that message without merging genuinely
+      // distinct requests that happen to reuse a messageId.
+      const usageRecordIndexes: number[] = [];
+      const requestIdsByMessage = new Map<string, Set<string>>();
+      let records: ClaudeUsageRecord[] = [];
       // sessionId → conversation title. Current Claude Code writes
       // `custom-title` (user-set) and `ai-title` (auto) lines; older versions
       // wrote `summary`. A custom title always wins over an AI one.
@@ -726,7 +794,6 @@ export class ClaudeDataLoader {
               }
 
               const data = parsed;
-              const uniqueHash = this.createUniqueHash(data);
 
               // Tag the record with the session/project it came from.
               // Prefer the real working directory (`cwd`) recorded in the log line
@@ -759,31 +826,18 @@ export class ClaudeDataLoader {
                 record._agentTask = agentInfo.task;
               }
 
-              if (uniqueHash && processedHashes.has(uniqueHash)) {
-                // Duplicate — keep whichever record has more tokens. This
-                // resolves the proxy "placeholder + real value" pair from
-                // issue #18 without needing to detect the proxy.
-                const existingIndex = processedHashes.get(uniqueHash)!;
-                if (this.tokenSum(record) > this.tokenSum(records[existingIndex])) {
-                  records[existingIndex] = record;
-                  stats.replacedByDedup += 1;
-                } else {
-                  stats.skippedByDedup += 1;
-                }
-                continue;
-              }
-
               records.push(record);
-              stats.kept += 1;
-              const modelName =
-                typeof record.message?.model === 'string' ? record.message.model : '<no-model>';
-              if (!stats.models[modelName]) {
-                stats.models[modelName] = { count: 0, tokens: 0 };
-              }
-              stats.models[modelName].count += 1;
-              stats.models[modelName].tokens += this.tokenSum(record);
-              if (uniqueHash) {
-                processedHashes.set(uniqueHash, records.length - 1);
+              usageRecordIndexes.push(records.length - 1);
+              const messageId = record.message?.id;
+              const requestId = record.requestId;
+              if (messageId && requestId) {
+                const messageKey = String(messageId);
+                let requestIds = requestIdsByMessage.get(messageKey);
+                if (!requestIds) {
+                  requestIds = new Set<string>();
+                  requestIdsByMessage.set(messageKey, requestIds);
+                }
+                requestIds.add(String(requestId));
               }
             } catch (parseError) {
               stats.parseErrors += 1;
@@ -800,6 +854,49 @@ export class ClaudeDataLoader {
         if (++fileIndex % 25 === 0) {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
+      }
+
+      // One Claude response can appear as separate thinking and text rows,
+      // monotonic partial/final snapshots, or a cross-file transcript clone.
+      // Keep the largest complete token vector for each resolved response
+      // identity. This is the established issue #18 behavior; the post-pass
+      // only makes requestId omission within one message order-independent.
+      const processedHashes = new Map<string, number>();
+      const removedUsageIndexes = new Set<number>();
+      for (const recordIndex of usageRecordIndexes) {
+        const record = records[recordIndex];
+        const uniqueHash = this.createUniqueHash(record, requestIdsByMessage);
+        if (!uniqueHash) {
+          continue;
+        }
+        const existingIndex = processedHashes.get(uniqueHash);
+        if (existingIndex === undefined) {
+          processedHashes.set(uniqueHash, recordIndex);
+          continue;
+        }
+        if (this.tokenSum(record) > this.tokenSum(records[existingIndex])) {
+          records[existingIndex] = record;
+          stats.replacedByDedup += 1;
+        } else {
+          stats.skippedByDedup += 1;
+        }
+        removedUsageIndexes.add(recordIndex);
+      }
+      if (removedUsageIndexes.size > 0) {
+        records = records.filter((_record, index) => !removedUsageIndexes.has(index));
+      }
+      stats.kept = usageRecordIndexes.length - removedUsageIndexes.size;
+      for (const record of records) {
+        if (record._isUserPrompt) {
+          continue;
+        }
+        const modelName =
+          typeof record.message?.model === 'string' ? record.message.model : '<no-model>';
+        if (!stats.models[modelName]) {
+          stats.models[modelName] = { count: 0, tokens: 0 };
+        }
+        stats.models[modelName].count += 1;
+        stats.models[modelName].tokens += this.tokenSum(record);
       }
 
       // Attach harvested conversation titles (custom beats AI). A post-pass
@@ -873,12 +970,22 @@ export class ClaudeDataLoader {
     }
   }
 
-  private static createUniqueHash(data: any): string | null {
+  private static createUniqueHash(
+    data: any,
+    requestIdsByMessage?: ReadonlyMap<string, ReadonlySet<string>>,
+  ): string | null {
     const messageId = data.message?.id;
-    const requestId = data.requestId;
+    let requestId = data.requestId;
 
     if (!messageId && !requestId) {
       return null;
+    }
+
+    if (messageId && !requestId) {
+      const knownRequestIds = requestIdsByMessage?.get(String(messageId));
+      if (knownRequestIds?.size === 1) {
+        requestId = knownRequestIds.values().next().value;
+      }
     }
 
     return `${messageId || 'no-msg'}-${requestId || 'no-req'}`;
@@ -898,7 +1005,7 @@ export class ClaudeDataLoader {
    * Claude Code stores logs as: <claudeDir>/projects/<encoded-cwd>/<session-id>.jsonl
    * The encoded-cwd folder is the working directory with path separators replaced by '-'.
    */
-  private static parseSessionInfo(filePath: string): { sessionId: string; projectName: string; projectPath: string } {
+  static parseSessionInfo(filePath: string): { sessionId: string; projectName: string; projectPath: string } {
     // Layouts under ~/.claude/projects/:
     //   <proj-encoded>/<session-id>.jsonl                                 (main conversation)
     //   <proj-encoded>/<session-id>/subagents/workflows/<wf>/agent-*.jsonl (workflow sub-agents)
@@ -931,7 +1038,7 @@ export class ClaudeDataLoader {
    * a slash command (`/model`, `/clear`, …) and its output. These otherwise
    * inflate the "Messages" count (one session showed 106 vs ~80 real prompts:
    * `[Request interrupted by user]` ×3, `<command-name>/model…` ×8, etc.). */
-  private static isSyntheticUserText(text: string): boolean {
+  static isSyntheticUserText(text: string): boolean {
     const t = text.trim();
     if (/^\[Request interrupted/i.test(t)) {
       return true;
@@ -955,7 +1062,7 @@ export class ClaudeDataLoader {
   }
 
   /** Last segment of a path, handling both '/' and '\\' separators. */
-  private static lastPathSegment(p: string): string {
+  static lastPathSegment(p: string): string {
     const parts = p.split(/[\\/]/).filter((s) => s.length > 0);
     return parts.length > 0 ? parts[parts.length - 1] : p;
   }
@@ -2123,7 +2230,7 @@ export class ClaudeDataLoader {
   }
 
   /** Agent type from the sibling agent-*.meta.json ("unknown" when absent). */
-  private static async readAgentType(jsonlPath: string, cache: Map<string, string>): Promise<string> {
+  static async readAgentType(jsonlPath: string, cache: Map<string, string>): Promise<string> {
     const metaPath = jsonlPath.replace(/\.jsonl$/i, '.meta.json');
     const cached = cache.get(metaPath);
     if (cached !== undefined) {
@@ -2148,7 +2255,7 @@ export class ClaudeDataLoader {
    * workflow id when no script matches (the wf_*.json shape is not a stable
    * API, so the script filename is the dependable source).
    */
-  private static async resolveWorkflowName(
+  static async resolveWorkflowName(
     agentFilePath: string,
     workflowId: string,
     cache: Map<string, string>
@@ -2579,12 +2686,12 @@ export class ClaudeDataLoader {
   }
 
   /** Normalise a path for case-insensitive comparison and grouping. */
-  private static normalizePath(p: string): string {
+  static normalizePath(p: string): string {
     return p.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
   }
 
   /** Number of leading path segments shared by every segment list. */
-  private static commonPrefixLength(lists: string[][]): number {
+  static commonPrefixLength(lists: string[][]): number {
     if (lists.length === 0) {
       return 0;
     }
@@ -2601,7 +2708,7 @@ export class ClaudeDataLoader {
   }
 
   /** Original-casing display path for a group, derived from a child's path. */
-  private static deriveGroupDisplayPath(childOriginalPath: string, groupKey: string): string {
+  static deriveGroupDisplayPath(childOriginalPath: string, groupKey: string): string {
     const groupSegCount = groupKey.split('/').filter((s) => s.length > 0).length;
     const sep = childOriginalPath.includes('\\') ? '\\' : '/';
     const originalSegments = childOriginalPath.split(/[\\/]/).filter((s) => s.length > 0);
@@ -2609,7 +2716,7 @@ export class ClaudeDataLoader {
   }
 
   /** Resolve the enclosing git repository root for a path, or null. Walks up the tree. */
-  private static resolveGitRoot(startPath: string, cache: Map<string, string | null>): string | null {
+  static resolveGitRoot(startPath: string, cache: Map<string, string | null>): string | null {
     const visited: string[] = [];
     let dir = startPath;
     for (let i = 0; i < 80; i++) {

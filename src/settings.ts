@@ -1,5 +1,8 @@
 import * as vscode from 'vscode';
-import { LIVE_REFRESH_SECONDS } from './refreshPolicy';
+import {
+  CODEX_LIVE_REFRESH_SECONDS,
+  LIVE_REFRESH_SECONDS,
+} from './refreshPolicy';
 
 // Single source of truth for every user setting (V2.1: "settings in the
 // dashboard"). Most settings moved OUT of VS Code's Settings UI to keep it
@@ -9,6 +12,7 @@ import { LIVE_REFRESH_SECONDS } from './refreshPolicy';
 // Settings Sync:
 //   - language        (UI language; people sync this)
 //   - dataDirectory   (machine-specific path a power user may script)
+//   - codex.dataDirectory (optional machine-specific Codex home)
 //   - advice.apiKey   (a secret some keep in their synced settings)
 //
 // The catalog below drives BOTH the read/write plumbing and the dashboard
@@ -19,7 +23,8 @@ import { LIVE_REFRESH_SECONDS } from './refreshPolicy';
 
 export type SettingType = 'boolean' | 'number' | 'enum' | 'string';
 export type SettingStorage = 'config' | 'state';
-export type SettingGroup = 'general' | 'features' | 'statusBar' | 'data' | 'advice';
+export type SettingGroup = 'general' | 'providers' | 'features' | 'statusBar' | 'data' | 'advice';
+export type SettingProvider = 'claude' | 'codex';
 
 export interface SettingDef {
   key: string; // dotted config key, e.g. 'advice.backend'
@@ -38,6 +43,16 @@ export interface SettingDef {
   max?: number;
   secret?: boolean; // mask the input (apiKey)
   multiline?: boolean; // render a textarea
+  // Dashboard visibility. Omitted settings are Claude-only; explicitly list
+  // both providers for truly shared controls.
+  providers?: SettingProvider[];
+}
+
+export function settingAppliesToProvider(
+  def: SettingDef,
+  provider: SettingProvider,
+): boolean {
+  return def.providers?.includes(provider) ?? provider === 'claude';
 }
 
 // globalState key prefix for moved settings — namespaced to avoid colliding
@@ -165,6 +180,7 @@ export const SETTINGS: SettingDef[] = [
     label: 'Display language',
     help: 'UI language. "auto" follows VS Code.',
     enumValues: ['auto', 'en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'],
+    providers: ['claude', 'codex'],
   },
   {
     key: 'decimalPlaces',
@@ -186,6 +202,7 @@ export const SETTINGS: SettingDef[] = [
     help: 'Decimals for compact token display (1.2M / 345.6K). Full integer counts are unaffected.',
     min: 0,
     max: 2,
+    providers: ['claude', 'codex'],
   },
   {
     key: 'compactNumbers',
@@ -195,6 +212,71 @@ export const SETTINGS: SettingDef[] = [
     group: 'general',
     label: 'Compact token counts',
     help: 'Show 1.2M / 345K instead of full numbers.',
+    providers: ['claude', 'codex'],
+  },
+  {
+    key: 'releaseAnnouncements',
+    type: 'boolean',
+    default: true,
+    storage: 'state',
+    group: 'general',
+    label: 'Release announcements',
+    help: "Show one What's New notification after an extension upgrade.",
+    providers: ['claude', 'codex'],
+  },
+
+  // --- Providers ---
+  {
+    key: 'codex.enabled',
+    type: 'boolean',
+    default: true,
+    storage: 'state',
+    group: 'providers',
+    label: 'Enable Codex Beta',
+    help: 'Read privacy-safe usage aggregates from local Codex session logs.',
+    providers: ['claude', 'codex'],
+  },
+  {
+    key: 'codex.dataDirectory',
+    type: 'string',
+    default: '',
+    storage: 'config',
+    group: 'providers',
+    label: 'Custom Codex data directory',
+    help: 'Empty = CODEX_HOME, then ~/.codex. Authentication files are never read.',
+    providers: ['codex'],
+  },
+  {
+    key: 'codex.fileWatchSeconds',
+    type: 'enum',
+    default: '30',
+    storage: 'state',
+    group: 'providers',
+    label: 'Codex live refresh delay',
+    help: 'Quiet debounce after local Codex JSONL changes. Off disables watching.',
+    enumValues: [...CODEX_LIVE_REFRESH_SECONDS],
+    enumLabels: ['Off', '10s', '30s', '60s', '120s', '300s'],
+    providers: ['codex'],
+  },
+  {
+    key: 'codex.optimization.enabled',
+    type: 'boolean',
+    default: true,
+    storage: 'state',
+    group: 'providers',
+    label: 'Show Codex behavior optimization',
+    help: 'Show local, deterministic Codex behavior metrics and recommendations.',
+    providers: ['codex'],
+  },
+  {
+    key: 'showWeeklyEquivalentValue',
+    type: 'boolean',
+    default: true,
+    storage: 'state',
+    group: 'features',
+    label: 'Show weekly API-equivalent value',
+    help: 'On by default. Show the historical weekly API-equivalent value panel in All-time and Compare. This is an estimate, not a bill or subscription allowance.',
+    providers: ['claude', 'codex'],
   },
   {
     key: 'showHeatmap',
@@ -270,6 +352,7 @@ export const SETTINGS: SettingDef[] = [
     enumValues: TIMEZONE_VALUES,
     enumLabels: TIMEZONE_LABELS,
     enumGroups: TIMEZONE_GROUPS,
+    providers: ['claude', 'codex'],
   },
   {
     key: 'projectGroupingMode',
@@ -283,6 +366,30 @@ export const SETTINGS: SettingDef[] = [
   },
 
   // --- Status bar ---
+  {
+    key: 'statusBarProvider',
+    type: 'enum',
+    default: 'auto',
+    storage: 'state',
+    group: 'statusBar',
+    label: 'Status-bar provider',
+    help: 'Auto prefers Claude when both providers have data.',
+    enumValues: ['auto', 'claude', 'codex'],
+    enumLabels: ['Auto', 'Claude', 'Codex'],
+    providers: ['claude', 'codex'],
+  },
+  {
+    key: 'codex.statusMetric',
+    type: 'enum',
+    default: 'fresh',
+    storage: 'state',
+    group: 'statusBar',
+    label: 'Codex status metric',
+    help: 'Uncached usage, processed tokens, or output tokens.',
+    enumValues: ['fresh', 'processed', 'output'],
+    enumLabels: ['Uncached', 'Processed', 'Output'],
+    providers: ['codex'],
+  },
   {
     key: 'showCost',
     type: 'boolean',
@@ -427,6 +534,7 @@ export const SETTINGS: SettingDef[] = [
     group: 'data',
     label: 'Dashboard auto-refresh',
     help: 'Auto-refresh the dashboard as new usage lands. Off = manual refresh only (the status bar still updates).',
+    providers: ['claude', 'codex'],
   },
   {
     key: 'enableContentAnalysis',

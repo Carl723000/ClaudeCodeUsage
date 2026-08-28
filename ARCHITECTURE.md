@@ -1,199 +1,281 @@
 # Architecture
 
-> A concise technical map of this extension — what it is, how data flows, and
-> how the exact token/cost numbers are produced. Kept deliberately short: it is
-> the reference a contributor (or an automated issue/PR helper) reads *instead
-> of* re-reading `src/`. If you change a module's role or the data flow, update
-> this file. A Simplified-Chinese version lives in
+> A concise map of the extension's provider boundaries, data flow, and usage
+> semantics. Update it whenever module ownership or provider behavior changes.
+> A faithful Simplified-Chinese companion lives in
 > [`ARCHITECTURE-zh-CN.md`](ARCHITECTURE-zh-CN.md).
 
-## What it is (and isn't)
+## Product boundary
 
-**Claude Code Usage** is a VS Code extension that reports Claude Code token
-usage and cost — in the status bar and a dashboard webview — by reading Claude
-Code's own local logs. It is deliberately:
+**Claude Code Usage** remains local-first, dependency-free, and read-mostly.
+v2.3.0 preserves the complete Claude experience and adds Codex Beta as a
+provider-specific usage and optimization view.
 
-- **Claude-only** — built around Claude Code's log format and Anthropic's OAuth
-  quota. (DeepSeek etc. are priced as a courtesy for CC-Switch users, but Claude
-  is the focus.)
-- **Lightweight** — minimal UI, no runtime dependencies, secondary views
-  collapsed by default.
-- **Token-attribution focused** — the headline numbers are *exact*, read from
-  each request's own usage accounting, not estimated.
-- **Read-only** over `~/.claude` — it never writes to Claude Code's data.
+- Claude: exact local token buckets, model pricing estimates, and Anthropic
+  OAuth 5-hour/weekly quota.
+- Codex Beta: local processed/fresh/cache/output/reasoning metrics, model and
+  effort breakdowns, thread structure, index coverage, quality flags, and
+  structural optimization guidance. Known models also receive a clearly
+  qualified API-equivalent cost estimate; it is never a bill or subscription
+  charge, and unknown models remain unpriced.
+- Compare: side-by-side compatible metrics only. It never sums provider cost,
+  quota, or tokens into a misleading combined total.
 
-**Out of scope** (use this list to triage requests): multi-provider/vendor
-dashboards as a first-class feature; full billing/invoice reconciliation;
-writing to or driving Claude Code; non-usage analytics. Requests that sharpen
-token insight, attribution, or the advice experience are the right fit.
+Full invoice reconciliation, driving either coding agent, and background
+telemetry are out of scope. Opt-in GitHub authentication and cross-device
+aggregate sync are deferred to v2.4.x after a separate privacy review.
 
 ## Module map (`src/`)
 
 | Module | Role |
 |---|---|
-| `extension.ts` | Activation, command registration, and the refresh orchestration: an activity-aware, self-rescheduling timer (faster while you're active, calmer when idle) with a generation guard and coalescing, plus `pauseDashboardRefresh`. Reads config through `SettingsStore`, runs the settings migration once, listens for workspace-folder changes (re-fetches quota), and owns `runOptimizer` (the Usage Optimizer round-trip). Wires loader + status bar + webview + quota client together. |
-| `dataLoader.ts` | The data pipeline. Reads `~/.claude/projects/**/*.jsonl`, parses/validates/dedups records, harvests session titles and user-prompt markers, and aggregates everything (`calculateUsageData` + today/month/session/project/group/branch breakdowns). Also v2.1: `getWorkflowBreakdown` (multi-agent runs from `subagents/` logs + ad-hoc batches), `getUsageAttribution` (the "what's contributing" panel), `getCurrentContextInfo` + `contextWindowFor` (per-model context window, main-thread record, `estimated` flag), and the content/calibration analysis (`windowDays` configurable). The largest piece of logic. |
-| `settings.ts` | **(v2.1)** Single source of truth for every user setting: the `SETTINGS` catalog (type/default/storage/group) + `SettingsStore`. A small core (`language`, `dataDirectory`, `advice.apiKey`) lives in VS Code config; the rest in `globalState`, edited from the dashboard's ⚙ Settings tab. `migrateOnce()` copies pre-2.1 `settings.json` values into the store. |
-| `pricing.ts` | Per-model, per-token rate table (separate input / output / cache-write / cache-read rates), model-family inference, and `[1m]`-context-suffix stripping. `calculateCostBreakdown` turns a usage record into a four-part cost. |
-| `statusBar.ts` | Three status-bar items: the primary (today's cost **or** token count, `statusBarMetric`; icon-only entry fallback when all three are hidden), the quota item (5h / weekly, opt-in `opus:NN%`), and the experimental context-window indicator (bar + breakdown tooltip, `~` for guessed windows). |
-| `webview.ts` | The dashboard: tabbed views (today, sessions, projects, content, branches, workflows, **⚙ settings**), the AI-advice + Usage-Optimizer action cards, charts and sortable tables. Holds optimizer state across re-renders and skips identical re-renders. By far the biggest file — almost all UI lives here. |
-| `claudeApiClient.ts` | Anthropic OAuth quota: reads `~/.claude/.credentials.json`, refreshes the token (re-reading disk first), and fetches real utilisation from `api.anthropic.com/api/oauth/usage`. Uses `httpClient` (fetch → curl). 60s cool-down on HTTP 429. |
-| `httpClient.ts` | **(v2.1)** Shared transport: `requestViaFetch` and `requestViaCurl` (curl `cwd` pinned to home so a stale workspace cwd can't ENOENT it). curl is the fallback for Anthropic's TLS-fingerprint `403 "Request not allowed"` gate. |
-| `advisor.ts` | The AI-advice + **Usage Optimizer** transport: `callModel` (Anthropic `/v1/messages` or OpenAI chat-completions, with the curl 403 fallback), `getUsageAdvice`, and the optimizer's pure helpers `buildOptimizerSystemPrompt` / `parseOptimizerOutput`. API-only (a dormant subscription branch remains). Opt-in. |
-| `adviceSummary.ts` | **(v2.1)** Builds the usage digest sent to the advice model — aggregates + multi-agent runs + thinking share + attribution + a windowed sample of the user's own prompts. |
-| `adviceDemoSample.ts` | Static sample advice (all seven languages) shown before a key is configured, so the feature is discoverable. |
-| `i18n.ts` | The string table for seven languages (`en`, `de-DE`, `zh-TW`, `zh-CN`, `ja`, `ko`, `pt-BR`) + `SETTINGS_I18N` (per-setting label/help for the ⚙ Settings panel) and `settingText()`. Every user-facing string goes through here. |
-| `types.ts` | Shared interfaces (`ClaudeUsageRecord`, `UsageData`, `SessionUsage`, `CostlyMessage`, `SupportedLanguage`, `ExtensionConfig`, `ContextWindowInfo`, quota + attribution + workflow types, …). |
+| `extension.ts` | Activation, commands, settings, provider lifecycle, refresh orchestration, watchers, status/webview wiring, and anonymous diagnostics. |
+| `dataLoader.ts` | Claude parsing, validation, attribution, and content-analysis primitives retained for exact compatibility. |
+| `claudeIncrementalIndex.ts` | Production in-memory per-file Claude index: append-tail parsing, exact cross-file response deduplication, affected-group aggregation, content-analysis contributions, and materialized dashboard rows. |
+| `providers/providerTypes.ts` | Provider-neutral token, event, confidence, outcome, coverage, and limit contracts. |
+| `providers/claudeProvider.ts` | Thin compatibility adapter that exposes existing Claude aggregates without changing their results. |
+| `providers/codex/codexSchema.ts` | Minimal safe JSON guards; never flattens or returns message/command/tool bodies. |
+| `providers/codex/codexParser.ts` | Codex exact-request parsing with cumulative high-water fallback, pseudonymous lineage metadata, structural counters, quality flags, and last-observed limits. |
+| `providers/codex/codexManifest.ts` | Allowlisted Codex directory discovery, HMAC file keys, fingerprints, and manifest diffing. |
+| `providers/codex/codexIndex.ts` | Schema-3 persistent per-file numeric aggregates and replay evidence, bounded cold/tail parsing, independent aggregate/period/current-day coverage, and atomic save/load. |
+| `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | Background coordinator, recent-first progress, cancellation, resume, checkpoint persistence, and single-flight client. |
+| `providers/codex/codexFilePassPool.ts` / `codexFilePassWorker.ts` | Adaptive bounded local pool for independent per-file main, lineage, period, current-day, and identity passes during incomplete backfills. |
+| `providers/codex/codexProvider.ts` | Extension-facing Codex snapshot facade and partial/unavailable/error outcomes. |
+| `providers/codex/codexUsage.ts` | Codex calendar-Today/hourly, 7-day, 30-day, monthly, task, and project view-model aggregation with exact-model API-equivalent cost. |
+| `providers/codex/codexInsights.ts` | Deterministic structural usage guidance; no prompt/body inspection. |
+| `codexView.ts` / `codexViewComponents.ts` | Codex localized-copy and default-provider contracts; no HTML renderer, client script, or CSS ownership. |
+| `settings.ts` | Canonical `SETTINGS` catalog and `SettingsStore`; do not scatter direct reads. |
+| `statusBar.ts` / `codexStatus.ts` | Provider-specific status presentation and generic Claude quota formatting. |
+| `webview.ts` | Single provider-aware Claude/Codex dashboard shell, shared render functions, shared client behavior, provider tabs, and Compare presentation. |
+| `i18n.ts` | All user-facing copy for all eight UI locales. |
+| `types.ts` | Shared extension and Claude contracts. |
 
-### V2.2 additions (pure, unit-tested modules)
-| Module | Role |
-|---|---|
-| `shareCard.ts` | Pure share-card logic: `buildShareCardData` (privacy redaction — the type carries no prompt/path/id field), `ShareSections`/`DEFAULT_SECTIONS`, `selectShareBadge`, `prettyModelName`, `rangeLabel`, `shareCardFilename`. |
-| `shareCardSvg.ts` | Self-contained SVG renderer for the share card (no DOM/fonts/network). `SHARE_CARD_THEMES` (claudeCream / claudeClassic / auroraDark) + `resolveShareCardTheme`; `BADGE_COPY`. Landscape 1200×680. |
-| `heatmap.ts` / `heatmapSvg.ts` | GitHub-contribution-style token heatmap logic + SVG (`buildContributionGrid`, `renderHeatmapSvg`). Exported/published to a GitHub profile repo (`extension.publishHeatmapToGitHub`, built-in GitHub auth + Contents API). |
-| `dateKeys.ts` | Timezone-consistent day/month bucketing (`dayKeyInZone`/`monthKeyInZone`) so dashboard buckets match the configured zone. |
-| `promptDedup.ts` | Dedups api_error retry re-logs so message counts aren't inflated. |
-| `quotaFormat.ts` | Pure status-bar quota text formatter (kept clean; reset detail lives in the tooltip). |
-| `dataContribution.ts` | Opt-in, OFF-by-default SCAFFOLD for future authorized cross-user signals (e.g. cache-TTL by tier). No endpoint / no-op; the Observation type has no identifying field. |
-| `sessionResume.ts` | **(v2.2)** Pure guards for the Sessions resume/copy actions: `isValidSessionId`, `isUsableCwd`, `buildResumeCommand`, `isUnderDir` (shell-injection-safe id/cwd validation). |
-| `conversationLog.ts` | **(v2.2)** Pure parser for the read-only conversation viewer: a session `.jsonl` → ordered display turns (prompt / text / thinking / tool_use / tool_result). Skips meta/sidechain, dedups by uuid, caps by ROUNDS (`maxRounds`) so prompts aren't starved, truncates per turn. Unit-tested. |
-| `conversationViewerHtml.ts` | **(v2.2)** Renders a `ParsedConversation` to a full read-only webview page (no scripts): prompts as the star, Markdown-rendered answers, thinking/tools behind pure-CSS toggles, a prompt jump-nav. |
-| `miniMarkdown.ts` | **(v2.2)** Dependency-free Markdown→HTML (headings, lists, GFM tables, code, links, blockquotes) used by the conversation viewer; escapes before formatting, scheme-checks links. Unit-tested. |
+Existing pure modules such as `quotaFormat.ts`, `dateKeys.ts`, `shareCard.ts`,
+`heatmap.ts`, `conversationLog.ts`, and `miniMarkdown.ts` keep their current
+ownership and tests.
 
-New data-layer methods on `dataLoader.ts`: `getCostliestMessages` (top-N single
-turns + prompt + skill + cost split + gap + prev-model, for the Content tab's
-"costliest messages"), `estimateCacheTtl` (hit-rate-by-gap-bin → warm-window
-estimate; measured ~60 min), `buildShareInput` (range today/week/last30/month/
-year/`month:YYYY-MM` + scope all/project/session). Efficiency insights
-(cost/tokens per message, realised cache savings, "Cache warmth"), thinking-share
-"hidden" handling (Fable 5 / Opus omit CoT text), and timezone = full UTC-offset
-coverage are all V2.2. The opt-in **Experimental insights** (`showInsights`) draw
-on `estimateCacheChurnCost`, `cacheStatsByModel` (per-model warm window),
-`sessionHealth` (big one-shot turns), `activeHours`, and `skillRoi`; plus
-`activeDurationBySession` for the Sessions "Active" column and `modelRightsizing`
-(computed but not shown — reserved for an AI-judged v2). All weekly-cached in the
-webview. CI: `@ccu-bot` first-pass automation (`claude.yml`,
-`issue-first-pass.yml`, `pr-first-pass.yml`) — INERT unless `AUTOMATION_ENABLED`;
-official or third-party (`ANTHROPIC_BASE_URL`) key; reads this file.
+## Provider data flow
 
-## Data flow
+```text
+Claude JSONL
+  ──> manifest metadata
+  ──> in-memory per-file incremental index
+  ──> exact global response identity + affected aggregate groups
+  ──> materialized Claude status/dashboard inputs
+  ──> Claude adapter
 
-```
-~/.claude/projects/<encoded-cwd>/<session>.jsonl     (one file = one conversation)
-        │  read line-by-line, JSON.parse each line
-        ▼
-validate (is it a usage record?) ─► dedup (messageId+requestId, keep higher tokens)
-        │  tag each record with session id + project (real cwd preferred)
-        ▼
-ClaudeUsageRecord[]  ──►  calculateUsageData()  ──►  UsageData
-        │                   (sum the 4 token buckets, price each)        │
-        │                                                                ├─► status bar (today + quota)
-        └─ session titles, user-prompt markers                           └─► webview (breakdowns + charts)
+allowlisted Codex JSONL
+  ──> manifest metadata
+  ──> background worker
+  ──> schema guard + exact-request parser with lineage high-water fallback
+  ──> per-file numeric aggregate index + targeted current-day hourly sidecar
+  ──> CodexProviderSnapshot
+  ──> Codex scopes + insights
+  ──> Codex status + provider-aware dashboard render inputs
+
+Claude aggregates + Codex scopes ──> one `webview.ts` dashboard render stack
+Claude aggregates + Codex scopes ──> side-by-side Compare (no cross-provider totals)
 ```
 
-Quota is a **separate** path: `claudeApiClient` calls the OAuth usage endpoint
-and returns five-hour / seven-day / seven-day-opus utilisation independently of
-the local logs (the logs cannot know your plan's limits; only Anthropic does).
+One provider may be unavailable or partial without clearing the other
+provider's last verified snapshot. Claude-only remains the v2.2.1 behavior;
+Codex-only defaults to Codex; when both exist, the dashboard defaults to Claude.
+Codex source availability is detected separately from indexed-data availability:
+the Codex tab appears as soon as an allowed local home exists, an in-page state
+covers the initial index with exact file, percentage, and byte counts, and
+Compare remains hidden until both providers have real data. Before the worker
+starts, the extension hydrates the last atomic checkpoint; a brand-new index
+adopts its first checkpoint while the worker continues. Thus progress is an
+annotation on the full indexed-subtotal dashboard rather than a replacement for
+its cards and tables. Worker progress is coalesced to at most one Webview render
+every 250 ms and repaints only while Codex is selected; the verified snapshot
+still gets a final render when the refresh returns.
 
-## How tokens & cost are computed (exact, not estimated)
+Codex Today is the current civil day in the configured timezone, not the most
+recent task. Its summary uses that day's verified period slice; exact hourly
+rows come from the independent current-day sidecar described below. Hourly,
+daily, and monthly primary charts use API-equivalent cost by default, while the
+token-composition chart remains a separate view. Unknown models contribute to
+the token denominator but remain unpriced, so pricing coverage stays visible.
+Claude and Codex time-series layouts share aligned responsive widths and keep
+dense chart/table content inside local keyboard-focusable scrollers.
 
-Each assistant-response line in the JSONL carries a `message.usage` object — the
-**Anthropic API's own token accounting**, the same counts Anthropic bills on.
-The extension does not estimate these; it reads, validates, dedups, sums, and
-prices them:
+## Token and limit semantics
 
-1. **Validate** — keep only records whose `usage.input_tokens` is a number (real
-   API responses); skip synthetic/error/`<synthetic>` model entries.
-2. **Dedup** — hash = `messageId + requestId`; on collision keep the
-   higher-token copy (handles proxies that log a placeholder line first, then
-   the real values).
-3. **Sum** the four buckets into the totals:
-   - `input_tokens` — fresh prompt, full price
-   - `cache_read_input_tokens` — prefix served from cache, ~10% of input price
-   - `cache_creation_input_tokens` — prefix *written* to cache (the
-     "Input Cache (Miss)" bar), ~125% of input price; spikes on a model switch
-     or after an idle gap past the cache TTL (the prompt cache is per-model; the
-     TTL is platform-side — MEASURED at ~60 min in practice, not the assumed
-     5 min — and `estimateCacheTtl` infers it from the user's own turns)
-   - `output_tokens` — generated, output price
-4. **Price** — each bucket × its per-model rate (`pricing.ts`); cost = the sum.
+Claude records carry Anthropic's four token buckets. The extension validates,
+deduplicates, sums, and prices them by model. Claude cost remains an estimate
+from the configured rate table; it is not an invoice.
 
-The **only** estimates in the product are the Content tab's character-based
-"what's consuming tokens" breakdown (and the planned v2.2 model-fit /
-cache-waste features) — always labelled as estimates and never folded into the
-exact totals. "Messages" counts user-typed prompts only, via synthetic
-zero-token marker records, so it never affects token sums.
+Codex uses these rules:
 
-## Log-format facts for model-core features (verified on disk 2026-06-13)
+- processed = `input total + output total`
+- fresh input + output = `max(0, input total - cached input) + output total`
+- cached input is a subset of input; reasoning output is a subset of output
+- neither subset is added again to processed totals
+- fresh input + output is an optimization aid, not a cost/quota equivalence
 
-What the JSONL logs *do* and *don't* contain — the reference for any feature
-that reasons about runs, models, or effort. Re-verify with a JSON-key probe
-(never a substring grep — see the trap below) when Claude Code's format drifts.
+Each valid Codex `token_count` normally carries `last_token_usage`; its input,
+cached-input, output, and reasoning components are the exact request-level
+attribution. `last_token_usage.total_tokens` is the active context size and is
+not attributed as request usage. A full numeric signature of both total and
+last snapshots suppresses replay only when it matches the same pseudonymous
+rate-limit source or the immediately preceding record. This narrow proof avoids
+silently merging a legitimate reset from another interleaved source.
 
-- **Run config (effort / thinking budget) is NOT logged.** There is no
-  `effort` / `ultracode` / `maxThinking` / reasoning-budget field on any usage
-  line. The only mode record is a `type:"mode"` line carrying `permissionMode`
-  (e.g. `"normal"`). **We cannot tell what effort level a run used.** ⇒ the only
-  reliable "dynamic-workflow engaged" signal is the **presence of a
-  `subagents/workflows/wf_<id>/` directory**, not effort. A plain Task-tool
-  fan-out (no `wf_` dir) is an "ad-hoc batch", not a workflow.
-  - **Trap:** a substring grep for `effort`/`ultracode` *appears* to hit — but
-    only inside prompt text and tool-call logs (including this extension's own
-    commands once they're logged). Parse JSON keys; never grep for config.
-- **Skill / plugin attribution IS first-class.** Assistant usage lines carry
-  `attributionSkill` (e.g. `"superpowers:executing-plans"`) and
-  `attributionPlugin` (e.g. `"superpowers"`). These are authoritative — prefer
-  them over the older `<command-name>` / `Skill` tool_use heuristic, and
-  cost-weight a skill/plugin by the *exact* `message.usage` of its own lines.
-- **Why native-Claude "workflows" look missing from the Workflows tab.** Claude
-  sub-agent logs *do* exist (haiku/opus appear under some `subagents/` dirs).
-  But when a native-Claude run uses ultracode, the expensive **Opus/Fable
-  orchestration stays in the main session log**, and only cheap **haiku**
-  sub-agents (or none) write `agent-*.jsonl`. A heavy Fable/Opus main thread can
-  produce **no `subagents/` dir at all**. The Workflows tab groups *sub-agent
-  files*, so it shows the cheap models and misses the main-thread cost — hence
-  the v2.1-PartII fix to associate a run's orchestrating main session and surface
-  its cost/models. **General principle:** the *expensive* model is usually the
-  main-thread orchestrator; sub-agent files skew cheap. Never infer "which model
-  I mainly use" from sub-agent files alone.
-- **Newer fields (Claude Code ≥ 2.1)** worth knowing: top-level `entrypoint`
-  (e.g. `claude-vscode`), `permissionMode`, `version`, `context_management`; line
-  `type`s `mode`, `last-prompt` (verbatim last user prompt), `queue-operation`,
-  `file-history-snapshot`, `attachment`, `system` (hook summaries); and on
-  `message.usage`: `service_tier`, `iterations`, `speed`, `inference_geo`,
-  `cache_creation` (object). Totals (`input/output/cache_*`) remain exact.
+If `last_token_usage` is absent, `total_token_usage` remains a cumulative
+fallback and may include an inherited parent baseline. That path uses
+per-component, per-lineage high-water marks. Unknown parents, regressions, and
+schema drift produce quality flags rather than negative or fabricated usage.
 
-## Key invariants (don't break these)
+Codex `rate_limits.primary` found in local logs is a last-observed snapshot only.
+It is hidden once its reset time passes. v2.3.0 does not read Codex credentials
+or make a network call to refresh it.
 
-- **Read-only** over `~/.claude` (the one write is `advice.apiKey` token refresh in `claudeApiClient`; never touch user logs).
-- Every user-facing string goes through `i18n.ts` in **all seven languages**; settings-panel labels/help go through `SETTINGS_I18N` (English fallback from the catalog).
-- **Settings live in `SettingsStore`, not scattered reads.** Only the core trio (`language`, `dataDirectory`, `advice.apiKey`) is declared in `package.json` / VS Code config; everything else is `globalState` and must be read via the store (so `config.get` won't find it). Adding a setting = one catalog entry in `settings.ts` (+ its `SETTINGS_I18N` rows).
-- New settings **default to existing behaviour** (opt-in); experimental/approximate features default OFF (context indicator, Usage Optimizer).
-- **No new runtime dependencies.** External calls (quota, advice/optimizer) go through `httpClient` with the fetch→curl 403 fallback; spawn `curl` with `cwd: os.homedir()`.
-- Exact totals and labelled estimates never mix.
-- Advice/Optimizer send **only** the usage digest / the pasted draft — never the user's files.
+## Privacy and persistence
 
-## Refresh model
+Codex discovery is restricted to:
 
-The dashboard/status bar stay current via an activity-aware loop in
-`extension.ts`: a self-rescheduling timer whose interval shortens when you're
-active and lengthens when idle, guarded by a `refreshGen` generation counter and
-coalescing so overlapping refreshes can't stack. File-watching of
-`~/.claude/projects` (opt-out) gives ~1.5s latency; an interval is the fallback.
-`pauseDashboardRefresh` freezes updates while the panel is open for inspection.
+- `$CODEX_HOME/sessions/**/*.jsonl`
+- `$CODEX_HOME/archived_sessions/**/*.jsonl`
+- default `$CODEX_HOME`: `~/.codex`
 
-## Release
+It never reads `auth.json`, SQLite databases, config secrets, keychains, browser
+state, or unknown files. Raw paths/session/parent IDs stay in short-lived local
+worker memory. Disk persistence contains machine-salted pseudonymous keys and
+numeric per-day/model/effort/session aggregates only—never prompt, response,
+command, tool-argument, raw-line, or raw-path content.
 
-TypeScript strict, clean compile (`node ./node_modules/typescript/bin/tsc -p ./`
-— the F5/debug task uses this, not `npm`, to dodge the Windows `npm.ps1`
-execution-policy block), green `node:test`. The repo lives at the org
-**`ClaudeCodeUsage/ClaudeCodeUsage`**; `main` is branch-protected (PR + `test`
-check). Flow (Release Drafter, set up in v2.0.3): contributors open PRs; the
-maintainer **squash-merges** with a version label (`patch`/`minor`/`major`,
-default patch) — that's the whole per-PR action; a **draft GitHub Release**
-auto-accumulates categorised notes; clicking **Publish** tags `v*` and
-`publish.yml` stamps `package.json`, packages with `@vscode/vsce`, and ships to
-the VS Code Marketplace + Open VSX with the `.vsix` attached. A cross-fork PR's
-attribution is preserved by squash-merge; the rare manual re-apply uses
-`git merge -s ours` to keep the contributor's commits as merged ancestors.
-Issue-closing PRs use `Closes #N`.
+The machine salt lives in VS Code `globalState`, not in the index file. Worker
+progress/results/errors and diagnostics contain anonymous counts and timings,
+not paths or identifiers.
+
+### Schema 3 index contract
+
+Schema 3 deliberately keeps the established `globalStorage` filename
+`codex-index-v1.json`; the filename is a compatibility path, not a statement
+about the JSON schema. Its persisted DTO is an explicit allowlist of numeric
+aggregates, enum values, pseudonymous keys, cleaned labels, and opaque
+fingerprints derived only from numeric token-counter vectors. A v3 file never
+stores a raw incomplete line or a carry buffer. The only reader for those old
+fields is the explicitly named legacy schema-1 migration boundary; it discards
+the carry before the v3 index is saved. Schema-1 and schema-2 indexes are marked
+for a bounded lineage rescan; their prior totals are not retained and added to
+the rebuilt result. A schema-3 container whose per-file parser state predates
+exact-request semantics is also reset once, so incompatible aggregates are
+never mixed. The parser state may persist only bounded numeric total-plus-last
+signatures keyed by machine-salted pseudonyms, plus the immediately preceding
+numeric signature.
+
+Each physical rollout locks its first reliable session and tree identity. An
+ordered numeric-event fingerprint trace then finds the copied prefix of a child
+inside its verified parent while retaining every independent sibling suffix.
+Nested forks and separate fork epochs apply their own prefix once. If the
+reported parent is absent, the child stays conservatively counted in full and a
+visible `missing-parent` quality warning replaces silent subtraction. Counter
+regressions still emit exact last usage with partial confidence; the cumulative
+fallback uses component high-water containment and never creates negative
+deltas or counts a reset gap again. A verified ordered overlap for the same
+pseudonymous session across active/archive copies is likewise counted once,
+while conflicting identity metadata still keeps identity coverage incomplete.
+
+There are two separate truth layers. The all-time view is built from the
+verified aggregate of canonical file contributions. Time-bucketed period slices
+are promoted independently, so a partial migration cannot overwrite, inflate,
+or stand in for that all-time verified aggregate. Period coverage is anchored by
+the target-zone `asOfDay` and reports separate 7-day, 30-day, and all-time
+states. The 7/30-day views sum events in their natural calendar days; they do
+not pull an entire older session into a range merely because the session's last
+activity falls inside it.
+
+The current-day hourly index is an additive schema-3 sidecar, not a third source
+of all-time truth. A file becomes eligible only after duplicate classification
+selects it as canonical and its verified period slice already contains
+`asOfDay`. Per-file hourly promotion and in-progress cursors are checkpointed,
+so cancellation resumes from the verified offset. A day or timezone change
+discards the stale sidecar and targets the new civil day. This path neither
+invalidates the primary aggregate nor triggers a full-history reindex.
+
+Identity is also a coverage contract. Git SCP-style SSH and HTTPS repository
+URLs are canonicalized to the same repository identity where their host/path
+matches. Root titles use the latest trusted `updated_at` title, subagents retain
+their reported nickname plus parent title, projects prefer the canonical
+repository name over a directory fallback, and recent-task ordering uses the
+maximum activity observed across a complete lineage. A strictly exact
+active/archive pair is deduplicated only after both copies are verified and
+their safe signatures agree; any other repeated session is ambiguous and keeps
+identity coverage incomplete rather than guessing. This stable ambiguity is a
+data-quality state, not unfinished I/O: once base and required period coverage
+are complete, it no longer leaves the dashboard labelled as still indexing.
+
+The five structural call proxies are `patchCalls`, `toolCalls`,
+`postPatchToolCalls`, `compactCount`, and `taskCompleteCount`. They describe
+observed structural envelopes only, not file, command, or review counts. They
+produce no dollar cost and are never derived from prompt, response, command
+body, or tool-argument content.
+
+## Refresh and scale
+
+Claude polling always honors `refreshInterval`; its file watcher uses the
+configured quiet debounce. The production Claude path maintains an in-memory
+per-file index: unchanged refreshes read zero JSONL bodies, appends read only a
+verified tail, and truncate/replace/move/delete changes rebuild only affected
+files and aggregate groups. Content-analysis contributions and the established
+cross-file response-identity rules are updated through the same atomic path.
+A new Extension Host performs one cold in-memory build; watcher-driven refreshes
+do not reread and reaggregate the complete corpus. Codex uses its own quiet
+debounce (default 30 seconds, configurable to Off/10/30/60/120/300).
+
+Codex history is designed for multi-gigabyte local corpora:
+
+- discovery and parsing run outside the Extension Host in a worker;
+- files are indexed recent-first with progress and cancellation; an incomplete
+  backfill uses up to half of the available logical CPUs, capped at six local
+  file-pass workers, while completed indexes return to the single low-power
+  coordinator path;
+- unchanged warm refresh reads no JSONL body;
+- a first non-empty index or incomplete legacy migration gets one bounded
+  16,384 file passes / 64 GiB streaming ceiling; this is not an up-front memory
+  allocation and retains cancellation and atomic resume checkpoints. After
+  convergence, automatic work uses 64 file passes / 128 MiB and the
+  always-visible manual Refresh uses 512 file passes / 2 GiB. The safe minimum
+  is 1 MiB + 1 byte, reads use 1 MiB chunks, and a Codex JSONL line is capped at
+  1 MiB;
+- live progress remains frequent, while a large persisted snapshot is written
+  at most roughly every 10 seconds, 2 GiB, or 256 completed file passes, plus
+  the final stage boundary. This bounds crash recovery without letting repeated
+  tens-of-megabytes snapshots dominate a fast backfill;
+- derived lineage is reconciled only in stages that can change it; period and
+  stable stages reuse the verified relationship instead of repeatedly scanning
+  the complete index;
+- current-day hourly work is limited to canonical files already known from
+  period slices to contain `asOfDay`; its own checkpoints resume independently
+  and do not reset the primary index;
+- append refresh reads only the new tail; an incomplete line stays only in the
+  scanner's short-lived memory and is retried from the safe cursor, never in v3;
+- truncation/replacement reparses only the affected file;
+- cancellation checkpoints atomically save per-file contributions and migration
+  progress, so the next run resumes from the verified cursor;
+- concurrent refresh requests share one worker run.
+
+Weekly API-equivalent history is derived from already-aggregated token usage.
+Observed weekly resets align seven-day buckets; otherwise usage-only history
+uses Monday-to-Monday UTC calendar weeks. A token log can prove used value, but
+not an historical subscription capacity: full and unused estimates are emitted
+only where a real quota-utilization sample exists. Codex usage-only history may
+combine multiple sign-ins in one home, while quota-derived rows remain bound to
+their observed reset series.
+
+v2.3.0 does not infer a $20, $100, or $200 subscription tier. Local Codex logs
+do not expose a reliable account-and-plan identity, so a future comparison must
+use an explicit opt-in account mapping rather than attaching prices by guess.
+
+## Release invariants
+
+- Strict TypeScript, red-green TDD, full `node:test`, F5 smoke test, and installed
+  VSIX smoke test are required in proportion to the change.
+- User-visible strings cover `en`, `de-DE`, `zh-TW`, `zh-CN`, `ja`, `ko`,
+  `pt-BR`, and `id`; all seven README editions move together.
+- `package.json` is not manually version-bumped. Publishing the reviewed Release
+  Drafter draft creates the tag; the publish workflow stamps that tag version.
+- Contributor PR attribution is preserved by merging the contributor's original
+  PR or, with authorization, adjusting that PR branch before merge.

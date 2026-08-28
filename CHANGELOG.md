@@ -4,9 +4,71 @@ All notable changes to this fork compared to upstream
 [`ClaudeCodeUsage/ClaudeCodeUsage`](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage) (last
 upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangelog.com).
 
-## [Unreleased]
+## [2.3.0] — Unreleased
 
 ### Fixed
+- **Codex Today is now the configured calendar day** — the first Codex tab now
+  pairs its day total with exact hourly API-equivalent cost and a separate
+  token-composition view. Its additive schema-3 current-day sidecar scans only
+  canonical files already known to contain that day, checkpoints and resumes,
+  and does not trigger a full-history reindex. Daily and monthly primary trends
+  now default to API-equivalent cost while token composition remains separate;
+  unknown models stay unpriced and pricing coverage remains visible. Claude and
+  Codex time-series charts keep aligned responsive widths, with dense content
+  scrolling inside its own keyboard-focusable region.
+- **Weekly API-equivalent periods no longer overlap or double-count usage** —
+  the newest valid official reset observation anchors one sequence of unique
+  `[start, reset)` weekly buckets, so each local usage event contributes to
+  exactly one period. Any overlapping, non-aligned future reset is treated as a
+  conflict even when its series name differs; it cannot create an additional
+  "current" row. Codex usage is persisted in daily slices, so a slice that
+  crosses an official intraday reset remains counted once but marks the affected
+  period as a boundary approximation and suppresses total / unused allowance
+  inference. This display-only correction does not change the index schema or
+  trigger a rebuild. Historical Codex periods are always used-value-only; only
+  the newest current period may infer a total when its reset is unambiguous and
+  its indexed usage can be attributed to one observation source. Current unused
+  value remains withheld, and ambiguous multi-sign-in usage stays used-only.
+- **Claude changed-file refreshes no longer reread the full corpus (#87)** —
+  the production refresh path now keeps an exact in-memory per-file index,
+  reads only a verified append tail, and rebuilds only affected files for
+  truncate, replacement, move, and delete events. Cross-file response identity,
+  request-ID degradation, content UUID ownership, titles, context, sessions,
+  projects, branches, workflows, costliest messages, and all time buckets retain
+  the established full-loader results. Dashboard aggregates are materialized
+  incrementally, so an unchanged watcher refresh reads zero JSONL bodies and
+  performs zero aggregate mutations. A new Extension Host still performs one
+  cold in-memory build; normal runtime changes no longer repeat that work.
+- **Codex one-time backfills now use high-end hardware** — incomplete indexes
+  use an adaptive local pool of up to half the logical CPUs, capped at six
+  workers, for independent file passes. One-MiB stream chunks, stage-aware
+  lineage reconciliation, one durable write for a small warm append, and
+  coarser resumable checkpoints prevent repeated tens-of-megabytes index writes
+  from dominating the scan. Once complete, refresh returns to the bounded
+  low-power incremental path. Stable duplicate-session ambiguity is now shown
+  as an explicit data-quality warning and no longer leaves the page falsely
+  labelled as still indexing forever.
+- **Codex request-level token attribution** — valid `last_token_usage` snapshots
+  now provide the exact input, cached-input, output, and reasoning components;
+  their `total_tokens` value remains an active-context measurement rather than
+  request usage. A full numeric total-plus-last signature suppresses only a
+  replay from the same pseudonymous rate-limit source or an immediately adjacent
+  duplicate. Missing last snapshots retain the cumulative lineage high-water
+  fallback. Existing schema-3 indexes rebuild once, keep showing indexed
+  subtotals during that pass, and never mix the two attribution semantics.
+- **Conservative Codex rebuild totals** — schema and lineage migrations no
+  longer expose retained legacy aggregates as current usage. Cards, tables,
+  projects, sessions, recommendations, and the status bar now use only freshly
+  indexed contributions and show an indexed-subtotal notice until coverage
+  converges. Stale files remain visible in data-quality reporting. Account
+  limits remain last-observed snapshots and are never summed.
+- **Profile-scoped Claude quota credentials (#89)** — quota reads and token
+  refresh writes now follow explicit `dataDirectory`, then the first valid
+  `CLAUDE_CONFIG_DIR`, then `~/.claude`. A selected custom profile without a
+  credentials file shows quota as unavailable instead of silently using the
+  single global macOS Keychain account, and persisted quota snapshots are
+  isolated by profile. Thanks to [@HoangJN](https://github.com/HoangJN) for the
+  precise report.
 - **Per-model weekly limits are read again** — Anthropic's usage API stopped
   filling in its per-model quota fields, so the weekly Opus figure had silently
   gone blank. The extension now reads whichever per-model weekly cap your plan
@@ -20,8 +82,76 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   Indonesian entry showed English text in the settings panel.
 
 ### Added
-- **Usage credits in the quota tooltip** — the amount spent this month and the date it resets, once you have actually spent some.
-  The figure stays visible after you switch credits off, since the spend already happened.
+- **Codex API-equivalent cost summary** — every Codex usage scope now begins
+  with a clearly labelled approximate dollar value calculated from currently
+  indexed tokens and exact known-model API prices. Unknown models stay unpriced,
+  the hover text reports priced-model coverage, and the value is explicitly not
+  presented as a bill or subscription charge.
+- **Historical weekly allowance value** — Claude and Codex All-time and Compare
+  views now calculate historical used API-equivalent value directly from local
+  token logs. One valid observed reset anchors unique, non-overlapping weekly
+  buckets; without one, usage-only rows use Monday-to-Monday UTC calendar weeks.
+  Codex historical periods, boundary-approximate daily slices, conflicting reset
+  sequences, and usage that cannot be assigned to one observed sign-in remain
+  used-value-only. Only an unambiguous newest current period with single-source
+  attribution may infer a total allowance; its unused value is still withheld.
+  Current official API prices are applied consistently and each period includes
+  model-price coverage. This remains an estimate, not a bill or an official
+  subscription price. The panel is enabled by default and can be hidden with
+  `showWeeklyEquivalentValue`.
+- **Complete Claude quota details** — the tooltip now shows every active
+  all-model and model-scoped weekly cap reported by Anthropic, plus used monthly
+  credits when available. Model-scoped status-bar display remains opt-in and is
+  named dynamically instead of assuming Opus.
+- **Codex Beta** — local-only Codex usage views for processed, uncached input +
+  output, cached input, input cache-hit rate, output, reasoning, model, effort,
+  thread structure, index coverage, quality flags, and last-observed limit
+  snapshots.
+- **Provider-aware dashboard** — Claude, Codex Beta, and side-by-side Compare
+  modes preserve provider-specific semantics; Compare does not sum cost or quota.
+- **Immediate Codex entry during backfill** — once an allowed Codex home is
+  detected, its provider tab appears before the first index finishes and shows
+  exact indexed-file, percentage, and byte progress inside the page. The last
+  atomic checkpoint is hydrated before the worker starts, so its full indexed-
+  subtotal dashboard remains usable while reconciliation continues; a brand-new
+  index adopts its first checkpoint without waiting for the whole pass. Progress
+  renders are coalesced so the indicator does not turn backfill into a Webview
+  redraw loop. Compare still waits until both providers have real data.
+- **Provider-aware Codex dashboard** — the existing Today / Month / All time /
+  Sessions / Projects / Content / Settings render functions now accept a
+  provider and present the corresponding Codex calendar Today with hourly detail /
+  Last 30 days / All time / Sessions / Projects / Recommendations / Settings data.
+- **Truthful Codex identities** — root tasks use the latest path-redacted local
+  thread title; child rows prefer their own real thread title, then fall back to
+  their reported nickname while displaying the parent/root title. If those are
+  also missing, localized neutral fallbacks are used. Projects use the Git
+  repository name (or a non-Git folder basename). Raw session IDs, repository
+  URLs, and full paths remain excluded.
+- **Codex detail tables and limits** — source-derived task/project names,
+  provider-native token columns, model/range filtering, sortable session and
+  project tables, and unexpired named limit windows make high usage traceable
+  without inventing Branches, Workflows, cost, or real-time subscription state.
+- **Local Codex optimization guidance** — structural signals explain unusually
+  high subagent, effort, approval-reviewer, tool-call, and cache overhead without
+  inspecting or retaining prompt, response, command, or tool-argument content.
+- **Scalable Codex indexing** — a cancellable background worker and persistent
+  per-file aggregate index support incremental progress, tail-only append reads,
+  resume, and zero unchanged usage-record/rollout JSONL body rereads on warm
+  refreshes. Incomplete one-time backfills may use the bounded adaptive local
+  file-pass pool; completed indexes do not retain those extra workers. This does
+  not include the exact `$CODEX_HOME/session_index.jsonl` title stream performed
+  on every refresh.
+- **One-pass initial Codex backfill** — the first non-empty index or an
+  incomplete legacy migration receives a bounded 64 GiB / 16,384-file-pass
+  streaming ceiling, with cancellation and atomic resume checkpoints. The
+  ceiling is not an up-front memory allocation. After convergence, automatic
+  work returns to 128 MiB / 64 file passes and the always-visible Refresh action
+  uses 2 GiB / 512 file passes. Unchanged warm refreshes still read zero
+  usage-record JSONL bodies.
+- **Codex UI release gate** — production-rendered coverage checks shared-tab
+  navigation, settings, charts, sorting, accessibility, responsive overflow,
+  stylesheet identity, and the invariant that Codex-rendered classes are a
+  subset of classes already emitted by the Claude dashboard.
 
 ### Changed
 - **`showOpusWeekly` is now `showScopedWeekly`** — the setting no longer names a
@@ -42,6 +172,123 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Quota warns at the same points as the official Claude app.**
   The quota indicator and every bar in its tooltip now turn amber at 75% and red at 90%, instead of 80% and 95%.
   The context-window indicator keeps the earlier 80% and 95% steps.
+- **Unified Claude/Codex dashboard shell** — Codex Beta now uses the same
+  header/action order, navigation rhythm, summary cards, detail rows, token
+  composition, tables, spacing, and responsive behavior as the existing Claude
+  dashboard. Usage limits are compact summary cards, recent-task identity is no
+  longer followed by a duplicate statistics block, and recommendation
+  composition uses the established model-detail layout.
+- **Consistent Codex terminology** — user-facing metrics now use Processed,
+  Input, Uncached input, Cached input, Output, Reasoning, and Uncached usage
+  consistently across all eight supported locales; internal field names and
+  persisted setting values remain compatible.
+- **Readable Codex Sessions table** — the collapsed view keeps eight useful
+  columns at 1280 px, prioritizes Thread and Project, and moves secondary token
+  details into an expandable row without duplicating Role.
+- **Stable dashboard UI state** — the selected provider, active tab, chart
+  metric, table sort, expanded rows, recommendation filters, and page scroll
+  position survive a webview reload when still applicable.
+- **Generic model-scoped weekly setting** — the earlier `showOpusWeekly` choice
+  migrates to `showScopedWeekly`, follows the model name supplied by Anthropic,
+  and nests a shared-reset cap into the weekly status-bar segment.
+- **One Claude/Codex dashboard render stack** — Codex Beta is now a provider
+  switch inside `webview.ts`. It uses the same render functions, HTML shell,
+  class names, stylesheet, header/action order, tabs, summary cards, detail
+  rows, charts, tables, spacing, and responsive behavior as Claude.
+- **Exact-version release announcements** — the default-on notification can be
+  disabled, stays quiet on a fresh install, and shows only the content for the
+  complete installed version instead of falling back to stale v2.2 notes.
+- Repository policy and architecture now define provider-neutral contracts,
+  Codex privacy boundaries, eight-locale/seven-README parity, and the real
+  OpenAI Codex co-author trailer for Codex-led commits.
+- Codex indexing follows observed rollout semantics: child counters start from
+  their own zero, repeated metadata preserves lineage, `guardian` sessions are
+  approval reviewers, and known non-usage envelopes are not quality failures.
+- The shared Settings renderer shows only shared and Codex-effective controls
+  when Codex is selected. Codex and its local optimization signals can be
+  disabled independently; recommendations remain grounded in the indexed
+  30-day structural aggregates and disclose partial coverage.
+- Codex period charts now reuse the existing dashboard's Y axis, grid, theme
+  colors, horizontal scrolling, and metric-switching behavior.
+- **Persistent period indexing** — the compatible `codex-index-v1.json` path now
+  persists only sanitized aggregates, promotes exact local day slices in bounded
+  resumable batches, and exposes independent 7-day, 30-day, and all-time
+  coverage. All-time aggregates remain verified independently of partial period
+  slices; exact active/archive copies are deduplicated while ambiguous identities
+  remain visible as incomplete coverage.
+- Rolling 7-day and 30-day views now use exact event-day slices in the configured
+  timezone. Period migration and coverage gaps stay visibly partial instead of
+  being presented as complete data.
+- **Schema-3 lineage reconciliation** — ordered fingerprints of numeric token
+  counters remove only copied parent prefixes across direct, nested, and
+  multi-epoch forks and verified active/archive overlaps while preserving
+  independent sibling work. Missing parents remain conservatively counted and
+  surface a visible quality warning. Legacy indexes rebuild in bounded passes
+  instead of retaining inflated totals.
+
+### Fixed
+- **Claude response-level token counting** — regression fixtures now lock the
+  observed transcript behavior: one response may emit separate `thinking` and
+  `text` rows with the same `messageId`, `requestId`, and complete `usage`
+  vector, so the extension counts that response once and keeps its largest
+  vector rather than summing rows like Claude Code's `stats-cache`. Identity
+  degradation is also covered: a matching row that omits `requestId` still
+  joins the sole known request, while distinct request IDs stay separate.
+- **Shared-dashboard readability** — active tabs remain distinguishable in
+  Light+ and Dark+, sortable headers expose their interaction without changing
+  the established alignment, and the output segment in composition charts uses
+  a fully opaque registered VS Code theme color.
+- **Responsive first-pass automation** — when both configured model tiers fail
+  or return no usable text, the Issue/PR workflow posts a deterministic,
+  provider-neutral fallback instead of exiting without a comment; reruns avoid
+  duplicate first-pass replies.
+- **Consistent Claude quota reset detail** — tooltip countdowns follow the
+  selected format and pair it with the wall-clock reset, while zero-use scoped
+  caps stay out of the compact status bar.
+- **Codex idle energy and multi-window contention** — Unfocused VS Code windows
+  suspend Claude and Codex polling/watchers until focus returns. Complete,
+  unchanged Codex indexes now skip aggregate recomputation and disk writes;
+  cross-window refreshes share a single index lease, and atomic saves use unique
+  temporary files instead of competing for one `.tmp`.
+- **Stable rolling-period tests** — Codex index refreshes use an injectable clock
+  internally so recent-period coverage remains deterministic without changing
+  runtime date or timezone semantics.
+- **Codex index self-recovery** — malformed JSON and unsupported persisted index
+  schemas are atomically preserved as timestamped `.corrupt-*.json` backups,
+  then rebuilt from local usage records instead of leaving Codex Beta stuck in
+  an error state. Diagnostics expose only a safe recovery reason, never the
+  index path or contents; unrelated filesystem errors still fail closed.
+- **Codex fork overcounting** — copied token histories replayed into child
+  rollouts no longer inflate provider totals. Counter regressions use
+  exact last-request components with partial confidence; only the missing-last
+  cumulative fallback uses component-wise high-water containment rather than
+  adding reset gaps again.
+- **Visible Codex backfill state** — while bounded indexing is still converging,
+  Coverage · Quality now warns that current totals are incomplete, shows the
+  real indexed-files/total-files progress, and clears the warning automatically
+  once base and period coverage are complete.
+
+### Removed
+- **Weekly Opus naming retired** — the fixed Opus-specific surface is replaced
+  by the generic, API-named `showScopedWeekly` setting. PR #38 and
+  [@wheelbarrel00](https://github.com/wheelbarrel00) remain credited for the
+  original contribution.
+
+### Privacy
+- Codex usage-record discovery is restricted to `sessions/**/*.jsonl` and
+  `archived_sessions/**/*.jsonl`. Separately, the extension streams exactly
+  `$CODEX_HOME/session_index.jsonl` to map `id` to `thread_name` for truthful
+  thread titles; credentials, SQLite databases, browser/keychain state, and
+  unknown files remain excluded.
+- Absolute filesystem paths embedded in a Codex thread title are replaced with
+  `[path]`, and the sanitized title remains memory-only. Usage-record JSONL lines
+  are streamed and temporarily parsed only for allowlisted metadata; prompt,
+  response, command, and tool-argument fields are not inspected or used for
+  analysis and are never retained.
+- The persistent index contains machine-salted pseudonymous keys, numeric and
+  structural aggregates, and sanitized project, directory, agent, model,
+  effort, role, time, and quality metadata. It never persists raw IDs, full
+  paths or repository URLs, thread titles, or conversation bodies.
 
 ## [2.2.2] — Unreleased
 
@@ -58,7 +305,6 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Opus 5 context window (#81, reported in #84)** — recognise the bare
   `claude-opus-5` model id as a 1M-context model and remove its spurious
   unknown-model pricing diagnostic. Thanks [@e7d](https://github.com/e7d).
-
 ## [2.2.1] — 2026-07-18
 
 ### Added
