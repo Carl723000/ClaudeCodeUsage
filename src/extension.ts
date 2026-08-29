@@ -128,6 +128,7 @@ export class ClaudeCodeUsageExtension {
   private static readonly CODEX_BACKGROUND_WORK_STATE_KEY =
     'ccu.codex.backgroundWork.v1';
   private static readonly CODEX_BACKGROUND_MEASUREMENT_VERSION = 1;
+  private static readonly CODEX_FIRST_BACKFILL_BLUR_DEADLINE_MS = 10_000;
   private statusBar: StatusBarManager;
   private webviewProvider: UsageWebviewProvider;
   private apiClient: ClaudeApiClient;
@@ -210,6 +211,8 @@ export class ClaudeCodeUsageExtension {
   private codexBackfillLease: ResourceLease | undefined;
   private codexWorkerLease: ResourceLease | undefined;
   private codexFirstBackfillActive = false;
+  private codexFirstBackfillBlurTimer: NodeJS.Timeout | undefined;
+  private codexFirstBackfillBlurTimerLease: ResourceLease | undefined;
   private codexWorkerCancellationRequested = false;
   private readonly activeAdviceNetworks = new Map<AbortController, ActiveNetworkOperation>();
   private readonly activeQuotaNetworks = new Map<AbortController, ActiveNetworkOperation>();
@@ -1074,6 +1077,10 @@ export class ClaudeCodeUsageExtension {
       !snapshot.hourlyCoverage?.complete;
   }
 
+  private codexIndexGeneration(snapshot: CodexProviderSnapshot | null): number | null {
+    return snapshot?.indexGeneration ?? null;
+  }
+
   private codexBackgroundReason(snapshot: CodexProviderSnapshot | null): BackgroundWorkReason {
     if (!snapshot || snapshot.coverage.totalFiles === 0) return 'first-index';
     if (!snapshot.coverage.period.allTime.complete) return 'period-migration';
@@ -1440,6 +1447,17 @@ export class ClaudeCodeUsageExtension {
     }
     if (persisted) {
       this.applyCodexSnapshot(persisted);
+      if (this.codexBackgroundState.indexGeneration !== this.codexIndexGeneration(persisted)) {
+        this.codexBackgroundState = createBackgroundWorkState({
+          measurementVersion:
+            ClaudeCodeUsageExtension.CODEX_BACKGROUND_MEASUREMENT_VERSION,
+          reason: this.codexBackgroundReason(persisted),
+          now: Date.now(),
+          progress: this.codexBackgroundProgress(persisted),
+          indexGeneration: this.codexIndexGeneration(persisted),
+        });
+        await this.saveCodexBackgroundState();
+      }
       this.syncProviderUi();
     }
     if (!persisted && this.codexBackgroundState.status === 'complete') {
@@ -1448,6 +1466,7 @@ export class ClaudeCodeUsageExtension {
           ClaudeCodeUsageExtension.CODEX_BACKGROUND_MEASUREMENT_VERSION,
         reason: 'first-index',
         now: Date.now(),
+        indexGeneration: null,
       });
       await this.saveCodexBackgroundState();
     }
@@ -1504,6 +1523,7 @@ export class ClaudeCodeUsageExtension {
         reason: this.codexBackgroundReason(persisted),
         now: Date.now(),
         progress: this.codexBackgroundProgress(persisted),
+        indexGeneration: this.codexIndexGeneration(persisted),
       });
       const running = beginBackgroundWork(fresh, {
         trigger: 'automatic',
@@ -1558,6 +1578,17 @@ export class ClaudeCodeUsageExtension {
       }
 
       this.applyCodexSnapshot(result.snapshot);
+      if (this.codexBackgroundState.indexGeneration !== this.codexIndexGeneration(result.snapshot)) {
+        this.codexBackgroundState = createBackgroundWorkState({
+          measurementVersion:
+            ClaudeCodeUsageExtension.CODEX_BACKGROUND_MEASUREMENT_VERSION,
+          reason: this.codexBackgroundReason(result.snapshot),
+          now: Date.now(),
+          progress: this.codexBackgroundProgress(result.snapshot),
+          indexGeneration: this.codexIndexGeneration(result.snapshot),
+        });
+        await this.saveCodexBackgroundState();
+      }
       if (historicalAttempt && this.codexBackgroundState.status === 'running') {
         const complete = !this.codexHistoricalWorkPending(result.snapshot);
         if (this.codexWorkerCancellationRequested || provider !== this.codexProvider) {
@@ -1596,6 +1627,7 @@ export class ClaudeCodeUsageExtension {
           reason: this.codexBackgroundReason(result.snapshot),
           now: Date.now(),
           progress: this.codexBackgroundProgress(result.snapshot),
+          indexGeneration: this.codexIndexGeneration(result.snapshot),
         });
         await this.saveCodexBackgroundState();
         continueHistoricalWork = true;
@@ -1620,6 +1652,7 @@ export class ClaudeCodeUsageExtension {
         }),
       );
     } finally {
+      this.stopFirstBackfillBlurDeadline('cancelled');
       if (historicalAttempt && this.codexBackgroundState.status === 'running') {
         this.codexBackgroundState =
           this.codexWorkerCancellationRequested || provider !== this.codexProvider
@@ -2227,7 +2260,9 @@ export class ClaudeCodeUsageExtension {
     this.stopFileWatching('window-blur');
     this.stopCodexWatching('window-blur');
     this.stopCredentialsWatching('window-blur');
-    if (this.codexRefreshing && !this.codexFirstBackfillActive) {
+    if (this.codexRefreshing && this.codexFirstBackfillActive) {
+      this.scheduleFirstBackfillBlurDeadline();
+    } else if (this.codexRefreshing) {
       this.codexWorkerCancellationRequested = true;
       void this.cancelCodexProviderAndWait();
     }
@@ -2235,6 +2270,7 @@ export class ClaudeCodeUsageExtension {
 
   private resumeRecurringWork(): void {
     if (this.disposed) return;
+    this.stopFirstBackfillBlurDeadline('cancelled');
     this.startAutoRefresh();
     void this.startFileWatching();
     this.startCodexWatching();
@@ -2250,6 +2286,50 @@ export class ClaudeCodeUsageExtension {
     } else if (transition === 'resume') {
       this.resumeRecurringWork();
     }
+  }
+
+  private stopFirstBackfillBlurDeadline(
+    condition: Extract<ResourceStopCondition, 'window-blur' | 'cancelled' | 'extension-dispose'> = 'cancelled',
+  ): void {
+    const timer = this.codexFirstBackfillBlurTimer;
+    const lease = this.codexFirstBackfillBlurTimerLease;
+    this.codexFirstBackfillBlurTimer = undefined;
+    this.codexFirstBackfillBlurTimerLease = undefined;
+    if (!timer) return;
+    if (lease?.active) {
+      this.trackResourceStop(lease.stop(condition, () => clearTimeout(timer)));
+    } else {
+      clearTimeout(timer);
+    }
+  }
+
+  private scheduleFirstBackfillBlurDeadline(): void {
+    if (
+      this.disposed ||
+      !this.codexRefreshing ||
+      !this.codexFirstBackfillActive ||
+      this.codexFirstBackfillBlurTimer
+    ) return;
+    const lease = this.resourceOwnership.register({
+      kind: 'timer',
+      capability: 'codex-history',
+      scope: 'codex',
+      creator: 'refresh-coordinator',
+      stopConditions: ['window-blur', 'cancelled', 'extension-dispose'],
+      boundedException: 'none',
+    });
+    const timer = setTimeout(() => {
+      this.codexFirstBackfillBlurTimer = undefined;
+      this.codexFirstBackfillBlurTimerLease = undefined;
+      if (lease.active) {
+        this.trackResourceStop(lease.stop('cancelled', () => undefined));
+      }
+      if (this.disposed || !this.codexRefreshing || !this.codexFirstBackfillActive) return;
+      this.codexWorkerCancellationRequested = true;
+      void this.cancelCodexProviderAndWait();
+    }, ClaudeCodeUsageExtension.CODEX_FIRST_BACKFILL_BLUR_DEADLINE_MS);
+    this.codexFirstBackfillBlurTimer = timer;
+    this.codexFirstBackfillBlurTimerLease = lease;
   }
 
   /** Keep recurring work only in the active VS Code window. Each window owns a
@@ -2805,6 +2885,7 @@ export class ClaudeCodeUsageExtension {
       };
       this.stopQuotaColdRetry('extension-dispose');
       this.stopAutoRefresh('extension-dispose');
+      this.stopFirstBackfillBlurDeadline('extension-dispose');
       this.stopFileWatching('extension-dispose');
       this.stopCodexWatching('extension-dispose');
       this.stopCredentialsWatching('extension-dispose');

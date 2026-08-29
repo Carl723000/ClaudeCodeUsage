@@ -20,6 +20,9 @@ test('production host registers timer, watcher, worker, network, and backfill ow
     assert.ok(source.includes(actualStop), `missing actual stop: ${actualStop}`);
   }
   assert.match(source, /onAiSurfaceClosed\s*=.*cancelAdviceNetworks/s);
+  assert.match(source, /scheduleFirstBackfillBlurDeadline/);
+  assert.match(source, /CODEX_FIRST_BACKFILL_BLUR_DEADLINE_MS/);
+  assert.match(source, /stopFirstBackfillBlurDeadline\('extension-dispose'\)/);
 });
 
 test('background eligibility is persisted and controls historical work only', () => {
@@ -39,6 +42,8 @@ test('background eligibility is persisted and controls historical work only', ()
   assert.match(extension, /historicalAttempt/);
   assert.match(protocol, /allowHistoricalBackfill\?: boolean/);
   assert.match(index, /allowHistoricalBackfill \? manifest\.files : \[\]/);
+  assert.match(index, /indexGeneration/);
+  assert.match(extension, /codexIndexGeneration/);
 });
 
 test('Codex worker is terminal after every result instead of remaining idle', () => {

@@ -44,6 +44,8 @@ export interface BackgroundWorkProgress {
 export interface BackgroundWorkState {
   schemaVersion: typeof BACKGROUND_WORK_STATE_SCHEMA_VERSION;
   measurementVersion: number;
+  /** Persisted producer generation; prevents reusing completion from an old index. */
+  indexGeneration: number | null;
   status: BackgroundWorkStatus;
   reason: BackgroundWorkReason;
   progress: BackgroundWorkProgress;
@@ -71,12 +73,14 @@ export interface CreateBackgroundWorkStateOptions {
   reason: BackgroundWorkReason;
   now: number;
   progress?: BackgroundWorkProgress;
+  indexGeneration?: number | null;
 }
 
 export type BackgroundWorkRestoreDisposition =
   | 'new'
   | 'valid'
   | 'measurement-changed'
+  | 'generation-changed'
   | 'corrupt';
 
 export interface BackgroundWorkRestoreResult {
@@ -98,6 +102,7 @@ export interface BackgroundWorkStartResult {
 const STATE_FIELDS = [
   'schemaVersion',
   'measurementVersion',
+  'indexGeneration',
   'status',
   'reason',
   'progress',
@@ -131,6 +136,10 @@ function hasExactFields(value: Record<string, unknown>, fields: readonly string[
 
 function isSafeNonNegativeInteger(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isIndexGeneration(value: unknown): value is number | null {
+  return value === null || (isSafeNonNegativeInteger(value) && value > 0);
 }
 
 function assertSafeNonNegativeInteger(value: number, field: string): void {
@@ -199,6 +208,7 @@ export function isBackgroundWorkState(value: unknown): value is BackgroundWorkSt
   if (!isRecord(value) || !hasExactFields(value, STATE_FIELDS)) return false;
   return value.schemaVersion === BACKGROUND_WORK_STATE_SCHEMA_VERSION &&
     isSafeNonNegativeInteger(value.measurementVersion) && value.measurementVersion > 0 &&
+    isIndexGeneration(value.indexGeneration) &&
     statusSet.has(value.status) &&
     reasonSet.has(value.reason) &&
     isProgress(value.progress) &&
@@ -213,6 +223,7 @@ function cloneState(value: BackgroundWorkState): BackgroundWorkState {
   return {
     schemaVersion: BACKGROUND_WORK_STATE_SCHEMA_VERSION,
     measurementVersion: value.measurementVersion,
+    indexGeneration: value.indexGeneration,
     status: value.status,
     reason: value.reason,
     progress: cloneProgress(value.progress),
@@ -233,6 +244,7 @@ export function createBackgroundWorkState(
   return {
     schemaVersion: BACKGROUND_WORK_STATE_SCHEMA_VERSION,
     measurementVersion: options.measurementVersion,
+    indexGeneration: options.indexGeneration ?? null,
     status: 'eligible',
     reason: options.reason,
     progress: options.progress === undefined ? emptyProgress() : cloneProgress(options.progress),
@@ -263,6 +275,9 @@ export function restoreBackgroundWorkState(
   }
   if (value.measurementVersion !== options.measurementVersion) {
     return { disposition: 'measurement-changed', state: fresh() };
+  }
+  if (options.indexGeneration !== undefined && value.indexGeneration !== options.indexGeneration) {
+    return { disposition: 'generation-changed', state: fresh() };
   }
   return { disposition: 'valid', state: cloneState(value) };
 }

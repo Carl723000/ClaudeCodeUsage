@@ -321,6 +321,34 @@ test('configured timezone rebuckets Claude Today and hours from the in-memory in
   }
 });
 
+test('hourly materialization is limited to the recent 30-day window while day and month stay all-time', async () => {
+  const previousTimeZone = I18n.getTimezone();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-claude-hour-window-'));
+  roots.push(root);
+  const project = path.join(root, 'projects', '-fixture-hour-window');
+  await mkdir(project, { recursive: true });
+  const now = Date.now();
+  const oldTimestamp = new Date(now - 45 * 24 * 60 * 60 * 1000).toISOString();
+  const recentTimestamp = new Date(now - 5 * 24 * 60 * 60 * 1000).toISOString();
+  await writeFile(path.join(project, 'window.jsonl'), [
+    usageLine('old', 10, 1, { timestamp: oldTimestamp }),
+    usageLine('recent', 20, 2, { timestamp: recentTimestamp }),
+    '',
+  ].join('\n'), 'utf8');
+  try {
+    I18n.setTimezone('UTC');
+    const loaded = await updateClaudeUsageIndex(createClaudeUsageIndex(), root, {
+      analyzeContent: false,
+    });
+    assert.equal(loaded.index.aggregates.byDay.size, 2);
+    assert.equal(loaded.index.aggregates.byMonth.size >= 1, true);
+    assert.equal([...loaded.index.aggregates.byLocalHour.keys()].some((key) => key.startsWith(oldTimestamp.slice(0, 10))), false);
+    assert.equal([...loaded.index.aggregates.byLocalHour.keys()].some((key) => key.startsWith(recentTimestamp.slice(0, 10))), true);
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
 test('append reads only the verified tail and preserves exact totals', async () => {
   const { root, first } = await fixture();
   const cold = await updateClaudeUsageIndex(createClaudeUsageIndex(), root, {

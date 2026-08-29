@@ -231,6 +231,8 @@ export interface CodexProviderAggregate {
 
 export interface CodexIndexV3 {
   schemaVersion: 3;
+  /** Independent persisted generation for migration completion isolation. */
+  indexGeneration?: number;
   files: Record<string, CodexFileContribution>;
   aggregate: CodexProviderAggregate;
   coverage: CodexIndexCoverage;
@@ -360,6 +362,14 @@ export class CodexIndexBudgetError extends Error {
 }
 
 const MAX_IDENTITY_BYTES = 256 * 1024;
+let lastRecoveryGeneration = 1;
+
+function recoveredIndex(timeZone: string): CodexIndexV3 {
+  const index = createEmptyCodexIndex(timeZone);
+  lastRecoveryGeneration = Math.max(lastRecoveryGeneration + 1, Date.now());
+  index.indexGeneration = lastRecoveryGeneration;
+  return index;
+}
 
 function zeroTokens(): ProviderTokenCounts {
   return {
@@ -475,6 +485,7 @@ export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV3 {
   });
   return {
     schemaVersion: 3,
+    indexGeneration: 1,
     files: {},
     aggregate: emptyAggregate(),
     coverage: {
@@ -2166,6 +2177,9 @@ export async function updateCodexIndex(
     };
   }
   const index = cloneIndex(previous);
+  if (previous.coverage.period.timeZone !== timeZone) {
+    index.indexGeneration = Math.max(1, Math.floor(previous.indexGeneration ?? 0) + 1);
+  }
   const entries = new Map(manifest.files.map((entry) => [entry.fileKey, entry]));
   let bodyReads = 0;
   let failedFiles = 0;
@@ -3864,6 +3878,7 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
 }
 
 function markLineageRescanRequired(index: CodexIndexV3): CodexIndexV3 {
+  index.indexGeneration = Math.max(1, Math.floor(index.indexGeneration ?? 0) + 1);
   for (const contribution of Object.values(index.files)) {
     delete contribution.lineage;
     delete contribution.lineageReconciliation;
@@ -4055,6 +4070,10 @@ function sanitizeIndexV2(value: unknown): CodexIndexV3 {
   }
   return {
     schemaVersion: 3,
+    ...(typeof index.indexGeneration === 'number' &&
+      Number.isSafeInteger(index.indexGeneration) && index.indexGeneration > 0
+      ? { indexGeneration: index.indexGeneration }
+      : {}),
     files,
     aggregate: sanitizeProviderAggregate(index.aggregate),
     coverage,
@@ -4106,7 +4125,7 @@ export async function loadCodexIndex(
     if (error instanceof SyntaxError) {
       await quarantineCorruptCodexIndex(indexPath);
       onRecovery?.({ reason: 'invalid-json' });
-      return createEmptyCodexIndex(timeZone);
+      return recoveredIndex(timeZone);
     }
     throw error;
   }
@@ -4125,7 +4144,7 @@ export async function loadCodexIndex(
   }
   await quarantineCorruptCodexIndex(indexPath);
   onRecovery?.({ reason: 'unsupported-schema' });
-  return createEmptyCodexIndex(timeZone);
+  return recoveredIndex(timeZone);
 }
 
 export async function saveCodexIndexAtomic(

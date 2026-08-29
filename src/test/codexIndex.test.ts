@@ -50,7 +50,8 @@ test('corrupt index trailing data is preserved and rebuilt from an empty index',
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-corrupt-'));
   try {
     const indexPath = path.join(root, 'codex-index.json');
-    const original = `${JSON.stringify(createEmptyCodexIndex('UTC'))},"cachedInput":1}`;
+    const originalIndex = createEmptyCodexIndex('UTC');
+    const original = `${JSON.stringify(originalIndex)},"cachedInput":1}`;
     const recoveries: Array<{ reason: string }> = [];
     await writeFile(indexPath, original, 'utf8');
 
@@ -61,6 +62,7 @@ test('corrupt index trailing data is preserved and rebuilt from an empty index',
     );
 
     assert.equal(loaded.schemaVersion, 3);
+    assert.notEqual(loaded.indexGeneration, originalIndex.indexGeneration);
     assert.equal(loaded.coverage.period.timeZone, 'Asia/Hong_Kong');
     assert.deepEqual(recoveries, [{ reason: 'invalid-json' }]);
     await assert.rejects(readFile(indexPath, 'utf8'), { code: 'ENOENT' });
@@ -87,6 +89,7 @@ test('unsupported index schema is quarantined with its distinct recovery reason'
     );
 
     assert.equal(loaded.schemaVersion, 3);
+    assert.ok((loaded.indexGeneration ?? 0) > 1);
     assert.deepEqual(recoveries, [{ reason: 'unsupported-schema' }]);
     const backups = await corruptIndexBackups(root);
     assert.equal(backups.length, 1);
@@ -117,6 +120,23 @@ test('valid and missing indexes do not report recovery while I/O errors still fa
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('timezone migration advances the independent index generation', async () => {
+  const initial = createEmptyCodexIndex('UTC');
+  assert.equal(initial.indexGeneration, 1);
+  const updated = await updateCodexIndexRaw(initial, persistableManifest([]), {
+    salt: SALT,
+    timeZone: 'Asia/Hong_Kong',
+    now: () => Date.parse('2026-08-30T00:00:00.000Z'),
+  });
+  assert.equal(updated.index.indexGeneration, 2);
+  const warm = await updateCodexIndexRaw(updated.index, persistableManifest([]), {
+    salt: SALT,
+    timeZone: 'Asia/Hong_Kong',
+    now: () => Date.parse('2026-08-30T00:00:00.000Z'),
+  });
+  assert.equal(warm.index.indexGeneration, 2);
 });
 
 test('concurrent atomic saves use independent temporary files', async () => {
@@ -1924,15 +1944,18 @@ test('cancellation checkpoints a resumable period cursor without clearing all-ti
     );
 
     assert.equal(checkpoints.length, 1);
+    assert.equal(checkpoints[0].indexGeneration, legacy.indexGeneration);
     assert.ok(checkpoints[0].files[key].periodMigration!.offset > 0);
     assert.equal(checkpoints[0].aggregate.total.inputTotal, cold.index.aggregate.total.inputTotal);
     const saved = await loadCodexIndex(checkpointPath, 'UTC');
+    assert.equal(saved.indexGeneration, legacy.indexGeneration);
     assert.equal(saved.files[key].periodMigration?.offset, checkpoints[0].files[key].periodMigration?.offset);
     assert.equal('carry' in (saved.files[key].periodMigration ?? {}), false);
     const resumed = await updateCodexIndex(saved, manifest, {
       salt: SALT,
       timeZone: 'UTC',
     });
+    assert.equal(resumed.index.indexGeneration, saved.indexGeneration);
     assert.equal(resumed.index.files[key].aggregate.period?.indexedThrough, legacy.files[key].offset);
   } finally {
     await rm(root, { recursive: true, force: true });

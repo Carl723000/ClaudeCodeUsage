@@ -125,6 +125,34 @@ test('foreground transition resumes both providers and catches up once', () => {
   ]);
 });
 
+test('blur deadline cooperatively cancels the bounded first Codex backfill', async () => {
+  const extension = bareExtension();
+  extension.codexRefreshing = true;
+  extension.codexFirstBackfillActive = true;
+  let cancelCalls = 0;
+  extension.codexProvider = { cancelAndWait: async () => { cancelCalls += 1; } };
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  let callback: (() => void) | undefined;
+  globalThis.setTimeout = ((fn: () => void) => {
+    callback = fn;
+    return 123 as any;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = (() => undefined) as typeof clearTimeout;
+  try {
+    extension.scheduleFirstBackfillBlurDeadline();
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 1);
+    callback?.();
+    await Promise.resolve();
+    assert.equal(cancelCalls, 1);
+    await extension.drainResourceStops();
+    assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test('background window cannot arm a new polling timer', () => {
   const extension = bareExtension();
   extension.windowActivity = new WindowActivityGate(false);

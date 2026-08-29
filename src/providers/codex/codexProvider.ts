@@ -49,6 +49,8 @@ export interface CodexIndexClientLike {
 
 export interface CodexProviderSnapshot {
   provider: 'codex';
+  /** Persisted index generation used to isolate migration completion state. */
+  indexGeneration?: number;
   total: ProviderTokenCounts;
   files: CodexFileAggregate[];
   coverage: CodexIndexCoverage;
@@ -265,6 +267,7 @@ function snapshotFromIndex(
   };
   return {
     provider: 'codex',
+    indexGeneration: index.indexGeneration,
     total: aggregateTotal(usageContributions),
     files,
     coverage: index.coverage,

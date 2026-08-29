@@ -208,6 +208,50 @@ test('complete work stays complete for the same measurement version', () => {
   });
 });
 
+test('completion cannot cross an independent index generation', () => {
+  const initial = createBackgroundWorkState({
+    measurementVersion: 4,
+    reason: 'history-backfill',
+    now: 100,
+    indexGeneration: 7,
+    progress: emptyProgress,
+  });
+  const running = beginBackgroundWork(initial, { trigger: 'automatic', now: 100 }).state;
+  const complete = recordBackgroundWorkProgress(running, {
+    now: 110,
+    complete: true,
+    progress: { completedUnits: 5, totalUnits: 5, completedBytes: 50, totalBytes: 50 },
+  }, policy);
+  assert.equal(complete.indexGeneration, 7);
+
+  const sameGeneration = restoreBackgroundWorkState(JSON.parse(JSON.stringify(complete)), {
+    measurementVersion: 4,
+    reason: 'history-backfill',
+    now: 200,
+    indexGeneration: 7,
+  });
+  assert.equal(sameGeneration.disposition, 'valid');
+  assert.equal(sameGeneration.state.status, 'complete');
+
+  const changedGeneration = restoreBackgroundWorkState(JSON.parse(JSON.stringify(complete)), {
+    measurementVersion: 4,
+    reason: 'history-backfill',
+    now: 200,
+    indexGeneration: 8,
+  });
+  assert.equal(changedGeneration.disposition, 'generation-changed');
+  assert.equal(changedGeneration.state.status, 'eligible');
+  assert.equal(changedGeneration.state.indexGeneration, 8);
+
+  const missingGeneration = restoreBackgroundWorkState(JSON.parse(JSON.stringify(complete)), {
+    measurementVersion: 4,
+    reason: 'history-backfill',
+    now: 200,
+  });
+  assert.equal(missingGeneration.disposition, 'valid', 'legacy callers may restore before snapshot hydration');
+  assert.equal(missingGeneration.state.indexGeneration, 7);
+});
+
 test('missing state starts safely while corrupt or content-bearing state fails closed', () => {
   const missing = restoreBackgroundWorkState(undefined, {
     measurementVersion: 3,

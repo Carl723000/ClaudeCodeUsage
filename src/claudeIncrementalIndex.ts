@@ -19,7 +19,6 @@ import {
 import {
   dayKeyInZone,
   formatHourLabel,
-  hourKeyInZone,
   monthKeyInZone,
   resolveTimeZone,
   rollingDayKeys,
@@ -108,6 +107,11 @@ interface CopyOnWriteKeys {
   visibleLocalDays: Set<string>;
 }
 
+interface ConfiguredTimeKeyers {
+  formatter: Intl.DateTimeFormat;
+  hourWindowStartDay: string;
+}
+
 export interface ClaudeUsageIndex {
   /** Canonical configured zone used by every materialized calendar bucket. */
   timeZone: string;
@@ -138,6 +142,8 @@ export interface ClaudeUsageIndex {
   analyzeContent: boolean;
   windowDays: number;
   analysisCutoffMs: number;
+  /** Transient formatter/cache state; never persisted with the index. */
+  timeKeyers: ConfiguredTimeKeyers;
 }
 
 export interface ClaudeUsageIndexDiagnostics extends LoadUsageDiagnostics {
@@ -256,9 +262,25 @@ function emptyCopyOnWriteKeys(): CopyOnWriteKeys {
   };
 }
 
-export function createClaudeUsageIndex(): ClaudeUsageIndex {
+function createConfiguredTimeKeyers(timeZone: string, now = Date.now()): ConfiguredTimeKeyers {
+  const resolved = resolveTimeZone(timeZone);
   return {
-    timeZone: resolveTimeZone(I18n.getTimezone()),
+    formatter: new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23',
+      timeZone: resolved,
+    }),
+    hourWindowStartDay: rollingDayKeys(now, resolved, 30)[0] ?? '',
+  };
+}
+
+export function createClaudeUsageIndex(): ClaudeUsageIndex {
+  const timeZone = resolveTimeZone(I18n.getTimezone());
+  return {
+    timeZone,
     files: new Map(),
     manifest: null,
     candidatesByMessage: new Map(),
@@ -286,6 +308,7 @@ export function createClaudeUsageIndex(): ClaudeUsageIndex {
     analyzeContent: false,
     windowDays: 30,
     analysisCutoffMs: 0,
+    timeKeyers: createConfiguredTimeKeyers(timeZone),
   };
 }
 
@@ -632,9 +655,12 @@ function configuredTimeKeys(
   index: ClaudeUsageIndex,
   date: Date,
 ): { day: string; month: string; hour: string } {
-  const day = dayKeyInZone(date, index.timeZone);
-  const month = monthKeyInZone(date, index.timeZone);
-  const hour = formatHourLabel(hourKeyInZone(date, index.timeZone));
+  if (isNaN(date.getTime())) return { day: '', month: '', hour: '' };
+  const parts = index.timeKeyers.formatter.formatToParts(date);
+  const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? '';
+  const day = `${get('year')}-${get('month')}-${get('day')}`;
+  const month = day.slice(0, 7);
+  const hour = formatHourLabel(get('hour'));
   return { day, month, hour };
 }
 
@@ -706,7 +732,9 @@ function applyConfiguredTimeAggregate(
   applyBucket(index.aggregates.byDay, day, contribution, sign);
   applyBucket(index.aggregates.byMonth, month, contribution, sign);
   applyBucket(index.aggregates.byLocalDay, day, contribution, sign);
-  applyBucket(index.aggregates.byLocalHour, dayHour, contribution, sign);
+  if (day >= index.timeKeyers.hourWindowStartDay) {
+    applyBucket(index.aggregates.byLocalHour, dayHour, contribution, sign);
+  }
 }
 
 function applyAggregate(index: ClaudeUsageIndex, record: ClaudeUsageRecord, sign: 1 | -1): void {
@@ -1052,6 +1080,14 @@ function cloneIndexForCommit(previous: ClaudeUsageIndex): ClaudeUsageIndex {
   };
 }
 
+function pruneHourlyBuckets(index: ClaudeUsageIndex): void {
+  const cutoff = index.timeKeyers.hourWindowStartDay;
+  if (!cutoff) return;
+  for (const key of index.aggregates.byLocalHour.keys()) {
+    if (key.slice(0, 10) < cutoff) index.aggregates.byLocalHour.delete(key);
+  }
+}
+
 function recordsOf(index: ClaudeUsageIndex): ClaudeUsageRecord[] {
   return [...index.visibleRecords.values()];
 }
@@ -1254,10 +1290,25 @@ export function claudeUsageAggregateSnapshot(
   const monthlyForAllTime = [...index.aggregates.byMonth.entries()]
     .map(([month, data]) => ({ date: `${month}-01`, data: cloneUsageData(data) }))
     .sort((left, right) => right.date.localeCompare(left.date));
-  const hourlyForToday = [...index.aggregates.byLocalHour.entries()]
+  let hourlyForToday = [...index.aggregates.byLocalHour.entries()]
     .filter(([key]) => key.startsWith(`${localToday}\0`))
     .map(([key, data]) => ({ hour: key.slice(localToday.length + 1), data: cloneUsageData(data) }))
     .sort((left, right) => left.hour.localeCompare(right.hour));
+  // Historical callers may ask for a deterministic snapshot date (tests,
+  // replay, or an already-rendered day). If that day is outside the rolling
+  // materialized hour window, derive its hours from the in-memory visible
+  // records only; never reopen JSONL.
+  if (hourlyForToday.length === 0 && index.aggregates.byLocalDay.has(localToday)) {
+    const fallback = new Map<string, UsageData>();
+    for (const record of index.visibleRecords.values()) {
+      const keys = configuredTimeKeys(index, new Date(record.timestamp));
+      if (keys.day !== localToday || !keys.hour) continue;
+      applyBucket(fallback, keys.hour, ClaudeDataLoader.calculateUsageData([record]), 1);
+    }
+    hourlyForToday = [...fallback.entries()]
+      .map(([hour, data]) => ({ hour, data }))
+      .sort((left, right) => left.hour.localeCompare(right.hour));
+  }
   return {
     today: cloneUsageData(index.aggregates.byLocalDay.get(localToday) ?? emptyUsageData()),
     month: cloneUsageData(index.aggregates.byMonth.get(configuredMonth) ?? emptyUsageData()),
@@ -1377,6 +1428,7 @@ export async function updateClaudeUsageIndex(
 ): Promise<ClaudeUsageIndexUpdateResult> {
   const started = performance.now();
   const configuredTimeZone = resolveTimeZone(I18n.getTimezone());
+  const timeKeyers = createConfiguredTimeKeyers(configuredTimeZone);
   const timeZoneChanged = previous.timeZone !== configuredTimeZone;
   const analyzeContent = options.analyzeContent !== false;
   const windowDays = Math.min(365, Math.max(1, Math.round(options.windowDays ?? 30)));
@@ -1516,6 +1568,8 @@ export async function updateClaudeUsageIndex(
 
   const next = cloneIndexForCommit(previous);
   next.timeZone = configuredTimeZone;
+  next.timeKeyers = timeKeyers;
+  pruneHourlyBuckets(next);
   if (timeZoneChanged) {
     rebuildConfiguredTimeAggregates(next);
   }
