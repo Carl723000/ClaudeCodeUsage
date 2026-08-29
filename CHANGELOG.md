@@ -4,6 +4,50 @@ All notable changes to this fork compared to upstream
 [`ClaudeCodeUsage/ClaudeCodeUsage`](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage) (last
 upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangelog.com).
 
+## [2.3.1] — Unreleased
+
+### Added
+- **Evidence-backed advice loop** — the default-off candidate now keeps local
+  observations, evidence, recommendations, actions, local helpful/not-helpful/
+  applied feedback, and guarded comparable-task results in one surface. When
+  reliable comparable work is unavailable, it says that the evidence is
+  insufficient instead of manufacturing an improvement claim.
+- **Exact BYOK preview and explicit send** — aggregate-only is the default.
+  Prompt personalization has separate consent. The complete Anthropic or
+  OpenAI-compatible request body is prepared once, previewed with its byte count
+  and SHA-256, and only the same canonical bytes can be sent after a second user
+  click. Claude Code OAuth credentials are never used for generative requests.
+- **Versioned local comparison evidence** — sanitized task pairs and frozen
+  comparison-result envelopes retain only coarse provider, cohort, metric,
+  quality, coverage, and version fields. Prompt text, response text, paths,
+  session identifiers, and task bodies have no persistence field.
+- **Thirty-day Codex hourly drill-down** — every populated date in the rolling
+  30-day view can expand from the already-indexed sparse date/hour sidecar.
+  Clicking a date reads zero JSONL bodies; the 31st day is evicted, and Claude
+  and Codex use the configured timezone and shared `HH:00` labels.
+
+### Changed
+- **One AI request boundary** — the former Get AI Advice command and Usage
+  Optimizer now enter the same preview, explicit-send, cancellation, strict
+  response parsing, and local-state boundary. The optimizer still sends only
+  the draft pasted by the user and keeps its copyable result format.
+- **Resumable Codex historical work** — first-use and migration work records its
+  progress, failure streak, next eligible time, and pause reason. Successful
+  work continues without an artificial delay; failure or no progress cannot be
+  hot-looped by ordinary refreshes, and restart resumes from a safe checkpoint.
+- **Unified resource ownership** — timers, watchers, workers, network requests,
+  and backfills expose their creator, stop conditions, and actual disposal to
+  lifecycle tests. A bounded first-index exception may finish after focus loss,
+  but disable, explicit cancellation, and extension disposal still stop it.
+
+### Privacy and packaging
+- Disabled or unconsented advice adds no timer, watcher, worker, network request,
+  log scan, or hidden Webview render relative to v2.3.0. There are no default or
+  background AI requests.
+- Dormant migration/experiment modules and internal v2.3.1 review documents are
+  explicitly excluded from the VSIX. The package version and release workflow
+  remain unchanged for this local candidate.
+
 ## [2.3.0] — Unreleased
 
 ### Fixed

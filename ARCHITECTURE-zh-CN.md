@@ -8,6 +8,9 @@
 
 **Claude Code Usage** 继续保持 local-first、无 runtime dependency 和 read-mostly。
 v2.3.0 保留完整 Claude 体验，并增加 provider-specific 的 Codex Beta 用量与优化视图。
+v2.3.1 候选在不改变 provider 计量口径的前提下，增加一套默认关闭、
+local-first 的建议有效性闭环、唯一的显式 BYOK 请求边界、可持久的历史任务状态，
+以及 Codex 滚动 30 天的日期→小时投影。
 
 - Claude：精确的本地 token bucket、模型成本估算和 Anthropic OAuth 5 小时/每周配额。
 - Codex Beta：本地 processed/fresh/cache/output/reasoning 指标、模型与 effort 拆分、
@@ -25,12 +28,17 @@ Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做�
 | `extension.ts` | 激活、命令、设置、provider 生命周期、刷新编排、watcher、状态栏/webview 接线和匿名诊断。 |
 | `dataLoader.ts` | 为精确兼容保留的 Claude 解析、校验、归因和内容分析 primitive。 |
 | `claudeIncrementalIndex.ts` | 生产环境 Claude 内存 per-file 索引：append-tail 解析、精确跨文件 response 去重、受影响 group 聚合、内容分析 contribution 和已物化 dashboard row。 |
+| `adviceEffectiveness/contract.ts`、`adapters.ts`、`payload.ts` | 严格的观察/证据/建议/行动/结果契约，隐私重建型 provider adapter，以及 canonical 聚合/个性化 payload。 |
+| `adviceEffectiveness/preparedRequest.ts` / `remoteAdvice.ts` | host 持有的唯一完整 HTTP Prepared 对象、精确 preview/send bytes、BYOK-only 授权、取消与严格结构化解析。 |
+| `adviceEffectiveness/comparisonPairing.ts`、`comparisonResult.ts`、`versionedPersistence.ts` | 净化的可比任务配对、冻结的 measurement-version envelope 与有界的本地反馈/比较存储。 |
+| `optimizerRequest.ts` | 仅用户粘贴草稿通过同一 Prepared 与严格发送边界；不回退到 advice 证据 parser。 |
+| `backgroundWorkState.ts` / `resourceOwnership.ts` | 可持久的 progress/backoff/pause 状态，以及供测试核对 timer、watcher、worker、network 和 backfill 创建者/停止/真实销毁的 registry。 |
 | `providers/providerTypes.ts` | Provider-neutral token、event、confidence、outcome、coverage 和 limit contract。 |
 | `providers/claudeProvider.ts` | 薄兼容 adapter，不改变既有 Claude 聚合结果。 |
 | `providers/codex/codexSchema.ts` | 最小安全 JSON guard，不展开或返回 message/command/tool body。 |
 | `providers/codex/codexParser.ts` | Codex 精确单次请求解析及 cumulative high-water 回退、伪名 lineage metadata、结构计数、quality flag 和 last-observed limit。 |
 | `providers/codex/codexManifest.ts` | Codex 允许目录发现、HMAC file key、fingerprint 和 manifest diff。 |
-| `providers/codex/codexIndex.ts` | schema-3 的 per-file 数字聚合与重放证据持久化、有界 cold/tail parse、独立 aggregate/period/current-day coverage 和原子存取。 |
+| `providers/codex/codexIndex.ts` | schema-3 的 per-file 数字聚合与重放证据持久化、有界 cold/tail parse、独立 aggregate/period/滚动 30 天小时 coverage 和原子存取。 |
 | `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | 后台协调器、recent-first progress、cancel、resume、checkpoint 持久化和 single-flight client。 |
 | `providers/codex/codexFilePassPool.ts` / `codexFilePassWorker.ts` | 未完成回填期间，用于独立 main、lineage、period、current-day 和 identity per-file pass 的自适应受限本地 pool。 |
 | `providers/codex/codexProvider.ts` | 面向 extension 的 Codex snapshot facade 与 partial/unavailable/error outcome。 |
@@ -60,13 +68,19 @@ Claude JSONL
   ──> manifest metadata
   ──> background worker
   ──> schema guard + 精确单次请求 parser（lineage high-water 回退）
-  ──> per-file 数字聚合索引 + 定向的当日小时 sidecar
+  ──> per-file 数字聚合索引 + 滚动稀疏 30 天小时 sidecar
   ──> CodexProviderSnapshot
   ──> Codex scope + insight
   ──> Codex 状态栏 + provider-aware dashboard render input
 
 Claude aggregate + Codex scope ──> 同一套 `webview.ts` dashboard render stack
 Claude aggregate + Codex scope ──> 并列 Compare（不跨 provider 求和）
+
+已物化 provider snapshot
+  ──> 隐私重建型 advice adapter
+  ──> 本地证据 + 确定性建议
+  ──> 可选 host-owned Prepared 请求 ──> 预览 ──> 显式 BYOK 发送
+  ──> 本地反馈 ──> 净化可比 pair ──> 冻结 comparison envelope
 ```
 
 任一 provider unavailable 或 partial 时，不清空另一 provider 最近验证的 snapshot。
@@ -79,7 +93,8 @@ provider 都已有真实数据时才显示「对比」。worker 启动前先装�
 选中 Codex 时才重绘 Webview；refresh 返回后仍会用已验证 snapshot 做最后一次渲染。
 
 Codex 的「今天」指配置时区中的当前自然日，而不是最近任务。汇总来自该日已验证的 period slice；
-精确小时行来自下文所述的独立当日 sidecar。小时、每日与每月主图默认使用 API 等效成本，Token 构成图
+精确小时行与 30 天日期下钻来自下文的独立滚动 sidecar。点击已渲染日期只展开这份投影，
+不要求 host 读取 JSONL。小时、每日与每月主图默认使用 API 等效成本，Token 构成图
 仍独立展示。未知模型计入 Token 分母但保持未定价，因此定价 coverage 始终可见。Claude 与 Codex 的
 时间序列布局使用对齐的响应式宽度，较密集的图表和表格在各自可键盘聚焦的区域内滚动。
 
@@ -122,6 +137,12 @@ Raw path/session/parent ID 只留在本地 worker 的短期内存。磁盘只持
 和按 day/model/effort/session 聚合的数字，绝不存 prompt、response、command、tool arguments、
 raw line 或 raw path。
 
+Advice 只消费已物化聚合，不重读 JSONL，也不重遍历保留的 records。远程默认为
+aggregate-only；prompt sample 与可选 user context 需单独明确同意，并必须原样出现在精确请求预览中。
+host 保管 Prepared 对象和 API key；webview 只拿到预览与不透明 handle。第二次点击才把同一 bytes 对象
+发给用户配置的 BYOK endpoint。Feedback、comparable pair 与 comparison envelope 全部保持本地，
+不接受 prompt、response、path、session、title、endpoint 或 credential 字段。
+
 Machine salt 存在 VS Code `globalState`，不写入索引。Worker progress/result/error 与 diagnostics
 只含匿名计数与时间，不含 path 或 ID。
 
@@ -150,10 +171,10 @@ aggregate；按日的期间切片则独立晋升，因此 partial migration 不�
 all-time 的状态。7 天与 30 天只累加自然日内发生的 event；不会因为 Session 的最后活动落在范围内，
 就把该 Session 的整段较早历史吸收进来。
 
-当日小时索引是 schema 3 的增量 sidecar，不是第三份 all-time 事实来源。只有经重复分类选为 canonical，
-且已验证 period slice 已包含 `asOfDay` 的文件才会进入候选集。每个文件的小时晋升状态与处理中 cursor
-都会写入 checkpoint，因此取消后可从已验证 offset 续传。日期或时区变化时会丢弃过期 sidecar，改为
-目标新自然日；该路径既不使主 aggregate 失效，也不会触发全历史重建。
+滚动 30 天小时索引是 schema 3 的增量 sidecar，不是第三份 all-time 事实来源。只有经重复分类选为
+canonical，且已验证 period slice 与配置自然日窗口相交的文件才会进入候选集。每个文件的小时晋升状态与
+处理中 cursor 都会写入 checkpoint，因此取消后可从已验证 offset 续传。窗口前移时淘汰第 31 天；
+时区改变只请求一次定向迁移。该路径既不使主 aggregate 失效，也不会触发无关的全历史重建。
 
 Identity 同样是一份 coverage 契约。Git 的 SCP 形式 SSH URL 与 HTTPS URL 在 host/path 一致时
 会规范化为同一个 repository identity。Root title 采用可信的最新 `updated_at` title；subagent
@@ -192,12 +213,19 @@ Codex 按多 GiB 本地历史设计：
   数十 MB snapshot 主导高速回填耗时；
 - 只有可能改变 lineage 的阶段才重新 reconcile；period 和稳定阶段复用已验证关系，
   不再反复扫描完整索引；
-- 当日小时任务仅处理 period slice 已证明包含 `asOfDay` 的 canonical 文件；它独立 checkpoint/续传，
-  不会重置主索引；
+- 滚动 30 天小时任务仅处理 period slice 已证明与配置自然日窗口相交的 canonical 文件；
+  它独立 checkpoint/续传，滚动淘汰第 31 天，不会重置主索引；
 - append refresh 只读新 tail；未完成行只留在 scanner 的短期内存，从 safe cursor 重试，绝不写入 v3；
 - truncate/replacement 只重解析受影响文件；
 - cancel checkpoint 会原子保存 per-file contribution 与 migration progress，下一轮从已验证 cursor resume；
 - 并发 refresh 共享同一 worker run。
+
+历史任务还使用一份精简的可持久控制状态：measurement version、reason、progress、
+failure streak、next eligible time 和 pause reason。成功后立即继续，不人为等待；失败或无进展后
+进入 backoff，普通 refresh/watch/focus 事件不能重启同一停滞迁移。Resource registry 记录每个 timer、
+watcher、worker、network request 与 backfill 的创建者，只在真实 stop callback 完成后释放 lease。
+为降低首次可用延迟，有界的首次索引可在失焦后继续；但 extension dispose、provider 关闭或显式取消
+仍对其终止负责。
 
 每周 API 等效价值历史只从已经聚合的 Token 用量生成。有真实每周重置观测时，七天窗口按该重置
 对齐；没有时，仅已用历史按 UTC 周一至周一的自然周分组。Token 日志能够证明已用价值，但不能证明
@@ -213,6 +241,7 @@ v2.3.0 不推断 20、100 或 200 美元的订阅档位。本地 Codex 日志没
   和安装 VSIX smoke test。
 - 用户可见字符串覆盖 `en`、`de-DE`、`zh-TW`、`zh-CN`、`ja`、`ko`、`pt-BR`、`id`；
   七份 README 同步。
+- dormant 的 preparation/experiment 模块与仅供评审的 v2.3.1 文档必须保持不可从生产 command graph 到达，并排除出 VSIX。
 - 不手工修改 `package.json` 版本。发布已审阅的 Release Drafter draft 后才创建 tag，
   publish workflow 再从 tag 写入包版本。
 - 通过合并贡献者原 PR，或经授权先修改该 PR 分支再合并，保留贡献归属。

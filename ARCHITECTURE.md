@@ -10,6 +10,9 @@
 **Claude Code Usage** remains local-first, dependency-free, and read-mostly.
 v2.3.0 preserves the complete Claude experience and adds Codex Beta as a
 provider-specific usage and optimization view.
+The v2.3.1 candidate adds a default-off, local-first advice-effectiveness loop,
+a single explicit BYOK request boundary, durable historical-work state, and a
+rolling 30-day Codex date/hour projection without changing provider accounting.
 
 - Claude: exact local token buckets, model pricing estimates, and Anthropic
   OAuth 5-hour/weekly quota.
@@ -32,12 +35,17 @@ aggregate sync are deferred to v2.4.x after a separate privacy review.
 | `extension.ts` | Activation, commands, settings, provider lifecycle, refresh orchestration, watchers, status/webview wiring, and anonymous diagnostics. |
 | `dataLoader.ts` | Claude parsing, validation, attribution, and content-analysis primitives retained for exact compatibility. |
 | `claudeIncrementalIndex.ts` | Production in-memory per-file Claude index: append-tail parsing, exact cross-file response deduplication, affected-group aggregation, content-analysis contributions, and materialized dashboard rows. |
+| `adviceEffectiveness/contract.ts`, `adapters.ts`, and `payload.ts` | Strict observation/evidence/recommendation/action/result contracts, privacy-rebuilding provider adapters, and canonical aggregate/personalization payloads. |
+| `adviceEffectiveness/preparedRequest.ts` and `remoteAdvice.ts` | One host-owned full HTTP request object, exact preview/send bytes, BYOK-only authorization, cancellation, and strict structured-advice parsing. |
+| `adviceEffectiveness/comparisonPairing.ts`, `comparisonResult.ts`, and `versionedPersistence.ts` | Sanitized comparable-task pairing, frozen measurement-version envelopes, and bounded local feedback/comparison storage. |
+| `optimizerRequest.ts` | User-draft-only projection through the same prepared-request and strict-send boundary; no advice-evidence parser fallback. |
+| `backgroundWorkState.ts` / `resourceOwnership.ts` | Durable progress/backoff/pause state and the testable creator/stop/disposal registry for timers, watchers, workers, network calls, and backfills. |
 | `providers/providerTypes.ts` | Provider-neutral token, event, confidence, outcome, coverage, and limit contracts. |
 | `providers/claudeProvider.ts` | Thin compatibility adapter that exposes existing Claude aggregates without changing their results. |
 | `providers/codex/codexSchema.ts` | Minimal safe JSON guards; never flattens or returns message/command/tool bodies. |
 | `providers/codex/codexParser.ts` | Codex exact-request parsing with cumulative high-water fallback, pseudonymous lineage metadata, structural counters, quality flags, and last-observed limits. |
 | `providers/codex/codexManifest.ts` | Allowlisted Codex directory discovery, HMAC file keys, fingerprints, and manifest diffing. |
-| `providers/codex/codexIndex.ts` | Schema-3 persistent per-file numeric aggregates and replay evidence, bounded cold/tail parsing, independent aggregate/period/current-day coverage, and atomic save/load. |
+| `providers/codex/codexIndex.ts` | Schema-3 persistent per-file numeric aggregates and replay evidence, bounded cold/tail parsing, independent aggregate/period/rolling-30-day-hour coverage, and atomic save/load. |
 | `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | Background coordinator, recent-first progress, cancellation, resume, checkpoint persistence, and single-flight client. |
 | `providers/codex/codexFilePassPool.ts` / `codexFilePassWorker.ts` | Adaptive bounded local pool for independent per-file main, lineage, period, current-day, and identity passes during incomplete backfills. |
 | `providers/codex/codexProvider.ts` | Extension-facing Codex snapshot facade and partial/unavailable/error outcomes. |
@@ -68,13 +76,19 @@ allowlisted Codex JSONL
   ──> manifest metadata
   ──> background worker
   ──> schema guard + exact-request parser with lineage high-water fallback
-  ──> per-file numeric aggregate index + targeted current-day hourly sidecar
+  ──> per-file numeric aggregate index + rolling sparse 30-day hourly sidecar
   ──> CodexProviderSnapshot
   ──> Codex scopes + insights
   ──> Codex status + provider-aware dashboard render inputs
 
 Claude aggregates + Codex scopes ──> one `webview.ts` dashboard render stack
 Claude aggregates + Codex scopes ──> side-by-side Compare (no cross-provider totals)
+
+materialized provider snapshots
+  ──> privacy-rebuilding advice adapters
+  ──> local evidence + deterministic recommendations
+  ──> optional host-owned Prepared request ──> preview ──> explicit BYOK send
+  ──> local feedback ──> sanitized comparable pairs ──> frozen comparison envelope
 ```
 
 One provider may be unavailable or partial without clearing the other
@@ -93,7 +107,9 @@ still gets a final render when the refresh returns.
 
 Codex Today is the current civil day in the configured timezone, not the most
 recent task. Its summary uses that day's verified period slice; exact hourly
-rows come from the independent current-day sidecar described below. Hourly,
+rows and 30-day drill-downs come from the independent rolling sidecar described
+below. Clicking an already-rendered date only reveals that projection and does
+not ask the host to read JSONL. Hourly,
 daily, and monthly primary charts use API-equivalent cost by default, while the
 token-composition chart remains a separate view. Unknown models contribute to
 the token denominator but remain unpriced, so pricing coverage stays visible.
@@ -145,6 +161,15 @@ worker memory. Disk persistence contains machine-salted pseudonymous keys and
 numeric per-day/model/effort/session aggregates only—never prompt, response,
 command, tool-argument, raw-line, or raw-path content.
 
+Advice starts from materialized aggregates rather than rereading JSONL or
+walking retained records. Aggregate-only is the remote default. Prompt samples
+and optional user context have a separate explicit consent and must appear in
+the exact request preview. The host keeps the prepared object and API key; the
+webview receives only the preview and an opaque handle. A second click sends the
+same byte object to the configured BYOK endpoint. Feedback, comparable pairs,
+and comparison envelopes remain local and accept no prompt, response, path,
+session, title, endpoint, or credential field.
+
 The machine salt lives in VS Code `globalState`, not in the index file. Worker
 progress/results/errors and diagnostics contain anonymous counts and timings,
 not paths or identifiers.
@@ -187,13 +212,14 @@ states. The 7/30-day views sum events in their natural calendar days; they do
 not pull an entire older session into a range merely because the session's last
 activity falls inside it.
 
-The current-day hourly index is an additive schema-3 sidecar, not a third source
-of all-time truth. A file becomes eligible only after duplicate classification
-selects it as canonical and its verified period slice already contains
-`asOfDay`. Per-file hourly promotion and in-progress cursors are checkpointed,
-so cancellation resumes from the verified offset. A day or timezone change
-discards the stale sidecar and targets the new civil day. This path neither
-invalidates the primary aggregate nor triggers a full-history reindex.
+The rolling 30-day hourly index is an additive schema-3 sidecar, not a third
+source of all-time truth. A file becomes eligible only after duplicate
+classification selects it as canonical and its verified period slice intersects
+the configured civil-day window. Per-file hourly promotion and in-progress
+cursors are checkpointed, so cancellation resumes from the verified offset.
+Day 31 is evicted as the window advances. A timezone change requests one
+targeted migration. This path neither invalidates the primary aggregate nor
+triggers an unrelated full-history reindex.
 
 Identity is also a coverage contract. Git SCP-style SSH and HTTPS repository
 URLs are canonicalized to the same repository identity where their host/path
@@ -247,15 +273,26 @@ Codex history is designed for multi-gigabyte local corpora:
 - derived lineage is reconciled only in stages that can change it; period and
   stable stages reuse the verified relationship instead of repeatedly scanning
   the complete index;
-- current-day hourly work is limited to canonical files already known from
-  period slices to contain `asOfDay`; its own checkpoints resume independently
-  and do not reset the primary index;
+- rolling 30-day hourly work is limited to canonical files already known from
+  period slices to intersect the configured civil-day window; its own
+  checkpoints resume independently, evicts day 31, and does not reset the
+  primary index;
 - append refresh reads only the new tail; an incomplete line stays only in the
   scanner's short-lived memory and is retried from the safe cursor, never in v3;
 - truncation/replacement reparses only the affected file;
 - cancellation checkpoints atomically save per-file contributions and migration
   progress, so the next run resumes from the verified cursor;
 - concurrent refresh requests share one worker run.
+
+Historical work also has a small durable control state: measurement version,
+reason, progress, failure streak, next eligible time, and pause reason. Progress
+continues immediately after success. Failure or no progress applies backoff, so
+ordinary refresh/watch/focus events cannot restart the same stalled migration.
+The resource registry records who created every timer, watcher, worker, network
+request, and backfill, and releases a lease only after its real stop callback
+finishes. A bounded first-index backfill may continue after focus loss for
+first-use latency, but extension disposal, provider disable, or explicit
+cancellation still owns its termination.
 
 Weekly API-equivalent history is derived from already-aggregated token usage.
 Observed weekly resets align seven-day buckets; otherwise usage-only history
@@ -275,6 +312,8 @@ use an explicit opt-in account mapping rather than attaching prices by guess.
   VSIX smoke test are required in proportion to the change.
 - User-visible strings cover `en`, `de-DE`, `zh-TW`, `zh-CN`, `ja`, `ko`,
   `pt-BR`, and `id`; all seven README editions move together.
+- Dormant preparation/experiment modules and review-only v2.3.1 documents stay
+  unreachable from the production command graph and are excluded from VSIX.
 - `package.json` is not manually version-bumped. Publishing the reviewed Release
   Drafter draft creates the tag; the publish workflow stamps that tag version.
 - Contributor PR attribution is preserved by merging the contributor's original

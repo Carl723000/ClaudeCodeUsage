@@ -73,14 +73,21 @@ tool results (by tool) vs. assistant output / thinking. This is the lever
 for optimising your usage. Scoped to the last 30 days
 (`advice.promptWindowDays`).*
 
-### AI advice — a coaching report from your real usage
+### AI advice — evidence first, sending optional
 
-AI advice writes you a **Markdown document**, so it reads better as text than as
-a screenshot. Set a key (`advice.apiKey`), click **Get AI advice** (the ✨ button
-or the card on the Content tab), pick a scope (all projects, or one), and it sends
-your usage aggregates + a sample of *your own* prompts to your model and opens a
-prioritised report. Bring your own key — Anthropic (`/v1/messages`) by default, or
-any OpenAI-compatible endpoint.
+The v2.3.1 candidate keeps one readable path from a local observation to its
+evidence, recommendation, action, feedback, and guarded result. It is off by
+default. Local evidence appears before any model is involved; **Helpful**, **Not
+helpful**, and **Applied** stay on this device. Once enough reliable, similar
+before/after tasks exist, the card reports the frozen comparison result;
+otherwise it says that the evidence is insufficient.
+
+AI personalisation is a separate choice. Aggregate-only is the default and
+prompt samples remain off until separately allowed. The extension prepares the
+complete request once and shows its exact JSON, byte count, and SHA-256. Preview
+sends nothing; **Send this exact request** is a second explicit action, using the
+same canonical bytes and your own configured key/endpoint. Claude Code OAuth
+credentials are never used as a generative backend.
 
 A flavour of what it returns (illustrative):
 
@@ -101,10 +108,30 @@ Paste a rough, half-formed request; get back one clean, **paste-ready** prompt
 (plain text, no Markdown) plus a recommended reasoning effort / thinking / model
 shown as chips. Three optional toggles refine it (flag vague references · condense
 long pastes · suggest a style direction). Experimental, off by default; **only the
-text you paste is sent** — never your files or the terminal — behind a one-time
-consent prompt.
+text you paste is included** — never your files or the terminal. It now uses the
+same full-request preview and separate explicit Send action as AI advice.
 
 ---
+
+## v2.3.1 local candidate
+
+- **One advice loop** — local evidence, explainable recommendations, optional
+  exact BYOK preview/send, device-local feedback, and versioned comparable-task
+  results share one boundary. Get AI Advice opens this surface; the Optimizer
+  reuses its preview/send/cancel/strict-parse behavior instead of forming a
+  third network path.
+- **No automatic AI traffic** — the feature is off by default, aggregate consent
+  and prompt-personalisation consent are separate, and a request crosses the
+  network only after the user previews it and clicks Send.
+- **Resumable first-use work** — Codex history and the rolling 30-day hour
+  migration show why they are running, persist progress/failure/backoff state,
+  and do not restart equivalent work after completion or on every refresh.
+- **Thirty-day hour drill-down** — any populated Codex day in the last 30 days
+  expands from the existing index with zero JSONL reads on click. Claude and
+  Codex use the configured timezone and the same `HH:00` labels.
+
+The candidate keeps the package version unchanged and is not a published
+release.
 
 ## What's new in 2.3
 
@@ -130,8 +157,9 @@ consent prompt.
   API-equivalent cost while token composition stays separately visible. Only
   exact known-model prices contribute; unknown models remain unpriced and every
   row keeps pricing coverage visible. The schema-3-compatible hourly sidecar
-  processes only canonical files already known to contain today, is checkpointed
-  and resumable, and does not force a full-history reindex.
+  keeps sparse buckets for the rolling last 30 days, is checkpointed and
+  resumable, evicts day 31, and serves date expansion with zero JSONL reads on
+  click.
 - **Request-level token attribution** — valid `last_token_usage` components are
   preferred, while its `total_tokens` remains an active-context measurement,
   not request usage. A full numeric total-plus-last signature suppresses only
@@ -284,20 +312,19 @@ consent prompt.
   cap actually named by Anthropic, such as `fable 17%`; migrated from the
   original model-specific contribution in PR #38 by
   [@wheelbarrel00](https://github.com/wheelbarrel00).
-- **AI advice 2.0** — bring your own key: **Anthropic** (`/v1/messages`) by
-  default, or any OpenAI-compatible endpoint (`advice.apiFormat`). Fed with the
-  new signals (runs, cache hit rates, attribution, thinking share); optional
-  `advice.userContext` adds a "Personalised for this project" section;
-  `advice.promptWindowDays` (default 30) sets the sampling window. Transport
-  hardened: timeout, retry, curl fallback. *(A keyless "subscription" backend
-  was prototyped but isn't shipped — Anthropic blocks calling the API with the
-  Claude Code OAuth token; it may return if that changes.)*
+- **AI advice 2.0** — bring your own key for Anthropic or an OpenAI-compatible
+  endpoint (`advice.apiFormat`). v2.3.1 places local evidence and an exact full-
+  request preview before the separate Send action. Aggregate-only is the
+  default; prompt samples and `advice.userContext` require independent prompt-
+  personalisation consent and appear verbatim in the preview. The keyless
+  Claude Code subscription backend is not shipped and is unreachable.
 - **Usage Optimizer** (experimental, `advice.optimizer.enabled`, default off) —
   a Content-tab card where you paste a rough request and get back one tightened
   prompt as **plain text** (paste-ready, no Markdown) plus a recommended effort
   / thinking / model. Three optional lenses (flag ambiguous references ·
   condense long pastes · suggest a style direction). **Only the text you paste
-  is sent**, behind a one-time consent prompt.
+  is included**, and the full provider request must be previewed and explicitly
+  sent.
 - **Context-window indicator** (experimental, off by default) — opt in via
   Settings to show the current session's context fill in the status bar. A "~"
   marks a guessed window; set `contextWindowOverride` for proxied/custom models.
@@ -312,8 +339,9 @@ consent prompt.
   by [@Dobidop](https://github.com/Dobidop).
 - **Four new tabs**: Sessions, Projects, Content, Branches — all sortable.
 - **Token-composition stacked chart** with Y-axis and reference lines.
-- **AI advice command** (DeepSeek V4 Pro default, `reasoning_effort=max`)
-  with a demo-mode fallback when no API key is configured.
+- **AI advice command** — now routes to the unified local-evidence surface; a
+  missing API key leaves the request unsent instead of opening a separate demo
+  or transport path.
 - **Multi-vendor pricing**: Opus 4.x, Sonnet 4.x, Haiku 4.5 (verified
   against Anthropic's public pricing); reference rates for proxied setups
   (OpenAI, Gemini, DeepSeek, Kimi, GLM, Qwen) with family-aware fallback.
@@ -372,7 +400,7 @@ for **`Claude Code Usage`**:
 | `language` | `"auto"` | UI language: `auto` / `en` / `de-DE` / `zh-TW` / `zh-CN` / `ja` / `ko` / `pt-BR` / `id`. |
 | `dataDirectory` | `""` | Custom Claude data dir; empty = auto-detect. |
 | `codex.dataDirectory` | `""` | Custom Codex home; empty = `CODEX_HOME` or `~/.codex`. |
-| `advice.apiKey` | `""` | API key for AI advice + the Usage Optimizer (empty = advice opens a demo instead). |
+| `advice.apiKey` | `""` | Bring-your-own key for AI advice + the Usage Optimizer; empty means no request can be sent. |
 
 Everything else — refresh interval, status-bar items, number/date formatting,
 project grouping, content analysis, and all the AI advice / Optimizer options —
@@ -435,13 +463,12 @@ authoritative.
 - The quota indicator calls **`api.anthropic.com/api/oauth/usage`** using
   Claude Code's existing OAuth token. No additional credentials are sent.
 - **AI advice** and the **Usage Optimizer** are the only features that call a
-  model — and only when *you* trigger them. AI advice sends an aggregate
-  summary of your usage plus a sample of your recent prompts; the Optimizer
-  sends **only the text you paste into it** (never your files or the terminal),
-  behind a one-time consent prompt. Both send to the endpoint in `advice.apiUrl`
-  with your own `advice.apiKey` (Anthropic `/v1/messages` by default, or any
-  OpenAI-compatible endpoint). **Bring your own key**; nothing is shipped with
-  the extension.
+  model — and only after *you* preview and explicitly send a prepared request.
+  Advice defaults to allowlisted aggregates; prompt samples and optional user
+  context require separate consent. The Optimizer includes **only the text you
+  paste into it** (never your files or terminal). Both use the exact previewed
+  bytes, the endpoint in `advice.apiUrl`, and your own `advice.apiKey`.
+  **Bring your own key**; no key or generative OAuth credential is shipped.
 
 ---
 
@@ -463,10 +490,10 @@ authoritative.
   `https://api.deepseek.com/chat/completions`. The extension auto-strips
   `/v1` if present.
 
-**`Get AI Usage Advice` shows demo instead of real advice**
-- AI advice needs a key. With no key under `claudeCodeUsage.advice.apiKey`, the
-  command opens a hand-written demo (filename-marked `…-DEMO-…`, with a prominent
-  banner) instead of calling any API. Add a key in Settings to get real advice.
+**`Send this exact request` is unavailable**
+- Enable the default-off advice-effectiveness setting, allow aggregate data,
+  and configure your own `claudeCodeUsage.advice.apiKey`. Previewing is always
+  local; without a key the request remains unsent.
 
 **High CPU or sluggish refresh on a large history (Linux included)**
 - V2.2.1 removes the hidden 8-second active polling override and bounds the

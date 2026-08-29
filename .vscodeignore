@@ -20,6 +20,15 @@ CONTRIBUTING.md
 probe-*.mjs
 issue87-*.cjs
 out/claudeIncrementalPrototype.js
+out/adviceEffectiveness/evidencePreparation.js
+out/adviceEffectiveness/feedback.js
+out/adviceEffectiveness/legacyBridge.js
+out/adviceEffectiveness/legacyPersonalization.js
+out/adviceEffectiveness/modelExperiment.js
+out/adviceDemoSample.js
+out/adviceSummary.js
+AI-ADVICE-*V2.3.1*.md
+V2.3.1-CANDIDATE-CONTRACT*.md
 docs/**
 
 .gitignore

@@ -1,14 +1,15 @@
-# v2.3.1 AI 建议有效性基础：接入与迁移说明
+# v2.3.1 AI 建议有效性：候选实现说明
 
 ## 状态与边界
 
-本基础开发从独立 worktree 的 `0b4b750`（tag `v2.2.0`）开始。R8 worktree
-`codex/v2.3.0-energy-efficiency`（`48e5e77`）只用于核对未来接口，没有复制或修改。
+当前 worktree 是从正式 `v2.3.0` 基线选择性移植并继续收敛的 v2.3.1 本地候选；版本号、
+release workflow 与发布入口保持不变，尚未发布。
 
-本提交不会改变当前 UI、设置、版本号、发布 workflow 或网络入口。新增代码没有被
-`extension.ts`、`advisor.ts`、`webview.ts` 或 settings 引用，因此默认完全 inert。
-当前旧 AI Advice/Optimizer 行为也保持不变；迁移必须在 v2.3.1 的独立 feature flag
-下完成，并经过单独的 UI、隐私和多语言评审。
+候选代码已经进入 `extension.ts`、`webview.ts` 与生产 VSIX 路径，但相关功能默认关闭。
+关闭、隐藏或未授权时不创建 AI timer、watcher、worker、network 或额外日志扫描。启用后，
+只有用户先检查完整请求预览、再另行点击“发送”，才会调用现有用户配置的 BYOK endpoint。
+旧 `Get AI Advice` 命令仅打开这一统一界面；Prompt Optimizer 也使用同一 prepare → preview →
+explicit Send → strict parse → local feedback 边界，不再保留一次性持久授权或宽松 parser fallback。
 
 ## 新增核心
 
@@ -35,28 +36,30 @@ record、project label/path、cwd、session、prompt、response、credential 没
 可远程发送的 metric 还有单独 allow-list；新增 metric 必须经过显式隐私评审。low/unknown
 confidence 或仍带 quality flag 的 source 会在 payload 生成前失败，不会要求模型填补缺口。
 
-`prepareAdvicePayload()` 默认生成 `aggregates-only`，且序列化结果中完全没有
+`prepareAdvicePayload()` 默认生成 `aggregates-only` 的内层 evidence body，且序列化结果中完全没有
 `promptSamples` key。只有调用者额外提供：
 
 ```ts
 { consent: 'explicit', samples: [{ text: '...' }] }
 ```
 
-才会加入受数量、单条长度和总长度限制的 prompt 文本；sample 上的 `cwd` 等多余字段
-仍会被丢弃。`adviceUserContext` 不属于 aggregate，未来不能悄悄接入该默认路径；若要
-发送，必须另设一项明确 consent 与 preview 设计。
+才会加入受数量、单条长度和总长度限制的 prompt 文本；sample 上的 `cwd` 等多余字段仍会被
+丢弃。`advice.userContext` 与 prompt sample 共用独立于 aggregate 的 personalization consent；
+未授权时两者都不进入 body，授权后必须逐字出现在完整预览中。
 
-payload 只序列化一次。`previewAdvicePayload()` 返回该 `serializedBody`，
-`sendPreparedAdvicePayload()` 把同一个字符串原样交给 transport。未来 transport 不得
-重新从 object 构建或“清理” body；API key、endpoint 和 headers 应在此字符串之外处理。
+生产路径再由 `preparedRequest.ts` 把内层 evidence body 封装为完整 Anthropic / OpenAI-compatible
+provider HTTP JSON body。该 body 只序列化一次，生成 host-retained `PreparedAiInvocation`、
+`canonicalBytes` 与 SHA-256；预览从同一 bytes 解码，实际发送和同一次发送内的 retry / curl
+fallback 继续复用该 Prepared bytes。API key 只在发送边界加入 header，不进入预览 body。
 
-### `src/adviceEffectiveness/feedback.ts`
+### `src/adviceEffectiveness/versionedPersistence.ts`
 
-feedback ledger 只接受 `helpful / not-helpful / applied`、advice/recommendation/event ID
-和本地时间。它不接受自由文本、prompt、payload、解释或 endpoint。helpful 与
-not-helpful 对同一建议互斥，applied 可独立共存。存储通过最小 `get/update` port 注入，
-未来可直接适配 VS Code `ExtensionContext.globalState`；模块本身没有任何网络依赖。
-损坏、未知版本或带额外字段的本地数据 fail closed，记录操作不会覆盖它。
+生产反馈统一写入 `ccu.adviceEffectiveness.localState` v2 envelope，只接受
+`helpful / not-helpful / applied`、格式验证后的 advice/recommendation ID 与本地 epoch 时间。
+它不接受自由文本、prompt、payload、解释、endpoint、path 或 session ID。helpful 与
+not-helpful 互斥，applied 独立；再次点击已选状态会撤回并在全部状态清空时删除该条记录。
+Advice 的每条 recommendation 与 Prompt Optimizer 的每次结果都走同一个写入函数。
+损坏、未知版本或带额外字段的数据 fail closed，写失败后不会用旧快照覆盖新决定。
 
 ### `src/adviceEffectiveness/comparison.ts`
 
@@ -74,6 +77,13 @@ not-helpful 对同一建议互斥，applied 可独立共存。存储通过最小
 改善但质量退化返回 `quality-guardrail-failed`；没有达到预设幅度只返回
 `no-demonstrated-improvement`，不声称建议造成伤害或收益。
 
+`comparisonPairing.ts`、`comparisonProduction.ts` 与 `comparisonResult.ts` 把这条纯比较边界接入
+真实、已净化的 provider/task-level 物化 aggregate。只有 scope、task kind、complexity、provider、
+model、effort、metric definition 与 quality rubric 全部相同，且 applied 时间能可靠划分前后时，
+才形成 comparable pair。版本化 result envelope 只保存 schema、provider、measurement / recommendation
+version、guardrail、replay eligibility、sample 与 result；prompt、response、session、path、正文和未知字段
+没有目标字段。无可靠 pair 时 UI 明确显示“证据不足”。
+
 ### `src/adviceEffectiveness/structuredOutput.ts`
 
 `parseStructuredAdviceOutput()` 只接受一个严格 JSON 值，并逐层拒绝未知/缺失字段、错误
@@ -82,43 +92,40 @@ schema version、非法枚举、超长/超量内容、重复 ID、空 action/cri
 返回 partial batch，或把 raw 输出 fallback 成看似有效的建议；错误结果也不回显 raw 模型
 正文。`recommendations: []` 是明确的 no-conclusion 成功结果。
 
-## v2.3.1 迁移顺序
+## 当前生产闭环
 
-1. **薄 adapter，不碰 raw records**：Claude 从 `ClaudeDataLoader.getAllTimeData()` 或等价
-   scoped aggregate 映射；本地 insight 先转成 numeric observation/evidence。不要复用当前
-   `buildAdviceSummary()`，因为它默认混入 prompt、cwd-derived scope 和自由文本信号。
-2. **R8 Codex adapter**：rebase/cherry-pick 到 v2.3.0 后，从
-   `CodexScopedInsights` / `CodexUsageScopeView` 映射 `kind、scope、numeric evidence、proxy`，
-   同时保留 `periodCoverage.complete`、confidence 和 `qualityFlags`。coverage 不完整或没有
-   triggered evidence 时不发 remote request、不生成通用 recommendation。
-3. **独立 preview/consent**：先生成 prepared payload 并展示其 exact body/manifest；prompt
-   sample 和任何 user context 分开询问、分开授权。取消授权时保留 aggregates-only body。
-4. **transport**：让 provider adapter 接收 `serializedBody`，把它作为实际 user payload
-   原样发送；重试继续复用同一字符串。不要调用旧 `buildAdviceSummary()` 后再次拼字符串。
-5. **strict response**：只在 parser `ok` 后用 host observations/evidence/privacy/provenance
-   调用 `createAdviceContract()`；失败只展示错误/重试，不展示 raw fallback 建议。
-6. **本地 feedback**：以 `globalState` adapter 接入三个 UI action；不得连接 analytics、
-   contribution endpoint 或 advice transport。
-7. **有效性评估**：先固定 task cohort、metric definition、quality rubric 与阈值，再收集
-   comparable pairs。比较结果是证据边界，不是因果证明。
+1. **本地证据**：Claude 只消费 `claudeIncrementalIndex` 已物化的同窗口 aggregate / session
+   summary；Codex 只消费现有结构化数值 insight 与任务级物化 aggregate，不新增日志扫描器。
+2. **独立 consent**：Advice 的 aggregate consent 与 prompt-personalization consent 分开持久化；
+   默认是 aggregates-only。Optimizer 只包含用户主动粘贴的 draft，不使用持久网络授权。
+3. **exact preview / explicit Send**：host 保留完整 Prepared provider body；Webview 只持有 opaque
+   snapshot ID、精确 body、byte count、content type、data mode 与 SHA-256。只有另行 Send 点击会联网。
+4. **唯一生产 sender**：Advice 与 Optimizer 都进入 `sendPreparedModelRequest()` →
+   `sendPreparedAiInvocation()`，且只能使用配置的 BYOK key / endpoint。
+5. **strict response**：Advice 只接受 exact-shape JSON 与已知 evidence references；Optimizer 只接受
+   完整 marker / 三行 settings contract。任一失败都不显示 raw 或自由文本 fallback。
+6. **可撤销本地 feedback**：每条 Advice recommendation 和 Optimizer result 共用 v2 bounded ledger；
+   不接 analytics、telemetry、contribution endpoint 或 advice payload。
+7. **有效性评估**：只有 applied 后出现严格可比的前后任务时才写 pair / result envelope；否则显示
+   `insufficient-evidence`。结果是受控描述性证据，不是因果证明。
 
-## 当前已知限制与未来接入点
+## 排除项与剩余边界
 
-- 当前 UI 仍走 legacy Markdown advice；本基础未接线，因此现有版本行为完全不变。
-- 尚无 Claude local-insight adapter、R8 Codex adapter、provider-specific HTTP adapter 或 UI。
-- prompt consent 由未来 host/UI 负责取得；核心只接受显式 capability 并精确预览结果。
-- comparator 提供预先声明阈值的描述性 paired result，不做统计显著性或因果识别。
-- feedback 只存最小本地状态，没有 free-text 原因、同步或 telemetry。
-
-未来 Claude 接入点是 `extension.ts` 当前 `buildAdviceSummary()` / `runAdviceRequest()` 边界；
-未来 Codex 接入点是 R8 的 `buildScopedCodexInsights()` 输出。两者都应通过薄 adapter 接入本
-目录，而不是让核心模块 import provider、VS Code 或 transport 类型。
+- `claudeCodeUsage.getAdvice` 只打开统一 Content 界面，不再构建旧 summary 或直接调用模型。
+- `legacyBridge.ts`、`adviceSummary.ts`、旧 demo / personalization / experiment 准备模块被排除出 VSIX，
+  且 `extension.ts` / `webview.ts` 没有生产调用点；它们不能成为默认或第三条 sender。
+- 生产 backend 固定为 BYOK `api`。Claude Code OAuth/subscription 凭据仅服务既有 quota/usage，
+  不用于 Advice 或 Optimizer，也不存在后台模型请求。
+- Codex remote advice 仍保持关闭；Codex recommendation 与 comparison 使用本地结构数据。
+- comparison 不做显著性或因果识别；缺少可靠 cohort、质量证据或最小样本时保持证据不足。
+- feedback 不存自由文本、不同步、不发 telemetry；Optimizer feedback 当前不触发 comparable-task comparison。
 
 ## 验证
 
-测试平铺在 `src/test/`，覆盖契约引用、canonical preview/send、默认 aggregates-only、
-prompt 独立 opt-in、敌意隐私字段注入、本地 feedback 损坏数据、可比性/质量 guardrail、
-以及严格 JSON fail-closed。运行：
+测试平铺在 `src/test/` 与 `tests/ui/`，覆盖契约引用、完整 Prepared preview/send object identity、
+默认 aggregates-only、prompt 独立 opt-in、Optimizer 关闭态与严格 parser、敌意隐私字段注入、
+可撤销本地 feedback、真实 pairing / 版本化 result envelope、可比性 / quality guardrail 以及
+未知字段 fail-closed。候选验证仍按仓库流程运行：
 
 ```bash
 npm test

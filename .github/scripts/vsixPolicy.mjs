@@ -18,6 +18,9 @@ const FORBIDDEN_ENTRY_PATTERNS = [
   /^extension\/node_modules(?:\/|$)/i,
   /^extension\/issue87-.*\.cjs$/i,
   /^extension\/out\/claudeIncrementalPrototype\.js$/i,
+  /^extension\/out\/adviceEffectiveness\/(?:evidencePreparation|feedback|legacyBridge|legacyPersonalization|modelExperiment)\.js$/i,
+  /^extension\/out\/(?:adviceDemoSample|adviceSummary)\.js$/i,
+  /^extension\/(?:AI-ADVICE-.*V2\.3\.1|V2\.3\.1-CANDIDATE-CONTRACT(?:\.zh-CN)?)\.md$/i,
   /(?:^|\/)\.env(?:\.|$)/i,
   /\.(?:pem|key|p12|pfx)$/i,
 ];
