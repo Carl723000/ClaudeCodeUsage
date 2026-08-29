@@ -47,7 +47,7 @@ import { getProviderNavClientScript } from './providerNavClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
-import { randomBytes } from 'crypto';
+import { createHash, randomBytes } from 'crypto';
 import {
   AdviceEffectivenessProvider,
   AdviceEffectivenessProviderState,
@@ -55,21 +55,35 @@ import {
   PreparedAdviceSnapshot,
   prepareAdviceSnapshot,
 } from './adviceEffectiveness/integration';
+import type { PreparedAiInvocation } from './adviceEffectiveness/preparedRequest';
+import { previewAiInvocation } from './adviceEffectiveness/preparedRequest';
+import type {
+  StructuredAdviceRequestResult,
+} from './adviceEffectiveness/remoteAdvice';
+import type { StructuredAdviceReferences } from './adviceEffectiveness/structuredOutput';
+import { AdviceRecommendation, createAdviceContract } from './adviceEffectiveness/contract';
+import type { PreparedOptimizerResult } from './optimizerRequest';
+import type { BackgroundWorkReason } from './backgroundWorkState';
 import {
   AdviceLocalState,
   AdviceLocalStateStorage,
+  StoredComparablePair,
+  appendAdviceComparisonResult,
+  appendStoredComparablePair,
+  createClearedAdviceLocalState,
   createClosedAdviceLocalState,
   loadAndMigrateAdviceLocalState,
   saveAdviceLocalState,
-  selectStoredComparablePairLineage,
-  toComparableTaskPairs,
   upsertAdviceLocalFeedback,
 } from './adviceEffectiveness/versionedPersistence';
 import {
-  AdviceComparisonResult,
-  DEFAULT_ADVICE_COMPARISON_POLICY,
-  compareAdviceEffectiveness,
-} from './adviceEffectiveness/comparison';
+  CODEX_COMPARISON_MEASUREMENT_PROFILE_VERSION,
+  CODEX_LOCAL_RECOMMENDATION_VERSION,
+  CodexComparableTaskProjection,
+  buildAppliedComparablePairs,
+  isComparableCodexRecommendationId,
+} from './adviceEffectiveness/comparisonProduction';
+import { buildAdviceComparisonResultEnvelope } from './adviceEffectiveness/comparisonResult';
 import {
   AttributionScope,
   BranchUsage,
@@ -90,7 +104,10 @@ interface CodexRenderProgress {
   totalFiles: number;
   indexedBytes: number;
   totalBytes: number;
+  reason?: BackgroundWorkReason;
 }
+
+const OPTIMIZER_FEEDBACK_RECOMMENDATION_ID = 'recommendation-optimizer-result-v1';
 
 export class UsageWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
@@ -154,13 +171,33 @@ export class UsageWebviewProvider {
   private usageLimits: ClaudeApiUsageResponse | null = null;
   private claudeWeeklyQuotaHistory: WeeklyQuotaObservation[] = [];
   private quotaWarnDismissed: boolean = false;
-  // Set by extension.ts: runs the Usage Optimizer round-trip (model lives there
-  // with the config + OAuth client). Returns the optimised prompt + settings
-  // recommendation, or an error string.
-  public onOptimize?: (
+  // Extension-host hooks make the optimizer use the same prepare -> preview ->
+  // explicit send boundary as advice, without exposing keys to the webview.
+  public onPrepareOptimizerInvocation?: (
     draft: string,
-    options: { resolve: boolean; distil: boolean; aesthetic: boolean }
-  ) => Promise<{ prompt?: string; settings?: string; error?: string }>;
+    options: { resolve: boolean; distil: boolean; aesthetic: boolean },
+    sourceRevision: string,
+    consentGeneration: number,
+  ) => Promise<{ prepared?: PreparedAiInvocation; error?: string }>;
+  public onSendOptimizerInvocation?: (
+    prepared: PreparedAiInvocation,
+    expectedSourceRevision: string,
+    expectedConsentGeneration: number,
+  ) => Promise<PreparedOptimizerResult>;
+  /** Extension-host hooks keep API configuration and keys out of the webview. */
+  public onPrepareAdviceInvocation?: (
+    snapshot: PreparedAdviceSnapshot,
+    sourceRevision: string,
+    consentGeneration: number,
+  ) => PreparedAiInvocation;
+  public onSendAdviceInvocation?: (
+    prepared: PreparedAiInvocation,
+    references: StructuredAdviceReferences,
+    expectedSourceRevision: string,
+    expectedConsentGeneration: number,
+  ) => Promise<StructuredAdviceRequestResult>;
+  public onAiSurfaceClosed?: () => void;
+  public onAdviceDataCleared?: () => Promise<void>;
   // Shared settings store + a callback to let extension.ts re-apply config when
   // the user edits a setting in the dashboard's ⚙ Settings tab. Both are set by
   // extension.ts right after construction.
@@ -177,7 +214,23 @@ export class UsageWebviewProvider {
     prompt?: string;
     settings?: string;
     error?: string;
+    snapshotId?: string;
+    previewBody?: string;
+    previewSha256?: string;
+    previewBytes?: number;
+    /** Random opaque run ID; never derived from the draft or model output. */
+    adviceId?: string;
   } | null = null;
+  private preparedOptimizerRequests = new Map<
+    string,
+    {
+      prepared: PreparedAiInvocation;
+      draft: string;
+      sourceRevision: string;
+      consentGeneration: number;
+    }
+  >();
+  private optimizerConsentGeneration = 0;
   /**
    * Experimental v2.3.1 state. Raw prompt samples never enter rendered HTML:
    * they stay in the provider state until one explicit sealed-snapshot request.
@@ -185,10 +238,21 @@ export class UsageWebviewProvider {
   private adviceEffectivenessStates: AdviceEffectivenessProviderStates = {};
   private preparedAdviceSnapshots = new Map<
     string,
-    { provider: AdviceEffectivenessProvider; snapshot: PreparedAdviceSnapshot }
+    {
+      provider: AdviceEffectivenessProvider;
+      snapshot: PreparedAdviceSnapshot;
+      invocation: PreparedAiInvocation;
+      sourceRevision: string;
+      consentGeneration: number;
+      references: StructuredAdviceReferences;
+    }
   >();
+  private adviceConsentGeneration = 0;
   private adviceLocalState: AdviceLocalState = createClosedAdviceLocalState();
   private adviceLocalStateStatus: 'loading' | 'ready' | 'degraded' = 'loading';
+  private adviceLocalStateGeneration = 0;
+  private adviceLocalStateWrite: Promise<void> = Promise.resolve();
+  private adviceComparisonProductionRevision = '';
 
   constructor(private context: vscode.ExtensionContext) {
     const storage = this.adviceStateStorage();
@@ -199,6 +263,7 @@ export class UsageWebviewProvider {
     void loadAndMigrateAdviceLocalState(storage).then((loaded) => {
       this.adviceLocalState = loaded.value;
       this.adviceLocalStateStatus = loaded.ok ? 'ready' : 'degraded';
+      this.scheduleAdviceComparisonProduction();
       if (this.panel) {
         this.updateWebview();
       }
@@ -232,6 +297,47 @@ export class UsageWebviewProvider {
     return this.setting<boolean>('advice.effectiveness.enabled', false);
   }
 
+  /**
+   * Serialize every persisted advice mutation through one writer. The mutation
+   * is derived from the latest committed state only when its turn starts, so a
+   * delayed consent, feedback, comparison, or clear write cannot resurrect an
+   * older snapshot over a newer user decision.
+   */
+  private enqueueAdviceLocalStateWrite(
+    mutate: (current: AdviceLocalState) => AdviceLocalState | undefined,
+  ): Promise<
+    | { ok: true; changed: boolean; value: AdviceLocalState }
+    | { ok: false }
+  > {
+    const operation = this.adviceLocalStateWrite.then(async () => {
+      const storage = this.adviceStateStorage();
+      if (!storage || this.adviceLocalStateStatus !== 'ready') {
+        return { ok: false as const };
+      }
+      let next: AdviceLocalState | undefined;
+      try {
+        next = mutate(this.adviceLocalState);
+      } catch {
+        return { ok: false as const };
+      }
+      if (!next) {
+        return { ok: true as const, changed: false, value: this.adviceLocalState };
+      }
+      const saved = await saveAdviceLocalState(storage, next);
+      if (!saved.ok) {
+        this.adviceLocalStateStatus = 'degraded';
+        return { ok: false as const };
+      }
+      this.adviceLocalState = saved.value;
+      return { ok: true as const, changed: true, value: saved.value };
+    });
+    this.adviceLocalStateWrite = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
   private adviceProviderState(value: unknown): AdviceEffectivenessProviderState | undefined {
     if (!this.adviceExperimentEnabled() || (value !== 'claude' && value !== 'codex')) {
       return undefined;
@@ -255,11 +361,49 @@ export class UsageWebviewProvider {
     }
   }
 
+  /** Opaque content revision; no path/session/title is retained or exposed. */
+  private adviceSourceRevision(state: AdviceEffectivenessProviderState): string {
+    const safeShape = {
+      provider: state.provider,
+      aggregate: state.aggregate,
+      observations: state.contract.observations.map((item) => ({
+        id: item.id,
+        metric: item.metric,
+        value: item.value,
+        unit: item.unit,
+        method: item.method,
+        sourceId: item.sourceId,
+      })),
+      evidence: state.contract.evidence.map((item) => ({
+        id: item.id,
+        observationIds: item.observationIds,
+        strength: item.strength,
+      })),
+      sourceQuality: state.contract.provenance.sources.map((source) => ({
+        id: source.id,
+        confidence: source.confidence,
+        qualityFlags: source.qualityFlags,
+        window: source.window,
+      })),
+      // Prompt text remains host-only. Its digest merely invalidates a preview
+      // if the separately consented sample set changes before send.
+      promptSampleDigest: createHash('sha256')
+        .update(state.promptSamples.map((sample) => sample.text).join('\u0000'), 'utf8')
+        .digest('hex'),
+      userContextDigest: createHash('sha256')
+        .update(state.userContext ?? '', 'utf8')
+        .digest('hex'),
+    };
+    return `advice-${createHash('sha256')
+      .update(JSON.stringify(safeShape), 'utf8')
+      .digest('hex')}`;
+  }
+
   private async handleAdviceConsentMessage(message: Record<string, unknown>): Promise<void> {
     const providerState = this.adviceProviderState(message.provider);
     const aggregateConsent = message.aggregateConsent;
     const promptSampleConsent = message.promptSampleConsent;
-    const storage = this.adviceStateStorage();
+    const stateGeneration = this.adviceLocalStateGeneration;
     if (
       !providerState ||
       providerState.provider !== 'claude' ||
@@ -268,26 +412,33 @@ export class UsageWebviewProvider {
       (aggregateConsent !== 'explicit' && aggregateConsent !== 'not-granted') ||
       (promptSampleConsent !== 'explicit' && promptSampleConsent !== 'not-granted') ||
       (promptSampleConsent === 'explicit' && aggregateConsent !== 'explicit') ||
-      (promptSampleConsent === 'explicit' && providerState.promptSamples.length === 0) ||
+      (promptSampleConsent === 'explicit' &&
+        providerState.promptSamples.length === 0 &&
+        !providerState.userContext?.trim()) ||
       this.adviceLocalStateStatus !== 'ready' ||
-      !storage
+      !this.adviceStateStorage()
     ) {
       this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
       return;
     }
-    const next: AdviceLocalState = {
-      ...this.adviceLocalState,
-      featureMode: 'enabled',
-      aggregateConsent,
-      promptSampleConsent,
-    };
-    const saved = await saveAdviceLocalState(storage, next);
+    const saved = await this.enqueueAdviceLocalStateWrite((current) => {
+      if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
+      return {
+        ...current,
+        featureMode: 'enabled',
+        aggregateConsent,
+        promptSampleConsent,
+      };
+    });
     if (!saved.ok) {
-      this.adviceLocalStateStatus = 'degraded';
       this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
       return;
     }
-    this.adviceLocalState = saved.value;
+    if (!saved.changed) {
+      this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
+      return;
+    }
+    this.adviceConsentGeneration += 1;
     this.clearPreparedAdviceSnapshots(providerState.provider);
     this.postAdviceMessage({
       command: 'adviceConsentResult',
@@ -329,73 +480,279 @@ export class UsageWebviewProvider {
       });
       return;
     }
+    let invocation: PreparedAiInvocation;
+    const sourceRevision = this.adviceSourceRevision(providerState);
+    try {
+      if (!this.onPrepareAdviceInvocation) {
+        throw new Error('AI preparation is unavailable');
+      }
+      invocation = this.onPrepareAdviceInvocation(
+        result.value,
+        sourceRevision,
+        this.adviceConsentGeneration,
+      );
+    } catch {
+      this.postAdviceMessage({
+        command: 'adviceSnapshotResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: 'invalid-evidence',
+      });
+      return;
+    }
+    const preview = previewAiInvocation(invocation);
     this.clearPreparedAdviceSnapshots(providerState.provider);
     const snapshotId = `snapshot-${randomBytes(12).toString('hex')}`;
     this.preparedAdviceSnapshots.set(snapshotId, {
       provider: providerState.provider,
       snapshot: result.value,
+      invocation,
+      sourceRevision,
+      consentGeneration: this.adviceConsentGeneration,
+      references: {
+        observationIds: providerState.contract.observations.map((item) => item.id),
+        evidenceIds: providerState.contract.evidence.map((item) => item.id),
+      },
     });
     this.postAdviceMessage({
       command: 'adviceSnapshotResult',
       ok: true,
       snapshotId,
       provider: providerState.provider,
-      contentType: result.value.preview.contentType,
-      dataMode: result.value.preview.dataMode,
+      contentType: preview.contentType,
+      dataMode: preview.dataMode,
       promptSampleCount: result.value.preview.promptSampleCount,
-      utf8Bytes: result.value.preview.utf8Bytes,
-      sha256: result.value.preview.sha256,
-      body: result.value.preview.body,
+      utf8Bytes: preview.utf8Bytes,
+      sha256: preview.sha256,
+      body: preview.body,
     });
   }
 
-  private async handleAdviceFeedbackMessage(message: Record<string, unknown>): Promise<void> {
+  private async handleSendAdviceSnapshotMessage(message: Record<string, unknown>): Promise<void> {
+    const snapshotId = message.snapshotId;
     const providerState = this.adviceProviderState(message.provider);
-    const storage = this.adviceStateStorage();
+    const stored = typeof snapshotId === 'string'
+      ? this.preparedAdviceSnapshots.get(snapshotId)
+      : undefined;
+    if (
+      !providerState ||
+      !stored ||
+      stored.provider !== providerState.provider ||
+      stored.sourceRevision !== this.adviceSourceRevision(providerState) ||
+      stored.consentGeneration !== this.adviceConsentGeneration ||
+      !this.onSendAdviceInvocation
+    ) {
+      this.postAdviceMessage({
+        command: 'adviceSendResult',
+        ok: false,
+        provider: message.provider,
+        reason: 'stale-preview',
+      });
+      return;
+    }
+    const result = await this.onSendAdviceInvocation(
+      stored.invocation,
+      stored.references,
+      stored.sourceRevision,
+      stored.consentGeneration,
+    );
+    if (
+      this.preparedAdviceSnapshots.get(snapshotId as string) !== stored ||
+      stored.sourceRevision !== this.adviceSourceRevision(providerState) ||
+      stored.consentGeneration !== this.adviceConsentGeneration
+    ) {
+      this.postAdviceMessage({
+        command: 'adviceSendResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: 'stale-preview',
+      });
+      return;
+    }
+    if (!result.ok) {
+      this.postAdviceMessage({
+        command: 'adviceSendResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: result.code,
+      });
+      return;
+    }
+    const next = createAdviceContract({
+      adviceId: providerState.contract.adviceId,
+      observations: providerState.contract.observations,
+      evidence: providerState.contract.evidence,
+      recommendations: result.value.recommendations,
+      privacy: {
+        dataMode: stored.invocation.dataMode === 'aggregates-with-prompt-samples'
+          ? 'aggregates-with-prompt-samples'
+          : stored.invocation.dataMode === 'aggregates-with-personalization'
+            ? 'aggregates-with-personalization'
+            : 'aggregates-only',
+        promptSampleConsent: stored.invocation.dataMode === 'aggregates-only'
+          ? 'not-granted'
+          : 'explicit',
+        promptSampleCount: stored.snapshot.prepared.promptSampleCount,
+        feedbackStorage: 'local-only',
+      },
+      provenance: {
+        ...providerState.contract.provenance,
+        generatedBy: { kind: 'remote-model' },
+        generatedAt: new Date().toISOString(),
+      },
+    });
+    if (!next.ok) {
+      this.postAdviceMessage({
+        command: 'adviceSendResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: 'invalid-schema',
+      });
+      return;
+    }
+    providerState.contract = next.value;
+    this.preparedAdviceSnapshots.delete(snapshotId as string);
+    this.postAdviceMessage({
+      command: 'adviceSendResult',
+      ok: true,
+      provider: providerState.provider,
+      recommendationCount: next.value.recommendations.length,
+    });
+    this.updateWebview();
+  }
+
+  private async handleClearAdviceLocalDataMessage(): Promise<void> {
+    if (
+      !this.adviceExperimentEnabled() ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      !this.adviceStateStorage()
+    ) {
+      this.postAdviceMessage({ command: 'adviceClearResult', ok: false });
+      return;
+    }
+    this.adviceLocalStateGeneration += 1;
+    this.adviceConsentGeneration += 1;
+    this.clearPreparedAdviceSnapshots();
+    this.adviceComparisonProductionRevision = '';
+    const write = this.enqueueAdviceLocalStateWrite(() => createClearedAdviceLocalState());
+    const cancelled = Promise.resolve(this.onAdviceDataCleared?.()).catch(() => undefined);
+    const saved = await write;
+    await cancelled;
+    if (!saved.ok) {
+      this.postAdviceMessage({ command: 'adviceClearResult', ok: false });
+      return;
+    }
+    this.postAdviceMessage({ command: 'adviceClearResult', ok: true });
+    this.updateWebview();
+  }
+
+  private async handleAdviceFeedbackMessage(message: Record<string, unknown>): Promise<void> {
+    const optimizerTarget =
+      message.provider === 'optimizer' &&
+      this.setting<boolean>('advice.optimizer.enabled', false) &&
+      typeof this.optimizerState?.adviceId === 'string' &&
+      this.optimizerState.adviceId === message.adviceId &&
+      message.recommendationId === OPTIMIZER_FEEDBACK_RECOMMENDATION_ID &&
+      typeof this.optimizerState.prompt === 'string' &&
+      this.optimizerState.prompt.length > 0;
+    const providerState = optimizerTarget
+      ? undefined
+      : this.adviceProviderState(message.provider);
+    const stateGeneration = this.adviceLocalStateGeneration;
     const adviceId = message.adviceId;
     const recommendationId = message.recommendationId;
     const kind = message.kind;
     const recommendation = providerState?.contract.recommendations.find(
       (candidate) => candidate.id === recommendationId,
     );
+    const targetAdviceId = optimizerTarget
+      ? this.optimizerState!.adviceId as string
+      : providerState?.contract.adviceId;
+    const targetRecommendationId = optimizerTarget
+      ? OPTIMIZER_FEEDBACK_RECOMMENDATION_ID
+      : recommendation?.id;
+    const responseIdentity =
+      typeof targetAdviceId === 'string' &&
+      typeof targetRecommendationId === 'string' &&
+      targetAdviceId === adviceId &&
+      targetRecommendationId === recommendationId
+        ? { adviceId: targetAdviceId, recommendationId: targetRecommendationId }
+        : {};
     if (
-      !providerState ||
-      providerState.contract.adviceId !== adviceId ||
-      !recommendation ||
+      (!optimizerTarget && !providerState) ||
+      targetAdviceId !== adviceId ||
+      targetRecommendationId !== recommendationId ||
       (kind !== 'helpful' && kind !== 'not-helpful' && kind !== 'applied') ||
       this.adviceLocalStateStatus !== 'ready' ||
-      !storage
+      !this.adviceStateStorage()
     ) {
-      this.postAdviceMessage({ command: 'adviceFeedbackResult', ok: false, provider: message.provider });
+      this.postAdviceMessage({
+        command: 'adviceFeedbackResult',
+        ok: false,
+        provider: message.provider,
+        ...responseIdentity,
+      });
       return;
     }
-    const changed = upsertAdviceLocalFeedback(this.adviceLocalState, {
-      adviceId: providerState.contract.adviceId,
-      recommendationId: recommendation.id,
-      kind,
-      updatedAtEpochMs: Date.now(),
-    });
-    if (!changed.ok) {
-      this.postAdviceMessage({ command: 'adviceFeedbackResult', ok: false, provider: providerState.provider });
-      return;
-    }
-    const saved = await saveAdviceLocalState(storage, {
-      ...changed.value,
-      featureMode: 'enabled',
+    const updatedAtEpochMs = Date.now();
+    let mutationAccepted = true;
+    const saved = await this.enqueueAdviceLocalStateWrite((current) => {
+      if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
+      const changed = upsertAdviceLocalFeedback(current, {
+        adviceId: targetAdviceId as string,
+        recommendationId: targetRecommendationId as string,
+        kind,
+        updatedAtEpochMs,
+      });
+      if (!changed.ok) {
+        mutationAccepted = false;
+        return undefined;
+      }
+      const changedFeedback = changed.value.feedback.find(
+        (item) => item.adviceId === adviceId && item.recommendationId === recommendationId,
+      );
+      return kind === 'applied' && changedFeedback?.applied !== 'applied'
+        ? {
+            ...changed.value,
+            featureMode: 'enabled' as const,
+            comparablePairs: changed.value.comparablePairs.filter(
+              (pair) => pair.adviceId !== adviceId || pair.recommendationId !== recommendationId,
+            ),
+            comparisonResults: changed.value.comparisonResults.filter(
+              (result) => result.recommendationId !== recommendationId,
+            ),
+          }
+        : { ...changed.value, featureMode: 'enabled' as const };
     });
     if (!saved.ok) {
-      this.adviceLocalStateStatus = 'degraded';
-      this.postAdviceMessage({ command: 'adviceFeedbackResult', ok: false, provider: providerState.provider });
+      this.postAdviceMessage({
+        command: 'adviceFeedbackResult',
+        ok: false,
+        provider: message.provider,
+        ...responseIdentity,
+      });
       return;
     }
-    this.adviceLocalState = saved.value;
+    if (!saved.changed || !mutationAccepted) {
+      this.postAdviceMessage({
+        command: 'adviceFeedbackResult',
+        ok: false,
+        provider: message.provider,
+        ...responseIdentity,
+      });
+      return;
+    }
+    if (kind === 'applied' && !optimizerTarget) {
+      this.adviceComparisonProductionRevision = '';
+      this.scheduleAdviceComparisonProduction();
+    }
     const feedback = saved.value.feedback.find(
       (item) => item.adviceId === adviceId && item.recommendationId === recommendationId,
     );
     this.postAdviceMessage({
       command: 'adviceFeedbackResult',
       ok: true,
-      provider: providerState.provider,
+      provider: message.provider,
       adviceId,
       recommendationId,
       rating: feedback?.rating ?? 'unrated',
@@ -403,9 +760,145 @@ export class UsageWebviewProvider {
     });
   }
 
-  show(): void {
+  private async handlePrepareOptimizerMessage(message: Record<string, unknown>): Promise<void> {
+    if (!this.setting<boolean>('advice.optimizer.enabled', false)) {
+      this.discardPreparedOptimizer();
+      this.postAdviceMessage({ command: 'optimizePreviewResult', ok: false, error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    const draft = typeof message.draft === 'string' ? message.draft : '';
+    const options = {
+      resolve: message.resolve === true,
+      distil: message.distil === true,
+      aesthetic: message.aesthetic === true,
+    };
+    this.optimizerConsentGeneration += 1;
+    this.preparedOptimizerRequests.clear();
+    const sourceRevision = `optimizer-${createHash('sha256')
+      .update(JSON.stringify({ draft, options }), 'utf8')
+      .digest('hex')}`;
+    const consentGeneration = this.optimizerConsentGeneration;
+    const baseState = { draft, ...options };
+    if (!this.onPrepareOptimizerInvocation) {
+      this.optimizerState = { ...baseState, error: 'Optimizer is not available.' };
+      this.postAdviceMessage({ command: 'optimizePreviewResult', ok: false, error: 'Optimizer is not available.' });
+      return;
+    }
+    const result = await this.onPrepareOptimizerInvocation(
+      draft,
+      options,
+      sourceRevision,
+      consentGeneration,
+    );
+    if (consentGeneration !== this.optimizerConsentGeneration) {
+      this.postAdviceMessage({ command: 'optimizePreviewResult', ok: false, error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    if (!result.prepared) {
+      this.optimizerState = { ...baseState, error: result.error ?? '' };
+      this.postAdviceMessage({ command: 'optimizePreviewResult', ok: false, error: result.error ?? '' });
+      return;
+    }
+    const preview = previewAiInvocation(result.prepared);
+    const snapshotId = `optimizer-${randomBytes(12).toString('hex')}`;
+    this.preparedOptimizerRequests.set(snapshotId, {
+      prepared: result.prepared,
+      draft,
+      sourceRevision,
+      consentGeneration,
+    });
+    this.optimizerState = {
+      ...baseState,
+      snapshotId,
+      previewBody: preview.body,
+      previewSha256: preview.sha256,
+      previewBytes: preview.utf8Bytes,
+    };
+    this.postAdviceMessage({
+      command: 'optimizePreviewResult',
+      ok: true,
+      snapshotId,
+      contentType: preview.contentType,
+      dataMode: preview.dataMode,
+      body: preview.body,
+      sha256: preview.sha256,
+      utf8Bytes: preview.utf8Bytes,
+    });
+  }
+
+  private async handleSendOptimizerMessage(message: Record<string, unknown>): Promise<void> {
+    if (!this.setting<boolean>('advice.optimizer.enabled', false)) {
+      this.discardPreparedOptimizer();
+      this.postAdviceMessage({ command: 'optimizeResult', error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    const snapshotId = typeof message.snapshotId === 'string' ? message.snapshotId : '';
+    const stored = this.preparedOptimizerRequests.get(snapshotId);
+    if (
+      !stored ||
+      !this.onSendOptimizerInvocation ||
+      stored.consentGeneration !== this.optimizerConsentGeneration ||
+      message.draft !== stored.draft
+    ) {
+      this.postAdviceMessage({ command: 'optimizeResult', error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    const result = await this.onSendOptimizerInvocation(
+      stored.prepared,
+      stored.sourceRevision,
+      stored.consentGeneration,
+    );
+    if (
+      this.preparedOptimizerRequests.get(snapshotId) !== stored ||
+      stored.consentGeneration !== this.optimizerConsentGeneration
+    ) {
+      this.postAdviceMessage({ command: 'optimizeResult', error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    this.preparedOptimizerRequests.delete(snapshotId);
+    if (!result.ok) {
+      const error = I18n.t.popup.adviceEffectiveness.strictOutputRejected;
+      this.optimizerState = this.optimizerState
+        ? { ...this.optimizerState, error }
+        : null;
+      this.postAdviceMessage({ command: 'optimizeResult', error });
+      return;
+    }
+    this.optimizerState = this.optimizerState
+      ? {
+          draft: this.optimizerState.draft,
+          resolve: this.optimizerState.resolve,
+          distil: this.optimizerState.distil,
+          aesthetic: this.optimizerState.aesthetic,
+          prompt: result.value.prompt,
+          settings: result.value.settings,
+          adviceId: `advice-optimizer-${randomBytes(12).toString('hex')}`,
+        }
+      : null;
+    this.postAdviceMessage({
+      command: 'optimizeResult',
+      ...result.value,
+      adviceId: this.optimizerState?.adviceId,
+      recommendationId: OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
+    });
+  }
+
+  private discardPreparedOptimizer(): void {
+    this.optimizerConsentGeneration += 1;
+    this.preparedOptimizerRequests.clear();
+    if (this.optimizerState) {
+      const { draft, resolve, distil, aesthetic } = this.optimizerState;
+      this.optimizerState = { draft, resolve, distil, aesthetic };
+    }
+  }
+
+  show(tab?: string): void {
+    if (tab) {
+      this.currentTab = tab;
+    }
     if (this.panel) {
       this.panel.reveal();
+      this.updateWebview();
       return;
     }
 
@@ -417,6 +910,8 @@ export class UsageWebviewProvider {
     this.panel.onDidDispose(() => {
       this.panel = undefined;
       this.clearPreparedAdviceSnapshots();
+      this.discardPreparedOptimizer();
+      this.onAiSurfaceClosed?.();
       // Force a fresh render into the next panel (the lastHtml guard must not
       // suppress the first paint after the panel was closed and reopened).
       this.lastHtml = '';
@@ -442,6 +937,9 @@ export class UsageWebviewProvider {
         case 'prepareAdviceSnapshot':
           this.handlePrepareAdviceSnapshotMessage(message as Record<string, unknown>);
           break;
+        case 'sendAdviceSnapshot':
+          await this.handleSendAdviceSnapshotMessage(message as Record<string, unknown>);
+          break;
         case 'discardAdviceSnapshot': {
           const provider = message.provider;
           if (provider === 'claude' || provider === 'codex') {
@@ -451,6 +949,9 @@ export class UsageWebviewProvider {
         }
         case 'recordAdviceFeedback':
           await this.handleAdviceFeedbackMessage(message as Record<string, unknown>);
+          break;
+        case 'clearAdviceLocalData':
+          await this.handleClearAdviceLocalDataMessage();
           break;
         case 'exportHeatmap':
           vscode.commands.executeCommand('claudeCodeUsage.exportHeatmap');
@@ -672,26 +1173,15 @@ export class UsageWebviewProvider {
           if (!this.panel) {
             break;
           }
-          const draft = String(message.draft || '');
-          const opts = {
-            resolve: !!message.resolve,
-            distil: !!message.distil,
-            aesthetic: !!message.aesthetic,
-          };
-          // Persist the inputs immediately so a refresh mid-request keeps them.
-          this.optimizerState = { draft, ...opts };
-          let result: { prompt?: string; settings?: string; error?: string };
-          if (this.onOptimize) {
-            result = await this.onOptimize(draft, opts);
-          } else {
-            result = { error: 'Optimizer is not available.' };
-          }
-          // Persist the result too, so re-rendering the webview (auto-refresh)
-          // restores it instead of wiping a prompt the user is still reading.
-          this.optimizerState = { draft, ...opts, ...result };
-          if (this.panel) {
-            this.panel.webview.postMessage({ command: 'optimizeResult', ...result });
-          }
+          await this.handlePrepareOptimizerMessage(message as Record<string, unknown>);
+          break;
+        }
+        case 'sendOptimizerRequest': {
+          await this.handleSendOptimizerMessage(message as Record<string, unknown>);
+          break;
+        }
+        case 'discardOptimizerRequest': {
+          this.discardPreparedOptimizer();
           break;
         }
         case 'getAttribution': {
@@ -812,6 +1302,7 @@ export class UsageWebviewProvider {
       codex: providerAvailability.codex,
       codexData: providerAvailability.codexData ?? providerAvailability.codex,
     };
+    this.scheduleAdviceComparisonProduction();
     if (!this.providerSelectionInitialized) {
       this.currentProvider = defaultDashboardProvider(
         providerAvailability.claude,
@@ -847,8 +1338,32 @@ export class UsageWebviewProvider {
    * it with updateProviderData, so one data refresh still produces one paint.
    */
   updateAdviceEffectivenessData(states: AdviceEffectivenessProviderStates): void {
+    for (const provider of ['claude', 'codex'] as const) {
+      const previous = this.adviceEffectivenessStates[provider];
+      const next = states[provider];
+      if (!previous || !next) {
+        this.clearPreparedAdviceSnapshots(provider);
+        continue;
+      }
+      const unchanged =
+        this.adviceSourceRevision(previous) === this.adviceSourceRevision(next);
+      if (!unchanged) {
+        this.clearPreparedAdviceSnapshots(provider);
+        continue;
+      }
+      // Keep a strictly parsed remote recommendation across ordinary refreshes
+      // of the same materialized source revision. Evidence remains host-owned.
+      if (previous.contract.provenance.generatedBy.kind === 'remote-model') {
+        next.contract = previous.contract;
+      }
+    }
     this.adviceEffectivenessStates = states;
+  }
+
+  invalidatePreparedAiRequests(): void {
+    this.adviceConsentGeneration += 1;
     this.clearPreparedAdviceSnapshots();
+    this.discardPreparedOptimizer();
   }
 
   setLoading(loading: boolean): void {
@@ -1652,9 +2167,22 @@ export class UsageWebviewProvider {
   }
 
   private renderCodexTodayHourly(view: CodexUsageView): string {
-    const rows = view.todayHourly;
-    const coverage = view.todayCoverage;
-    if (rows.length === 0 && coverage.complete) {
+    return this.renderCodexHourlyBreakdown(
+      view.todayHourly,
+      view.todayCoverage,
+    );
+  }
+
+  private renderCodexHourlyBreakdown(
+    rows: CodexHourlyUsageView[],
+    coverage: {
+      indexedFiles: number;
+      totalFiles: number;
+      complete: boolean;
+    },
+    day?: string,
+  ): string {
+    if (rows.length === 0 && coverage.complete && !day) {
       return '';
     }
     const copy = I18n.t.providers.codex;
@@ -1672,10 +2200,10 @@ export class UsageWebviewProvider {
       '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
       '</div>';
     const chart = rows.length > 0
-      ? '<div class="chart-content" id="codexTodayHourlyChart">' +
+      ? '<div class="chart-content"' + (day ? '' : ' id="codexTodayHourlyChart"') + '>' +
         this.renderCodexHourlyChart(rows) + '</div>' +
         this.renderCompositionChart(
-          rows.map((row) => ({ label: row.hour, data: row.total })),
+          rows.map((row) => ({ label: row.label, data: row.total })),
           'codex',
         )
       : '<div class="no-chart-data">' + this.escapeHtml(copy.noDailyData) + '</div>';
@@ -1688,7 +2216,7 @@ export class UsageWebviewProvider {
         '<th>' + this.escapeHtml(copy.output) + '</th><th>' + this.escapeHtml(copy.reasoning) + '</th>' +
         '<th>' + this.escapeHtml(copy.threads) + '</th></tr></thead><tbody>' +
         rows.map((row) =>
-          '<tr><td class="date-cell">' + this.escapeHtml(row.hour) + '</td>' +
+          '<tr><td class="date-cell">' + this.escapeHtml(row.label) + '</td>' +
           '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
           (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
@@ -1700,8 +2228,15 @@ export class UsageWebviewProvider {
           '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
         ).join('') + '</tbody></table></div>'
       : '';
-    return '<div class="daily-breakdown" data-codex-time-series data-codex-today-hourly>' +
-      '<h3>' + this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '</h3>' + partial + tabs + chart + table + '</div>';
+    const heading = day
+      ? '<h4>' + this.escapeHtml(this.formatDate(day)) + ' · ' +
+        this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '</h4>'
+      : '<h3>' + this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '</h3>';
+    return '<div class="' + (day ? 'hourly-breakdown' : 'daily-breakdown') +
+      '" data-codex-time-series' + (day
+        ? ' data-codex-materialized-hours="true" data-date="' + this.escapeHtml(day) + '"'
+        : ' data-codex-today-hourly') + '>' +
+      heading + partial + tabs + chart + table + '</div>';
   }
 
   /** Opt-in (showEfficiency) efficiency chips appended to a usage summary:
@@ -1791,7 +2326,10 @@ export class UsageWebviewProvider {
       I18n.getLocale(),
       I18n.getTimezone(),
     );
-    return this.escapeHtml(copy.indexedLogEntries) + ': ' +
+    const reason = progress.reason
+      ? this.escapeHtml(copy.indexingReasons[progress.reason]) + ' · '
+      : '';
+    return reason + this.escapeHtml(copy.indexedLogEntries) + ': ' +
       exactCount.format(progress.scannedFiles) + '/' +
       exactCount.format(progress.totalFiles) +
       (progress.totalFiles > 0 ? ' (' + completedPercent + '%)' : '') + ' · ' +
@@ -2129,8 +2667,28 @@ export class UsageWebviewProvider {
           '<th>' + this.escapeHtml(copy.fresh) + '</th><th>' + this.escapeHtml(copy.input) + '</th>' +
           '<th>' + this.escapeHtml(copy.cachedInput) + '</th><th>' + this.escapeHtml(copy.output) + '</th>' +
           '<th>' + this.escapeHtml(copy.reasoning) + '</th><th>' + this.escapeHtml(copy.threads) + '</th>' +
-          '</tr></thead><tbody>' + rows.map((row) =>
-            '<tr><td class="date-cell">' + this.escapeHtml(row.day) + '</td>' +
+          '<th></th></tr></thead><tbody>' + rows.map((row) => {
+            const hourly = view.last30DaysHourlyByDay[row.day];
+            const canExpand = hourly !== undefined;
+            const dayCoverage = view.hourlyCoverage.days[row.day] ?? view.hourlyCoverage;
+            const day = this.escapeHtml(row.day);
+            const detailButton = canExpand
+              ? '<button class="detail-button" data-codex-hourly-toggle data-date="' + day + '" ' +
+                'onclick="toggleCodexHourlyDetail(\'' + day + '\')" aria-expanded="false" ' +
+                'aria-controls="codex-hourly-detail-' + day + '" title="' +
+                this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '">' +
+                '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">' +
+                '<path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>' +
+                '</svg></button>'
+              : '';
+            const detailRow = canExpand
+              ? '<tr class="hourly-detail-row" data-codex-hourly-detail-row data-date="' + day +
+                '" style="display: none;"><td colspan="10"><div class="hourly-detail-container" ' +
+                'id="codex-hourly-detail-' + day + '" data-loaded="true">' +
+                this.renderCodexHourlyBreakdown(hourly, dayCoverage, row.day) +
+                '</div></td></tr>'
+              : '';
+            return '<tr class="daily-row" data-date="' + day + '"><td class="date-cell">' + day + '</td>' +
             '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
             (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
@@ -2139,8 +2697,9 @@ export class UsageWebviewProvider {
             '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
-            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
-          ).join('') + '</tbody></table></div></div>';
+            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td>' +
+            '<td class="detail-cell">' + detailButton + '</td></tr>' + detailRow;
+          }).join('') + '</tbody></table></div></div>';
       return this.renderUsageData(null, provider, view.last30Days) + breakdown;
     }
     if (!this.monthData) {
@@ -3813,25 +4372,372 @@ export class UsageWebviewProvider {
     );
   }
 
+  private codexComparisonModelFamily(model: string): 'opus' | 'sonnet' | 'haiku' | 'fable' | 'other' {
+    const value = model.toLowerCase();
+    if (value.includes('opus')) return 'opus';
+    if (value.includes('sonnet')) return 'sonnet';
+    if (value.includes('haiku')) return 'haiku';
+    if (value.includes('fable')) return 'fable';
+    return 'other';
+  }
+
+  private codexComparisonEffort(
+    effort: string,
+  ): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'unknown' {
+    const value = effort.toLowerCase();
+    return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ||
+      value === 'max' || value === 'ultra'
+      ? value
+      : 'unknown';
+  }
+
+  /**
+   * Project the existing bounded Codex view into numeric task aggregates. The
+   * rootTaskViewKey is used transiently only to join already-materialized child
+   * rows; it has no destination in the returned or persisted representation.
+   */
+  private codexComparableTaskProjections(): CodexComparableTaskProjection[] {
+    const view = this.codexView;
+    if (!view) return [];
+    interface Group {
+      hasRoot: boolean;
+      observedAtEpochMs: number;
+      processed: number;
+      fresh: number;
+      childFresh: number;
+      approvalReviewerFresh: number;
+      patchCalls: number;
+      toolCalls: number;
+      postPatchToolCalls: number;
+      taskCompleteCount: number;
+      modelFamilies: Set<'opus' | 'sonnet' | 'haiku' | 'fable' | 'other'>;
+      efforts: Set<'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'unknown'>;
+    }
+    const groups = new Map<string, Group>();
+    for (const thread of view.recentThreads.slice(0, 1_000)) {
+      const current = groups.get(thread.rootTaskViewKey) ?? {
+        hasRoot: false,
+        observedAtEpochMs: 0,
+        processed: 0,
+        fresh: 0,
+        childFresh: 0,
+        approvalReviewerFresh: 0,
+        patchCalls: 0,
+        toolCalls: 0,
+        postPatchToolCalls: 0,
+        taskCompleteCount: 0,
+        modelFamilies: new Set<'opus' | 'sonnet' | 'haiku' | 'fable' | 'other'>(),
+        efforts: new Set<'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'unknown'>(),
+      };
+      current.hasRoot ||= thread.role === 'root';
+      current.observedAtEpochMs = Math.max(current.observedAtEpochMs, thread.observedAt);
+      current.processed += Math.max(0, thread.total.processed);
+      current.fresh += Math.max(0, thread.total.fresh);
+      if (thread.role === 'subagent') current.childFresh += Math.max(0, thread.total.fresh);
+      if (thread.role === 'approval-reviewer') {
+        current.approvalReviewerFresh += Math.max(0, thread.total.fresh);
+      }
+      current.patchCalls += Math.max(0, thread.structural.patchCalls);
+      current.toolCalls += Math.max(0, thread.structural.toolCalls);
+      current.postPatchToolCalls += Math.max(0, thread.structural.postPatchToolCalls);
+      current.taskCompleteCount += Math.max(0, thread.structural.taskCompleteCount);
+      for (const model of thread.models) {
+        current.modelFamilies.add(this.codexComparisonModelFamily(model));
+      }
+      for (const effort of thread.efforts) {
+        current.efforts.add(this.codexComparisonEffort(effort));
+      }
+      groups.set(thread.rootTaskViewKey, current);
+    }
+    const qualityFlags = view.qualityFlags.map((item) => item.flag);
+    return [...groups.values()]
+      .filter((group) => group.hasRoot)
+      .map((group) => ({
+        observedAtEpochMs: group.observedAtEpochMs,
+        total: { processed: group.processed, fresh: group.fresh },
+        structural: {
+          patchCalls: group.patchCalls,
+          toolCalls: group.toolCalls,
+          postPatchToolCalls: group.postPatchToolCalls,
+          taskCompleteCount: group.taskCompleteCount,
+        },
+        childFreshShare: group.fresh > 0 ? group.childFresh / group.fresh : 0,
+        approvalReviewerFreshShare:
+          group.fresh > 0 ? group.approvalReviewerFresh / group.fresh : 0,
+        modelFamilies: [...group.modelFamilies].sort(),
+        efforts: [...group.efforts].sort(),
+        coverage: {
+          complete: view.coverage.complete,
+          identityComplete: view.coverage.identity.complete,
+          qualityFlags: [...qualityFlags],
+        },
+      }))
+      .sort((left, right) => left.observedAtEpochMs - right.observedAtEpochMs);
+  }
+
+  private adviceComparablePairSampleKey(pair: StoredComparablePair): string {
+    return JSON.stringify({
+      recommendationId: pair.recommendationId,
+      recommendationVersion: pair.recommendationVersion,
+      context: pair.context,
+      metric: pair.metric,
+      quality: pair.quality,
+      evidence: pair.evidence,
+      recordedAtEpochMs: pair.recordedAtEpochMs,
+    });
+  }
+
+  private adviceComparablePairCohortKey(pair: StoredComparablePair): string {
+    return JSON.stringify({
+      context: pair.context,
+      metric: {
+        name: pair.metric.name,
+        unit: pair.metric.unit,
+        direction: pair.metric.direction,
+      },
+    });
+  }
+
+  /** Pure state projection used by the production writer and focused tests. */
+  private materializeAdviceComparisonState(
+    _now: number = Date.now(),
+    baseState: AdviceLocalState = this.adviceLocalState,
+  ): AdviceLocalState {
+    const providerState = this.adviceEffectivenessStates.codex;
+    if (
+      !this.adviceExperimentEnabled() ||
+      !providerState ||
+      !this.codexView ||
+      this.adviceLocalStateStatus !== 'ready'
+    ) {
+      return baseState;
+    }
+    const tasks = this.codexComparableTaskProjections();
+    let next = baseState;
+    for (const recommendation of providerState.contract.recommendations) {
+      if (!isComparableCodexRecommendationId(recommendation.id)) continue;
+      const applied = [...next.feedback]
+        .filter(
+          (item) =>
+            item.applied === 'applied' &&
+            item.recommendationId === recommendation.id &&
+            item.adviceId.startsWith('advice-codex-'),
+        )
+        .sort(
+          (left, right) =>
+            (right.appliedAtEpochMs ?? right.updatedAtEpochMs) -
+              (left.appliedAtEpochMs ?? left.updatedAtEpochMs) ||
+            right.adviceId.localeCompare(left.adviceId),
+        )[0];
+      if (!applied) continue;
+      const built = buildAppliedComparablePairs({
+        adviceId: applied.adviceId,
+        recommendationId: recommendation.id,
+        recommendationVersion: CODEX_LOCAL_RECOMMENDATION_VERSION,
+        appliedAtEpochMs: applied.appliedAtEpochMs ?? applied.updatedAtEpochMs,
+        tasks,
+      });
+      if (!built.ok) continue;
+      const existingSamples = new Set(
+        next.comparablePairs.map((pair) => this.adviceComparablePairSampleKey(pair)),
+      );
+      for (const pair of built.pairs) {
+        const sampleKey = this.adviceComparablePairSampleKey(pair);
+        if (existingSamples.has(sampleKey)) continue;
+        const appended = appendStoredComparablePair(next, pair);
+        if (!appended.ok) continue;
+        next = appended.value;
+        existingSamples.add(sampleKey);
+      }
+
+      const criterion = recommendation.successCriteria.find(
+        (item) =>
+          item.target.kind === 'relative-change' &&
+          item.direction === 'decrease' &&
+          item.qualityGuardrail.rubricId === 'task-quality-rubric-v1',
+      );
+      if (!criterion) continue;
+      const lineage = next.comparablePairs.filter(
+        (pair) =>
+          pair.context.provider === 'codex' &&
+          pair.recommendationId === recommendation.id &&
+          pair.recommendationVersion === CODEX_LOCAL_RECOMMENDATION_VERSION &&
+          pair.context.measurementProfileVersion === CODEX_COMPARISON_MEASUREMENT_PROFILE_VERSION,
+      );
+      const cohorts = new Map<string, StoredComparablePair[]>();
+      for (const pair of lineage) {
+        const key = this.adviceComparablePairCohortKey(pair);
+        const cohort = cohorts.get(key) ?? [];
+        cohort.push(pair);
+        cohorts.set(key, cohort);
+      }
+      for (const pairs of cohorts.values()) {
+        const first = pairs[0];
+        const frozen = buildAdviceComparisonResultEnvelope({
+          provider: 'codex',
+          recommendationId: recommendation.id,
+          recommendationVersion: CODEX_LOCAL_RECOMMENDATION_VERSION,
+          measurementProfileVersion: CODEX_COMPARISON_MEASUREMENT_PROFILE_VERSION,
+          cohort: {
+            scope: first.context.scope,
+            taskKind: first.context.taskKind,
+            complexityBand: first.context.complexityBand,
+            modelFamily: first.context.modelFamily,
+            effort: first.context.effort,
+            metricDefinitionVersion: first.context.metricDefinitionVersion,
+            qualityRubricId: first.context.qualityRubricId,
+            metric: {
+              name: first.metric.name,
+              unit: first.metric.unit,
+              direction: first.metric.direction,
+            },
+          },
+          guardrail: {
+            minComparablePairs: criterion.minimumComparableTasks,
+            minRelativeImprovement: criterion.target.value,
+            minAfterQualityScore: criterion.qualityGuardrail.minimumScore,
+            maxMeanQualityRegression: criterion.qualityGuardrail.maximumRegression,
+            allowedQualityFlags: [],
+            qualityRubricId: criterion.qualityGuardrail.rubricId,
+          },
+          pairs,
+          recordedAtEpochMs: Math.max(...pairs.map((pair) => pair.recordedAtEpochMs)),
+        });
+        if (
+          !frozen.ok ||
+          next.comparisonResults.some(
+            (result) => result.comparisonId === frozen.value.comparisonId,
+          )
+        ) {
+          continue;
+        }
+        const appended = appendAdviceComparisonResult(next, frozen.value);
+        if (appended.ok) next = appended.value;
+      }
+    }
+    return next;
+  }
+
+  private currentAdviceComparisonProductionRevision(): string {
+    const view = this.codexView;
+    const safe = {
+      enabled: this.adviceExperimentEnabled(),
+      stateStatus: this.adviceLocalStateStatus,
+      applied: this.adviceLocalState.feedback
+        .filter((item) => item.applied === 'applied')
+        .map((item) => ({
+          adviceId: item.adviceId,
+          recommendationId: item.recommendationId,
+          appliedAtEpochMs: item.appliedAtEpochMs ?? item.updatedAtEpochMs,
+        })),
+      comparablePairCount: this.adviceLocalState.comparablePairs.length,
+      comparisonResultCount: this.adviceLocalState.comparisonResults.length,
+      codex: view
+        ? {
+            indexedFiles: view.coverage.indexedFiles,
+            indexedBytes: view.coverage.indexedBytes,
+            complete: view.coverage.complete,
+            identityComplete: view.coverage.identity.complete,
+            totalThreadCount: view.totalThreadCount,
+            lastActiveAt: view.lastTaskIdentity?.lastActiveAt ?? 0,
+            lastTaskTotal: view.lastTask?.total,
+            lastTaskStructural: view.lastTask?.structural,
+            qualityFlags: view.qualityFlags,
+          }
+        : null,
+    };
+    return createHash('sha256').update(JSON.stringify(safe), 'utf8').digest('hex');
+  }
+
+  private scheduleAdviceComparisonProduction(): void {
+    if (
+      !this.adviceExperimentEnabled() ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      !this.codexView ||
+      !this.adviceStateStorage()
+    ) {
+      return;
+    }
+    const revision = this.currentAdviceComparisonProductionRevision();
+    if (revision === this.adviceComparisonProductionRevision) return;
+    this.adviceComparisonProductionRevision = revision;
+    void this.enqueueAdviceLocalStateWrite((current) => {
+      const next = this.materializeAdviceComparisonState(Date.now(), current);
+      if (
+        next.comparablePairs.length === current.comparablePairs.length &&
+        next.comparisonResults.length === current.comparisonResults.length
+      ) {
+        return undefined;
+      }
+      return next;
+    })
+      .then((saved) => {
+        if (!saved.ok) {
+          if (this.adviceComparisonProductionRevision === revision) {
+            this.adviceComparisonProductionRevision = '';
+          }
+          return;
+        }
+        this.adviceComparisonProductionRevision =
+          this.currentAdviceComparisonProductionRevision();
+        if (saved.changed && this.panel) this.updateWebview();
+      })
+      .catch(() => {
+        if (this.adviceComparisonProductionRevision === revision) {
+          this.adviceComparisonProductionRevision = '';
+        }
+      });
+  }
+
   private adviceComparison(
     state: AdviceEffectivenessProviderState,
     recommendationId: string | undefined,
-  ): AdviceComparisonResult {
+  ): {
+    status:
+      | 'evidence-insufficient'
+      | 'quality-guardrail-failed'
+      | 'improved'
+      | 'no-demonstrated-improvement';
+    comparablePairs: number;
+    minimumComparablePairs: number;
+  } {
+    const minimumComparablePairs = state.contract.recommendations
+      .find((item) => item.id === recommendationId)
+      ?.successCriteria[0]?.minimumComparableTasks ?? 5;
     if (!recommendationId) {
+      return { status: 'evidence-insufficient', comparablePairs: 0, minimumComparablePairs };
+    }
+    const recommendationVersion = state.provider === 'codex' &&
+      isComparableCodexRecommendationId(recommendationId)
+      ? CODEX_LOCAL_RECOMMENDATION_VERSION
+      : undefined;
+    const frozen = this.adviceLocalState.comparisonResults
+      .filter(
+        (item) =>
+          item.provider === state.provider &&
+          item.recommendationId === recommendationId &&
+          (!recommendationVersion || item.recommendationVersion === recommendationVersion),
+      )
+      .sort(
+        (left, right) =>
+          right.sample.pairCount - left.sample.pairCount ||
+          right.recordedAtEpochMs - left.recordedAtEpochMs ||
+          right.comparisonId.localeCompare(left.comparisonId),
+      )[0];
+    if (frozen) {
       return {
-        status: 'insufficient-evidence',
-        reasons: ['no evidence-backed recommendation'],
-        comparablePairs: 0,
+        status: frozen.result.status,
+        comparablePairs: frozen.sample.pairCount,
+        minimumComparablePairs: frozen.guardrail.minComparablePairs,
       };
     }
-    const stored = selectStoredComparablePairLineage(
-      this.adviceLocalState.comparablePairs,
-      { provider: state.provider, recommendationId },
-    );
-    return compareAdviceEffectiveness(
-      toComparableTaskPairs(stored),
-      DEFAULT_ADVICE_COMPARISON_POLICY,
-    );
+    const comparablePairs = this.adviceLocalState.comparablePairs.filter(
+      (pair) =>
+        pair.context.provider === state.provider &&
+        pair.recommendationId === recommendationId &&
+        (!recommendationVersion || pair.recommendationVersion === recommendationVersion),
+    ).length;
+    return { status: 'evidence-insufficient', comparablePairs, minimumComparablePairs };
   }
 
   /**
@@ -3851,10 +4757,8 @@ export class UsageWebviewProvider {
     const percent = (value: number): string =>
       `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
     const contract = state?.contract;
-    const recommendation = contract?.recommendations[0];
+    const recommendations = contract?.recommendations ?? [];
     const observations: string[] = [];
-    let actionText = t.noEvidenceAdvice;
-    let recommendationText = t.noEvidenceAdvice;
     let limitationText = t.qualityGuardrailPending;
 
     if (state && provider === 'claude') {
@@ -3872,19 +4776,15 @@ export class UsageWebviewProvider {
         observations.push(replace(t.frameworkOverheadSignal, 'share', percent(framework.value)));
       }
       limitationText = `${t.elapsedTimeProxy} ${t.qualityGuardrailPending}`;
-      if (recommendation) {
-        recommendationText = t.clearBoundaryRecommendation;
-        actionText = t.clearBoundaryAction;
-      }
     } else if (state && provider === 'codex') {
       const copy = I18n.t.providers.codex;
-      const kind = recommendation?.id.replace('recommendation-codex-', '') as
-        | keyof typeof copy.insightObservations
-        | undefined;
-      if (kind && Object.prototype.hasOwnProperty.call(copy.insightObservations, kind)) {
-        observations.push(copy.insightObservations[kind]);
-        recommendationText = t.codexLocalRecommendation;
-        actionText = copy.insightTips[kind];
+      for (const recommendation of recommendations) {
+        const kind = recommendation.id.replace('recommendation-codex-', '') as
+          keyof typeof copy.insightObservations;
+        if (Object.prototype.hasOwnProperty.call(copy.insightObservations, kind)) {
+          const observation = copy.insightObservations[kind];
+          if (!observations.includes(observation)) observations.push(observation);
+        }
       }
       limitationText = `${copy.structuralProxy} ${t.qualityGuardrailPending}`;
     }
@@ -3892,36 +4792,15 @@ export class UsageWebviewProvider {
       observations.push(t.noEvidenceAdvice);
     }
 
-    const comparison = state
-      ? this.adviceComparison(state, recommendation?.id)
-      : {
-          status: 'insufficient-evidence' as const,
-          reasons: ['provider contract unavailable'],
-          comparablePairs: 0,
-        };
-    const pairCount = comparison.status === 'insufficient-evidence'
-      ? comparison.comparablePairs
-      : comparison.stats.comparablePairs;
-    const resultText = comparison.status === 'quality-guardrail-failed'
-      ? t.qualityGuardrailFailed
-      : comparison.status === 'improved'
-        ? t.improved
-        : comparison.status === 'no-demonstrated-improvement'
-          ? t.noDemonstratedImprovement
-          : t.insufficientEvidence;
-    const pairText = replace(t.comparablePairs, 'count', String(pairCount));
-    const minimumText = replace(
-      t.minimumComparablePairs,
-      'minimum',
-      String(DEFAULT_ADVICE_COMPARISON_POLICY.minComparablePairs),
-    );
     const evidenceText = state
       ? `${t.source}: ${provider === 'claude' ? 'Claude' : 'Codex'} · ${t.evidence}: ${state.contract.evidence.length}`
       : t.noEvidenceAdvice;
     const bodyId = `advice-effectiveness-${provider}`;
-
-    let feedbackHtml = '';
-    if (state && recommendation) {
+    const step = (index: number, label: string, content: string): string =>
+      '<li><span class="advice-step-marker" aria-hidden="true">' + index + '</span>' +
+      '<div><strong>' + html(label) + '</strong><p>' + content + '</p></div></li>';
+    const feedbackFor = (recommendation: AdviceRecommendation): string => {
+      if (!state) return '';
       const feedback = this.adviceLocalState.feedback.find(
         (item) =>
           item.adviceId === state.contract.adviceId &&
@@ -3939,7 +4818,7 @@ export class UsageWebviewProvider {
         ' data-recommendation-id="' + html(recommendation.id) + '"' +
         ' data-feedback-kind="' + kind + '" aria-pressed="' + String(selected) + '"' + disabled + '>' +
         '<span aria-hidden="true">' + (selected ? '✓' : '○') + '</span> ' + html(label) + '</button>';
-      feedbackHtml =
+      return (
         '<div class="advice-feedback-section">' +
         '<h5>' + html(t.feedbackTitle) + '</h5>' +
         '<div class="advice-feedback-group" role="group" aria-label="' + html(t.feedbackTitle) + '">' +
@@ -3948,15 +4827,74 @@ export class UsageWebviewProvider {
         button('applied', t.applied, feedback?.applied === 'applied') +
         '</div>' +
         '<p class="advice-local-note">' + html(t.feedbackLocalOnly) + '</p>' +
-        '<p class="advice-inline-status" data-advice-feedback-status="' + provider + '" aria-live="polite"></p>' +
-        '</div>';
-    }
+        '<p class="advice-inline-status" data-advice-feedback-status="' + provider + '"' +
+        ' data-advice-id="' + html(state.contract.adviceId) + '"' +
+        ' data-recommendation-id="' + html(recommendation.id) + '" aria-live="polite"></p>' +
+        '</div>'
+      );
+    };
+    const recommendationCopy = (
+      recommendation: AdviceRecommendation,
+    ): { recommendation: string; action: string } => {
+      if (provider === 'claude') {
+        return { recommendation: t.clearBoundaryRecommendation, action: t.clearBoundaryAction };
+      }
+      const copy = I18n.t.providers.codex;
+      const kind = recommendation.id.replace('recommendation-codex-', '') as keyof typeof copy.insightTips;
+      return {
+        recommendation: t.codexLocalRecommendation,
+        action: Object.prototype.hasOwnProperty.call(copy.insightTips, kind)
+          ? copy.insightTips[kind]
+          : t.noEvidenceAdvice,
+      };
+    };
+    const recommendationHtml = state && recommendations.length > 0
+      ? recommendations.map((recommendation) => {
+          const copy = recommendationCopy(recommendation);
+          const comparison = this.adviceComparison(state, recommendation.id);
+          const resultText = comparison.status === 'quality-guardrail-failed'
+            ? t.qualityGuardrailFailed
+            : comparison.status === 'improved'
+              ? t.improved
+              : comparison.status === 'no-demonstrated-improvement'
+                ? t.noDemonstratedImprovement
+                : t.insufficientEvidence;
+          const pairText = replace(
+            t.comparablePairs,
+            'count',
+            String(comparison.comparablePairs),
+          );
+          const minimumText = replace(
+            t.minimumComparablePairs,
+            'minimum',
+            String(comparison.minimumComparablePairs),
+          );
+          return (
+            '<div class="advice-recommendation-boundary" data-advice-recommendation="' +
+            html(recommendation.id) + '">' +
+            '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
+            step(3, t.recommendation, html(copy.recommendation)) +
+            step(4, t.action, html(copy.action)) +
+            step(
+              5,
+              t.result,
+              html(resultText) + '<br><span class="advice-step-caveat">' +
+                html(pairText + ' · ' + minimumText) + '</span>',
+            ) +
+            '</ol>' + feedbackFor(recommendation) + '</div>'
+          );
+        }).join('')
+      : '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
+        step(3, t.recommendation, html(t.noEvidenceAdvice)) +
+        step(4, t.action, html(t.noEvidenceAdvice)) +
+        step(5, t.result, html(t.insufficientEvidence)) +
+        '</ol>';
 
     let payloadHtml = '<p class="advice-local-note">' + html(t.codexPreviewUnavailable) + '</p>';
     if (state?.provider === 'claude' && state.remotePreviewEligible && state.aggregate) {
       const ready = this.adviceLocalStateStatus === 'ready';
       const aggregateChecked = ready && this.adviceLocalState.aggregateConsent === 'explicit';
-      const promptAvailable = state.promptSamples.length > 0;
+      const promptAvailable = state.promptSamples.length > 0 || Boolean(state.userContext?.trim());
       const promptChecked =
         aggregateChecked && promptAvailable && this.adviceLocalState.promptSampleConsent === 'explicit';
       const aggregateDisabled = ready ? '' : ' disabled';
@@ -3974,7 +4912,12 @@ export class UsageWebviewProvider {
         '<label><input type="checkbox" data-advice-consent-kind="prompt" data-provider="' + provider + '"' +
         ' data-prompt-available="' + String(promptAvailable) + '"' +
         (promptChecked ? ' checked' : '') + promptDisabled + '> <span><strong>' +
-        html(t.promptConsentLabel) + '</strong><small>' + html(t.promptConsentHelp) + '</small></span></label>' +
+        html(t.promptConsentLabel) + '</strong><small>' +
+        html(t.promptConsentHelp + ' ' + replace(
+          t.promptWindowHelp,
+          'days',
+          String(state.aggregate.windowDays),
+        )) + '</small></span></label>' +
         '</fieldset>' +
         '<div class="advice-payload-actions"><button type="button" class="btn-secondary btn-small"' +
         ' data-advice-action="preview" data-provider="' + provider + '"' + previewDisabled + '>' +
@@ -3986,12 +4929,12 @@ export class UsageWebviewProvider {
         '<span data-advice-preview-content-type></span><span data-advice-preview-mode></span><span data-advice-preview-bytes></span>' +
         '<span data-advice-preview-count></span><code data-advice-preview-digest></code></div>' +
         '<pre tabindex="0" data-advice-preview-body aria-label="' + html(t.payloadTitle) + '"></pre>' +
+        '<div class="advice-payload-actions"><button type="button" class="btn-primary btn-small"' +
+        ' data-advice-action="send" data-provider="' + provider + '" disabled>' +
+        html(t.sendPreparedRequest) + '</button></div>' +
         '</details></div>';
     }
 
-    const step = (index: number, label: string, content: string): string =>
-      '<li><span class="advice-step-marker" aria-hidden="true">' + index + '</span>' +
-      '<div><strong>' + html(label) + '</strong><p>' + content + '</p></div></li>';
     return (
       '<section class="advice-effectiveness-body" data-advice-provider="' + provider + '" aria-labelledby="' + bodyId + '">' +
       '<div class="advice-effectiveness-heading"><h4 id="' + bodyId + '">' + html(t.title) +
@@ -4000,11 +4943,11 @@ export class UsageWebviewProvider {
       '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
       step(1, t.observation, observations.map((item) => html(item)).join('<br>')) +
       step(2, t.evidence, html(evidenceText) + '<br><span class="advice-step-caveat">' + html(limitationText) + '</span>') +
-      step(3, t.recommendation, html(recommendationText)) +
-      step(4, t.action, html(actionText)) +
-      step(5, t.result, html(resultText) + '<br><span class="advice-step-caveat">' + html(pairText + ' · ' + minimumText) + '</span>') +
       '</ol>' +
-      feedbackHtml + payloadHtml +
+      recommendationHtml + payloadHtml +
+      '<div class="advice-local-data-actions"><button type="button" class="btn-secondary btn-small"' +
+      ' data-advice-action="clear" data-provider="' + provider + '">' +
+      html(t.clearLocalData) + '</button></div>' +
       '</section>'
     );
   }
@@ -4034,12 +4977,13 @@ export class UsageWebviewProvider {
   /**
    * Usage Optimizer card (Phase 9c). Default OFF — until the user opts in via
    * settings it shows only a description + an "enable" button. When enabled it
-   * exposes a textarea + toggles; the round-trip runs in extension.ts via the
-   * onOptimize hook (consent modal lives there). The result skeleton is baked
+   * exposes a textarea + toggles; preparation and explicit sending run through
+   * the same sealed-request hooks as advice. The result skeleton is baked
    * in (hidden) so the webview JS only fills text — no labels passed to JS.
    */
   private renderOptimizerCard(): string {
     const t = I18n.t.popup;
+    const ai = t.adviceEffectiveness;
     const enabled = this.setting<boolean>('advice.optimizer.enabled', false);
     // Shared header: icon badge + title (with an "experimental" pill) + purpose.
     const head = (action: string): string =>
@@ -4055,7 +4999,7 @@ export class UsageWebviewProvider {
 
     if (!enabled) {
       return (
-        '<div class="action-card">' +
+        '<div class="action-card" data-advice-provider="optimizer">' +
         head(
           '<button class="btn-secondary btn-small" onclick="showTab(\'settings\')">' +
             t.optimizerEnableBtn +
@@ -4070,11 +5014,50 @@ export class UsageWebviewProvider {
     const draftVal = st ? this.escapeHtml(st.draft) : '';
     const hasResult = !!(st && (st.prompt || st.settings));
     const hasErr = !!(st && st.error);
+    const hasPreview = !!(
+      st && st.snapshotId && st.previewBody && st.previewSha256 && st.previewBytes !== undefined
+    );
+    const optimizerAdviceId = st?.adviceId ?? '';
+    const optimizerFeedback = optimizerAdviceId
+      ? this.adviceLocalState.feedback.find(
+          (item) =>
+            item.adviceId === optimizerAdviceId &&
+            item.recommendationId === OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
+        )
+      : undefined;
+    const feedbackDisabled =
+      !optimizerAdviceId || this.adviceLocalStateStatus !== 'ready' ? ' disabled' : '';
+    const feedbackButton = (
+      kind: 'helpful' | 'not-helpful' | 'applied',
+      label: string,
+      selected: boolean,
+    ): string =>
+      '<button type="button" class="advice-feedback-button' + (selected ? ' is-selected' : '') + '"' +
+      ' data-advice-action="feedback" data-provider="optimizer"' +
+      ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '"' +
+      ' data-recommendation-id="' + OPTIMIZER_FEEDBACK_RECOMMENDATION_ID + '"' +
+      ' data-feedback-kind="' + kind + '" aria-pressed="' + String(selected) + '"' +
+      feedbackDisabled + '><span aria-hidden="true">' + (selected ? '✓' : '○') +
+      '</span> ' + this.escapeHtml(label) + '</button>';
+    const optimizerFeedbackHtml =
+      '<div id="optFeedback" class="advice-feedback-section" style="display:' +
+      (hasResult && optimizerAdviceId ? '' : 'none') + '">' +
+      '<h5>' + this.escapeHtml(ai.feedbackTitle) + '</h5>' +
+      '<div class="advice-feedback-group" role="group" aria-label="' +
+      this.escapeHtml(ai.feedbackTitle) + '">' +
+      feedbackButton('helpful', ai.helpful, optimizerFeedback?.rating === 'helpful') +
+      feedbackButton('not-helpful', ai.notHelpful, optimizerFeedback?.rating === 'not-helpful') +
+      feedbackButton('applied', ai.applied, optimizerFeedback?.applied === 'applied') +
+      '</div><p class="advice-local-note">' + this.escapeHtml(ai.feedbackLocalOnly) + '</p>' +
+      '<p class="advice-inline-status" data-advice-feedback-status="optimizer"' +
+      ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '"' +
+      ' data-recommendation-id="' + OPTIMIZER_FEEDBACK_RECOMMENDATION_ID +
+      '" aria-live="polite"></p></div>';
     const lens = (id: string, label: string, hint: string, on?: boolean): string =>
       '<label title="' + this.escapeHtml(hint) + '"><input type="checkbox" id="' + id + '"' +
       ck(on) + '> ' + this.escapeHtml(label) + '</label>';
     return (
-      '<div class="action-card">' +
+      '<div class="action-card" data-advice-provider="optimizer">' +
       head('') +
       '<p class="action-card-howto">' + t.optimizerHowto + '</p>' +
       '<textarea id="optDraft" class="opt-input" rows="4" placeholder="' +
@@ -4084,12 +5067,28 @@ export class UsageWebviewProvider {
       lens('optDistil', t.optimizerDistil, t.optimizerDistilHint, st?.distil) +
       lens('optAesthetic', t.optimizerAesthetic, t.optimizerAestheticHint, st?.aesthetic) +
       '<button class="btn-primary" id="optRunBtn" data-run="' +
-      this.escapeHtml(t.optimizerRun) + '" data-running="' +
+      this.escapeHtml(ai.previewPayload) + '" data-running="' +
       this.escapeHtml(t.optimizerRunning) + '" onclick="runOptimizer()">' +
-      t.optimizerRun + '</button>' +
+      ai.previewPayload + '</button>' +
       '</div>' +
       '<div id="optError" class="opt-error" style="display:' + (hasErr ? '' : 'none') + '">' +
       (hasErr ? this.escapeHtml(st!.error as string) : '') + '</div>' +
+      '<details id="optPreview" class="advice-payload-preview"' + (hasPreview ? ' open' : '') +
+      ' style="display:' + (hasPreview ? '' : 'none') + '" data-snapshot-id="' +
+      (hasPreview ? this.escapeHtml(st!.snapshotId as string) : '') + '">' +
+      '<summary><span>' + this.escapeHtml(ai.payloadTitle) +
+      '</span><span class="advice-seal-stamp">SHA-256</span></summary>' +
+      '<div class="advice-payload-meta"><span id="optPreviewBytes">' +
+      (hasPreview ? this.escapeHtml(ai.payloadBytes.replace('{bytes}', String(st!.previewBytes))) : '') +
+      '</span><code id="optPreviewDigest">' +
+      (hasPreview ? this.escapeHtml(`SHA-256 ${st!.previewSha256}`) : '') + '</code></div>' +
+      '<pre id="optPreviewBody" tabindex="0">' +
+      (hasPreview ? this.escapeHtml(st!.previewBody as string) : '') + '</pre>' +
+      '<div class="advice-payload-actions"><button type="button" class="btn-primary btn-small"' +
+      ' id="optSendBtn" onclick="sendOptimizer()"' + (hasPreview ? '' : ' disabled') + '>' +
+      this.escapeHtml(ai.sendPreparedRequest) +
+      '</button><span>' + this.escapeHtml(ai.noNetworkTransport) + '</span></div>' +
+      '</details>' +
       '<div id="optResult" class="opt-result" style="display:' + (hasResult ? '' : 'none') + '">' +
       '<h4 class="opt-subhead">' + t.optimizerPromptHeading + '</h4>' +
       '<div class="opt-output"><pre id="optPrompt">' +
@@ -4103,7 +5102,7 @@ export class UsageWebviewProvider {
       '<div id="optSettings" class="opt-settings" data-raw="' +
       (st && st.settings ? this.escapeHtml(st.settings) : '') + '">' +
       (st && st.settings ? this.escapeHtml(st.settings) : '') + '</div>' +
-      '</div>' +
+      optimizerFeedbackHtml + '</div>' +
       '</div>'
     );
   }
@@ -4832,9 +5831,14 @@ export class UsageWebviewProvider {
         const cost = data.apiEquivalent;
         const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
         const costLabel = cost.pricedTokens > 0 ? I18n.formatCurrency(cost.equivalentUsd) : '—';
+        const hasHourlyDetail = !monthly && Object.prototype.hasOwnProperty.call(
+          this.codexView?.last30DaysHourlyByDay ?? {},
+          date,
+        );
         return '<div class="hc-col" data-date="' + this.escapeHtml(date) + '">' +
           '<div class="hc-barval">' + costLabel + '</div>' +
-          '<div class="chart-bar cost-bar cost-stacked" style="height:' + height + 'px" ' +
+          '<div class="chart-bar cost-bar cost-stacked' + (hasHourlyDetail ? ' clickable' : '') +
+          '" style="height:' + height + 'px" ' +
           'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
           'data-input="' + data.total.processed + '" data-output="' + data.total.fresh + '" ' +
           'data-cache-creation="' + data.total.output + '" data-cache-read="' + data.total.reasoning + '" ' +
@@ -4943,7 +5947,7 @@ export class UsageWebviewProvider {
         this.codexCostStackHtml(cost, height) + '</div></div>';
     }).join('');
     const labels = rows.map((row) =>
-      '<div class="hc-xlabel">' + this.escapeHtml(row.hour) + '</div>'
+      '<div class="hc-xlabel">' + this.escapeHtml(row.label) + '</div>'
     ).join('');
     return '<div class="hc-wrap"><div class="hc-yaxis">' +
       '<span class="hc-yval">' + costAxisLabel(maxCost) + '</span>' +
@@ -7166,6 +8170,30 @@ function ccuWriteUiState(key, value) {
     vscode.setState(st);
   } catch (e) {}
 }
+async function ccuVerifyCanonicalPreview(body, sha256, utf8Bytes) {
+  if (
+    typeof body !== 'string' ||
+    typeof sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(sha256) ||
+    !Number.isInteger(utf8Bytes) ||
+    utf8Bytes < 0
+  ) { return false; }
+  try {
+    var encoded = new TextEncoder().encode(body);
+    if (encoded.byteLength !== utf8Bytes || !globalThis.crypto || !globalThis.crypto.subtle) {
+      return false;
+    }
+    var digest = await globalThis.crypto.subtle.digest('SHA-256', encoded);
+    var hex = Array.prototype.map.call(new Uint8Array(digest), function(byte) {
+      return byte.toString(16).padStart(2, '0');
+    }).join('');
+    return hex === sha256;
+  } catch (e) {
+    return false;
+  }
+}
+var advicePreviewValidationGeneration = {};
+var optimizerPreviewValidationGeneration = 0;
 function ccuProviderName() {
   var selected = document.querySelector('.provider-tab[aria-selected="true"]');
   return selected ? (selected.getAttribute('data-provider') || selected.id.replace('provider-tab-', '')) : 'claude';
@@ -7178,6 +8206,9 @@ function ccuElementStateKey(element, kind) {
 }
 
 function adviceRoot(provider) {
+  if (provider === 'optimizer') {
+    return document.querySelector('.action-card[data-advice-provider="optimizer"]');
+  }
   return document.querySelector('.advice-effectiveness-body[data-advice-provider="' + provider + '"]');
 }
 function adviceConsentElements(provider) {
@@ -7187,6 +8218,7 @@ function adviceConsentElements(provider) {
     aggregate: root ? root.querySelector('[data-advice-consent-kind="aggregate"]') : null,
     prompt: root ? root.querySelector('[data-advice-consent-kind="prompt"]') : null,
     previewButton: root ? root.querySelector('[data-advice-action="preview"]') : null,
+    sendButton: root ? root.querySelector('[data-advice-action="send"]') : null,
     preview: root ? root.querySelector('[data-advice-preview]') : null,
     consentStatus: root ? root.querySelector('[data-advice-consent-status]') : null,
   };
@@ -7207,6 +8239,10 @@ function adviceClearPreview(provider) {
   elements.preview.hidden = true;
   elements.preview.open = false;
   elements.preview.removeAttribute('data-snapshot-id');
+  if (elements.sendButton) {
+    elements.sendButton.disabled = true;
+    elements.sendButton.textContent = __adviceCopy.sendPreparedRequest;
+  }
   var body = elements.preview.querySelector('[data-advice-preview-body]');
   var digest = elements.preview.querySelector('[data-advice-preview-digest]');
   var mode = elements.preview.querySelector('[data-advice-preview-mode]');
@@ -7259,7 +8295,12 @@ function restorePersistedDetails() {
   } catch (e) {}
 }
 function clearPersistedDetails() {
-  try { var st = ccuReadUiState(); st.openDetails = []; vscode.setState(st); } catch (e) {}
+  try {
+    var st = ccuReadUiState();
+    st.openDetails = [];
+    st.codexHourlyDetails = {};
+    vscode.setState(st);
+  } catch (e) {}
 }
 // 'toggle' doesn't bubble — listen in the capture phase.
 document.addEventListener('toggle', function(e){
@@ -7280,6 +8321,7 @@ function restoreUi() {
   restoreActiveTab();
   restoreSessionFilter();
   restorePersistedDetails();
+  restoreCodexHourlyDetails();
   restoreAdviceEffectivenessState();
   restoreSessionDetails();
   restoreTableSorts();
@@ -7412,8 +8454,10 @@ function runOptimizer() {
   if (!ta || !ta.value.trim()) { return; }
   var err = document.getElementById('optError');
   var res = document.getElementById('optResult');
+  var preview = document.getElementById('optPreview');
   if (err) { err.style.display = 'none'; }
   if (res) { res.style.display = 'none'; }
+  if (preview) { preview.style.display = 'none'; preview.removeAttribute('data-snapshot-id'); }
   if (btn) {
     btn.disabled = true;
     btn.textContent = btn.getAttribute('data-running') || '…';
@@ -7427,6 +8471,70 @@ function runOptimizer() {
   });
 }
 
+async function showOptimizerPreview(msg) {
+  var validationGeneration = ++optimizerPreviewValidationGeneration;
+  var btn = document.getElementById('optRunBtn');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = btn.getAttribute('data-run') || __adviceCopy.previewPayload;
+  }
+  var err = document.getElementById('optError');
+  var preview = document.getElementById('optPreview');
+  var body = document.getElementById('optPreviewBody');
+  var digest = document.getElementById('optPreviewDigest');
+  var bytes = document.getElementById('optPreviewBytes');
+  var send = document.getElementById('optSendBtn');
+  if (preview) { preview.style.display = 'none'; preview.removeAttribute('data-snapshot-id'); }
+  if (send) { send.disabled = true; send.textContent = __adviceCopy.sendPreparedRequest; }
+  if (!msg.ok) {
+    if (err && msg.error) { err.textContent = msg.error; err.style.display = ''; }
+    return;
+  }
+  var valid =
+    msg.ok === true &&
+    /^optimizer-[a-f0-9]{24}$/.test(msg.snapshotId || '') &&
+    typeof msg.body === 'string' &&
+    typeof msg.sha256 === 'string' && /^[a-f0-9]{64}$/.test(msg.sha256) &&
+    Number.isInteger(msg.utf8Bytes) && msg.utf8Bytes >= 0 &&
+    msg.contentType === 'application/json' &&
+    msg.dataMode === 'user-draft-only';
+  if (valid) {
+    valid = await ccuVerifyCanonicalPreview(msg.body, msg.sha256, msg.utf8Bytes);
+  }
+  if (validationGeneration !== optimizerPreviewValidationGeneration) { return; }
+  if (!preview || !valid) {
+    if (preview) { preview.style.display = 'none'; preview.removeAttribute('data-snapshot-id'); }
+    if (send) { send.disabled = true; send.textContent = __adviceCopy.sendPreparedRequest; }
+    if (err) {
+      err.textContent = __adviceCopy.strictOutputRejected;
+      err.style.display = '';
+    }
+    return;
+  }
+  if (err) { err.style.display = 'none'; }
+  preview.setAttribute('data-snapshot-id', msg.snapshotId);
+  preview.style.display = '';
+  preview.open = true;
+  if (body) { body.textContent = msg.body; }
+  if (digest) { digest.textContent = 'SHA-256 ' + msg.sha256; }
+  if (bytes) { bytes.textContent = __adviceCopy.payloadBytes.replace('{bytes}', String(msg.utf8Bytes)); }
+  if (send) { send.disabled = false; send.textContent = __adviceCopy.sendPreparedRequest; }
+}
+
+function sendOptimizer() {
+  var preview = document.getElementById('optPreview');
+  var send = document.getElementById('optSendBtn');
+  var draft = document.getElementById('optDraft');
+  var snapshotId = preview ? preview.getAttribute('data-snapshot-id') : '';
+  if (!draft || !/^optimizer-[a-f0-9]{24}$/.test(snapshotId || '')) { return; }
+  if (send) { send.disabled = true; send.textContent = __adviceCopy.sendingPreparedRequest; }
+  vscode.postMessage({
+    command: 'sendOptimizerRequest',
+    snapshotId: snapshotId,
+    draft: draft.value,
+  });
+}
+
 function showOptimizeResult(msg) {
   var btn = document.getElementById('optRunBtn');
   if (btn) {
@@ -7435,8 +8543,20 @@ function showOptimizeResult(msg) {
   }
   var err = document.getElementById('optError');
   var res = document.getElementById('optResult');
+  var preview = document.getElementById('optPreview');
+  if (preview) { preview.style.display = 'none'; preview.removeAttribute('data-snapshot-id'); }
   if (msg.error) {
     if (err) { err.textContent = msg.error; err.style.display = ''; }
+    return;
+  }
+  var validFeedbackTarget =
+    typeof msg.adviceId === 'string' && /^advice-optimizer-[a-f0-9]{24}$/.test(msg.adviceId) &&
+    msg.recommendationId === 'recommendation-optimizer-result-v1';
+  if (!validFeedbackTarget) {
+    if (err) {
+      err.textContent = __adviceCopy.strictOutputRejected;
+      err.style.display = '';
+    }
     return;
   }
   var promptEl = document.getElementById('optPrompt');
@@ -7447,6 +8567,20 @@ function showOptimizeResult(msg) {
     formatOptSettings();
   }
   if (res) { res.style.display = ''; }
+  var feedback = document.getElementById('optFeedback');
+  if (feedback) {
+    feedback.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+      button.setAttribute('data-advice-id', msg.adviceId);
+      button.disabled = false;
+      button.setAttribute('aria-pressed', 'false');
+      button.classList.remove('is-selected');
+      var marker = button.querySelector('[aria-hidden="true"]');
+      if (marker) { marker.textContent = '○'; }
+    });
+    var feedbackStatus = feedback.querySelector('[data-advice-feedback-status]');
+    if (feedbackStatus) { feedbackStatus.textContent = ''; }
+    feedback.style.display = '';
+  }
 }
 
 function copyOptPrompt(btn) {
@@ -7873,6 +9007,93 @@ function toggleHourlyDetail(date) {
   }
 }
 
+function codexHourlyDetailElements(date) {
+  const detailRow = document.querySelector('[data-codex-hourly-detail-row][data-date="' + date + '"]');
+  const scope = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : document;
+  return {
+    detailRow: detailRow,
+    button: scope ? scope.querySelector('[data-codex-hourly-toggle][data-date="' + date + '"]') : null,
+    chartBar: scope ? scope.querySelector('.hc-col[data-date="' + date + '"] .chart-bar') : null,
+    scope: scope,
+  };
+}
+
+function codexHourlyDetailStateKey(detailRow) {
+  const tab = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : null;
+  return 'codex:' + (tab ? tab.id : 'month');
+}
+
+function persistCodexHourlyDetail(detailRow, date) {
+  if (!detailRow) { return; }
+  const details = ccuReadUiState().codexHourlyDetails || {};
+  const key = codexHourlyDetailStateKey(detailRow);
+  if (date) { details[key] = date; } else { delete details[key]; }
+  ccuWriteUiState('codexHourlyDetails', details);
+}
+
+function closeAllCodexHourlyDetails(scope) {
+  const root = scope || document;
+  root.querySelectorAll('[data-codex-hourly-detail-row]').forEach(function(row) {
+    row.style.display = 'none';
+  });
+  root.querySelectorAll('[data-codex-hourly-toggle]').forEach(function(button) {
+    button.classList.remove('expanded');
+    button.setAttribute('aria-expanded', 'false');
+  });
+  root.querySelectorAll('[data-codex-last30-daily] .chart-bar.selected').forEach(function(bar) {
+    bar.classList.remove('selected');
+  });
+}
+
+function setCodexHourlyDetail(date, expanded, restoring) {
+  const elements = codexHourlyDetailElements(date);
+  if (!elements.detailRow || !elements.button) { return false; }
+  if (expanded) {
+    closeAllCodexHourlyDetails(elements.scope);
+    elements.detailRow.style.display = 'table-row';
+    elements.button.classList.add('expanded');
+    elements.button.setAttribute('aria-expanded', 'true');
+    if (elements.chartBar) { elements.chartBar.classList.add('selected'); }
+    persistCodexHourlyDetail(elements.detailRow, date);
+    if (!restoring) {
+      try { elements.detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+    }
+  } else {
+    elements.detailRow.style.display = 'none';
+    elements.button.classList.remove('expanded');
+    elements.button.setAttribute('aria-expanded', 'false');
+    if (elements.chartBar) { elements.chartBar.classList.remove('selected'); }
+    persistCodexHourlyDetail(elements.detailRow, '');
+  }
+  return true;
+}
+
+function toggleCodexHourlyDetail(date) {
+  try {
+    const elements = codexHourlyDetailElements(date);
+    if (!elements.detailRow || !elements.button) { return; }
+    setCodexHourlyDetail(
+      date,
+      elements.button.getAttribute('aria-expanded') !== 'true',
+      false,
+    );
+  } catch (error) {
+    console.error('Error in toggleCodexHourlyDetail:', error);
+  }
+}
+
+function restoreCodexHourlyDetails() {
+  try {
+    const saved = ccuReadUiState().codexHourlyDetails || {};
+    document.querySelectorAll('[data-codex-hourly-detail-row]').forEach(function(row) {
+      const date = row.getAttribute('data-date');
+      if (date && saved[codexHourlyDetailStateKey(row)] === date) {
+        setCodexHourlyDetail(date, true, true);
+      }
+    });
+  } catch (e) {}
+}
+
 function closeAllHourlyDetails() {
   // Close all expanded detail rows
   const allDetailRows = document.querySelectorAll('.hourly-detail-row');
@@ -8002,6 +9223,7 @@ window.refresh = refresh;
 window.openSettings = openSettings;
 window.refreshPricing = refreshPricing;
 window.getAdvice = getAdvice;
+window.sendOptimizer = sendOptimizer;
 window.toggleProjectGroup = toggleProjectGroup;
 window.sortTable = sortTable;
 window.dismissQuotaWarn = dismissQuotaWarn;
@@ -8022,7 +9244,7 @@ document.addEventListener('change', function(event) {
     : null;
   if (!input) { return; }
   var provider = input.getAttribute('data-provider');
-  if (provider !== 'claude' && provider !== 'codex') { return; }
+  if (provider !== 'claude' && provider !== 'codex' && provider !== 'optimizer') { return; }
   var elements = adviceConsentElements(provider);
   if (!elements.aggregate || !elements.prompt) { return; }
   if (!elements.aggregate.checked) { elements.prompt.checked = false; }
@@ -8038,13 +9260,24 @@ document.addEventListener('change', function(event) {
   });
 });
 
+document.addEventListener('input', function(event) {
+  var target = event.target;
+  if (!target || target.id !== 'optDraft') { return; }
+  var preview = document.getElementById('optPreview');
+  if (preview && preview.getAttribute('data-snapshot-id')) {
+    preview.style.display = 'none';
+    preview.removeAttribute('data-snapshot-id');
+    vscode.postMessage({ command: 'discardOptimizerRequest' });
+  }
+});
+
 document.addEventListener('click', function(event) {
   var action = event.target && event.target.closest
     ? event.target.closest('[data-advice-action][data-provider]')
     : null;
   if (!action) { return; }
   var provider = action.getAttribute('data-provider');
-  if (provider !== 'claude' && provider !== 'codex') { return; }
+  if (provider !== 'claude' && provider !== 'codex' && provider !== 'optimizer') { return; }
   if (action.getAttribute('data-advice-action') === 'preview') {
     event.preventDefault();
     var elements = adviceConsentElements(provider);
@@ -8059,27 +9292,61 @@ document.addEventListener('click', function(event) {
     });
     return;
   }
+  if (action.getAttribute('data-advice-action') === 'send') {
+    event.preventDefault();
+    var sendElements = adviceConsentElements(provider);
+    var snapshotId = sendElements.preview
+      ? sendElements.preview.getAttribute('data-snapshot-id')
+      : null;
+    if (!snapshotId || !/^snapshot-[a-f0-9]{24}$/.test(snapshotId)) { return; }
+    action.disabled = true;
+    action.textContent = __adviceCopy.sendingPreparedRequest;
+    if (sendElements.consentStatus) {
+      sendElements.consentStatus.textContent = __adviceCopy.sendingPreparedRequest;
+    }
+    vscode.postMessage({
+      command: 'sendAdviceSnapshot',
+      provider: provider,
+      snapshotId: snapshotId,
+    });
+    return;
+  }
   if (action.getAttribute('data-advice-action') === 'feedback') {
     event.preventDefault();
     var root = adviceRoot(provider);
     if (!root) { return; }
+    var recommendationId = action.getAttribute('data-recommendation-id');
     root.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+      if (button.getAttribute('data-recommendation-id') !== recommendationId) { return; }
       button.disabled = true;
     });
-    var status = root.querySelector('[data-advice-feedback-status]');
-    if (status) { status.textContent = ''; }
+    root.querySelectorAll('[data-advice-feedback-status]').forEach(function(status) {
+      if (
+        status.getAttribute('data-advice-id') === action.getAttribute('data-advice-id') &&
+        status.getAttribute('data-recommendation-id') === recommendationId
+      ) {
+        status.textContent = '';
+      }
+    });
     vscode.postMessage({
       command: 'recordAdviceFeedback',
       provider: provider,
       adviceId: action.getAttribute('data-advice-id'),
-      recommendationId: action.getAttribute('data-recommendation-id'),
+      recommendationId: recommendationId,
       kind: action.getAttribute('data-feedback-kind'),
     });
+    return;
+  }
+  if (action.getAttribute('data-advice-action') === 'clear') {
+    event.preventDefault();
+    if (!window.confirm(__adviceCopy.clearLocalDataConfirm)) { return; }
+    action.disabled = true;
+    vscode.postMessage({ command: 'clearAdviceLocalData' });
   }
 });
 
 // Handle messages from extension
-window.addEventListener('message', function(event) {
+window.addEventListener('message', async function(event) {
   const message = event.data;
 
   if (message.command === 'adviceConsentResult') {
@@ -8107,8 +9374,12 @@ window.addEventListener('message', function(event) {
 
   if (message.command === 'adviceSnapshotResult') {
     var snapshotProvider = message.provider;
+    var snapshotValidationGeneration =
+      (advicePreviewValidationGeneration[snapshotProvider] || 0) + 1;
+    advicePreviewValidationGeneration[snapshotProvider] = snapshotValidationGeneration;
     var snapshotElements = adviceConsentElements(snapshotProvider);
     if (snapshotElements.previewButton) { snapshotElements.previewButton.disabled = false; }
+    adviceClearPreview(snapshotProvider);
     var validSnapshot =
       message.ok === true &&
       typeof message.snapshotId === 'string' && /^snapshot-[a-f0-9]{24}$/.test(message.snapshotId) &&
@@ -8117,9 +9388,20 @@ window.addEventListener('message', function(event) {
       Number.isInteger(message.utf8Bytes) && message.utf8Bytes >= 0 &&
       Number.isInteger(message.promptSampleCount) && message.promptSampleCount >= 0 &&
       message.contentType === 'application/json' &&
-      (message.dataMode === 'aggregates-only' || message.dataMode === 'aggregates-with-prompt-samples');
+      (message.dataMode === 'aggregates-only' ||
+        message.dataMode === 'aggregates-with-personalization' ||
+        message.dataMode === 'aggregates-with-prompt-samples');
+    if (validSnapshot) {
+      validSnapshot = await ccuVerifyCanonicalPreview(
+        message.body,
+        message.sha256,
+        message.utf8Bytes,
+      );
+    }
+    if (advicePreviewValidationGeneration[snapshotProvider] !== snapshotValidationGeneration) {
+      return;
+    }
     if (!validSnapshot || !snapshotElements.preview) {
-      adviceClearPreview(snapshotProvider);
       if (snapshotElements.consentStatus) {
         snapshotElements.consentStatus.textContent = __adviceCopy.strictOutputRejected;
       }
@@ -8137,7 +9419,9 @@ window.addEventListener('message', function(event) {
       if (previewMode) {
         previewMode.textContent = message.dataMode === 'aggregates-only'
           ? __adviceCopy.aggregatesOnly
-          : __adviceCopy.aggregatesWithPromptSamples;
+          : message.dataMode === 'aggregates-with-personalization'
+            ? __adviceCopy.aggregatesWithPersonalization
+            : __adviceCopy.aggregatesWithPromptSamples;
       }
       if (previewBytes) {
         previewBytes.textContent = __adviceCopy.payloadBytes.replace('{bytes}', String(message.utf8Bytes));
@@ -8151,6 +9435,10 @@ window.addEventListener('message', function(event) {
       preview.setAttribute('data-snapshot-id', message.snapshotId);
       preview.hidden = false;
       preview.open = true;
+      if (snapshotElements.sendButton) {
+        snapshotElements.sendButton.disabled = false;
+        snapshotElements.sendButton.textContent = __adviceCopy.sendPreparedRequest;
+      }
       if (snapshotElements.consentStatus) {
         snapshotElements.consentStatus.textContent = __adviceCopy.noNetworkTransport;
       }
@@ -8158,13 +9446,44 @@ window.addEventListener('message', function(event) {
     adviceSyncConsentControls(snapshotProvider);
   }
 
+  if (message.command === 'adviceSendResult') {
+    var sendProvider = message.provider;
+    var sendElements = adviceConsentElements(sendProvider);
+    if (message.ok === true) {
+      if (sendElements.consentStatus) {
+        sendElements.consentStatus.textContent = __adviceCopy.sentPreparedRequest;
+      }
+      adviceClearPreview(sendProvider);
+    } else {
+      if (sendElements.sendButton) {
+        sendElements.sendButton.disabled = false;
+        sendElements.sendButton.textContent = __adviceCopy.sendPreparedRequest;
+      }
+      if (sendElements.consentStatus) {
+        sendElements.consentStatus.textContent = __adviceCopy.strictOutputRejected;
+      }
+    }
+  }
+
   if (message.command === 'adviceFeedbackResult') {
     var feedbackProvider = message.provider;
     var feedbackRoot = adviceRoot(feedbackProvider);
     if (feedbackRoot) {
-      var feedbackStatus = feedbackRoot.querySelector('[data-advice-feedback-status]');
+      var feedbackStatus = null;
+      feedbackRoot.querySelectorAll('[data-advice-feedback-status]').forEach(function(status) {
+        if (
+          status.getAttribute('data-advice-id') === message.adviceId &&
+          status.getAttribute('data-recommendation-id') === message.recommendationId
+        ) {
+          feedbackStatus = status;
+        }
+      });
       if (message.ok === true) {
         feedbackRoot.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+          if (
+            button.getAttribute('data-advice-id') !== message.adviceId ||
+            button.getAttribute('data-recommendation-id') !== message.recommendationId
+          ) { return; }
           var kind = button.getAttribute('data-feedback-kind');
           var selected =
             (kind === 'helpful' && message.rating === 'helpful') ||
@@ -8178,9 +9497,23 @@ window.addEventListener('message', function(event) {
         });
         if (feedbackStatus) { feedbackStatus.textContent = __adviceCopy.feedbackLocalOnly; }
       } else {
+        feedbackRoot.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+          if (
+            button.getAttribute('data-advice-id') === message.adviceId &&
+            button.getAttribute('data-recommendation-id') === message.recommendationId
+          ) {
+            button.disabled = false;
+          }
+        });
         if (feedbackStatus) { feedbackStatus.textContent = __adviceCopy.feedbackSaveFailed; }
       }
     }
+  }
+
+  if (message.command === 'adviceClearResult' && message.ok !== true) {
+    document.querySelectorAll('[data-advice-action="clear"]').forEach(function(button) {
+      button.disabled = false;
+    });
   }
 
   if (message.command === 'shareCardResult') {
@@ -8223,6 +9556,9 @@ window.addEventListener('message', function(event) {
 
   if (message.command === 'optimizeResult') {
     showOptimizeResult(message);
+  }
+  if (message.command === 'optimizePreviewResult') {
+    showOptimizerPreview(message);
   }
 });
 
@@ -8283,7 +9619,7 @@ document.addEventListener('click', function(event) {
     const metric = chartTab.dataset.metric;
 
     // Find the container and determine the context
-    const container = chartTab.closest('.daily-breakdown') || chartTab.closest('.hourly-breakdown');
+    const container = chartTab.closest('.daily-breakdown, .hourly-breakdown');
 
     if (container) {
       applyChartMetric(container, metric, true);
@@ -8306,7 +9642,11 @@ document.addEventListener('click', function(event) {
           toggleMonthlyDetail(date);
         } else {
           // This is in the "month" tab, so it's a daily chart
-          toggleHourlyDetail(date);
+          if (event.target.closest('[data-codex-last30-daily]')) {
+            toggleCodexHourlyDetail(date);
+          } else {
+            toggleHourlyDetail(date);
+          }
         }
       }
     }
@@ -8330,7 +9670,7 @@ function handleChartTabClick(event) {
 
   const metric = this.dataset.metric;
   if (!metric) { return; }
-  const container = this.closest('.daily-breakdown') || this.closest('.hourly-breakdown');
+  const container = this.closest('.daily-breakdown, .hourly-breakdown');
 
   if (container) {
     applyChartMetric(container, metric, true);

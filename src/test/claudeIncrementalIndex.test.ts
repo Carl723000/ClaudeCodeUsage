@@ -18,6 +18,7 @@ import {
   updateClaudeUsageIndex,
 } from '../claudeIncrementalIndex';
 import { ClaudeDataLoader } from '../dataLoader';
+import { I18n } from '../i18n';
 import { ClaudeUsageRecord } from '../types';
 
 const roots: string[] = [];
@@ -248,6 +249,76 @@ test('materialized dashboard rows match every legacy full-record aggregation', a
     stableValue(snapshot.context),
     stableValue(ClaudeDataLoader.getCurrentContextInfo(records, '/fixture/project-a')),
   );
+});
+
+test('advice window is opt-in and comes only from materialized day and session aggregates', async () => {
+  const { root, first } = await fixture();
+  await writeFile(
+    path.join(path.dirname(first), 'session-old.jsonl'),
+    `${usageLine('old-advice', 999, 99, { timestamp: '2026-06-01T08:00:00.000Z' })}\n`,
+    'utf8',
+  );
+  const loaded = await updateClaudeUsageIndex(createClaudeUsageIndex(), root, {
+    analyzeContent: false,
+  });
+  const ordinary = claudeUsageDashboardSnapshot(loaded.index, {
+    now: new Date('2026-08-22T12:00:00.000Z'),
+  });
+  assert.equal(ordinary.adviceWindow, undefined);
+
+  const candidate = claudeUsageDashboardSnapshot(loaded.index, {
+    now: new Date('2026-08-22T12:00:00.000Z'),
+    adviceWindowDays: 30,
+  });
+  assert.equal(candidate.adviceWindow?.aggregate.messageCount, 1);
+  assert.equal(candidate.adviceWindow?.aggregate.totalInputTokens, 30);
+  assert.equal(candidate.adviceWindow?.totalSessions, 2);
+  assert.equal(candidate.adviceWindow?.longSessionCount, 0);
+  assert.equal(candidate.adviceWindow?.largeContextSessionCount, 0);
+  assert.equal(loaded.diagnostics.bodyReads, 3, 'snapshot materialization performs no extra reads');
+});
+
+test('configured timezone rebuckets Claude Today and hours from the in-memory index without body reads', async () => {
+  const previousTimeZone = I18n.getTimezone();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-claude-timezone-index-'));
+  roots.push(root);
+  const project = path.join(root, 'projects', '-fixture-timezone');
+  await mkdir(project, { recursive: true });
+  const file = path.join(project, 'timezone.jsonl');
+  await writeFile(file, `${usageLine('timezone', 10, 2, {
+    timestamp: '2026-07-20T23:30:00.000Z',
+  })}\n`, 'utf8');
+
+  try {
+    I18n.setTimezone('UTC');
+    const cold = await updateClaudeUsageIndex(createClaudeUsageIndex(), root, {
+      analyzeContent: false,
+    });
+    const utc = claudeUsageDashboardSnapshot(cold.index, {
+      now: new Date('2026-07-21T00:15:00.000Z'),
+    });
+    assert.equal(utc.today.totalInputTokens, 0);
+    assert.deepEqual(utc.hourlyForToday, []);
+
+    I18n.setTimezone('Asia/Hong_Kong');
+    const shifted = await updateClaudeUsageIndex(cold.index, root, {
+      analyzeContent: false,
+    });
+    const hongKong = claudeUsageDashboardSnapshot(shifted.index, {
+      now: new Date('2026-07-21T00:15:00.000Z'),
+    });
+
+    assert.equal(shifted.diagnostics.bodyReads, 0);
+    assert.equal(hongKong.today.totalInputTokens, 10);
+    assert.deepEqual(hongKong.hourlyForToday.map(({ hour }) => hour), ['07:00']);
+    assert.deepEqual(
+      ClaudeDataLoader.getHourlyDataForDate(shifted.records, '2026-07-21')
+        .map(({ hour }) => hour),
+      ['07:00'],
+    );
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
 });
 
 test('append reads only the verified tail and preserves exact totals', async () => {

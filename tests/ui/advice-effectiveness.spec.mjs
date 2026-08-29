@@ -7,6 +7,7 @@ import { test, expect, openClaude, openCodex } from './support/app.mjs';
 const require = createRequire(import.meta.url);
 const {
   PROMPT_SENTINEL,
+  USER_CONTEXT_SENTINEL,
   buildAdviceEffectivenessFixture,
 } = require('./support/advice-effectiveness-fixture.cjs');
 
@@ -223,6 +224,16 @@ test('sealed preview renders the exact canonical body, UTF-8 size, and SHA-256',
     aggregateConsent: 'explicit',
     promptSampleConsent: 'not-granted',
   });
+  await dispatchHostMessage(page, {
+    ...fixture.snapshotMessages.aggregateOnly,
+    body: `${fixture.snapshotMessages.aggregateOnly.body} `,
+  });
+  await expect(
+    page.locator('[data-advice-provider="claude"] [data-advice-consent-status]'),
+  ).not.toHaveText('');
+  await expect(
+    page.locator('[data-advice-provider="claude"] [data-advice-action="send"]'),
+  ).toBeDisabled();
   await dispatchHostMessage(page, fixture.snapshotMessages.aggregateOnly);
 
   const preview = page.locator('[data-advice-preview="claude"]');
@@ -247,6 +258,7 @@ test('sealed preview renders the exact canonical body, UTF-8 size, and SHA-256',
     .update(fixture.snapshotMessages.aggregateOnly.body, 'utf8')
     .digest('hex')).toBe(fixture.snapshotMessages.aggregateOnly.sha256);
   expect(fixture.snapshotMessages.aggregateOnly.body).not.toContain('promptSamples');
+  expect(fixture.snapshotMessages.aggregateOnly.body).not.toContain(USER_CONTEXT_SENTINEL);
   expect(await page.content()).not.toContain(PROMPT_SENTINEL);
 
   const prompt = page.locator(
@@ -276,6 +288,7 @@ test('sealed preview renders the exact canonical body, UTF-8 size, and SHA-256',
   await dispatchHostMessage(page, fixture.snapshotMessages.withPromptSamples);
   await expect(body).toHaveText(fixture.snapshotMessages.withPromptSamples.body);
   await expect(body).toContainText(PROMPT_SENTINEL);
+  await expect(body).toContainText(USER_CONTEXT_SENTINEL);
   await expect(preview.locator('[data-advice-preview-bytes]')).toContainText(
     String(fixture.snapshotMessages.withPromptSamples.utf8Bytes),
   );
@@ -289,16 +302,27 @@ test('sealed preview renders the exact canonical body, UTF-8 size, and SHA-256',
   expect(createHash('sha256')
     .update(fixture.snapshotMessages.withPromptSamples.body, 'utf8')
     .digest('hex')).toBe(fixture.snapshotMessages.withPromptSamples.sha256);
+  const send = page.locator(
+    '[data-advice-provider="claude"] [data-advice-action="send"]',
+  );
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expectPostedCount(page, 'sendAdviceSnapshot', 1);
+  expect((await postedMessages(page, 'sendAdviceSnapshot')).at(-1)).toEqual({
+    command: 'sendAdviceSnapshot',
+    provider: 'claude',
+    snapshotId: fixture.snapshotMessages.withPromptSamples.snapshotId,
+  });
   expect(networkAfterLoad).toEqual([]);
 });
 
-test('candidate exposes no send control and feedback posts identifiers plus kind only', async ({ page }) => {
+test('candidate exposes only bounded advice actions and feedback posts identifiers plus kind only', async ({ page }) => {
   const root = await openCandidate(page, 'claude');
   await expect(root.locator('form, a[href]')).toHaveCount(0);
-  await expect(root.getByRole('button', { name: /send|upload|submit|transmit/i })).toHaveCount(0);
+  await expect(root.locator('[data-advice-action="send"]')).toBeDisabled();
   expect(await root.locator('[data-advice-action]').evaluateAll((elements) =>
     [...new Set(elements.map((element) => element.getAttribute('data-advice-action')))].sort()))
-    .toEqual(['feedback', 'preview']);
+    .toEqual(['clear', 'feedback', 'preview', 'send']);
 
   const feedbackKinds = await root.locator('[data-advice-action="feedback"]')
     .evaluateAll((buttons) => buttons.map((button) => button.getAttribute('data-feedback-kind')));
@@ -337,6 +361,196 @@ test('candidate exposes no send control and feedback posts identifiers plus kind
   await expect(helpful).toHaveAttribute('aria-pressed', 'true');
   await expect(helpful).toBeEnabled();
   await expect(root.locator('[data-advice-feedback-status]')).not.toBeEmpty();
+
+  page.once('dialog', (dialog) => dialog.accept());
+  await root.locator('[data-advice-action="clear"]').click();
+  await expectPostedCount(page, 'clearAdviceLocalData', 1);
+  expect((await postedMessages(page, 'clearAdviceLocalData')).at(-1)).toEqual({
+    command: 'clearAdviceLocalData',
+  });
+});
+
+test('one recommendation feedback leaves sibling recommendations interactive and recovers on failure', async ({ page }) => {
+  const root = await openCandidate(page, 'codex');
+  const groups = root.locator('.advice-feedback-group');
+  await expect(groups).toHaveCount(2);
+  const firstButtons = groups.nth(0).locator('[data-advice-action="feedback"]');
+  const siblingButtons = groups.nth(1).locator('[data-advice-action="feedback"]');
+
+  await firstButtons.first().click();
+  for (let index = 0; index < 3; index += 1) {
+    await expect(firstButtons.nth(index)).toBeDisabled();
+    await expect(siblingButtons.nth(index)).toBeEnabled();
+  }
+  const message = (await postedMessages(page, 'recordAdviceFeedback')).at(-1);
+
+  await dispatchHostMessage(page, {
+    command: 'adviceFeedbackResult',
+    ok: false,
+    provider: 'codex',
+    adviceId: message.adviceId,
+    recommendationId: message.recommendationId,
+  });
+  for (let index = 0; index < 3; index += 1) {
+    await expect(firstButtons.nth(index)).toBeEnabled();
+    await expect(siblingButtons.nth(index)).toBeEnabled();
+  }
+});
+
+test('optimizer exact preview fails closed before enabling the shared explicit sender', async ({ page }) => {
+  await openClaude(page, { fixture: 'advice-optimizer' });
+  await page.locator('#tab-content').click();
+  const card = page.locator('.action-card[data-advice-provider="optimizer"]');
+  const preview = card.locator('#optPreview');
+  const send = card.locator('#optSendBtn');
+  await expect(card).toBeVisible();
+  await expect(send).toBeDisabled();
+
+  const base = {
+    command: 'optimizePreviewResult',
+    ok: true,
+    snapshotId: 'optimizer-0123456789abcdef01234567',
+    body: '{"safe":true}',
+    sha256: createHash('sha256').update('{"safe":true}', 'utf8').digest('hex'),
+    utf8Bytes: Buffer.byteLength('{"safe":true}', 'utf8'),
+    dataMode: 'user-draft-only',
+  };
+  await dispatchHostMessage(page, base);
+  await expect(preview).toBeHidden();
+  await expect(send).toBeDisabled();
+
+  await dispatchHostMessage(page, {
+    ...base,
+    contentType: 'application/json',
+    sha256: 'a'.repeat(64),
+  });
+  await expect(card.locator('#optError')).toBeVisible();
+  await expect(preview).toBeHidden();
+  await expect(send).toBeDisabled();
+
+  await dispatchHostMessage(page, { ...base, contentType: 'application/json' });
+  await expect(preview).toBeVisible();
+  await expect(send).toBeEnabled();
+  await send.click();
+  await expectPostedCount(page, 'sendOptimizerRequest', 1);
+  expect((await postedMessages(page, 'sendOptimizerRequest')).at(-1)).toEqual({
+    command: 'sendOptimizerRequest',
+    snapshotId: base.snapshotId,
+    draft: 'HOST_ONLY_OPTIMIZER_DRAFT',
+  });
+});
+
+test('optimizer result records the same retractable local feedback events', async ({ page }) => {
+  await openClaude(page, { fixture: 'advice-optimizer' });
+  await page.locator('#tab-content').click();
+  const card = page.locator('.action-card[data-advice-provider="optimizer"]');
+  const feedback = card.locator('#optFeedback');
+  const buttons = feedback.locator('[data-advice-action="feedback"]');
+  await expect(feedback).toBeVisible();
+  await expect(buttons).toHaveCount(3);
+
+  await buttons.first().click();
+  const message = (await postedMessages(page, 'recordAdviceFeedback')).at(-1);
+  expect(message).toEqual({
+    command: 'recordAdviceFeedback',
+    provider: 'optimizer',
+    adviceId: 'advice-optimizer-0123456789abcdef01234567',
+    recommendationId: 'recommendation-optimizer-result-v1',
+    kind: 'helpful',
+  });
+  await dispatchHostMessage(page, {
+    command: 'adviceFeedbackResult',
+    ok: true,
+    provider: 'optimizer',
+    adviceId: message.adviceId,
+    recommendationId: message.recommendationId,
+    rating: 'helpful',
+    applied: 'not-applied',
+  });
+  await expect(buttons.first()).toHaveAttribute('aria-pressed', 'true');
+  for (let index = 0; index < 3; index += 1) {
+    await expect(buttons.nth(index)).toBeEnabled();
+  }
+});
+
+test('a new optimizer result does not inherit feedback from the previous run', async ({ page }) => {
+  await openClaude(page, { fixture: 'advice-optimizer' });
+  await page.locator('#tab-content').click();
+  const card = page.locator('.action-card[data-advice-provider="optimizer"]');
+  const helpful = card.locator('[data-feedback-kind="helpful"]');
+
+  await dispatchHostMessage(page, {
+    command: 'adviceFeedbackResult',
+    ok: true,
+    provider: 'optimizer',
+    adviceId: 'advice-optimizer-0123456789abcdef01234567',
+    recommendationId: 'recommendation-optimizer-result-v1',
+    rating: 'helpful',
+    applied: 'not-applied',
+  });
+  await expect(helpful).toHaveAttribute('aria-pressed', 'true');
+
+  await dispatchHostMessage(page, {
+    command: 'optimizeResult',
+    prompt: 'New paste-ready result',
+    settings: 'Effort: low',
+    adviceId: 'advice-optimizer-89abcdef0123456789abcdef',
+    recommendationId: 'recommendation-optimizer-result-v1',
+  });
+
+  await expect(helpful).toHaveAttribute(
+    'data-advice-id',
+    'advice-optimizer-89abcdef0123456789abcdef',
+  );
+  await expect(helpful).toHaveAttribute('aria-pressed', 'false');
+  await expect(helpful).not.toHaveClass(/is-selected/);
+
+  await dispatchHostMessage(page, {
+    command: 'adviceFeedbackResult',
+    ok: true,
+    provider: 'optimizer',
+    adviceId: 'advice-optimizer-0123456789abcdef01234567',
+    recommendationId: 'recommendation-optimizer-result-v1',
+    rating: 'helpful',
+    applied: 'not-applied',
+  });
+  await expect(helpful).toHaveAttribute('aria-pressed', 'false');
+  await expect(helpful).not.toHaveClass(/is-selected/);
+});
+
+test('optimizer feedback operation survives a full webview reload', async ({ page }) => {
+  await openClaude(page, { fixture: 'advice-optimizer' });
+  await page.locator('#tab-content').click();
+  const card = page.locator('.action-card[data-advice-provider="optimizer"]');
+  const helpful = card.locator('[data-feedback-kind="helpful"]');
+
+  await helpful.click();
+  const message = (await postedMessages(page, 'recordAdviceFeedback')).at(-1);
+  await dispatchHostMessage(page, {
+    command: 'adviceFeedbackResult',
+    ok: true,
+    provider: 'optimizer',
+    adviceId: message.adviceId,
+    recommendationId: message.recommendationId,
+    rating: 'helpful',
+    applied: 'not-applied',
+  });
+  await expect(helpful).toHaveAttribute('aria-pressed', 'true');
+
+  // The query value is the test harness representation of the durable host
+  // ledger written by the operation above; reload must reconstruct the state.
+  await page.evaluate(() => {
+    const url = new URL(window.location.href);
+    url.searchParams.set('adviceFeedback', 'optimizer-helpful');
+    window.history.replaceState({}, '', url);
+  });
+  await page.reload({ waitUntil: 'load' });
+
+  const reloaded = page.locator(
+    '.action-card[data-advice-provider="optimizer"] [data-feedback-kind="helpful"]',
+  );
+  await expect(reloaded).toHaveAttribute('aria-pressed', 'true');
+  await expect(reloaded).toHaveClass(/is-selected/);
 });
 
 for (const provider of ['claude', 'codex']) {
@@ -344,11 +558,20 @@ for (const provider of ['claude', 'codex']) {
     const root = await openCandidate(page, provider, { theme: 'dark' });
     await expect(root).toHaveAttribute('aria-labelledby', `advice-effectiveness-${provider}`);
     await expect(root.locator(`#advice-effectiveness-${provider}`)).toBeVisible();
-    await expect(root.locator('.advice-spine')).toHaveAttribute('aria-label', /.+/);
-    await expect(root.locator('.advice-spine > li')).toHaveCount(5);
-    await expect(root.locator('.advice-step-marker')).toHaveText(['1', '2', '3', '4', '5']);
-    await expect(root.locator('.advice-feedback-group')).toHaveAttribute('role', 'group');
-    await expect(root.locator('[data-advice-feedback-status]')).toHaveAttribute('aria-live', 'polite');
+    const spines = root.locator('.advice-spine');
+    expect(await spines.count()).toBeGreaterThanOrEqual(2);
+    expect(await spines.evaluateAll((items) =>
+      items.every((item) => Boolean(item.getAttribute('aria-label'))))).toBe(true);
+    await expect(spines.first().locator(':scope > li')).toHaveCount(2);
+    await expect(spines.first().locator('.advice-step-marker')).toHaveText(['1', '2']);
+    for (let index = 1; index < await spines.count(); index += 1) {
+      await expect(spines.nth(index).locator(':scope > li')).toHaveCount(3);
+      await expect(spines.nth(index).locator('.advice-step-marker')).toHaveText(['3', '4', '5']);
+    }
+    expect(await root.locator('.advice-feedback-group').evaluateAll((items) =>
+      items.every((item) => item.getAttribute('role') === 'group'))).toBe(true);
+    expect(await root.locator('[data-advice-feedback-status]').evaluateAll((items) =>
+      items.every((item) => item.getAttribute('aria-live') === 'polite'))).toBe(true);
     if (provider === 'claude') {
       await expect(root.locator('.advice-consent legend')).not.toBeEmpty();
       await expect(root.locator('[data-advice-consent-status]')).toHaveAttribute('aria-live', 'polite');

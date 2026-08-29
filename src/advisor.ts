@@ -1,75 +1,16 @@
-// Optional "usage advice" feature: sends a usage summary (and, optionally, a
-// sample of the developer's own prompts) to a model and returns advice on how
-// to use Claude Code more effectively.
-//
-// Transport history (v2.1 Phase 9): the exported entry point still contains a
-// dormant 'subscription' prototype, but production never selects it. Direct
-// Messages calls with Claude Code subscription credentials later returned 403
-// and are not an approved/default AI backend; those credentials remain scoped
-// to the quota API. Supported production paths are user-configured BYOK:
-//   1. 'api' + apiFormat 'anthropic' (the default for a configured key) —
-//      x-api-key against /v1/messages.
-//   2. 'api' + apiFormat 'openai' — the OpenAI chat-completions shape
-//      (DeepSeek etc.), kept for compatibility.
-// Anthropic is the default shape across the extension; OpenAI is opt-in.
+// Shared AI helpers for the two explicit user-triggered workflows. Production
+// can send only an already-previewed PreparedAiInvocation through the user's
+// configured BYOK endpoint. Anthropic Messages and OpenAI-compatible chat are
+// wire formats; neither implies subscription/OAuth credential reuse.
 
 import { HttpResponse, requestViaCurl, requestViaFetch } from './httpClient';
+import {
+  PreparedAiInvocation,
+  PreparedAiTransportRequest,
+  sendPreparedAiInvocation,
+} from './adviceEffectiveness/preparedRequest';
 
-export type AdviceBackend = 'subscription' | 'api';
 export type AdviceFormat = 'anthropic' | 'openai';
-
-export interface AdviceOptions {
-  // Transport selection. Defaults (when omitted) keep the pre-2.1 behaviour:
-  // backend 'api' + format 'openai'.
-  backend?: AdviceBackend;
-  apiFormat?: AdviceFormat;
-  // backend 'api':
-  apiKey: string;
-  apiUrl: string;
-  model: string;
-  // backend 'subscription': the cheap model to spend a little quota on, plus a
-  // provider for a valid OAuth access token (ClaudeApiClient.getAccessToken).
-  subscriptionModel?: string;
-  getSubscriptionToken?: () => Promise<string | null>;
-  // The usage digest sent as the user turn (built by adviceSummary.ts).
-  summary: string;
-  // Localised name of the user's UI language, e.g. "简体中文 (Simplified Chinese)".
-  language: string;
-  // '', 'high' or 'max' — passed as reasoning_effort for OpenAI-format models.
-  reasoningEffort?: string;
-  // Free-text background about the user/project; when set, the reply ends with
-  // a "Personalised for this project" section calibrated against it.
-  userContext?: string;
-  // Abort the request after this long (reasoning models can take minutes).
-  timeoutMs?: number;
-}
-
-const DEFAULT_TIMEOUT_MS = 120_000;
-const ADVICE_MAX_TOKENS = 16_000;
-
-function buildSystemPrompt(language: string, userContext?: string): string {
-  let prompt =
-    'You are a coaching advisor that helps a developer use the Claude Code AI ' +
-    'coding agent more effectively. You are given a breakdown of their usage and ' +
-    'a sample of their actual prompts. Your PRIMARY goal: advise how to write ' +
-    'clearer, more complete and more precise instructions so tasks are completed ' +
-    'correctly and efficiently — point at concrete weaknesses in the sample ' +
-    'prompts and show better rewrites. SECONDARY goal: where it does not hurt ' +
-    'clarity, suggest ways to reduce token consumption. Be concrete and ' +
-    'actionable, use short sections and bullet points. ';
-  const ctx = (userContext || '').trim();
-  if (ctx !== '') {
-    prompt +=
-      'The user provided this background about themself and the project: ' +
-      `"${ctx.slice(0, 1000)}". End your reply with a final section titled ` +
-      '"Personalised for this project" that calibrates the advice against this ' +
-      'background instead of generic best practice. ';
-  }
-  prompt +=
-    `IMPORTANT: write your entire reply in ${language}, regardless of the ` +
-    'language(s) used in the sample prompts.';
-  return prompt;
-}
 
 /** Normalise an OpenAI-compatible chat endpoint URL. */
 function normalizeOpenAiUrl(url: string): string {
@@ -99,10 +40,11 @@ function normalizeAnthropicUrl(url: string): string {
 async function send(
   url: string,
   headers: Record<string, string>,
-  body: string,
-  timeoutMs: number
+  body: string | Uint8Array,
+  timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<HttpResponse> {
-  const reqOpts = { method: 'POST', headers, body };
+  const reqOpts = { method: 'POST', headers, body, ...(signal ? { signal } : {}) };
   const curl = (): Promise<HttpResponse> =>
     requestViaCurl(url, { ...reqOpts, timeoutSec: Math.ceil(timeoutMs / 1000) });
   try {
@@ -114,133 +56,92 @@ async function send(
     }
     return r;
   } catch {
+    if (signal?.aborted) throw new Error('Request cancelled');
     try {
       return await requestViaFetch(url, { ...reqOpts, timeoutMs });
     } catch {
+      if (signal?.aborted) throw new Error('Request cancelled');
       return curl();
     }
   }
 }
 
-/**
- * Send one system+user turn to whichever backend is configured and return the
- * assistant text. Shared by the advice feature and the Usage Optimizer.
- */
-export async function callModel(
-  systemPrompt: string,
-  userContent: string,
-  options: AdviceOptions
-): Promise<string> {
-  const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const backend: AdviceBackend = options.backend ?? 'api';
-  const format: AdviceFormat = options.apiFormat ?? 'openai';
-
-  // --- Anthropic Messages shape (subscription, or api+anthropic) ---
-  if (backend === 'subscription' || format === 'anthropic') {
-    let headers: Record<string, string>;
-    let model: string;
-    let url = normalizeAnthropicUrl(options.apiUrl);
-    if (backend === 'subscription') {
-      const token = options.getSubscriptionToken ? await options.getSubscriptionToken() : null;
-      if (!token) {
-        throw new Error(
-          'No Claude subscription session found — sign in to Claude Code, or configure an API key.'
-        );
-      }
-      url = 'https://api.anthropic.com/v1/messages';
-      model = options.subscriptionModel || 'claude-haiku-4-5';
-      headers = {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
-      };
-    } else {
-      model = options.model;
-      headers = {
-        'Content-Type': 'application/json',
-        'x-api-key': options.apiKey,
-        'anthropic-version': '2023-06-01',
-      };
-    }
-    const body = JSON.stringify({
-      model,
-      max_tokens: ADVICE_MAX_TOKENS,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: userContent }],
-    });
-    const response = await send(url, headers, body, timeoutMs);
-    if (response.status < 200 || response.status >= 300) {
-      throw new Error(`API ${response.status}: ${response.body.slice(0, 300)}`);
-    }
-    let data: { content?: { type?: string; text?: string }[] };
-    try {
-      data = JSON.parse(response.body);
-    } catch {
-      throw new Error(`The API returned a non-JSON response: ${response.body.slice(0, 200)}`);
-    }
-    const text = (data.content || [])
-      .filter((b) => b.type === 'text' && typeof b.text === 'string')
-      .map((b) => b.text as string)
-      .join('');
-    if (!text.trim()) {
-      throw new Error('The model returned an empty response.');
-    }
-    return text;
-  }
-
-  // --- OpenAI chat-completions shape (api + openai) ---
-  const body: Record<string, unknown> = {
-    model: options.model,
-    stream: false,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      { role: 'user', content: userContent },
-    ],
-  };
-  if (options.reasoningEffort && options.reasoningEffort.trim() !== '') {
-    body.reasoning_effort = options.reasoningEffort.trim();
-    body.thinking = { type: 'enabled' };
-  }
-  const url = normalizeOpenAiUrl(options.apiUrl);
-  const headers = {
-    'Content-Type': 'application/json',
-    Authorization: `Bearer ${options.apiKey}`,
-  };
-  const response = await send(url, headers, JSON.stringify(body), timeoutMs);
+function parsePreparedModelResponse(
+  prepared: PreparedAiInvocation,
+  response: HttpResponse,
+): string {
   if (response.status < 200 || response.status >= 300) {
-    const hint =
-      response.status === 404
-        ? ' (check advice.apiUrl — for DeepSeek it is https://api.deepseek.com/chat/completions)'
-        : '';
+    const hint = prepared.apiFormat === 'openai' && response.status === 404
+      ? ' (check advice.apiUrl — for DeepSeek it is https://api.deepseek.com/chat/completions)'
+      : '';
     throw new Error(`API ${response.status}${hint}: ${response.body.slice(0, 300)}`);
   }
-  let data: { choices?: { message?: { content?: string } }[] };
+  let data: unknown;
   try {
     data = JSON.parse(response.body);
   } catch {
     throw new Error(`The API returned a non-JSON response: ${response.body.slice(0, 200)}`);
   }
-  const content = data.choices?.[0]?.message?.content;
-  if (!content || content.trim() === '') {
-    throw new Error('The model returned an empty response.');
+  let text = '';
+  if (prepared.apiFormat === 'anthropic') {
+    const blocks = (data as { content?: { type?: string; text?: string }[] }).content;
+    text = (blocks ?? [])
+      .filter((block) => block.type === 'text' && typeof block.text === 'string')
+      .map((block) => block.text as string)
+      .join('');
+  } else {
+    text = (data as { choices?: { message?: { content?: string } }[] })
+      .choices?.[0]?.message?.content ?? '';
   }
-  return content;
+  if (!text.trim()) throw new Error('The model returned an empty response.');
+  return text;
 }
 
 /**
- * Request usage advice. Returns the advice text (markdown).
+ * Production transport for an already-previewed invocation. The full wire
+ * body is the original canonical byte object on every fetch retry/curl
+ * fallback; this function never calls JSON.stringify.
  */
-export async function getUsageAdvice(options: AdviceOptions): Promise<string> {
-  const systemPrompt = buildSystemPrompt(options.language || 'English', options.userContext);
-  return callModel(systemPrompt, options.summary, options);
+export async function sendPreparedModelRequest(
+  prepared: PreparedAiInvocation,
+  apiKey: string,
+  options: {
+    expectedSourceRevision?: string;
+    expectedConsentGeneration?: number;
+    signal?: AbortSignal;
+    transport?: (request: PreparedAiTransportRequest) => Promise<HttpResponse>;
+  } = {},
+): Promise<string> {
+  const response = await sendPreparedAiInvocation(
+    prepared,
+    {
+      backend: 'api',
+      apiKey,
+      ...(options.expectedSourceRevision !== undefined
+        ? { expectedSourceRevision: options.expectedSourceRevision }
+        : {}),
+      ...(options.expectedConsentGeneration !== undefined
+        ? { expectedConsentGeneration: options.expectedConsentGeneration }
+        : {}),
+      ...(options.signal ? { signal: options.signal } : {}),
+    },
+    options.transport ?? ((request) => send(
+      request.endpoint,
+      request.headers,
+      request.canonicalBytes,
+      request.timeoutMs,
+      request.signal,
+    )),
+  );
+  return parsePreparedModelResponse(prepared, response);
 }
 
 // === Usage Optimizer (Phase 9c) ===
 // The optimizer turns a rough pasted request into one tight, paste-ready prompt
 // plus a settings recommendation. The system prompt and the reply parser are
 // pure functions here (no VS Code dependency) so they can be unit-tested; the
-// VS Code glue (consent modal, config, webview round-trip) lives in extension.ts.
+// VS Code glue (exact preview, explicit send, config, webview round-trip) lives
+// in extension.ts and webview.ts.
 
 export interface OptimizerLenses {
   resolve: boolean; // flag ambiguous references

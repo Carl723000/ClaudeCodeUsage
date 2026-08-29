@@ -75,6 +75,18 @@ test('rejects privacy metadata that claims aggregates-only while carrying prompt
   assert.ok(result.issues.some((issue) => issue.includes('zero prompt samples')));
 });
 
+test('accepts explicit personal context without pretending that prompt samples were included', () => {
+  const input = validInput();
+  input.privacy = {
+    dataMode: 'aggregates-with-personalization',
+    promptSampleConsent: 'explicit',
+    promptSampleCount: 0,
+    feedbackStorage: 'local-only',
+  };
+  const result = createAdviceContract(input);
+  assert.equal(result.ok, true);
+});
+
 test('allows an empty recommendation list to represent no supported conclusion', () => {
   const input = validInput();
   input.recommendations = [];

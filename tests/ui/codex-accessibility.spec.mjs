@@ -83,13 +83,16 @@ test('provider tabs keep the shared keyboard navigation contract', async ({ page
 test('shared chart controls activate from the keyboard', async ({ page }) => {
   await openCodex(page, { locale: 'en' });
   await page.locator('#tab-month').click();
-  const output = page.locator('#month .chart-tab[data-metric="cacheCreation"]');
+  const output = page.locator(
+    '#month [data-codex-last30-daily] > .chart-tabs .chart-tab[data-metric="cacheCreation"]',
+  );
 
   await output.focus();
   await output.press('Space');
 
   await expect(output).toHaveClass(/active/);
-  await expect(page.locator('#month .chart-bar').first()).toHaveClass(/cache-creation-bar/);
+  await expect(page.locator('#month [data-codex-last30-daily] > .chart-content .chart-bar').first())
+    .toHaveClass(/cache-creation-bar/);
 });
 
 test('shared settings controls retain explicit labels', async ({ page }) => {

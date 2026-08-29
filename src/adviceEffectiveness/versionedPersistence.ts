@@ -1,11 +1,37 @@
-import type { ComparableTaskPair } from './comparison';
 import { isAdviceIdentifier } from './contract';
+import {
+  StoredComparablePair,
+  parseStoredComparablePair,
+  toComparableTaskPairs,
+} from './comparisonPairing';
+import {
+  AdviceComparisonResultEnvelope,
+  parseAdviceComparisonResultEnvelope,
+} from './comparisonResult';
+
+export type {
+  StoredAdviceScope,
+  StoredComparableContext,
+  StoredComparablePair,
+  StoredComplexityBand,
+  StoredConfidence,
+  StoredCoverage,
+  StoredEffort,
+  StoredMetricDirection,
+  StoredMetricUnit,
+  StoredModelFamily,
+  StoredProvider,
+  StoredQualityPass,
+  StoredTaskKind,
+} from './comparisonPairing';
+export { toComparableTaskPairs } from './comparisonPairing';
 
 /** Stable key: schema versions migrate in-place instead of changing the key. */
 export const ADVICE_LOCAL_STATE_KEY = 'ccu.adviceEffectiveness.localState';
 export const ADVICE_LOCAL_STATE_VERSION = 2 as const;
 export const MAX_PERSISTED_ADVICE_FEEDBACK = 500;
 export const MAX_PERSISTED_COMPARABLE_PAIRS = 200;
+export const MAX_PERSISTED_ADVICE_COMPARISON_RESULTS = 200;
 
 export type AdviceFeatureMode = 'disabled' | 'enabled';
 export type AdviceConsentState = 'not-granted' | 'explicit';
@@ -18,57 +44,9 @@ export interface PersistedAdviceFeedback {
   recommendationId: string;
   rating: PersistedAdviceRating;
   applied: PersistedAdviceApplied;
+  /** Stable intervention boundary; later rating changes never move it. */
+  appliedAtEpochMs: number | null;
   updatedAtEpochMs: number;
-}
-
-export type StoredTaskKind =
-  | 'small-change'
-  | 'feature'
-  | 'bug-fix'
-  | 'review'
-  | 'other';
-export type StoredModelFamily = 'opus' | 'sonnet' | 'haiku' | 'fable' | 'other';
-export type StoredEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'unknown';
-export type StoredMetricUnit = 'count' | 'tokens' | 'ratio' | 'multiple' | 'milliseconds';
-export type StoredQualityPass = 'passed' | 'failed' | 'unknown';
-
-export interface StoredComparablePair {
-  pairId: string;
-  adviceId: string;
-  recommendationId: string;
-  context: {
-    taskKind: StoredTaskKind;
-    complexityBand: 'low' | 'medium' | 'high';
-    provider: 'claude' | 'codex';
-    modelFamily: StoredModelFamily;
-    effort: StoredEffort;
-    metricDefinitionVersion: string;
-    qualityRubricId: string;
-  };
-  metric: {
-    name: string;
-    unit: StoredMetricUnit;
-    direction: 'lower-is-better' | 'higher-is-better';
-    beforeValue: number;
-    afterValue: number;
-  };
-  quality: {
-    beforeScore: number;
-    afterScore: number;
-    beforePassed: StoredQualityPass;
-    afterPassed: StoredQualityPass;
-    beforeEvidenceCount: number;
-    afterEvidenceCount: number;
-  };
-  evidence: {
-    beforeCoverage: 'complete' | 'partial' | 'unknown';
-    afterCoverage: 'complete' | 'partial' | 'unknown';
-    beforeConfidence: 'high' | 'medium' | 'low' | 'unknown';
-    afterConfidence: 'high' | 'medium' | 'low' | 'unknown';
-    beforeQualityFlags: string[];
-    afterQualityFlags: string[];
-  };
-  recordedAtEpochMs: number;
 }
 
 export interface AdviceLocalState {
@@ -78,6 +56,7 @@ export interface AdviceLocalState {
   promptSampleConsent: AdviceConsentState;
   feedback: PersistedAdviceFeedback[];
   comparablePairs: StoredComparablePair[];
+  comparisonResults: AdviceComparisonResultEnvelope[];
 }
 
 export interface AdviceLocalStateStorage {
@@ -100,6 +79,15 @@ export type AdviceLocalStateMutationResult =
 const STATE_KEYS = [
   'aggregateConsent',
   'comparablePairs',
+  'comparisonResults',
+  'featureMode',
+  'feedback',
+  'promptSampleConsent',
+  'schemaVersion',
+] as const;
+const LEGACY_V2_STATE_KEYS = [
+  'aggregateConsent',
+  'comparablePairs',
   'featureMode',
   'feedback',
   'promptSampleConsent',
@@ -108,45 +96,17 @@ const STATE_KEYS = [
 const FEEDBACK_KEYS = [
   'adviceId',
   'applied',
+  'appliedAtEpochMs',
   'rating',
   'recommendationId',
   'updatedAtEpochMs',
 ] as const;
-const PAIR_KEYS = [
+const LEGACY_FEEDBACK_KEYS = [
   'adviceId',
-  'context',
-  'evidence',
-  'metric',
-  'pairId',
-  'quality',
+  'applied',
+  'rating',
   'recommendationId',
-  'recordedAtEpochMs',
-] as const;
-const CONTEXT_KEYS = [
-  'complexityBand',
-  'effort',
-  'metricDefinitionVersion',
-  'modelFamily',
-  'provider',
-  'qualityRubricId',
-  'taskKind',
-] as const;
-const METRIC_KEYS = ['afterValue', 'beforeValue', 'direction', 'name', 'unit'] as const;
-const QUALITY_KEYS = [
-  'afterEvidenceCount',
-  'afterPassed',
-  'afterScore',
-  'beforeEvidenceCount',
-  'beforePassed',
-  'beforeScore',
-] as const;
-const EVIDENCE_KEYS = [
-  'afterConfidence',
-  'afterCoverage',
-  'afterQualityFlags',
-  'beforeConfidence',
-  'beforeCoverage',
-  'beforeQualityFlags',
+  'updatedAtEpochMs',
 ] as const;
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -163,28 +123,8 @@ function isEpochMs(value: unknown): value is number {
   return typeof value === 'number' && Number.isInteger(value) && value >= 0;
 }
 
-function isFiniteNonNegative(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
-}
-
-function isScore(value: unknown): value is number {
-  return isFiniteNonNegative(value) && value <= 1;
-}
-
 function oneOf<T extends string>(value: unknown, values: readonly T[]): value is T {
   return typeof value === 'string' && (values as readonly string[]).includes(value);
-}
-
-function parseOpaqueFlags(value: unknown): string[] | undefined {
-  if (!Array.isArray(value) || value.length > 32) return undefined;
-  const result: string[] = [];
-  const seen = new Set<string>();
-  for (const flag of value) {
-    if (typeof flag !== 'string' || !isAdviceIdentifier(flag) || seen.has(flag)) return undefined;
-    seen.add(flag);
-    result.push(flag);
-  }
-  return result;
 }
 
 function parseFeedback(value: unknown): PersistedAdviceFeedback | undefined {
@@ -196,6 +136,9 @@ function parseFeedback(value: unknown): PersistedAdviceFeedback | undefined {
     !isAdviceIdentifier(value.recommendationId) ||
     !oneOf(value.rating, ['unrated', 'helpful', 'not-helpful'] as const) ||
     !oneOf(value.applied, ['not-applied', 'applied'] as const) ||
+    !(value.appliedAtEpochMs === null || isEpochMs(value.appliedAtEpochMs)) ||
+    (value.applied === 'applied' && value.appliedAtEpochMs === null) ||
+    (value.applied === 'not-applied' && value.appliedAtEpochMs !== null) ||
     !isEpochMs(value.updatedAtEpochMs)
   ) {
     return undefined;
@@ -205,104 +148,8 @@ function parseFeedback(value: unknown): PersistedAdviceFeedback | undefined {
     recommendationId: value.recommendationId,
     rating: value.rating,
     applied: value.applied,
+    appliedAtEpochMs: value.appliedAtEpochMs,
     updatedAtEpochMs: value.updatedAtEpochMs,
-  };
-}
-
-function parseComparablePair(value: unknown): StoredComparablePair | undefined {
-  if (!isObject(value) || !hasExactKeys(value, PAIR_KEYS)) return undefined;
-  if (
-    typeof value.pairId !== 'string' ||
-    typeof value.adviceId !== 'string' ||
-    typeof value.recommendationId !== 'string' ||
-    !isAdviceIdentifier(value.pairId) ||
-    !isAdviceIdentifier(value.adviceId) ||
-    !isAdviceIdentifier(value.recommendationId) ||
-    !isEpochMs(value.recordedAtEpochMs) ||
-    !isObject(value.context) ||
-    !hasExactKeys(value.context, CONTEXT_KEYS) ||
-    !isObject(value.metric) ||
-    !hasExactKeys(value.metric, METRIC_KEYS) ||
-    !isObject(value.quality) ||
-    !hasExactKeys(value.quality, QUALITY_KEYS) ||
-    !isObject(value.evidence) ||
-    !hasExactKeys(value.evidence, EVIDENCE_KEYS)
-  ) {
-    return undefined;
-  }
-  const context = value.context;
-  const metric = value.metric;
-  const quality = value.quality;
-  const evidence = value.evidence;
-  if (
-    !oneOf(context.taskKind, ['small-change', 'feature', 'bug-fix', 'review', 'other'] as const) ||
-    !oneOf(context.complexityBand, ['low', 'medium', 'high'] as const) ||
-    !oneOf(context.provider, ['claude', 'codex'] as const) ||
-    !oneOf(context.modelFamily, ['opus', 'sonnet', 'haiku', 'fable', 'other'] as const) ||
-    !oneOf(context.effort, ['low', 'medium', 'high', 'xhigh', 'max', 'ultra', 'unknown'] as const) ||
-    typeof context.metricDefinitionVersion !== 'string' ||
-    typeof context.qualityRubricId !== 'string' ||
-    !isAdviceIdentifier(context.metricDefinitionVersion) ||
-    !isAdviceIdentifier(context.qualityRubricId) ||
-    typeof metric.name !== 'string' ||
-    !isAdviceIdentifier(metric.name) ||
-    !oneOf(metric.unit, ['count', 'tokens', 'ratio', 'multiple', 'milliseconds'] as const) ||
-    !oneOf(metric.direction, ['lower-is-better', 'higher-is-better'] as const) ||
-    !isFiniteNonNegative(metric.beforeValue) ||
-    !isFiniteNonNegative(metric.afterValue) ||
-    !isScore(quality.beforeScore) ||
-    !isScore(quality.afterScore) ||
-    !oneOf(quality.beforePassed, ['passed', 'failed', 'unknown'] as const) ||
-    !oneOf(quality.afterPassed, ['passed', 'failed', 'unknown'] as const) ||
-    !isEpochMs(quality.beforeEvidenceCount) ||
-    !isEpochMs(quality.afterEvidenceCount) ||
-    !oneOf(evidence.beforeCoverage, ['complete', 'partial', 'unknown'] as const) ||
-    !oneOf(evidence.afterCoverage, ['complete', 'partial', 'unknown'] as const) ||
-    !oneOf(evidence.beforeConfidence, ['high', 'medium', 'low', 'unknown'] as const) ||
-    !oneOf(evidence.afterConfidence, ['high', 'medium', 'low', 'unknown'] as const)
-  ) {
-    return undefined;
-  }
-  const beforeQualityFlags = parseOpaqueFlags(evidence.beforeQualityFlags);
-  const afterQualityFlags = parseOpaqueFlags(evidence.afterQualityFlags);
-  if (!beforeQualityFlags || !afterQualityFlags) return undefined;
-  return {
-    pairId: value.pairId,
-    adviceId: value.adviceId,
-    recommendationId: value.recommendationId,
-    context: {
-      taskKind: context.taskKind,
-      complexityBand: context.complexityBand,
-      provider: context.provider,
-      modelFamily: context.modelFamily,
-      effort: context.effort,
-      metricDefinitionVersion: context.metricDefinitionVersion,
-      qualityRubricId: context.qualityRubricId,
-    },
-    metric: {
-      name: metric.name,
-      unit: metric.unit,
-      direction: metric.direction,
-      beforeValue: metric.beforeValue,
-      afterValue: metric.afterValue,
-    },
-    quality: {
-      beforeScore: quality.beforeScore,
-      afterScore: quality.afterScore,
-      beforePassed: quality.beforePassed,
-      afterPassed: quality.afterPassed,
-      beforeEvidenceCount: quality.beforeEvidenceCount,
-      afterEvidenceCount: quality.afterEvidenceCount,
-    },
-    evidence: {
-      beforeCoverage: evidence.beforeCoverage,
-      afterCoverage: evidence.afterCoverage,
-      beforeConfidence: evidence.beforeConfidence,
-      afterConfidence: evidence.afterConfidence,
-      beforeQualityFlags,
-      afterQualityFlags,
-    },
-    recordedAtEpochMs: value.recordedAtEpochMs,
   };
 }
 
@@ -317,7 +164,9 @@ function parseCurrentState(value: unknown): AdviceLocalState | undefined {
     !Array.isArray(value.feedback) ||
     value.feedback.length > MAX_PERSISTED_ADVICE_FEEDBACK ||
     !Array.isArray(value.comparablePairs) ||
-    value.comparablePairs.length > MAX_PERSISTED_COMPARABLE_PAIRS
+    value.comparablePairs.length > MAX_PERSISTED_COMPARABLE_PAIRS ||
+    !Array.isArray(value.comparisonResults) ||
+    value.comparisonResults.length > MAX_PERSISTED_ADVICE_COMPARISON_RESULTS
   ) {
     return undefined;
   }
@@ -334,10 +183,18 @@ function parseCurrentState(value: unknown): AdviceLocalState | undefined {
   const comparablePairs: StoredComparablePair[] = [];
   const pairIds = new Set<string>();
   for (const raw of value.comparablePairs) {
-    const item = parseComparablePair(raw);
+    const item = parseStoredComparablePair(raw);
     if (!item || pairIds.has(item.pairId)) return undefined;
     pairIds.add(item.pairId);
     comparablePairs.push(item);
+  }
+  const comparisonResults: AdviceComparisonResultEnvelope[] = [];
+  const comparisonIds = new Set<string>();
+  for (const raw of value.comparisonResults) {
+    const item = parseAdviceComparisonResultEnvelope(raw);
+    if (!item || comparisonIds.has(item.comparisonId)) return undefined;
+    comparisonIds.add(item.comparisonId);
+    comparisonResults.push(item);
   }
   return {
     schemaVersion: ADVICE_LOCAL_STATE_VERSION,
@@ -346,7 +203,36 @@ function parseCurrentState(value: unknown): AdviceLocalState | undefined {
     promptSampleConsent: value.promptSampleConsent,
     feedback,
     comparablePairs,
+    comparisonResults,
   };
+}
+
+function migrateLegacyV2(value: Record<string, unknown>): AdviceLocalState | undefined {
+  const oldRoot = hasExactKeys(value, LEGACY_V2_STATE_KEYS);
+  const currentRoot = hasExactKeys(value, STATE_KEYS);
+  if (
+    (!oldRoot && !currentRoot) ||
+    value.schemaVersion !== ADVICE_LOCAL_STATE_VERSION ||
+    !Array.isArray(value.feedback) ||
+    (oldRoot && (!Array.isArray(value.comparablePairs) || value.comparablePairs.length !== 0))
+  ) {
+    return undefined;
+  }
+  const feedback: PersistedAdviceFeedback[] = [];
+  for (const raw of value.feedback) {
+    if (!isObject(raw) || !hasExactKeys(raw, LEGACY_FEEDBACK_KEYS)) return undefined;
+    const parsed = parseFeedback({
+      ...raw,
+      appliedAtEpochMs: raw.applied === 'applied' ? raw.updatedAtEpochMs : null,
+    });
+    if (!parsed) return undefined;
+    feedback.push(parsed);
+  }
+  return parseCurrentState({
+    ...value,
+    feedback,
+    comparisonResults: currentRoot ? value.comparisonResults : [],
+  });
 }
 
 interface LegacyFeedbackV1 {
@@ -401,6 +287,7 @@ function migrateV1(value: Record<string, unknown>): AdviceLocalState | undefined
       recommendationId: legacy.recommendationId,
       rating: legacy.rating,
       applied: legacy.applied ? 'applied' : 'not-applied',
+      appliedAtEpochMs: legacy.applied ? legacy.updatedAtEpochMs : null,
       updatedAtEpochMs: legacy.updatedAtEpochMs,
     });
   }
@@ -412,6 +299,7 @@ function migrateV1(value: Record<string, unknown>): AdviceLocalState | undefined
     promptSampleConsent: 'not-granted',
     feedback,
     comparablePairs: [],
+    comparisonResults: [],
   };
 }
 
@@ -423,6 +311,15 @@ export function createClosedAdviceLocalState(): AdviceLocalState {
     promptSampleConsent: 'not-granted',
     feedback: [],
     comparablePairs: [],
+    comparisonResults: [],
+  };
+}
+
+/** User-visible privacy reset: keep the enabled surface, close consent, and erase its local ledger. */
+export function createClearedAdviceLocalState(): AdviceLocalState {
+  return {
+    ...createClosedAdviceLocalState(),
+    featureMode: 'enabled',
   };
 }
 
@@ -440,10 +337,14 @@ export async function loadAndMigrateAdviceLocalState(
   if (raw === undefined) return { ok: true, migrated: false, value: closed };
   const current = parseCurrentState(raw);
   if (current) return { ok: true, migrated: false, value: current };
-  if (!isObject(raw) || raw.schemaVersion !== 1) {
+  if (!isObject(raw)) {
     return { ok: false, reason: 'invalid-local-data', value: closed };
   }
-  const migrated = migrateV1(raw);
+  const migrated = raw.schemaVersion === ADVICE_LOCAL_STATE_VERSION
+    ? migrateLegacyV2(raw)
+    : raw.schemaVersion === 1
+      ? migrateV1(raw)
+      : undefined;
   if (!migrated) return { ok: false, reason: 'invalid-local-data', value: closed };
   try {
     await storage.update(ADVICE_LOCAL_STATE_KEY, migrated);
@@ -491,18 +392,34 @@ export function upsertAdviceLocalFeedback(
   const existing = current.feedback.find(
     (item) => item.adviceId === input.adviceId && item.recommendationId === input.recommendationId,
   );
+  let rating = existing?.rating ?? 'unrated';
+  let applied = existing?.applied ?? 'not-applied';
+  let appliedAtEpochMs = existing?.appliedAtEpochMs ?? null;
+  if (input.kind === 'helpful') {
+    rating = rating === 'helpful' ? 'unrated' : 'helpful';
+  } else if (input.kind === 'not-helpful') {
+    rating = rating === 'not-helpful' ? 'unrated' : 'not-helpful';
+  } else if (applied === 'applied') {
+    applied = 'not-applied';
+    appliedAtEpochMs = null;
+  } else {
+    applied = 'applied';
+    appliedAtEpochMs = input.updatedAtEpochMs;
+  }
   const next: PersistedAdviceFeedback = {
     adviceId: input.adviceId,
     recommendationId: input.recommendationId,
-    rating: input.kind === 'applied' ? existing?.rating ?? 'unrated' : input.kind,
-    applied: input.kind === 'applied' ? 'applied' : existing?.applied ?? 'not-applied',
+    rating,
+    applied,
+    appliedAtEpochMs,
     updatedAtEpochMs: input.updatedAtEpochMs,
   };
-  const feedback = current.feedback
-    .filter(
-      (item) => item.adviceId !== input.adviceId || item.recommendationId !== input.recommendationId,
-    )
-    .concat(next)
+  const withoutTarget = current.feedback.filter(
+    (item) => item.adviceId !== input.adviceId || item.recommendationId !== input.recommendationId,
+  );
+  const feedback = (rating === 'unrated' && applied === 'not-applied'
+    ? withoutTarget
+    : withoutTarget.concat(next))
     .slice(-MAX_PERSISTED_ADVICE_FEEDBACK);
   return { ok: true, value: { ...current, feedback } };
 }
@@ -513,7 +430,7 @@ export function appendStoredComparablePair(
 ): AdviceLocalStateMutationResult {
   const current = parseCurrentState(state);
   if (!current) return { ok: false, reason: 'invalid-local-data' };
-  const pair = parseComparablePair(input);
+  const pair = parseStoredComparablePair(input);
   if (!pair || current.comparablePairs.some((item) => item.pairId === pair.pairId)) {
     return { ok: false, reason: 'invalid-input' };
   }
@@ -524,6 +441,30 @@ export function appendStoredComparablePair(
       comparablePairs: current.comparablePairs
         .concat(pair)
         .slice(-MAX_PERSISTED_COMPARABLE_PAIRS),
+    },
+  };
+}
+
+export function appendAdviceComparisonResult(
+  state: AdviceLocalState,
+  input: unknown,
+): AdviceLocalStateMutationResult {
+  const current = parseCurrentState(state);
+  if (!current) return { ok: false, reason: 'invalid-local-data' };
+  const result = parseAdviceComparisonResultEnvelope(input);
+  if (
+    !result ||
+    current.comparisonResults.some((item) => item.comparisonId === result.comparisonId)
+  ) {
+    return { ok: false, reason: 'invalid-input' };
+  }
+  return {
+    ok: true,
+    value: {
+      ...current,
+      comparisonResults: current.comparisonResults
+        .concat(result)
+        .slice(-MAX_PERSISTED_ADVICE_COMPARISON_RESULTS),
     },
   };
 }
@@ -555,59 +496,4 @@ export function selectStoredComparablePairLineage(
       pair.context.provider === lineage.provider &&
       pair.recommendationId === lineage.recommendationId,
   );
-}
-
-/** Convert only state that has already passed the exact persistence parser. */
-export function toComparableTaskPairs(
-  pairs: readonly StoredComparablePair[],
-): ComparableTaskPair[] {
-  return pairs.map((pair) => {
-    const context = {
-      taskKind: pair.context.taskKind,
-      complexityBand: pair.context.complexityBand,
-      provider: pair.context.provider,
-      modelFamily: pair.context.modelFamily,
-      effort: pair.context.effort,
-      metricDefinitionVersion: pair.context.metricDefinitionVersion,
-      qualityRubricId: pair.context.qualityRubricId,
-    };
-    const outcome = (
-      period: 'before' | 'after',
-    ): ComparableTaskPair['before'] => ({
-      context: { ...context },
-      primaryMetric: {
-        name: pair.metric.name,
-        unit: pair.metric.unit,
-        direction: pair.metric.direction,
-        value: period === 'before' ? pair.metric.beforeValue : pair.metric.afterValue,
-      },
-      quality: {
-        score: period === 'before' ? pair.quality.beforeScore : pair.quality.afterScore,
-        passed: (() => {
-          const value = period === 'before' ? pair.quality.beforePassed : pair.quality.afterPassed;
-          return value === 'unknown' ? null : value === 'passed';
-        })(),
-        evidenceCount:
-          period === 'before'
-            ? pair.quality.beforeEvidenceCount
-            : pair.quality.afterEvidenceCount,
-      },
-      evidence: {
-        coverage:
-          period === 'before'
-            ? pair.evidence.beforeCoverage
-            : pair.evidence.afterCoverage,
-        confidence:
-          period === 'before'
-            ? pair.evidence.beforeConfidence
-            : pair.evidence.afterConfidence,
-        qualityFlags: [
-          ...(period === 'before'
-            ? pair.evidence.beforeQualityFlags
-            : pair.evidence.afterQualityFlags),
-        ],
-      },
-    });
-    return { pairId: pair.pairId, before: outcome('before'), after: outcome('after') };
-  });
 }

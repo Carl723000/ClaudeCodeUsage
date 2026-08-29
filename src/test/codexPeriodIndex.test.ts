@@ -2,8 +2,12 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import {
+  CODEX_ROLLING_HOURLY_DAYS,
   CodexDailySlice,
+  CodexHourlyDays,
   CodexHourlySlice,
+  pruneCodexHourlyDays,
+  reduceCodexRollingHourlySlice,
   reduceCodexHourlySlice,
   reduceCodexStructuralSlice,
   reduceCodexUsageSlice,
@@ -157,4 +161,40 @@ test('hourly reducer retains only the requested local day as sparse hour buckets
   assert.equal(hours['00'].byModel['gpt-5.6-sol'].inputTotal, 50);
   assert.equal(hours['02'].total.outputTotal, 5);
   assert.equal('byEffort' in hours['00'], false);
+});
+
+test('rolling hourly reducer keeps sparse configured-zone days and prunes day 31', () => {
+  const days: CodexHourlyDays = {};
+  const allowedDays = new Set([
+    '2026-06-22',
+    '2026-07-20',
+    '2026-07-21',
+  ]);
+
+  reduceCodexRollingHourlySlice(
+    days,
+    usage('2026-06-21T15:55:00.000Z', 25, 5, 3),
+    allowedDays,
+    'Asia/Hong_Kong',
+  );
+  reduceCodexRollingHourlySlice(
+    days,
+    usage('2026-06-21T16:05:00.000Z', 50, 10, 6),
+    allowedDays,
+    'Asia/Hong_Kong',
+  );
+  reduceCodexRollingHourlySlice(
+    days,
+    usage('2026-07-20T16:05:00.000Z', 75, 15, 9),
+    allowedDays,
+    'Asia/Hong_Kong',
+  );
+
+  assert.equal(CODEX_ROLLING_HOURLY_DAYS, 30);
+  assert.deepEqual(Object.keys(days).sort(), ['2026-06-22', '2026-07-21']);
+  assert.equal(days['2026-06-22']['00'].total.inputTotal, 50);
+  assert.equal(days['2026-07-21']['00'].total.outputTotal, 15);
+
+  pruneCodexHourlyDays(days, new Set(['2026-07-21']));
+  assert.deepEqual(Object.keys(days), ['2026-07-21']);
 });

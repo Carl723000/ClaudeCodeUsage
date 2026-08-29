@@ -6,6 +6,7 @@ import * as path from 'node:path';
 
 import { scanUsageManifest } from '../claudeUsageFiles';
 import { ClaudeDataLoader } from '../dataLoader';
+import { I18n } from '../i18n';
 import { ClaudeUsageRecord } from '../types';
 
 const tempRoots: string[] = [];
@@ -45,6 +46,43 @@ test('getCurrentContextInfo keeps the 200K window for pre-4.6 Opus and Sonnet', 
     const info = ClaudeDataLoader.getCurrentContextInfo([record(model)]);
     assert.ok(info, `expected context info for ${model}, got null`);
     assert.equal(info!.windowTokens, 200_000, model);
+  }
+});
+
+test('day attribution uses the configured timezone instead of the host timezone', () => {
+  const previousTimeZone = I18n.getTimezone();
+  const fixedNow = new Date('2026-07-21T02:00:00.000Z');
+  const attributionRecord = (
+    timestamp: string,
+    inputTokens: number,
+    sessionId: string,
+  ): ClaudeUsageRecord => ({
+    timestamp,
+    _sessionId: sessionId,
+    message: {
+      model: 'claude-sonnet-4-5',
+      usage: { input_tokens: inputTokens, output_tokens: 10 },
+    },
+  });
+
+  try {
+    I18n.setTimezone('America/New_York');
+    const attribution = ClaudeDataLoader.getUsageAttribution(
+      [
+        attributionRecord('2026-07-20T03:30:00.000Z', 200, 'previous-day'),
+        attributionRecord('2026-07-21T01:00:00.000Z', 100, 'configured-today'),
+      ],
+      null,
+      { kind: 'day' },
+      fixedNow,
+    );
+
+    assert.equal(attribution.totalTokens, 110);
+    assert.deepEqual(attribution.models.map(({ key, count }) => ({ key, count })), [
+      { key: 'claude-sonnet-4-5', count: 1 },
+    ]);
+  } finally {
+    I18n.setTimezone(previousTimeZone);
   }
 });
 

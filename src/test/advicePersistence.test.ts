@@ -6,9 +6,12 @@ import { compareAdviceEffectiveness } from '../adviceEffectiveness/comparison';
 import {
   ADVICE_LOCAL_STATE_KEY,
   ADVICE_LOCAL_STATE_VERSION,
+  MAX_PERSISTED_ADVICE_COMPARISON_RESULTS,
   AdviceLocalStateStorage,
   StoredComparablePair,
+  appendAdviceComparisonResult,
   appendStoredComparablePair,
+  createClearedAdviceLocalState,
   createClosedAdviceLocalState,
   loadAndMigrateAdviceLocalState,
   saveAdviceLocalState,
@@ -16,6 +19,10 @@ import {
   toComparableTaskPairs,
   upsertAdviceLocalFeedback,
 } from '../adviceEffectiveness/versionedPersistence';
+import {
+  AdviceComparisonResultEnvelope,
+  buildAdviceComparisonResultEnvelope,
+} from '../adviceEffectiveness/comparisonResult';
 
 class MemoryStorage implements AdviceLocalStateStorage {
   value: unknown;
@@ -46,6 +53,13 @@ test('missing local state defaults to a closed, non-consenting state without wri
   assert.equal(storage.updates.length, 0);
 });
 
+test('user privacy reset keeps the surface enabled while erasing consent and every local result', () => {
+  assert.deepEqual(createClearedAdviceLocalState(), {
+    ...createClosedAdviceLocalState(),
+    featureMode: 'enabled',
+  });
+});
+
 test('v1 migration preserves validated local feedback but conservatively closes feature and consent', async () => {
   const storage = new MemoryStorage();
   storage.value = {
@@ -71,12 +85,14 @@ test('v1 migration preserves validated local feedback but conservatively closes 
   assert.equal(result.value.featureMode, 'disabled');
   assert.equal(result.value.aggregateConsent, 'not-granted');
   assert.equal(result.value.promptSampleConsent, 'not-granted');
+  assert.deepEqual(result.value.comparisonResults, []);
   assert.deepEqual(result.value.feedback, [
     {
       adviceId: 'advice-1',
       recommendationId: 'recommendation-1',
       rating: 'helpful',
       applied: 'applied',
+      appliedAtEpochMs: 1_777_000_000_000,
       updatedAtEpochMs: 1_777_000_000_000,
     },
   ]);
@@ -156,6 +172,7 @@ test('save accepts only the exact enum, numeric, and opaque-id state shape', asy
     recommendationId: 'recommendation-1',
     rating: 'not-helpful',
     applied: 'not-applied',
+    appliedAtEpochMs: null,
     updatedAtEpochMs: 1_777_000_000_000,
   });
   const saved = await saveAdviceLocalState(storage, state);
@@ -199,9 +216,31 @@ test('feedback upsert keeps rating mutually exclusive while applied remains inde
       recommendationId: 'recommendation-1',
       rating: 'not-helpful',
       applied: 'applied',
+      appliedAtEpochMs: 1_777_000_000_002,
       updatedAtEpochMs: 1_777_000_000_003,
     },
   ]);
+
+  const ratingRetracted = upsertAdviceLocalFeedback(notHelpful.value, {
+    adviceId: 'advice-1',
+    recommendationId: 'recommendation-1',
+    kind: 'not-helpful',
+    updatedAtEpochMs: 1_777_000_000_004,
+  });
+  assert.equal(ratingRetracted.ok, true);
+  if (!ratingRetracted.ok) return;
+  assert.equal(ratingRetracted.value.feedback[0].rating, 'unrated');
+  assert.equal(ratingRetracted.value.feedback[0].applied, 'applied');
+
+  const applicationRetracted = upsertAdviceLocalFeedback(ratingRetracted.value, {
+    adviceId: 'advice-1',
+    recommendationId: 'recommendation-1',
+    kind: 'applied',
+    updatedAtEpochMs: 1_777_000_000_005,
+  });
+  assert.equal(applicationRetracted.ok, true);
+  if (!applicationRetracted.ok) return;
+  assert.deepEqual(applicationRetracted.value.feedback, []);
 });
 
 function comparablePair(): StoredComparablePair {
@@ -209,12 +248,15 @@ function comparablePair(): StoredComparablePair {
     pairId: 'pair-1',
     adviceId: 'advice-1',
     recommendationId: 'recommendation-1',
+    recommendationVersion: 'recommendation-v1',
     context: {
+      scope: 'task-cohort',
       taskKind: 'small-change',
       complexityBand: 'low',
       provider: 'codex',
       modelFamily: 'other',
       effort: 'high',
+      measurementProfileVersion: 'codex-aggregate-v1',
       metricDefinitionVersion: 'fresh-tokens-v1',
       qualityRubricId: 'task-quality-rubric-v1',
     },
@@ -243,6 +285,43 @@ function comparablePair(): StoredComparablePair {
     },
     recordedAtEpochMs: 1_777_000_000_000,
   };
+}
+
+function comparisonResult(recordedAtEpochMs: number): AdviceComparisonResultEnvelope {
+  const pairs = Array.from({ length: 5 }, (_, index) => {
+    const value = comparablePair();
+    value.pairId = `pair-${recordedAtEpochMs}-${index}`;
+    return value;
+  });
+  const result = buildAdviceComparisonResultEnvelope({
+    provider: 'codex',
+    recommendationId: 'recommendation-1',
+    recommendationVersion: 'recommendation-v1',
+    measurementProfileVersion: 'codex-aggregate-v1',
+    cohort: {
+      scope: 'task-cohort',
+      taskKind: 'small-change',
+      complexityBand: 'low',
+      modelFamily: 'other',
+      effort: 'high',
+      metricDefinitionVersion: 'fresh-tokens-v1',
+      qualityRubricId: 'task-quality-rubric-v1',
+      metric: { name: 'fresh-tokens', unit: 'tokens', direction: 'lower-is-better' },
+    },
+    guardrail: {
+      minComparablePairs: 5,
+      minRelativeImprovement: 0.1,
+      minAfterQualityScore: 0.8,
+      maxMeanQualityRegression: 0.02,
+      allowedQualityFlags: [],
+      qualityRubricId: 'task-quality-rubric-v1',
+    },
+    pairs,
+    recordedAtEpochMs,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) throw new Error('comparison result fixture failed validation');
+  return result.value;
 }
 
 test('comparable-pair persistence accepts only coarse enums, finite numbers, and opaque IDs', async () => {
@@ -313,4 +392,45 @@ test('comparison lineage spans rotating advice instances while preserving strict
     'insufficient-evidence',
     'lineage selection must not silently drop an incomparable task cohort',
   );
+});
+
+test('legacy exact v2 state migrates in-place to the same ledger with empty comparison results', async () => {
+  const storage = new MemoryStorage();
+  storage.value = {
+    schemaVersion: ADVICE_LOCAL_STATE_VERSION,
+    featureMode: 'disabled',
+    aggregateConsent: 'not-granted',
+    promptSampleConsent: 'not-granted',
+    feedback: [],
+    comparablePairs: [],
+  };
+  const result = await loadAndMigrateAdviceLocalState(storage);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.migrated, true);
+  assert.deepEqual(result.value.comparisonResults, []);
+  assert.deepEqual(storage.updates, [result.value]);
+});
+
+test('comparison results share v2 state, remain bounded, and reject duplicate or hostile envelopes', () => {
+  let state = createClosedAdviceLocalState();
+  const first = comparisonResult(1_778_000_000_000);
+  const appended = appendAdviceComparisonResult(state, first);
+  assert.equal(appended.ok, true);
+  if (!appended.ok) return;
+  state = appended.value;
+  assert.deepEqual(state.comparisonResults, [first]);
+  assert.equal(appendAdviceComparisonResult(state, first).ok, false, 'duplicate IDs fail closed');
+
+  const hostile = { ...comparisonResult(1_778_000_000_001), prompt: 'PRIVATE_PROMPT' };
+  assert.equal(appendAdviceComparisonResult(state, hostile).ok, false);
+
+  for (let index = 1; index <= MAX_PERSISTED_ADVICE_COMPARISON_RESULTS; index += 1) {
+    const result = appendAdviceComparisonResult(state, comparisonResult(1_778_000_000_001 + index));
+    assert.equal(result.ok, true);
+    if (!result.ok) return;
+    state = result.value;
+  }
+  assert.equal(state.comparisonResults.length, MAX_PERSISTED_ADVICE_COMPARISON_RESULTS);
+  assert.notEqual(state.comparisonResults[0].comparisonId, first.comparisonId);
 });

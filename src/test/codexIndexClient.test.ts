@@ -59,6 +59,22 @@ class FakeWorker extends EventEmitter implements CodexWorkerLike {
   }
 }
 
+class DelayedTerminateWorker extends FakeWorker {
+  private finishTerminate!: (value: number) => void;
+  readonly terminateSettled = new Promise<number>((resolve) => {
+    this.finishTerminate = resolve;
+  });
+
+  override terminate(): Promise<number> {
+    this.terminated += 1;
+    return this.terminateSettled;
+  }
+
+  finish(): void {
+    this.finishTerminate(0);
+  }
+}
+
 const request = {
   codexHome: '/private/runtime-only-codex-home',
   indexPath: '/private/global-storage/codex-index-v1.json',
@@ -201,6 +217,7 @@ test('a worker error rejects all shared callers with a typed safe error', async 
       );
     });
   }
+  assert.equal(worker.terminated, 1);
 });
 
 test('dispose terminates the worker and rejects later refreshes', async () => {
@@ -208,11 +225,74 @@ test('dispose terminates the worker and rejects later refreshes', async () => {
   const client = new CodexIndexClient(() => worker);
   const pending = client.refresh(request);
 
-  client.dispose();
+  await client.dispose();
 
   assert.equal(worker.terminated, 1);
   await assert.rejects(pending, { code: 'disposed' });
   await assert.rejects(client.refresh(request), { code: 'disposed' });
+});
+
+test('terminal refresh remains owned until the worker has actually terminated', async () => {
+  const firstWorker = new DelayedTerminateWorker();
+  const secondWorker = new FakeWorker();
+  const workers = [firstWorker, secondWorker];
+  const client = new CodexIndexClient(() => {
+    const worker = workers.shift();
+    if (!worker) throw new Error('unexpected worker allocation');
+    return worker;
+  });
+  let firstSettled = false;
+  const first = client.refresh(request).finally(() => {
+    firstSettled = true;
+  });
+  const firstRequest = firstWorker.requests[0];
+  if (firstRequest.type !== 'refresh') throw new Error('expected refresh');
+
+  firstWorker.emitMessage({
+    type: 'result',
+    requestId: firstRequest.requestId,
+    result: result(),
+  });
+  const sharedWhileStopping = client.refresh(request);
+  await Promise.resolve();
+  assert.equal(firstSettled, false);
+  assert.equal(secondWorker.requests.length, 0);
+
+  firstWorker.finish();
+  await first;
+  await sharedWhileStopping;
+  assert.equal(firstWorker.terminated, 1);
+  assert.equal(secondWorker.requests.length, 0);
+  await client.dispose();
+});
+
+test('dispose resolves only after actual worker termination settles', async () => {
+  const worker = new DelayedTerminateWorker();
+  const client = new CodexIndexClient(() => worker);
+  const pending = client.refresh(request);
+  let disposed = false;
+  const disposal = client.dispose().then(() => {
+    disposed = true;
+  });
+
+  await Promise.resolve();
+  assert.equal(worker.terminated, 1);
+  assert.equal(disposed, false);
+  await assert.rejects(pending, { code: 'disposed' });
+  worker.finish();
+  await disposal;
+  assert.equal(disposed, true);
+});
+
+test('dispose rejects when worker termination cannot be confirmed', async () => {
+  const worker = new FakeWorker();
+  worker.terminate = () => Promise.reject(new Error('terminate failed'));
+  const client = new CodexIndexClient(() => worker);
+  const pending = client.refresh(request);
+  const pendingRejection = assert.rejects(pending, { code: 'disposed' });
+
+  await assert.rejects(client.dispose(), /terminate failed/);
+  await pendingRejection;
 });
 
 test('the compiled worker keeps a safe project basename without raw identifiers or paths', async () => {
@@ -393,6 +473,46 @@ test('unchanged worker refresh skips the final atomic index write', async () => 
   const resultMessage = messages.find((message) => message.type === 'result');
   assert.ok(resultMessage && resultMessage.type === 'result');
   assert.equal((resultMessage.result as any).indexChanged, false);
+});
+
+test('an ineligible background state disables historical passes without disabling the main refresh', async () => {
+  const previous = createEmptyCodexIndex(request.timeZone);
+  let historicalAllowed: boolean | undefined;
+  let pools = 0;
+  const messages: CodexWorkerMessage[] = [];
+  await runCodexWorkerRefresh(
+    {
+      type: 'refresh',
+      requestId: 'historical-cooldown',
+      ...request,
+      allowHistoricalBackfill: false,
+    },
+    {
+      isCancelled: () => false,
+      post: (message) => messages.push(message),
+      acquireCodexIndexLease: async () => ({ release: async () => undefined }),
+      loadCodexIndex: async () => previous,
+      scanCodexManifest: async () => ({ files: [], persistable: {} }),
+      updateCodexIndex: async (_index, _manifest, options) => {
+        historicalAllowed = options.allowHistoricalBackfill;
+        return {
+          index: previous,
+          indexChanged: false,
+          bodyReads: 0,
+          failedFiles: 0,
+          migration: { filePasses: 0, bytesRead: 0, pending: true },
+        };
+      },
+      saveCodexIndexAtomic: async () => undefined,
+      createCodexFilePassPool: () => {
+        pools += 1;
+        return { run: async () => undefined, dispose: async () => undefined };
+      },
+    },
+  );
+  assert.equal(historicalAllowed, false);
+  assert.equal(pools, 0);
+  assert.equal(messages.some((message) => message.type === 'result'), true);
 });
 
 test('a refresh already saved by its final checkpoint skips the duplicate final write', async () => {

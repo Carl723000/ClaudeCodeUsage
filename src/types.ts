@@ -208,7 +208,7 @@ export interface ContentAnalysis {
   totalEstimatedTokens: number;
   // Recent user prompts (last 30 days), for the AI-advice feature. Each carries
   // its working directory so advice can be scoped to a project.
-  recentPrompts: { cwd: string; text: string }[];
+  recentPrompts: { cwd: string; text: string; observedAtEpochMs: number }[];
   /**
    * Numeric-only proxy separating Claude Code framework injection from text
    * attributed to the user. No source text, path, session ID, or tool ID is

@@ -18,6 +18,8 @@ export interface AdviceEffectivenessProviderState {
   contract: AdviceContract;
   remotePreviewEligible: boolean;
   aggregate?: AdviceAggregateSnapshot;
+  /** Included only when the separate prompt-personalisation consent is explicit. */
+  userContext?: string;
   promptSamples: readonly { text: string }[];
 }
 
@@ -29,6 +31,32 @@ export type AdviceSnapshotConsent = {
   aggregate: 'explicit' | 'not-granted';
   promptSamples: 'explicit' | 'not-granted';
 };
+
+/** Select only timestamped samples inside the current consent window. */
+export function selectAdvicePromptSamples(
+  samples: readonly { text: string; observedAtEpochMs: number }[],
+  nowEpochMs: number,
+  windowDays: number,
+): { text: string }[] {
+  if (
+    !Number.isFinite(nowEpochMs) ||
+    !Number.isInteger(windowDays) ||
+    windowDays < 1 ||
+    windowDays > 365
+  ) {
+    return [];
+  }
+  const cutoff = nowEpochMs - windowDays * 86_400_000;
+  return samples
+    .filter(
+      (sample) =>
+        typeof sample.text === 'string' &&
+        Number.isFinite(sample.observedAtEpochMs) &&
+        sample.observedAtEpochMs >= cutoff &&
+        sample.observedAtEpochMs <= nowEpochMs,
+    )
+    .map((sample) => ({ text: sample.text }));
+}
 
 export interface PreparedAdviceSnapshot {
   provider: 'claude';
@@ -84,6 +112,7 @@ export function prepareAdviceSnapshot(
         ? {
             promptSamples: {
               consent: 'explicit' as const,
+              ...(state.userContext === undefined ? {} : { userContext: state.userContext }),
               samples: state.promptSamples.map((sample) => ({ text: sample.text })),
             },
           }

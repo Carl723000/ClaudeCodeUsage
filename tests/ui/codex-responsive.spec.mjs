@@ -14,7 +14,7 @@ async function expectTableToFit(table) {
     const scroller = element.closest('.daily-table-container');
     return {
       container: scroller ? { clientWidth: scroller.clientWidth, scrollWidth: scroller.scrollWidth } : null,
-      clippedHeaders: Array.from(element.querySelectorAll('thead th'))
+      clippedHeaders: Array.from(element.querySelectorAll(':scope > thead > tr > th'))
         .filter((header) => header.scrollWidth > header.clientWidth)
         .map((header) => ({
           text: header.textContent?.trim() ?? '',
@@ -159,10 +159,10 @@ for (const locale of ['en', 'de-DE']) {
   test(`${locale} Codex daily and session tables fit at 1280px`, async ({ page }) => {
     await openCodex(page, { locale, width: 1280, height: 900 });
     await page.locator('#tab-month').click();
-    const dailyTable = page.locator('#month .daily-breakdown .daily-table');
+    const dailyTable = page.locator('#month [data-codex-last30-daily] > .daily-table-container > .daily-table');
     await expect(dailyTable).toBeVisible();
-    await expect(dailyTable.locator('thead th')).toHaveCount(9);
-    await expect(dailyTable.locator('thead th').nth(1)).toContainText('API');
+    await expect(dailyTable.locator(':scope > thead > tr > th')).toHaveCount(10);
+    await expect(dailyTable.locator(':scope > thead > tr > th').nth(1)).toContainText('API');
     await expectTableToFit(dailyTable);
 
     await page.locator('#tab-sessions').click();
@@ -197,8 +197,11 @@ test('Codex 30-day charts scroll horizontally without widening the dashboard', a
 
   const breakdown = page.locator('#month [data-codex-last30-daily]');
   await expect(breakdown).toBeVisible();
-  await expect(breakdown.locator('.chart-tab.active')).toHaveAttribute('data-metric', 'cost');
-  const chartScrollers = breakdown.locator('.hc-scroll');
+  await expect(breakdown.locator(':scope > .chart-tabs .chart-tab.active'))
+    .toHaveAttribute('data-metric', 'cost');
+  const chartScrollers = breakdown.locator(
+    ':scope > .chart-content .hc-scroll, :scope > .composition-chart .hc-scroll',
+  );
   await expect(chartScrollers).toHaveCount(2);
 
   const viewportWidth = page.viewportSize()?.width ?? 720;
@@ -234,9 +237,10 @@ test('Codex 30-day charts scroll horizontally without widening the dashboard', a
     expect(visibleRightEdge).toBe(true);
   }
 
-  const tableScroller = breakdown.locator('.daily-table-container');
-  await expect(tableScroller.locator('thead th')).toHaveCount(9);
-  await expect(tableScroller.locator('thead th').nth(1)).toHaveText('API-equivalent cost');
+  const tableScroller = breakdown.locator(':scope > .daily-table-container');
+  await expect(tableScroller.locator(':scope > table > thead > tr > th')).toHaveCount(10);
+  await expect(tableScroller.locator(':scope > table > thead > tr > th').nth(1))
+    .toHaveText('API-equivalent cost');
   const tableBefore = await tableScroller.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,

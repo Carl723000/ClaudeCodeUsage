@@ -106,7 +106,11 @@ export interface AdviceRecommendation {
 }
 
 export interface AdvicePrivacyInfo {
-  dataMode: 'local-only' | 'aggregates-only' | 'aggregates-with-prompt-samples';
+  dataMode:
+    | 'local-only'
+    | 'aggregates-only'
+    | 'aggregates-with-personalization'
+    | 'aggregates-with-prompt-samples';
   promptSampleConsent: 'not-applicable' | 'not-granted' | 'explicit';
   promptSampleCount: number;
   feedbackStorage: 'local-only';
@@ -332,6 +336,12 @@ export function validateAdviceContract(contract: AdviceContract): string[] {
     (privacy.promptSampleConsent !== 'explicit' || privacy.promptSampleCount < 1)
   ) {
     issues.push('prompt samples require explicit consent and a non-zero sample count');
+  }
+  if (
+    privacy.dataMode === 'aggregates-with-personalization' &&
+    (privacy.promptSampleConsent !== 'explicit' || privacy.promptSampleCount !== 0)
+  ) {
+    issues.push('personal context requires explicit consent and zero prompt samples');
   }
 
   if (!nonEmpty(contract.provenance.locale)) issues.push('provenance locale is required');

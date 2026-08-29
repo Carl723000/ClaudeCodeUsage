@@ -1,6 +1,8 @@
 import { CodexProviderSnapshot } from '../providers/codex/codexProvider';
 import { CodexFileAggregate } from '../providers/codex/codexIndex';
 import { ProviderTokenCounts } from '../providers/providerTypes';
+import { hourKeyInZone } from '../dateKeys';
+import { CODEX_ROLLING_HOURLY_DAYS } from '../providers/codex/codexPeriodIndex';
 import { codexFixtureIdentityKey, snapshotFixture } from './codexFixtures';
 
 export const CODEX_WEBVIEW_NOW = Date.parse('2026-07-20T12:00:00.000Z');
@@ -52,6 +54,11 @@ function generatedFile(index: number, template: CodexFileAggregate): CodexFileAg
     compactCount: index % 7 === 0 ? 1 : 0,
     taskCompleteCount: role === 'root' ? 1 : 0,
   };
+  const hour = hourKeyInZone(new Date(endedAt), 'Asia/Hong_Kong');
+  const hourlySlice = {
+    total: { ...total },
+    byModel: { [model]: { ...total } },
+  };
 
   return {
     ...structuredClone(template),
@@ -86,19 +93,14 @@ function generatedFile(index: number, template: CodexFileAggregate): CodexFileAg
         },
       },
     },
-    today: dayKey === '2026-07-20'
-      ? {
-          day: dayKey,
-          timeZone: 'Asia/Hong_Kong',
-          indexedThrough: 1,
-          hours: {
-            [String(8 + (index % 4)).padStart(2, '0')]: {
-              total: { ...total },
-              byModel: { [model]: { ...total } },
-            },
-          },
-        }
-      : undefined,
+    today: {
+      day: '2026-07-20',
+      timeZone: 'Asia/Hong_Kong',
+      indexedThrough: 1,
+      windowDays: CODEX_ROLLING_HOURLY_DAYS,
+      days: { [dayKey]: { [hour]: hourlySlice } },
+      hours: dayKey === '2026-07-20' ? { [hour]: hourlySlice } : {},
+    },
   };
 }
 
@@ -113,10 +115,36 @@ export function codexWebviewFixture(): CodexProviderSnapshot {
     totalBytes: 3_000_000,
     complete: false,
   };
+  const hourlyDays = Object.fromEntries(
+    [...new Set(files.flatMap((file) => Object.keys(file.today?.days ?? {})))]
+      .map((day) => {
+        const totalFiles = files.filter((file) => file.today?.days?.[day]).length;
+        return [day, {
+          day,
+          indexedFiles: totalFiles,
+          totalFiles,
+          indexedBytes: totalFiles,
+          totalBytes: totalFiles,
+          complete: true,
+        }];
+      }),
+  );
+  const hourlyCoverage = {
+    timeZone: 'Asia/Hong_Kong',
+    asOfDay: '2026-07-20',
+    windowDays: CODEX_ROLLING_HOURLY_DAYS,
+    indexedFiles: files.length,
+    totalFiles: files.length,
+    indexedBytes: files.length,
+    totalBytes: files.length,
+    complete: false,
+    days: hourlyDays,
+  };
   return {
     ...base,
     files,
     total: sumTotals(files),
+    hourlyCoverage,
     weeklyValueInputs: {
       observations: [
         {
@@ -171,6 +199,7 @@ export function codexWebviewFixture(): CodexProviderSnapshot {
         last30Days: { ...periodCoverage },
         allTime: { ...periodCoverage },
       },
+      hourly: hourlyCoverage,
       today: {
         timeZone: 'Asia/Hong_Kong',
         day: '2026-07-20',
@@ -230,6 +259,20 @@ export function unknownModelCodexWebviewFixture(): CodexProviderSnapshot {
                   ...slice,
                   byModel: { 'unknown-model-fixture': { ...slice.total } },
                 },
+              ]),
+            ),
+            days: Object.fromEntries(
+              Object.entries(file.today.days ?? {}).map(([day, hours]) => [
+                day,
+                Object.fromEntries(
+                  Object.entries(hours).map(([hour, slice]) => [
+                    hour,
+                    {
+                      ...slice,
+                      byModel: { 'unknown-model-fixture': { ...slice.total } },
+                    },
+                  ]),
+                ),
               ]),
             ),
           }

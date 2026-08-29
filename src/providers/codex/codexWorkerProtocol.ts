@@ -12,6 +12,9 @@ export interface CodexWorkerRefreshInput {
   timeZone: string;
   /** Controls the steady-state budget after any first-time/migration backfill. */
   profile?: 'background' | 'foreground';
+  /** False keeps changed-file/tail maintenance active but suppresses unchanged
+   * historical reconciliation until the persisted eligibility time. */
+  allowHistoricalBackfill?: boolean;
 }
 
 export type CodexWorkerRequest =

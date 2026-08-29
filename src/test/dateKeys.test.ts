@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 import {
   dayKeyInZone,
+  formatHourLabel,
   hourKeyInZone,
   monthKeyInZone,
   resolveTimeZone,
@@ -91,6 +92,15 @@ test('hour keys use the same target zone and a stable 00-23 clock', () => {
     '23',
   );
   assert.equal(hourKeyInZone(new Date('nonsense'), 'UTC'), '');
+});
+
+test('hour labels use one strict HH:00 formatter for every provider', () => {
+  assert.equal(formatHourLabel('00'), '00:00');
+  assert.equal(formatHourLabel('09'), '09:00');
+  assert.equal(formatHourLabel('23'), '23:00');
+  assert.equal(formatHourLabel('24'), '');
+  assert.equal(formatHourLabel('9'), '');
+  assert.equal(formatHourLabel('09:00'), '');
 });
 
 test('timezone resolution returns a usable canonical zone', () => {

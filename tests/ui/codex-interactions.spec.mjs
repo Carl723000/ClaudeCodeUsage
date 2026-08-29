@@ -134,12 +134,69 @@ test('table sort column and direction survive a full reload', async ({ page }) =
 test('chart metric selection survives a full reload', async ({ page }) => {
   await openCodex(page);
   await page.locator('#tab-month').click();
-  await page.locator('#month .chart-tab[data-metric="outputTokens"]').click();
-  await expect(page.locator('#month .chart-tab[data-metric="outputTokens"]')).toHaveClass(/active/);
+  const metric = page.locator(
+    '#month [data-codex-last30-daily] > .chart-tabs .chart-tab[data-metric="outputTokens"]',
+  );
+  await metric.click();
+  await expect(metric).toHaveClass(/active/);
 
   await page.reload();
 
-  await expect(page.locator('#month .chart-tab[data-metric="outputTokens"]')).toHaveClass(/active/);
+  await expect(page.locator(
+    '#month [data-codex-last30-daily] > .chart-tabs .chart-tab[data-metric="outputTokens"]',
+  )).toHaveClass(/active/);
+});
+
+test('materialized Codex hourly detail sends no host message and survives a full reload', async ({ page }) => {
+  await openCodex(page);
+  await page.locator('#tab-month').click();
+
+  const day = '2026-07-19';
+  const toggle = page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`);
+  const detail = page.locator(`#month [data-codex-hourly-detail-row][data-date="${day}"]`);
+  const postedBefore = await page.evaluate(() => window.__ccuPostedMessages.length);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(detail).toBeVisible();
+  await expect(detail.locator('[data-codex-materialized-hours="true"]')).toBeVisible();
+  await expect(detail.locator('.daily-table tbody .date-cell').first()).toHaveText(/^\d{2}:00$/);
+  expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBefore);
+
+  await toggle.click();
+  await expect(detail).toBeHidden();
+  const chartBar = page.locator(`#month [data-codex-last30-daily] .hc-col[data-date="${day}"] .chart-bar`);
+  await expect(chartBar).toHaveClass(/clickable/);
+  await chartBar.click();
+  await expect(detail).toBeVisible();
+  expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBefore);
+  await expect.poll(() => page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+    return state.codexHourlyDetails?.['codex:month'];
+  })).toBe(day);
+
+  await page.reload();
+
+  await expect(page.locator('#tab-month')).toHaveClass(/active/);
+  await expect(page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`))
+    .toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator(`#month [data-codex-hourly-detail-row][data-date="${day}"]`)).toBeVisible();
+  expect(await page.evaluate(() => window.__ccuPostedMessages)).toEqual([]);
+});
+
+test('a covered Codex date with no hourly token rows expands to an explicit empty state', async ({ page }) => {
+  await openCodex(page, { fixture: 'covered-day-without-hourly-rows' });
+  await page.locator('#tab-month').click();
+
+  const day = '2026-07-19';
+  const toggle = page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`);
+  const detail = page.locator(`#month [data-codex-hourly-detail-row][data-date="${day}"]`);
+  const postedBefore = await page.evaluate(() => window.__ccuPostedMessages.length);
+
+  await toggle.click();
+  await expect(detail).toBeVisible();
+  await expect(detail.locator('.no-chart-data')).toHaveText('No daily Codex usage is indexed yet.');
+  expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBefore);
 });
 
 test('page scroll position survives a full reload', async ({ page }) => {

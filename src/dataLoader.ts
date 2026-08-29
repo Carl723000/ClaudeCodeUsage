@@ -6,7 +6,12 @@ import * as path from 'path';
 // Removed zod dependency - using native validation instead
 import { calculateCostBreakdown, getModelRatesPerMillion } from './pricing';
 import { isRetryDuplicatePrompt } from './promptDedup';
-import { dayKeyInZone, monthKeyInZone } from './dateKeys';
+import {
+  dayKeyInZone,
+  formatHourLabel,
+  hourKeyInZone,
+  monthKeyInZone,
+} from './dateKeys';
 import { I18n } from './i18n';
 import { DayUsage } from './heatmap';
 import { ShareInput, ShareRange, rangeLabel as shareRangeLabel } from './shareCard';
@@ -103,7 +108,7 @@ export interface AnalysisAcc {
   toolIdToName: Record<string, string>;
   seenUuids: Set<string>;
   cutoffMs: number;
-  prompts: { cwd: string; text: string }[];
+  prompts: { cwd: string; text: string; observedAtEpochMs: number }[];
   // Estimated thinking vs. total assistant-output tokens, per session and per
   // local day ("YYYY-MM-DD") — feeds the thinking-share column / Today line.
   thinkingBySession: Record<string, ThinkingShare>;
@@ -163,7 +168,12 @@ function localDayKey(timestamp: unknown): string {
 }
 
 // Collect an actual user prompt (capped + truncated) for the AI-advice feature.
-function collectPrompt(acc: AnalysisAcc, cwd: string, text: string): void {
+function collectPrompt(
+  acc: AnalysisAcc,
+  cwd: string,
+  text: string,
+  observedAtEpochMs: number,
+): void {
   const trimmed = text.trim();
   if (trimmed.length < 4) {
     return;
@@ -171,7 +181,11 @@ function collectPrompt(acc: AnalysisAcc, cwd: string, text: string): void {
   // The caller has already applied classifyPromptTextOrigin. Do not repeat a
   // looser tag heuristic here: unknown custom elements may be user-authored
   // Web Component examples and must remain eligible for explicit opt-in.
-  acc.prompts.push({ cwd, text: trimmed.slice(0, 2500) });
+  acc.prompts.push({
+    cwd,
+    text: trimmed.slice(0, 2500),
+    observedAtEpochMs: Number.isFinite(observedAtEpochMs) ? observedAtEpochMs : 0,
+  });
   if (acc.prompts.length > 600) {
     acc.prompts.shift();
   }
@@ -404,7 +418,7 @@ export function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = fals
       addToBucket(acc.cat, 'userPrompts', content);
       collectCommandUse(acc, content, sessionId, parsed.timestamp);
       if (allowPromptSample && origin === 'user-authored') {
-        collectPrompt(acc, cwd, content);
+        collectPrompt(acc, cwd, content, Date.parse(parsed.timestamp));
       }
     } else if (Array.isArray(content)) {
       for (const block of content) {
@@ -435,7 +449,7 @@ export function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = fals
           addToBucket(acc.cat, 'userPrompts', block.text);
           collectCommandUse(acc, block.text, sessionId, parsed.timestamp);
           if (allowPromptSample && origin === 'user-authored') {
-            collectPrompt(acc, cwd, block.text);
+            collectPrompt(acc, cwd, block.text, Date.parse(parsed.timestamp));
           }
         }
       }
@@ -1410,13 +1424,11 @@ export class ClaudeDataLoader {
   }
 
   static getTodayData(records: ClaudeUsageRecord[]): UsageData {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const todayRecords = records.filter((record) => {
-      const recordDate = new Date(record.timestamp);
-      return recordDate >= today;
-    });
+    const tz = I18n.getTimezone();
+    const today = dayKeyInZone(new Date(), tz);
+    const todayRecords = records.filter((record) =>
+      dayKeyInZone(new Date(record.timestamp), tz) === today
+    );
 
     return this.calculateUsageData(todayRecords);
   }
@@ -2523,13 +2535,13 @@ export class ClaudeDataLoader {
   static getUsageAttribution(
     records: ClaudeUsageRecord[],
     analysis: ContentAnalysis | null,
-    scope: AttributionScope
+    scope: AttributionScope,
+    now: Date = new Date(),
   ): UsageAttribution {
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    const timeZone = I18n.getTimezone();
+    const configuredToday = dayKeyInZone(now, timeZone);
     const minTs =
-      scope.kind === 'day' ? startOfDay
-      : scope.kind === 'week' ? now.getTime() - 7 * 24 * 60 * 60 * 1000
+      scope.kind === 'week' ? now.getTime() - 7 * 24 * 60 * 60 * 1000
       : scope.kind === 'month' ? now.getTime() - 30 * 24 * 60 * 60 * 1000
       : 0;
     const normScope = scope.projectPath ? this.normalizePath(scope.projectPath) : '';
@@ -2545,7 +2557,12 @@ export class ClaudeDataLoader {
         return this.normalizePath(r._projectPath || '').startsWith(normScope);
       }
       const t = Date.parse(r.timestamp);
-      return !isNaN(t) && t >= minTs;
+      if (isNaN(t)) {
+        return false;
+      }
+      return scope.kind === 'day'
+        ? dayKeyInZone(new Date(t), timeZone) === configuredToday
+        : t >= minTs;
     });
 
     // Skill / plugin activation points. A skill's usage share is the weight
@@ -2568,7 +2585,9 @@ export class ClaudeDataLoader {
         uses = uses.filter((u) => sessionIds.has(u.sessionId));
       } else {
         // "YYYY-MM-DD" compares correctly as a string.
-        const minDay = localDayKey(new Date(minTs).toISOString());
+        const minDay = scope.kind === 'day'
+          ? configuredToday
+          : localDayKey(new Date(minTs).toISOString());
         uses = uses.filter((u) => u.day >= minDay);
       }
       // key → session → earliest invocation ts (skills and plugins separately)
@@ -3047,20 +3066,21 @@ export class ClaudeDataLoader {
   }
 
   static getHourlyDataForToday(records: ClaudeUsageRecord[]): { hour: string; data: UsageData }[] {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const todayRecords = records.filter((record) => {
-      const recordDate = new Date(record.timestamp);
-      return recordDate >= today;
-    });
+    const tz = I18n.getTimezone();
+    const today = dayKeyInZone(new Date(), tz);
+    const todayRecords = records.filter((record) =>
+      dayKeyInZone(new Date(record.timestamp), tz) === today
+    );
 
     // Group records by hour
     const recordsByHour: Record<string, ClaudeUsageRecord[]> = {};
 
     todayRecords.forEach((record) => {
       const recordDate = new Date(record.timestamp);
-      const hourKey = `${recordDate.getHours().toString().padStart(2, '0')}:00`; // HH:00 format
+      const hourKey = formatHourLabel(hourKeyInZone(recordDate, tz));
+      if (!hourKey) {
+        return;
+      }
 
       if (!recordsByHour[hourKey]) {
         recordsByHour[hourKey] = [];
@@ -3080,23 +3100,20 @@ export class ClaudeDataLoader {
   }
 
   static getHourlyDataForDate(records: ClaudeUsageRecord[], dateString: string): { hour: string; data: UsageData }[] {
-    const targetDate = new Date(dateString);
-    targetDate.setHours(0, 0, 0, 0);
-
-    const nextDate = new Date(targetDate);
-    nextDate.setDate(nextDate.getDate() + 1);
-
-    const dateRecords = records.filter((record) => {
-      const recordDate = new Date(record.timestamp);
-      return recordDate >= targetDate && recordDate < nextDate;
-    });
+    const tz = I18n.getTimezone();
+    const dateRecords = records.filter((record) =>
+      dayKeyInZone(new Date(record.timestamp), tz) === dateString
+    );
 
     // Group records by hour
     const recordsByHour: Record<string, ClaudeUsageRecord[]> = {};
 
     dateRecords.forEach((record) => {
       const recordDate = new Date(record.timestamp);
-      const hourKey = `${recordDate.getHours().toString().padStart(2, '0')}:00`; // HH:00 format
+      const hourKey = formatHourLabel(hourKeyInZone(recordDate, tz));
+      if (!hourKey) {
+        return;
+      }
 
       if (!recordsByHour[hourKey]) {
         recordsByHour[hourKey] = [];

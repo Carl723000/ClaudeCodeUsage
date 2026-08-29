@@ -37,13 +37,20 @@ const server = createServer(async (request, response) => {
       'weekly-claude-completed',
       'unknown-models',
       'zero-input',
+      'covered-day-without-hourly-rows',
       'advice-effectiveness',
       'advice-effectiveness-disabled',
+      'advice-optimizer',
     ].includes(requestedFixture)
       ? requestedFixture
       : 'default';
     const autoRefresh = url.searchParams.get('autoRefresh') === 'true';
     const weeklyValue = url.searchParams.get('weeklyValue') !== 'false';
+    const requestedFeedback = url.searchParams.get('adviceFeedback');
+    const adviceFeedback = requestedFeedback === 'claude-helpful' ||
+      requestedFeedback === 'optimizer-helpful'
+      ? requestedFeedback
+      : 'none';
     const html = await renderHarness({
       provider,
       locale,
@@ -51,6 +58,7 @@ const server = createServer(async (request, response) => {
       fixture,
       autoRefresh,
       weeklyValue,
+      adviceFeedback,
     });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',

@@ -1,8 +1,4 @@
 import {
-  AdviceOptions,
-  callModel,
-} from '../advisor';
-import {
   PreparedAdvicePayload,
   sendPreparedAdvicePayload,
 } from './payload';
@@ -33,10 +29,16 @@ export interface LegacyByokAdviceOptions {
   timeoutMs?: number;
 }
 
+export interface LegacyByokCallOptions extends LegacyByokAdviceOptions {
+  backend: 'api';
+  summary: '';
+  language: '';
+}
+
 export type LegacyByokModelCall = (
   systemPrompt: string,
   userContent: string,
-  options: AdviceOptions,
+  options: LegacyByokCallOptions,
 ) => Promise<string>;
 
 export type LegacyByokAdviceResult =
@@ -55,7 +57,7 @@ export async function requestStructuredAdviceViaLegacyByok(
   prepared: PreparedAdvicePayload,
   references: StructuredAdviceReferences,
   options: LegacyByokAdviceOptions,
-  invoke: LegacyByokModelCall = callModel,
+  invoke: LegacyByokModelCall,
 ): Promise<LegacyByokAdviceResult> {
   if (!validLegacyByokOptions(options)) {
     return {

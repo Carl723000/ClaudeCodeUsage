@@ -147,12 +147,14 @@ function settingsStore({
   autoRefresh = false,
   weeklyValue = true,
   adviceEffectiveness = false,
+  adviceOptimizer = false,
 } = {}) {
   const values = new Map(SETTINGS.map((definition) => [definition.key, definition.default]));
   values.set('codex.optimization.enabled', true);
   values.set('dashboardAutoRefresh', autoRefresh);
   values.set('showWeeklyEquivalentValue', weeklyValue);
   values.set('advice.effectiveness.enabled', adviceEffectiveness);
+  values.set('advice.optimizer.enabled', adviceOptimizer);
   return {
     get: (key) => values.get(key),
     snapshot: () => SETTINGS.map((definition) => ({
@@ -322,6 +324,15 @@ function withoutInputSnapshot(snapshot) {
   };
 }
 
+function withoutHourlyRowsForCoveredDay(snapshot, day) {
+  for (const file of snapshot.files) {
+    if (!file.today?.days) continue;
+    delete file.today.days[day];
+    if (file.today.day === day) file.today.hours = {};
+  }
+  return snapshot;
+}
+
 exports.renderHarness = async function renderHarness({
   provider: selectedProvider = 'codex',
   locale = 'en',
@@ -329,6 +340,7 @@ exports.renderHarness = async function renderHarness({
   fixture = 'default',
   autoRefresh = false,
   weeklyValue = true,
+  adviceFeedback = 'none',
 } = {}) {
   I18n.setLanguage(locale);
   I18n.setTimezone('Asia/Hong_Kong');
@@ -356,6 +368,8 @@ exports.renderHarness = async function renderHarness({
         }
       : fixture === 'zero-input'
         ? withoutInputSnapshot(baseSnapshot)
+        : fixture === 'covered-day-without-hourly-rows'
+          ? withoutHourlyRowsForCoveredDay(baseSnapshot, '2026-07-19')
         : baseSnapshot;
     const view = buildCodexUsageView(snapshot, CODEX_WEBVIEW_NOW);
     const provider = new UsageWebviewProvider({ globalState: memoryGlobalState() });
@@ -364,18 +378,50 @@ exports.renderHarness = async function renderHarness({
     await new Promise((resolve) => setImmediate(resolve));
     const persistedDetailsFixture = fixture === 'persisted-details';
     const adviceEffectivenessFixture = fixture === 'advice-effectiveness';
+    const adviceOptimizerFixture = fixture === 'advice-optimizer';
     const adviceContentFixture = adviceEffectivenessFixture
+      || adviceOptimizerFixture
       || fixture === 'advice-effectiveness-disabled';
     provider.settings = settingsStore({
       autoRefresh,
       weeklyValue,
       adviceEffectiveness: adviceEffectivenessFixture,
+      adviceOptimizer: adviceOptimizerFixture,
     });
     addClaudeData(provider, { fixture, enableContent: adviceContentFixture });
     if (adviceEffectivenessFixture) {
       provider.updateAdviceEffectivenessData(
         buildAdviceEffectivenessFixture({ locale }).states,
       );
+    }
+    if (adviceOptimizerFixture) {
+      provider.optimizerState = {
+        draft: 'HOST_ONLY_OPTIMIZER_DRAFT',
+        resolve: false,
+        distil: false,
+        aesthetic: false,
+        prompt: 'Paste-ready optimizer result',
+        settings: 'Effort: high',
+        adviceId: 'advice-optimizer-0123456789abcdef01234567',
+      };
+    }
+    if (adviceFeedback !== 'none') {
+      provider.adviceLocalState = {
+        ...provider.adviceLocalState,
+        featureMode: 'enabled',
+        feedback: [{
+          adviceId: adviceFeedback === 'optimizer-helpful'
+            ? 'advice-optimizer-0123456789abcdef01234567'
+            : 'advice-claude-ui-fixture',
+          recommendationId: adviceFeedback === 'optimizer-helpful'
+            ? 'recommendation-optimizer-result-v1'
+            : 'recommendation-claude-clear-between-tasks',
+          rating: 'helpful',
+          applied: 'not-applied',
+          appliedAtEpochMs: null,
+          updatedAtEpochMs: CODEX_WEBVIEW_NOW,
+        }],
+      };
     }
     provider.updateProviderData(
       view,

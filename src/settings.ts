@@ -563,15 +563,12 @@ export const SETTINGS: SettingDef[] = [
     storage: 'state',
     group: 'advice',
     label: 'Enable AI advice effectiveness preview',
-    help: 'Off by default. Shows the local-first v2.3.1 candidate evidence, payload preview, feedback, and comparison interface without enabling a network transport.',
+    help: 'Off by default. Shows local evidence, an optional exact BYOK request preview/send flow, local feedback, and comparable-task results. Previewing never sends; sending requires a separate click.',
     providers: ['claude', 'codex'],
   },
-  // NOTE: the 'subscription' backend (call Anthropic with the Claude Code OAuth
-  // session, no API key) is intentionally NOT shipped in this version. Anthropic
-  // returns 403 "Request not allowed" for that gray-area use of the OAuth token
-  // (it only succeeds by routing around the TLS-fingerprint gate via curl), so
-  // it is too fragile/inappropriate for a public extension. The transport code
-  // stays in advisor.ts, dormant, to re-enable if direct calls become allowed.
+  // Claude Code OAuth/subscription credentials remain quota-only. AI requests
+  // have no dormant subscription transport: both surfaces require an exact
+  // Prepared preview plus a separate Send click through configured BYOK.
   {
     key: 'advice.apiKey',
     type: 'string',
@@ -579,7 +576,7 @@ export const SETTINGS: SettingDef[] = [
     storage: 'config',
     group: 'advice',
     label: 'API key',
-    help: 'For the api backend. Stays in VS Code settings.',
+    help: 'Bring-your-own key for the configured endpoint. It stays in VS Code settings and is never placed in a preview body.',
     secret: true,
   },
   {
@@ -625,7 +622,7 @@ export const SETTINGS: SettingDef[] = [
     default: 30,
     storage: 'state',
     group: 'advice',
-    label: 'Prompt sample window (days)',
+    label: 'Evidence and prompt window (days)',
     min: 1,
     max: 365,
   },
@@ -636,7 +633,7 @@ export const SETTINGS: SettingDef[] = [
     storage: 'state',
     group: 'advice',
     label: 'Personal/project context',
-    help: 'Optional background; adds a "Personalised" section.',
+    help: 'Optional free text. It may leave the machine only with separate prompt-personalization consent and appears verbatim in the exact request preview.',
     multiline: true,
   },
   {
@@ -646,7 +643,7 @@ export const SETTINGS: SettingDef[] = [
     storage: 'state',
     group: 'advice',
     label: 'Enable Usage Optimizer',
-    help: 'Show the opt-in Optimizer card on the Content tab.',
+    help: 'Show the opt-in Optimizer card on the Content tab. Its user-draft-only request is previewed before a separate Send action.',
   },
 ];
 

@@ -6,6 +6,7 @@ import { createAdviceContract } from '../adviceEffectiveness/contract';
 import {
   AdviceEffectivenessProviderState,
   prepareAdviceSnapshot,
+  selectAdvicePromptSamples,
 } from '../adviceEffectiveness/integration';
 import {
   buildAdviceAggregateSnapshot,
@@ -45,6 +46,7 @@ function state(provider: 'claude' | 'codex' = 'claude'): AdviceEffectivenessProv
     remotePreviewEligible: provider === 'claude',
     aggregate:
       provider === 'claude' ? buildAdviceAggregateSnapshot(usageFixture, 'overall', 30) : undefined,
+    userContext: '私有项目约束',
     promptSamples: [{ text: '请核对这个非 ASCII 样本' }],
   };
 }
@@ -65,6 +67,7 @@ test('sealed snapshot requires separate aggregate consent and defaults to no pro
   assert.equal(result.value.preview.body, result.value.prepared.serializedBody);
   assert.equal(result.value.preview.dataMode, 'aggregates-only');
   assert.equal(result.value.preview.body.includes('promptSamples'), false);
+  assert.equal(result.value.preview.body.includes('私有项目约束'), false);
 });
 
 test('prompt text enters only the explicitly opted-in sealed body and UTF-8 bytes are exact', () => {
@@ -77,11 +80,26 @@ test('prompt text enters only the explicitly opted-in sealed body and UTF-8 byte
   assert.equal(result.value.preview.body, result.value.prepared.serializedBody);
   assert.equal(result.value.preview.dataMode, 'aggregates-with-prompt-samples');
   assert.equal(result.value.preview.promptSampleCount, 1);
+  assert.equal(result.value.preview.body.includes('私有项目约束'), true);
   assert.equal(
     result.value.preview.utf8Bytes,
     Buffer.byteLength(result.value.prepared.serializedBody, 'utf8'),
   );
   assert.ok(result.value.preview.utf8Bytes > result.value.preview.body.length);
+});
+
+test('configured context remains usable when no prompt sample is inside the window', () => {
+  const contextOnly = state();
+  contextOnly.promptSamples = [];
+  const result = prepareAdviceSnapshot(contextOnly, {
+    aggregate: 'explicit',
+    promptSamples: 'explicit',
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.preview.dataMode, 'aggregates-with-personalization');
+  assert.equal(result.value.preview.promptSampleCount, 0);
+  assert.equal(result.value.preview.body.includes('私有项目约束'), true);
 });
 
 test('sealed snapshot preview, digest, and future sender share one canonical UTF-8 byte sequence', async () => {
@@ -121,4 +139,14 @@ test('Codex evidence stays local until a provider-discriminated remote aggregate
     promptSamples: 'not-granted',
   });
   assert.deepEqual(result, { ok: false, reason: 'provider-not-eligible' });
+});
+
+test('prompt personalisation excludes old, future, and untrusted-age samples', () => {
+  const now = 1_778_000_000_000;
+  assert.deepEqual(selectAdvicePromptSamples([
+    { text: 'inside', observedAtEpochMs: now - 29 * 86_400_000 },
+    { text: 'too old', observedAtEpochMs: now - 31 * 86_400_000 },
+    { text: 'future', observedAtEpochMs: now + 1 },
+    { text: 'missing age', observedAtEpochMs: 0 },
+  ], now, 30), [{ text: 'inside' }]);
 });

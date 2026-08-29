@@ -22,12 +22,7 @@ import { fetchLatestPricing } from './pricing';
 import { ClaudeApiClient } from './claudeApiClient';
 import {
   buildOptimizerSystemPrompt,
-  callModel,
-  getUsageAdvice,
-  parseOptimizerOutput
 } from './advisor';
-import { buildAdviceSummary } from './adviceSummary';
-import { getDemoBody } from './adviceDemoSample';
 import { ClaudeApiUsageResponse, ContentAnalysis, ExtensionConfig } from './types';
 import { SettingsStore } from './settings';
 import { normalizeQuotaWindows } from './quotaWindows';
@@ -80,12 +75,44 @@ import {
   adaptClaudeAdvice,
   adaptCodexLocalAdvice,
 } from './adviceEffectiveness/adapters';
-import { AdviceEffectivenessProviderStates } from './adviceEffectiveness/integration';
+import {
+  AdviceEffectivenessProviderStates,
+  selectAdvicePromptSamples,
+} from './adviceEffectiveness/integration';
 import { buildAdviceAggregateSnapshot } from './adviceEffectiveness/payload';
+import {
+  prepareStructuredAdviceInvocation,
+  requestStructuredAdvice,
+} from './adviceEffectiveness/remoteAdvice';
+import {
+  prepareOptimizerInvocation,
+  requestPreparedOptimizer,
+} from './optimizerRequest';
+import {
+  BackgroundWorkReason,
+  BackgroundWorkState,
+  beginBackgroundWork,
+  createBackgroundWorkState,
+  interruptBackgroundWork,
+  recordBackgroundWorkFailure,
+  recordBackgroundWorkProgress,
+  restoreBackgroundWorkState,
+} from './backgroundWorkState';
+import {
+  ResourceLease,
+  ResourceOwnershipRegistry,
+  ResourceStopCondition,
+} from './resourceOwnership';
 
 interface LocalizedReleaseAnnouncement {
   version: string;
   body: () => string;
+}
+
+interface ActiveNetworkOperation {
+  readonly lease: ResourceLease;
+  /** Resolves only after the request promise has reached its own terminal path. */
+  readonly settled: Promise<void>;
 }
 
 // Full-version entries only: an installed patch must never inherit stale notes
@@ -98,16 +125,23 @@ const WHATS_NEW: ReleaseAnnouncementCatalog<LocalizedReleaseAnnouncement> = {
 };
 
 export class ClaudeCodeUsageExtension {
+  private static readonly CODEX_BACKGROUND_WORK_STATE_KEY =
+    'ccu.codex.backgroundWork.v1';
+  private static readonly CODEX_BACKGROUND_MEASUREMENT_VERSION = 1;
   private statusBar: StatusBarManager;
   private webviewProvider: UsageWebviewProvider;
   private apiClient: ClaudeApiClient;
   private settings: SettingsStore;
   private refreshTimer: NodeJS.Timeout | undefined;
+  private refreshTimerLease: ResourceLease | undefined;
   private fileWatcher: fs.FSWatcher | undefined;
+  private fileWatcherLease: ResourceLease | undefined;
   private codexWatchers: fs.FSWatcher[] = [];
-  private readonly codexWatchDebounce = new QuietDebounce();
+  private readonly codexWatcherLeases = new Map<fs.FSWatcher, ResourceLease>();
+  private readonly debounceTimerLeases = new Map<NodeJS.Timeout, ResourceLease>();
+  private readonly codexWatchDebounce = this.createOwnedRefreshDebounce('codex');
   private codexWatchedHome: string | null = null;
-  private readonly watchDebounce = new QuietDebounce();
+  private readonly watchDebounce = this.createOwnedRefreshDebounce('claude');
   private readonly refreshGate = new RefreshSingleFlight();
   private readonly windowActivity =
     new WindowActivityGate(vscode.window.state.focused);
@@ -117,7 +151,9 @@ export class ClaudeCodeUsageExtension {
   // Watches ~/.claude/.credentials.json so an account switch is reflected
   // promptly instead of after a full quota TTL (#45).
   private credsWatcher: fs.FSWatcher | undefined;
+  private credsWatcherLease: ResourceLease | undefined;
   private credsDebounceTimer: NodeJS.Timeout | undefined;
+  private credsDebounceTimerLease: ResourceLease | undefined;
   private cache: {
     records: any[];
     contentAnalysis: ContentAnalysis | null;
@@ -154,6 +190,8 @@ export class ClaudeCodeUsageExtension {
   // flaky network and the very first /usage fetch fails, try once more shortly
   // after so the indicator appears without waiting for the next regular tick.
   private quotaColdRetryDone: boolean = false;
+  private quotaColdRetryTimer: NodeJS.Timeout | undefined;
+  private quotaColdRetryTimerLease: ResourceLease | undefined;
   private claudeProfileGeneration: number = 0;
   private claudeWeeklyQuotaHistory: WeeklyQuotaObservation[] = [];
   private codexProvider: CodexProvider;
@@ -167,6 +205,26 @@ export class ClaudeCodeUsageExtension {
   private codexProgressLastRenderedAt = 0;
   private codexCheckpointHydration: Promise<void> | null = null;
   private codexCheckpointHydrationLastAttemptAt = 0;
+  private codexBackgroundState: BackgroundWorkState;
+  private readonly resourceOwnership = new ResourceOwnershipRegistry();
+  private codexBackfillLease: ResourceLease | undefined;
+  private codexWorkerLease: ResourceLease | undefined;
+  private codexFirstBackfillActive = false;
+  private codexWorkerCancellationRequested = false;
+  private readonly activeAdviceNetworks = new Map<AbortController, ActiveNetworkOperation>();
+  private readonly activeQuotaNetworks = new Map<AbortController, ActiveNetworkOperation>();
+  private readonly codexProviderRetirements = new Set<Promise<void>>();
+  private codexProviderRetirementFailure: unknown = null;
+  private readonly activeCodexRefreshes = new Set<Promise<void>>();
+  private readonly pendingResourceStops = new Set<Promise<void>>();
+  private resourceStopFailure: unknown = null;
+  private codexBackgroundStateWrite: Promise<void> = Promise.resolve();
+  private configurationGeneration = 0;
+  private fileWatcherGeneration = 0;
+  private codexWatcherGeneration = 0;
+  private credentialsWatcherGeneration = 0;
+  private disposed = false;
+  private disposal: Promise<void> | null = null;
 
   constructor(private context: vscode.ExtensionContext) {
     console.log('Claude Code Usage Extension: Constructor called');
@@ -174,6 +232,30 @@ export class ClaudeCodeUsageExtension {
     context.subscriptions.push(this.outputChannel);
     this.statusBar = new StatusBarManager();
     this.settings = new SettingsStore(context);
+    const backgroundRestore = restoreBackgroundWorkState(
+      context.globalState.get<unknown>(
+        ClaudeCodeUsageExtension.CODEX_BACKGROUND_WORK_STATE_KEY,
+      ),
+      {
+        measurementVersion:
+          ClaudeCodeUsageExtension.CODEX_BACKGROUND_MEASUREMENT_VERSION,
+        reason: 'history-backfill',
+        now: Date.now(),
+      },
+    );
+    this.codexBackgroundState = backgroundRestore.state;
+    if (this.codexBackgroundState.status === 'running') {
+      this.codexBackgroundState = interruptBackgroundWork(
+        this.codexBackgroundState,
+        { now: Date.now() },
+      );
+    }
+    if (
+      backgroundRestore.disposition !== 'valid' ||
+      backgroundRestore.state.status === 'running'
+    ) {
+      void this.saveCodexBackgroundState().catch(() => undefined);
+    }
     this.webviewProvider = new UsageWebviewProvider(context);
     this.apiClient = new ClaudeApiClient(
       this.outputChannel,
@@ -197,7 +279,69 @@ export class ClaudeCodeUsageExtension {
     // Usage Optimizer (Phase 9c): the webview posts a draft prompt; we run it
     // through the same model backend as the advice feature and post back a
     // tightened prompt + a settings recommendation. Consent gate lives here.
-    this.webviewProvider.onOptimize = (draft, options) => this.runOptimizer(draft, options);
+    this.webviewProvider.onPrepareOptimizerInvocation = (
+      draft,
+      options,
+      sourceRevision,
+      consentGeneration,
+    ) => this.prepareOptimizerRequest(
+      draft,
+      options,
+      sourceRevision,
+      consentGeneration,
+    );
+    this.webviewProvider.onSendOptimizerInvocation = (
+      prepared,
+      expectedSourceRevision,
+      expectedConsentGeneration,
+    ) => {
+      const config = this.getConfiguration();
+      return this.runAdviceNetwork((signal) =>
+        requestPreparedOptimizer(prepared, {
+          apiKey: config.adviceApiKey,
+          expectedSourceRevision,
+          expectedConsentGeneration,
+          signal,
+        }),
+      );
+    };
+    this.webviewProvider.onAiSurfaceClosed = () => {
+      void this.cancelAdviceNetworks('cancelled');
+    };
+    this.webviewProvider.onAdviceDataCleared = () =>
+      this.cancelAdviceNetworks('cancelled');
+    this.webviewProvider.onPrepareAdviceInvocation = (
+      snapshot,
+      sourceRevision,
+      consentGeneration,
+    ) => {
+      const config = this.getConfiguration();
+      return prepareStructuredAdviceInvocation(snapshot.prepared, {
+        apiFormat: config.adviceApiFormat,
+        apiUrl: config.adviceApiUrl,
+        model: config.adviceModel,
+        reasoningEffort: config.adviceReasoningEffort,
+        sourceRevision,
+        consentGeneration,
+        createdAtEpochMs: Date.now(),
+      });
+    };
+    this.webviewProvider.onSendAdviceInvocation = (
+      prepared,
+      references,
+      expectedSourceRevision,
+      expectedConsentGeneration,
+    ) => {
+      const config = this.getConfiguration();
+      return this.runAdviceNetwork((signal) =>
+        requestStructuredAdvice(prepared, references, {
+          apiKey: config.adviceApiKey,
+          expectedSourceRevision,
+          expectedConsentGeneration,
+          signal,
+        }),
+      );
+    };
     // Share the settings store with the dashboard's ⚙ Settings panel, and have
     // it tell us when the user changes a setting there so we re-apply config
     // (globalState changes don't fire onDidChangeConfiguration).
@@ -209,7 +353,14 @@ export class ClaudeCodeUsageExtension {
     this.loadPersistedQuota();
     if (this.windowActivity.focused) {
       this.startAutoRefresh();
+      const startupGeneration = this.configurationGeneration;
       void this.refreshData(false, 'startup').then(() => {
+        if (
+          this.disposed ||
+          startupGeneration !== this.configurationGeneration
+        ) {
+          return;
+        }
         void this.startFileWatching();
         this.startCodexWatching();
       });
@@ -549,123 +700,27 @@ export class ClaudeCodeUsageExtension {
   }
 
   private async getAdvice(): Promise<void> {
-    const config = this.getConfiguration();
-    // Runtime advice is API/BYOK-only. An empty user key opens the local demo;
-    // Claude Code subscription OAuth remains reserved for quota observation.
-    const needsKey =
-      config.adviceBackend === 'api' && (!config.adviceApiKey || config.adviceApiKey.trim() === '');
-    if (needsKey) {
-      const picked = await vscode.window.showWarningMessage(
-        I18n.t.popup.adviceNeedsKey,
+    // The legacy command now enters the one evidence/preview/send surface. It
+    // never constructs or sends an alternate free-form summary.
+    this.webviewProvider.show('content');
+    if (!this.settings.get<boolean>('advice.effectiveness.enabled')) {
+      const picked = await vscode.window.showInformationMessage(
+        I18n.t.popup.adviceEffectiveness.description,
         I18n.t.popup.settings,
-        I18n.t.popup.adviceDemoButton
       );
       if (picked === I18n.t.popup.settings) {
         vscode.commands.executeCommand('claudeCodeUsage.openSettings');
-      } else if (picked === I18n.t.popup.adviceDemoButton) {
-        await this.openAdviceDemo();
       }
-      return;
     }
-
-    const records = this.cache.records;
-    const analysis = this.cache.contentAnalysis;
-    if (!records || records.length === 0 || !analysis) {
-      vscode.window.showWarningMessage(I18n.t.popup.noDataMessage);
-      return;
-    }
-
-    // Let the user scope the advice to everything, or to one project.
-    const projects = ClaudeDataLoader.getProjectBreakdown(records);
-    const items: (vscode.QuickPickItem & { scope: string })[] = [
-      { label: I18n.t.popup.adviceScopeOverall, scope: 'overall' },
-      ...projects.map((p) => ({ label: p.groupName, description: p.groupPath, scope: p.groupPath }))
-    ];
-    const picked = await vscode.window.showQuickPick(items, { placeHolder: I18n.t.popup.adviceScopePrompt });
-    if (!picked) {
-      return;
-    }
-
-    const summary = buildAdviceSummary(
-      records,
-      analysis,
-      picked.scope,
-      picked.label,
-      config.advicePromptWindowDays
-    );
-
-    await this.runAdviceRequest(config, picked.scope, picked.label, summary);
-  }
-
-  private async openAdviceDemo(): Promise<void> {
-    const now = new Date();
-    const pad = (n: number): string => String(n).padStart(2, '0');
-    const stamp =
-      `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
-      `_${pad(now.getHours())}${pad(now.getMinutes())}`;
-    const uri = vscode.Uri.parse(`untitled:claude-advice-DEMO-${stamp}.md`);
-    const doc = await vscode.workspace.openTextDocument(uri);
-    const editor = await vscode.window.showTextDocument(doc);
-    const lang = I18n.getCurrentLanguage();
-    const banner = I18n.t.popup.adviceDemoNotice;
-    const body = getDemoBody(lang);
-    const content = `${banner}\n\n---\n\n${body}`;
-    await editor.edit((eb) => eb.insert(new vscode.Position(0, 0), content));
-  }
-
-  private async runAdviceRequest(
-    config: ExtensionConfig,
-    scope: string,
-    label: string,
-    summary: string
-  ): Promise<void> {
-    await vscode.window.withProgress(
-      { location: vscode.ProgressLocation.Notification, title: I18n.t.popup.adviceGenerating },
-      async () => {
-        try {
-          const advice = await getUsageAdvice({
-            backend: config.adviceBackend,
-            apiFormat: config.adviceApiFormat,
-            apiKey: config.adviceApiKey,
-            apiUrl: config.adviceApiUrl,
-            model: config.adviceModel,
-            reasoningEffort: config.adviceReasoningEffort,
-            userContext: config.adviceUserContext,
-            language: I18n.getLanguageName(),
-            summary
-          });
-
-          // Give the document a distinguishable name like
-          // claude-advice-<scope>-YYYY-MM-DD_HHmm.md so different runs are easy
-          // to tell apart in the tab strip.
-          const now = new Date();
-          const pad = (n: number): string => String(n).padStart(2, '0');
-          const stamp =
-            `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
-            `_${pad(now.getHours())}${pad(now.getMinutes())}`;
-          const safeScope =
-            scope === 'overall'
-              ? 'overall'
-              : (label || 'project').replace(/[^A-Za-z0-9_-]+/g, '_').slice(0, 30) || 'project';
-          const uri = vscode.Uri.parse(`untitled:claude-advice-${safeScope}-${stamp}.md`);
-          const doc = await vscode.workspace.openTextDocument(uri);
-          const editor = await vscode.window.showTextDocument(doc);
-          await editor.edit((eb) => eb.insert(new vscode.Position(0, 0), advice));
-        } catch (error) {
-          const message = error instanceof Error ? error.message : String(error);
-          vscode.window.showErrorMessage(`${I18n.t.popup.adviceFailed}: ${message}`);
-        }
-      }
-    );
   }
 
   /**
    * Usage Optimizer round-trip (Phase 9c). Takes the user's rough draft and the
    * three optional lenses, asks the configured model to return a tightened
    * paste-ready prompt plus a settings recommendation, and parses the two
-   * sections out. ONLY the pasted draft is sent — no filesystem access. First
-   * use shows a one-time consent modal (the text is going to a model, not to
-   * Claude Code's terminal).
+   * sections out. ONLY the pasted draft enters the sealed preview — no
+   * filesystem access. A separate Send click is the sole authorization for the
+   * prepared bytes to leave the machine.
    */
   /** Distinct models the user actually uses — Claude reduced to family names
    * (haiku/sonnet/opus/fable), third-party models kept as-is — so the optimizer
@@ -703,28 +758,15 @@ export class ClaudeCodeUsageExtension {
     return out.slice(0, 8);
   }
 
-  private async runOptimizer(
+  private async prepareOptimizerRequest(
     draft: string,
-    options: { resolve: boolean; distil: boolean; aesthetic: boolean }
-  ): Promise<{ prompt?: string; settings?: string; error?: string }> {
+    options: { resolve: boolean; distil: boolean; aesthetic: boolean },
+    sourceRevision: string,
+    consentGeneration: number,
+  ): Promise<{ prepared?: ReturnType<typeof prepareOptimizerInvocation>; error?: string }> {
     const text = (draft || '').trim();
     if (text === '') {
       return { error: I18n.t.popup.noDataMessage };
-    }
-
-    // One-time consent: the draft leaves the machine for whichever model the
-    // advice backend points at. Remember the choice in globalState.
-    const consentKey = 'claudeCodeUsage.optimizerConsented';
-    if (!this.context.globalState.get<boolean>(consentKey, false)) {
-      const proceed = await vscode.window.showWarningMessage(
-        I18n.t.popup.optimizerConsent,
-        { modal: true },
-        I18n.t.popup.optimizerRun
-      );
-      if (proceed !== I18n.t.popup.optimizerRun) {
-        return { error: '' };
-      }
-      await this.context.globalState.update(consentKey, true);
     }
 
     const config = this.getConfiguration();
@@ -738,18 +780,18 @@ export class ClaudeCodeUsageExtension {
     const systemPrompt = buildOptimizerSystemPrompt(language, options, this.usedModelNames());
 
     try {
-      const raw = await callModel(systemPrompt, text, {
-        backend: config.adviceBackend,
+      return { prepared: prepareOptimizerInvocation({
         apiFormat: config.adviceApiFormat,
-        apiKey: config.adviceApiKey,
         apiUrl: config.adviceApiUrl,
         model: config.adviceModel,
         reasoningEffort: config.adviceReasoningEffort,
-        language,
-        summary: '',
-        timeoutMs: 90_000
-      });
-      return parseOptimizerOutput(raw);
+        systemPrompt,
+        draft: text,
+        sourceRevision,
+        consentGeneration,
+        createdAtEpochMs: Date.now(),
+        timeoutMs: 90_000,
+      }) };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return { error: `${I18n.t.popup.adviceFailed}: ${message}` };
@@ -876,8 +918,17 @@ export class ClaudeCodeUsageExtension {
               totalFiles: this.codexProgress.totalFiles,
               indexedBytes: this.codexProgress.indexedBytes,
               totalBytes: this.codexProgress.totalBytes,
+              reason: this.codexBackgroundState.reason,
             }
-          : null,
+          : this.codexRefreshing
+            ? {
+                scannedFiles: this.codexView?.coverage.indexedFiles ?? 0,
+                totalFiles: this.codexView?.coverage.totalFiles ?? 0,
+                indexedBytes: this.codexView?.coverage.indexedBytes ?? 0,
+                totalBytes: this.codexView?.coverage.totalBytes ?? 0,
+                reason: this.codexBackgroundState.reason,
+              }
+            : null,
       },
     );
 
@@ -905,8 +956,8 @@ export class ClaudeCodeUsageExtension {
 
   /**
    * Build the default-off experimental evidence view from narrow, numeric
-   * inputs. Raw records are used only here to form a same-window aggregate;
-   * neither provider adapter accepts records, paths, session IDs, or prompts.
+   * inputs already materialized by each provider index. Neither provider
+   * adapter accepts records, paths, session IDs, or prompt bodies.
    */
   private buildAdviceEffectivenessProviderStates(
     config: ExtensionConfig,
@@ -919,20 +970,19 @@ export class ClaudeCodeUsageExtension {
     const generatedAt = new Date(now).toISOString();
     const epochDay = Math.floor(now / 86_400_000);
     const windowDays = Math.max(1, Math.round(config.advicePromptWindowDays));
-    const cutoff = now - windowDays * 86_400_000;
 
     try {
-      const windowRecords = this.cache.records.filter((record) => {
-        const timestamp = typeof record?.timestamp === 'string' ? Date.parse(record.timestamp) : NaN;
-        return Number.isFinite(timestamp) && timestamp >= cutoff && timestamp <= now;
+      const materialized = claudeUsageDashboardSnapshot(this.cache.claudeIndex, {
+        now: new Date(now),
+        adviceWindowDays: windowDays,
       });
-      if (windowRecords.length > 0) {
+      const adviceWindow = materialized.adviceWindow;
+      if (adviceWindow && adviceWindow.aggregate.messageCount > 0) {
         const aggregate = buildAdviceAggregateSnapshot(
-          ClaudeDataLoader.getAllTimeData(windowRecords),
+          adviceWindow.aggregate,
           'overall',
           windowDays,
         );
-        const sessions = ClaudeDataLoader.getSessionBreakdown(windowRecords);
         const framework = this.cache.contentAnalysis?.frameworkOverhead;
         const adapted = adaptClaudeAdvice({
           adviceId: `advice-claude-${windowDays}d-${epochDay}`,
@@ -942,15 +992,9 @@ export class ClaudeCodeUsageExtension {
           sessionSummary: {
             scope: 'overall',
             windowDays,
-            totalSessions: sessions.length,
-            longSessionCount: sessions.filter(
-              (session) =>
-                session.endTime.getTime() - session.startTime.getTime() >=
-                8 * 60 * 60 * 1000,
-            ).length,
-            largeContextSessionCount: sessions.filter(
-              (session) => session.peakContextTokens >= 150_000,
-            ).length,
+            totalSessions: adviceWindow.totalSessions,
+            longSessionCount: adviceWindow.longSessionCount,
+            largeContextSessionCount: adviceWindow.largeContextSessionCount,
           },
           ...(framework
             ? {
@@ -968,9 +1012,12 @@ export class ClaudeCodeUsageExtension {
             contract: adapted.value.contract,
             remotePreviewEligible: adapted.value.remoteEvidenceEligible,
             aggregate: adapted.value.aggregate,
-            promptSamples: (this.cache.contentAnalysis?.recentPrompts ?? []).map((prompt) => ({
-              text: prompt.text,
-            })),
+            userContext: config.adviceUserContext,
+            promptSamples: selectAdvicePromptSamples(
+              this.cache.contentAnalysis?.recentPrompts ?? [],
+              now,
+              windowDays,
+            ),
           };
         }
       }
@@ -1018,9 +1065,286 @@ export class ClaudeCodeUsageExtension {
     return states;
   }
 
-  private async refreshCodexData(trigger: RefreshTrigger): Promise<void> {
+  private codexHistoricalWorkPending(snapshot: CodexProviderSnapshot | null): boolean {
+    if (!snapshot) return true;
+    const coverage = snapshot.coverage;
+    return !coverage.complete ||
+      !coverage.identity.complete ||
+      !coverage.period.allTime.complete ||
+      !snapshot.hourlyCoverage?.complete;
+  }
+
+  private codexBackgroundReason(snapshot: CodexProviderSnapshot | null): BackgroundWorkReason {
+    if (!snapshot || snapshot.coverage.totalFiles === 0) return 'first-index';
+    if (!snapshot.coverage.period.allTime.complete) return 'period-migration';
+    if (!snapshot.hourlyCoverage?.complete) return 'hourly-history';
+    return 'history-backfill';
+  }
+
+  private codexBackgroundProgress(snapshot: CodexProviderSnapshot): BackgroundWorkState['progress'] {
+    const main = snapshot.coverage;
+    const period = main.period.allTime;
+    const hourly = snapshot.hourlyCoverage;
+    return {
+      completedUnits: main.indexedFiles + period.migratedFiles + (hourly?.indexedFiles ?? 0),
+      totalUnits: main.totalFiles + period.totalFiles + (hourly?.totalFiles ?? 0),
+      completedBytes: main.indexedBytes + period.migratedBytes + (hourly?.indexedBytes ?? 0),
+      totalBytes: main.totalBytes + period.totalBytes + (hourly?.totalBytes ?? 0),
+    };
+  }
+
+  private async saveCodexBackgroundState(): Promise<void> {
+    const snapshot: BackgroundWorkState = {
+      ...this.codexBackgroundState,
+      progress: { ...this.codexBackgroundState.progress },
+    };
+    const previous = this.codexBackgroundStateWrite;
+    const write = previous
+      .catch(() => undefined)
+      .then(() => this.context.globalState.update(
+        ClaudeCodeUsageExtension.CODEX_BACKGROUND_WORK_STATE_KEY,
+        snapshot,
+      ));
+    this.codexBackgroundStateWrite = write;
+    await write;
+  }
+
+  private trackResourceStop(stop: Promise<unknown>): void {
+    let tracked!: Promise<void>;
+    tracked = stop
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        this.resourceStopFailure ??= error;
+        throw error;
+      })
+      .finally(() => this.pendingResourceStops.delete(tracked));
+    this.pendingResourceStops.add(tracked);
+    // The owning lifecycle later drains and reports the failure. Attaching a
+    // handler here prevents a fire-and-forget watcher close from becoming an
+    // unhandled rejection before disposal reaches that drain point.
+    void tracked.catch(() => undefined);
+  }
+
+  private async drainResourceStops(): Promise<void> {
+    while (this.pendingResourceStops.size > 0) {
+      await Promise.allSettled([...this.pendingResourceStops]);
+    }
+    if (this.resourceStopFailure) {
+      const failure = this.resourceStopFailure;
+      this.resourceStopFailure = null;
+      throw failure;
+    }
+  }
+
+  private async runAdviceNetwork<T>(
+    request: (signal: AbortSignal) => Promise<T>,
+  ): Promise<T> {
+    if (this.disposed) {
+      throw new Error('Extension is disposed');
+    }
+    const controller = new AbortController();
+    const lease = this.resourceOwnership.register({
+      kind: 'network',
+      capability: 'advice-personalization',
+      scope: 'advice',
+      creator: 'advice-runtime',
+      stopConditions: [
+        'settled',
+        'cancelled',
+        'feature-disabled',
+        'extension-dispose',
+        'settings-change',
+      ],
+      boundedException: 'none',
+    });
+    let markSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
+    this.activeAdviceNetworks.set(controller, { lease, settled });
     try {
-      await this.runCodexRefresh(trigger);
+      return await request(controller.signal);
+    } finally {
+      this.activeAdviceNetworks.delete(controller);
+      markSettled();
+      if (lease.active) {
+        await lease.stop(controller.signal.aborted ? 'cancelled' : 'settled', () => undefined);
+      }
+    }
+  }
+
+  private async cancelAdviceNetworks(
+    condition: Extract<
+      ResourceStopCondition,
+      'cancelled' | 'feature-disabled' | 'extension-dispose' | 'settings-change'
+    >,
+  ): Promise<void> {
+    const active = [...this.activeAdviceNetworks.entries()];
+    await Promise.all(active.map(async ([controller, operation]) => {
+      const { lease, settled } = operation;
+      if (lease.active) {
+        await lease.stop(condition, async () => {
+          controller.abort();
+          await settled;
+        });
+      }
+      this.activeAdviceNetworks.delete(controller);
+    }));
+  }
+
+  private async cancelQuotaNetworks(
+    condition: Extract<
+      ResourceStopCondition,
+      | 'cancelled'
+      | 'window-blur'
+      | 'feature-disabled'
+      | 'extension-dispose'
+      | 'settings-change'
+      | 'profile-change'
+    >,
+  ): Promise<void> {
+    const active = [...this.activeQuotaNetworks.entries()];
+    await Promise.all(active.map(async ([controller, operation]) => {
+      const { lease, settled } = operation;
+      if (lease.active) {
+        await lease.stop(condition, async () => {
+          controller.abort();
+          await settled;
+        });
+      }
+      this.activeQuotaNetworks.delete(controller);
+    }));
+  }
+
+  private createOwnedRefreshDebounce(
+    scope: 'claude' | 'codex',
+  ): QuietDebounce {
+    return new QuietDebounce(
+      (callback, ms) => {
+        if (this.disposed) {
+          return undefined as unknown as NodeJS.Timeout;
+        }
+        let timer!: NodeJS.Timeout;
+        timer = setTimeout(() => {
+          const lease = this.debounceTimerLeases.get(timer);
+          this.debounceTimerLeases.delete(timer);
+          if (lease?.active) {
+            this.trackResourceStop(lease.stop('settled', () => undefined));
+          }
+          if (!this.disposed) callback();
+        }, ms);
+        const lease = this.resourceOwnership.register({
+          kind: 'timer',
+          capability: 'refresh',
+          scope,
+          creator: 'refresh-coordinator',
+          stopConditions: [
+            'settled',
+            'cancelled',
+            'window-blur',
+            'feature-disabled',
+            'extension-dispose',
+            'settings-change',
+          ],
+          boundedException: 'none',
+        });
+        this.debounceTimerLeases.set(timer, lease);
+        return timer;
+      },
+      (timer) => {
+        if (!timer) return;
+        const lease = this.debounceTimerLeases.get(timer);
+        this.debounceTimerLeases.delete(timer);
+        if (lease?.active) {
+          this.trackResourceStop(lease.stop('cancelled', () => clearTimeout(timer)));
+        }
+        else clearTimeout(timer);
+      },
+    );
+  }
+
+  private scheduleQuotaColdRetry(): void {
+    if (
+      this.disposed ||
+      this.quotaColdRetryTimer ||
+      !this.windowActivity.focused ||
+      !this.getConfiguration().usageLimitTracking
+    ) {
+      return;
+    }
+    this.quotaColdRetryTimer = setTimeout(() => {
+      const lease = this.quotaColdRetryTimerLease;
+      this.quotaColdRetryTimer = undefined;
+      this.quotaColdRetryTimerLease = undefined;
+      if (lease?.active) {
+        this.trackResourceStop(lease.stop('settled', () => undefined));
+      }
+      if (
+        this.disposed ||
+        !this.windowActivity.focused ||
+        !this.getConfiguration().usageLimitTracking
+      ) {
+        return;
+      }
+      void this.maybeFetchUsageLimits(this.getConfiguration()).then((retry) => {
+        if (retry) {
+          this.statusBar.updateQuota(retry);
+          this.webviewProvider.updateQuota(retry);
+        }
+      });
+    }, 8_000);
+    this.quotaColdRetryTimerLease = this.resourceOwnership.register({
+      kind: 'timer',
+      capability: 'quota',
+      scope: 'claude',
+      creator: 'refresh-coordinator',
+      stopConditions: [
+        'settled',
+        'window-blur',
+        'feature-disabled',
+        'extension-dispose',
+        'settings-change',
+        'profile-change',
+      ],
+      boundedException: 'none',
+    });
+  }
+
+  private stopQuotaColdRetry(
+    condition: Extract<
+      ResourceStopCondition,
+      | 'window-blur'
+      | 'feature-disabled'
+      | 'extension-dispose'
+      | 'settings-change'
+      | 'profile-change'
+    >,
+  ): void {
+    const timer = this.quotaColdRetryTimer;
+    const lease = this.quotaColdRetryTimerLease;
+    this.quotaColdRetryTimer = undefined;
+    this.quotaColdRetryTimerLease = undefined;
+    if (timer) {
+      if (lease?.active) {
+        this.trackResourceStop(lease.stop(condition, () => clearTimeout(timer)));
+      }
+      else clearTimeout(timer);
+    }
+  }
+
+  private async refreshCodexData(trigger: RefreshTrigger): Promise<void> {
+    if (this.disposed) return;
+    const generation = this.configurationGeneration;
+    try {
+      await this.waitForCodexProviderRetirements();
+    } catch {
+      return;
+    }
+    if (this.disposed || generation !== this.configurationGeneration) return;
+    const operation = this.runCodexRefresh(trigger);
+    this.activeCodexRefreshes.add(operation);
+    try {
+      await operation;
     } catch {
       this.codexView = null;
       this.codexInsights = emptyCodexScopedInsights();
@@ -1028,6 +1352,7 @@ export class ClaudeCodeUsageExtension {
       this.codexRefreshing = false;
       this.codexProgress = null;
       this.codexProgressLastRenderedAt = 0;
+      if (this.disposed) return;
       this.outputChannel.appendLine(
         formatCodexIndexDiagnostic({
           outcome: 'error',
@@ -1046,12 +1371,41 @@ export class ClaudeCodeUsageExtension {
         }),
       );
       this.syncProviderUi();
+    } finally {
+      this.activeCodexRefreshes.delete(operation);
     }
   }
 
+  private async cancelCodexProviderAndWait(provider = this.codexProvider): Promise<void> {
+    const lifecycleProvider = provider as CodexProvider & {
+      cancelAndWait?: () => Promise<void>;
+    };
+    if (typeof lifecycleProvider.cancelAndWait === 'function') {
+      await lifecycleProvider.cancelAndWait();
+      return;
+    }
+    // Retains compatibility with narrow provider doubles while production
+    // always uses the awaitable Codex provider lifecycle.
+    provider.cancel();
+  }
+
   private async runCodexRefresh(trigger: RefreshTrigger): Promise<void> {
+    if (this.disposed) return;
+    let ownedBackfillLease: ResourceLease | undefined;
+    let ownedWorkerLease: ResourceLease | undefined;
+    let workerStoppedSafely = false;
+    let continueHistoricalWork = false;
     const config = this.getConfiguration();
     if (!config.codexEnabled) {
+      await this.cancelCodexProviderAndWait();
+      if (this.codexBackfillLease?.active) {
+        await this.codexBackfillLease.stop('feature-disabled', () => undefined);
+      }
+      this.codexBackfillLease = undefined;
+      if (this.codexWorkerLease?.active) {
+        await this.codexWorkerLease.stop('feature-disabled', () => undefined);
+      }
+      this.codexWorkerLease = undefined;
       this.codexView = null;
       this.codexInsights = emptyCodexScopedInsights();
       this.codexAvailable = false;
@@ -1063,6 +1417,7 @@ export class ClaudeCodeUsageExtension {
       return;
     }
     this.codexAvailable = await this.codexProvider.isAvailable();
+    if (this.disposed) return;
     if (!this.codexAvailable) {
       this.codexView = null;
       this.codexInsights = emptyCodexScopedInsights();
@@ -1080,18 +1435,120 @@ export class ClaudeCodeUsageExtension {
     const provider = this.codexProvider;
     this.codexCheckpointHydrationLastAttemptAt = Date.now();
     const persisted = await provider.loadPersistedSnapshot();
-    if (provider !== this.codexProvider) {
+    if (this.disposed || provider !== this.codexProvider) {
       return;
     }
     if (persisted) {
       this.applyCodexSnapshot(persisted);
       this.syncProviderUi();
     }
+    if (!persisted && this.codexBackgroundState.status === 'complete') {
+      this.codexBackgroundState = createBackgroundWorkState({
+        measurementVersion:
+          ClaudeCodeUsageExtension.CODEX_BACKGROUND_MEASUREMENT_VERSION,
+        reason: 'first-index',
+        now: Date.now(),
+      });
+      await this.saveCodexBackgroundState();
+    }
+    const historicalPending = this.codexHistoricalWorkPending(persisted);
+    let historicalAttempt = false;
+    if (historicalPending) {
+      const started = beginBackgroundWork(this.codexBackgroundState, {
+        trigger: trigger === 'manual' ? 'manual' : 'automatic',
+        now: Date.now(),
+        reason: this.codexBackgroundReason(persisted),
+      });
+      this.codexBackgroundState = started.state;
+      historicalAttempt = started.started;
+      try {
+        await this.saveCodexBackgroundState();
+      } catch (error) {
+        if (historicalAttempt && this.codexBackgroundState.status === 'running') {
+          this.codexBackgroundState = interruptBackgroundWork(
+            this.codexBackgroundState,
+            { now: Date.now() },
+          );
+          await this.saveCodexBackgroundState().catch(() => undefined);
+        }
+        throw error;
+      }
+      if (historicalAttempt) {
+        ownedBackfillLease = this.resourceOwnership.register({
+          kind: 'backfill',
+          capability: 'codex-history',
+          scope: 'codex',
+          creator: 'refresh-coordinator',
+          stopConditions: [
+            'settled',
+            'completed',
+            'cancelled',
+            'feature-disabled',
+            'extension-dispose',
+            'user-pause',
+            'settings-change',
+          ],
+          boundedException: persisted ? 'none' : 'first-codex-history',
+        });
+        this.codexBackfillLease = ownedBackfillLease;
+        this.codexFirstBackfillActive = !persisted;
+      }
+    } else if (
+      this.codexBackgroundState.status !== 'complete' &&
+      this.codexBackgroundState.pausedReason !== 'corrupt-state' &&
+      persisted
+    ) {
+      const fresh = createBackgroundWorkState({
+        measurementVersion:
+          ClaudeCodeUsageExtension.CODEX_BACKGROUND_MEASUREMENT_VERSION,
+        reason: this.codexBackgroundReason(persisted),
+        now: Date.now(),
+        progress: this.codexBackgroundProgress(persisted),
+      });
+      const running = beginBackgroundWork(fresh, {
+        trigger: 'automatic',
+        now: Date.now(),
+      });
+      if (running.started) {
+        this.codexBackgroundState = recordBackgroundWorkProgress(running.state, {
+          now: Date.now(),
+          complete: true,
+          progress: this.codexBackgroundProgress(persisted),
+        });
+        await this.saveCodexBackgroundState();
+      }
+    }
+    // The trigger reason is visible while metadata discovery and the first
+    // worker progress event are still pending.
+    this.syncProviderUi();
     try {
+      if (!this.codexWorkerLease?.active) {
+        ownedWorkerLease = this.resourceOwnership.register({
+          kind: 'worker',
+          capability: 'codex-index',
+          scope: 'codex',
+          creator: 'codex-index-client',
+          stopConditions: [
+            'settled',
+            'cancelled',
+            'feature-disabled',
+            'extension-dispose',
+            'settings-change',
+          ],
+          boundedException: 'none',
+        });
+        this.codexWorkerLease = ownedWorkerLease;
+        this.codexWorkerCancellationRequested = false;
+      }
       const result = await provider.refresh(
         codexRefreshProfileForTrigger(trigger),
         (progress) => this.onCodexIndexProgress(progress),
+        historicalAttempt,
       );
+      workerStoppedSafely = true;
+      if (this.disposed || provider !== this.codexProvider) {
+        return;
+      }
       if (result.outcome === 'unavailable') {
         this.codexView = null;
         this.codexInsights = emptyCodexScopedInsights();
@@ -1101,7 +1558,48 @@ export class ClaudeCodeUsageExtension {
       }
 
       this.applyCodexSnapshot(result.snapshot);
+      if (historicalAttempt && this.codexBackgroundState.status === 'running') {
+        const complete = !this.codexHistoricalWorkPending(result.snapshot);
+        if (this.codexWorkerCancellationRequested || provider !== this.codexProvider) {
+          this.codexBackgroundState = interruptBackgroundWork(
+            this.codexBackgroundState,
+            { now: Date.now() },
+          );
+        } else if (result.outcome === 'error' || (result.diagnostic?.failedFiles ?? 0) > 0) {
+          this.codexBackgroundState = recordBackgroundWorkFailure(
+            this.codexBackgroundState,
+            { now: Date.now() },
+          );
+        } else {
+          this.codexBackgroundState = recordBackgroundWorkProgress(
+            this.codexBackgroundState,
+            {
+              now: Date.now(),
+              complete,
+              progress: this.codexBackgroundProgress(result.snapshot),
+            },
+          );
+          continueHistoricalWork = this.codexBackgroundState.status === 'eligible';
+        }
+        await this.saveCodexBackgroundState();
+      }
       const diagnostic = result.diagnostic;
+      if (
+        !historicalAttempt &&
+        diagnostic?.indexRecovery &&
+        this.codexBackgroundState.status === 'complete' &&
+        this.codexHistoricalWorkPending(result.snapshot)
+      ) {
+        this.codexBackgroundState = createBackgroundWorkState({
+          measurementVersion:
+            ClaudeCodeUsageExtension.CODEX_BACKGROUND_MEASUREMENT_VERSION,
+          reason: this.codexBackgroundReason(result.snapshot),
+          now: Date.now(),
+          progress: this.codexBackgroundProgress(result.snapshot),
+        });
+        await this.saveCodexBackgroundState();
+        continueHistoricalWork = true;
+      }
       this.outputChannel.appendLine(
         formatCodexIndexDiagnostic({
           outcome: result.outcome,
@@ -1122,10 +1620,55 @@ export class ClaudeCodeUsageExtension {
         }),
       );
     } finally {
+      if (historicalAttempt && this.codexBackgroundState.status === 'running') {
+        this.codexBackgroundState =
+          this.codexWorkerCancellationRequested || provider !== this.codexProvider
+          ? interruptBackgroundWork(this.codexBackgroundState, { now: Date.now() })
+          : recordBackgroundWorkFailure(
+              this.codexBackgroundState,
+              { now: Date.now() },
+            );
+        await this.saveCodexBackgroundState();
+      }
+      if (workerStoppedSafely && ownedBackfillLease?.active) {
+        const condition = this.codexBackgroundState.status === 'complete'
+          ? 'completed'
+          : 'settled';
+        await ownedBackfillLease.stop(condition, () => undefined);
+      }
+      if (
+        workerStoppedSafely &&
+        this.codexBackfillLease === ownedBackfillLease
+      ) {
+        this.codexBackfillLease = undefined;
+      }
+      if (workerStoppedSafely && ownedWorkerLease?.active) {
+        await ownedWorkerLease.stop(
+          this.codexWorkerCancellationRequested || provider !== this.codexProvider
+            ? 'cancelled'
+            : 'settled',
+          () => undefined,
+        );
+      }
+      if (workerStoppedSafely && this.codexWorkerLease === ownedWorkerLease) {
+        this.codexWorkerLease = undefined;
+      }
+      if (workerStoppedSafely && ownedBackfillLease) {
+        this.codexFirstBackfillActive = false;
+      }
       this.codexRefreshing = false;
       this.codexProgress = null;
       this.codexProgressLastRenderedAt = 0;
-      this.syncProviderUi();
+      if (!this.disposed) this.syncProviderUi();
+      if (
+        !this.disposed &&
+        continueHistoricalWork &&
+        provider === this.codexProvider &&
+        this.getConfiguration().codexEnabled &&
+        this.windowActivity.focused
+      ) {
+        queueMicrotask(() => void this.refreshCodexData(trigger));
+      }
     }
   }
 
@@ -1143,6 +1686,7 @@ export class ClaudeCodeUsageExtension {
         totalFiles: progress.totalFiles,
         indexedBytes: progress.indexedBytes,
         totalBytes: progress.totalBytes,
+        reason: this.codexBackgroundState.reason,
       });
     }
   }
@@ -1212,6 +1756,7 @@ export class ClaudeCodeUsageExtension {
 
   /** Dashboard Settings change — status-bar-only toggles apply in place, others reload. */
   private onSettingsChangedFromPanel(key?: string): void {
+    if (this.disposed) return;
     if (key && ClaudeCodeUsageExtension.DASHBOARD_ONLY_SETTINGS.has(key)) {
       this.syncProviderUi();
       return;
@@ -1226,7 +1771,54 @@ export class ClaudeCodeUsageExtension {
     this.onConfigurationChanged();
   }
 
+  private trackCodexProviderRetirement(provider: CodexProvider): Promise<void> {
+    let tracked!: Promise<void>;
+    tracked = Promise.resolve()
+      .then(() => provider.dispose())
+      .catch((error: unknown) => {
+        this.codexProviderRetirementFailure ??= error;
+        throw error;
+      })
+      .finally(() => this.codexProviderRetirements.delete(tracked));
+    this.codexProviderRetirements.add(tracked);
+    void tracked.catch(() => undefined);
+    return tracked;
+  }
+
+  private async waitForCodexProviderRetirements(): Promise<void> {
+    while (this.codexProviderRetirements.size > 0) {
+      await Promise.all([...this.codexProviderRetirements]);
+    }
+    if (this.codexProviderRetirementFailure) {
+      throw this.codexProviderRetirementFailure;
+    }
+  }
+
+  private async releaseCodexOwnership(
+    condition: Extract<
+      ResourceStopCondition,
+      'cancelled' | 'feature-disabled' | 'extension-dispose' | 'settings-change'
+    >,
+  ): Promise<void> {
+    if (this.codexWorkerLease?.active) {
+      await this.codexWorkerLease.stop(condition, () => undefined);
+    }
+    if (this.codexBackfillLease?.active) {
+      await this.codexBackfillLease.stop(condition, () => undefined);
+    }
+    this.codexWorkerLease = undefined;
+    this.codexBackfillLease = undefined;
+  }
+
   private onConfigurationChanged(): void {
+    if (this.disposed) return;
+    const generation = ++this.configurationGeneration;
+    // Any endpoint/model/key/consent-affecting configuration change invalidates
+    // a visible preview before a later click could send it.
+    this.webviewProvider.invalidatePreparedAiRequests();
+    void this.cancelAdviceNetworks('settings-change');
+    this.stopQuotaColdRetry('settings-change');
+    void this.cancelQuotaNetworks('settings-change');
     const config = this.getConfiguration();
     I18n.setLanguage(config.language as any);
     I18n.setDecimalPlaces(config.decimalPlaces);
@@ -1243,16 +1835,30 @@ export class ClaudeCodeUsageExtension {
     this.stopCodexWatching();
     this.stopCredentialsWatching();
     this.selectClaudeProfile(config.dataDirectory);
-    this.codexProvider.dispose();
+    const retiringCodexProvider = this.codexProvider;
+    this.codexWorkerCancellationRequested = true;
+    retiringCodexProvider.cancel();
+    this.trackCodexProviderRetirement(retiringCodexProvider);
     this.codexProvider = this.createCodexProvider(config);
     if (!this.windowActivity.focused) {
       return;
     }
-    void this.refreshData(true, 'settings').then(() => {
-      void this.startFileWatching();
-      this.startCodexWatching();
-      this.startCredentialsWatching();
-    });
+    void (async () => {
+      try {
+        await this.waitForCodexProviderRetirements();
+        if (this.disposed || generation !== this.configurationGeneration) return;
+        await this.releaseCodexOwnership('settings-change');
+        await this.refreshData(true, 'settings');
+        if (this.disposed || generation !== this.configurationGeneration) return;
+        await this.startFileWatching();
+        if (this.disposed || generation !== this.configurationGeneration) return;
+        this.startCodexWatching();
+        this.startCredentialsWatching();
+      } catch {
+        // A provider that cannot be terminated stays fail-closed. Disposal will
+        // surface the retained failure instead of starting an unowned replacement.
+      }
+    })();
   }
 
   /** Keep quota credentials on the same Claude profile as this window's logs.
@@ -1263,6 +1869,8 @@ export class ClaudeCodeUsageExtension {
     if (nextClient.getCredentialsPath() === this.apiClient.getCredentialsPath()) {
       return;
     }
+    this.stopQuotaColdRetry('profile-change');
+    void this.cancelQuotaNetworks('profile-change');
     this.apiClient = nextClient;
     this.claudeProfileGeneration += 1;
     this.cache.usageLimits = null;
@@ -1284,18 +1892,33 @@ export class ClaudeCodeUsageExtension {
    * filesystems do not support recursive watching).
    */
   private async startFileWatching(): Promise<void> {
+    if (this.disposed) return;
+    const requestGeneration = ++this.fileWatcherGeneration;
     if (!this.windowActivity.focused) {
-      this.stopFileWatching();
+      this.stopFileWatching('window-blur');
       return;
     }
     const config = this.getConfiguration();
     if (!(config.fileWatchSeconds > 0)) {
-      this.stopFileWatching(); // "Off"
+      this.stopFileWatching('feature-disabled'); // "Off"
       return;
     }
     const dataDirectory = await ClaudeDataLoader.findClaudeDataDirectory(config.dataDirectory || undefined);
+    if (
+      this.disposed ||
+      requestGeneration !== this.fileWatcherGeneration
+    ) {
+      return;
+    }
     if (!this.windowActivity.focused) {
-      this.stopFileWatching();
+      this.stopFileWatching('window-blur');
+      return;
+    }
+    const currentConfig = this.getConfiguration();
+    if (
+      !(currentConfig.fileWatchSeconds > 0) ||
+      currentConfig.dataDirectory !== config.dataDirectory
+    ) {
       return;
     }
     if (!dataDirectory) {
@@ -1306,8 +1929,10 @@ export class ClaudeCodeUsageExtension {
       return;
     }
     this.stopFileWatching();
+    const activeGeneration = this.fileWatcherGeneration;
     try {
       this.fileWatcher = fs.watch(projectsDir, { recursive: true }, (_event, filename) => {
+        if (this.disposed || activeGeneration !== this.fileWatcherGeneration) return;
         if (!filename || !String(filename).endsWith('.jsonl')) {
           return;
         }
@@ -1317,7 +1942,7 @@ export class ClaudeCodeUsageExtension {
         this.watcherEventsSinceRefresh += 1;
         const delaySeconds = this.getConfiguration().fileWatchSeconds;
         if (!(delaySeconds > 0)) {
-          this.stopFileWatching();
+          this.stopFileWatching('feature-disabled');
           return;
         }
         this.watchDebounce.push(delaySeconds * 1000, () => {
@@ -1325,32 +1950,60 @@ export class ClaudeCodeUsageExtension {
         });
       });
       this.watchedDir = projectsDir;
+      this.fileWatcherLease = this.resourceOwnership.register({
+        kind: 'watcher',
+        capability: 'refresh',
+        scope: 'claude',
+        creator: 'extension',
+        stopConditions: [
+          'window-blur',
+          'feature-disabled',
+          'extension-dispose',
+          'settings-change',
+          'profile-change',
+        ],
+        boundedException: 'none',
+      });
     } catch {
       // Recursive watching unsupported — the polling timer is enough.
     }
   }
 
-  private stopFileWatching(): void {
+  private stopFileWatching(
+    condition: Extract<
+      ResourceStopCondition,
+      'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change' | 'profile-change'
+    > = 'settings-change',
+  ): void {
+    this.fileWatcherGeneration += 1;
     this.watchDebounce.clear();
-    if (this.fileWatcher) {
-      try {
-        this.fileWatcher.close();
-      } catch {
-        // Already closed.
-      }
-      this.fileWatcher = undefined;
+    const watcher = this.fileWatcher;
+    const lease = this.fileWatcherLease;
+    this.fileWatcher = undefined;
+    this.fileWatcherLease = undefined;
+    if (watcher) {
+      const close = (): void => {
+        try {
+          watcher.close();
+        } catch {
+          // Already closed.
+        }
+      };
+      if (lease?.active) this.trackResourceStop(lease.stop(condition, close));
+      else close();
     }
     this.watchedDir = null;
   }
 
   private startCodexWatching(): void {
+    if (this.disposed) return;
     if (!this.windowActivity.focused) {
-      this.stopCodexWatching();
+      this.stopCodexWatching('window-blur');
       return;
     }
     const config = this.getConfiguration();
     if (!config.codexEnabled || !(config.codexFileWatchSeconds > 0)) {
-      this.stopCodexWatching();
+      this.stopCodexWatching('feature-disabled');
       return;
     }
     const codexHome = this.codexHome(config);
@@ -1358,6 +2011,7 @@ export class ClaudeCodeUsageExtension {
       return;
     }
     this.stopCodexWatching();
+    const activeGeneration = this.codexWatcherGeneration;
     for (const child of ['sessions', 'archived_sessions']) {
       const directory = path.join(codexHome, child);
       if (!fs.existsSync(directory)) {
@@ -1368,12 +2022,13 @@ export class ClaudeCodeUsageExtension {
           directory,
           { recursive: true },
           (_event, filename) => {
+            if (this.disposed || activeGeneration !== this.codexWatcherGeneration) return;
             if (!filename || !String(filename).endsWith('.jsonl')) {
               return;
             }
             const delaySeconds = this.getConfiguration().codexFileWatchSeconds;
             if (!(delaySeconds > 0)) {
-              this.stopCodexWatching();
+              this.stopCodexWatching('feature-disabled');
               return;
             }
             this.codexWatchDebounce.push(delaySeconds * 1000, () => {
@@ -1382,6 +2037,19 @@ export class ClaudeCodeUsageExtension {
           },
         );
         this.codexWatchers.push(watcher);
+        this.codexWatcherLeases.set(watcher, this.resourceOwnership.register({
+          kind: 'watcher',
+          capability: 'codex-index',
+          scope: 'codex',
+          creator: 'extension',
+          stopConditions: [
+            'window-blur',
+            'feature-disabled',
+            'extension-dispose',
+            'settings-change',
+          ],
+          boundedException: 'none',
+        }));
       } catch {
         // Polling remains available when recursive watches are unsupported.
       }
@@ -1390,16 +2058,28 @@ export class ClaudeCodeUsageExtension {
       this.codexWatchers.length > 0 ? codexHome : null;
   }
 
-  private stopCodexWatching(): void {
+  private stopCodexWatching(
+    condition: Extract<
+      ResourceStopCondition,
+      'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change'
+    > = 'settings-change',
+  ): void {
+    this.codexWatcherGeneration += 1;
     this.codexWatchDebounce.clear();
     for (const watcher of this.codexWatchers) {
-      try {
-        watcher.close();
-      } catch {
-        // Already closed.
-      }
+      const close = (): void => {
+        try {
+          watcher.close();
+        } catch {
+          // Already closed.
+        }
+      };
+      const lease = this.codexWatcherLeases.get(watcher);
+      if (lease?.active) this.trackResourceStop(lease.stop(condition, close));
+      else close();
     }
     this.codexWatchers = [];
+    this.codexWatcherLeases.clear();
     this.codexWatchedHome = null;
   }
 
@@ -1414,8 +2094,9 @@ export class ClaudeCodeUsageExtension {
    * watch — those still self-correct on the next refresh tick.
    */
   private startCredentialsWatching(): void {
+    if (this.disposed) return;
     if (!this.windowActivity.focused) {
-      this.stopCredentialsWatching();
+      this.stopCredentialsWatching('window-blur');
       return;
     }
     this.stopCredentialsWatching();
@@ -1426,16 +2107,64 @@ export class ClaudeCodeUsageExtension {
       return;
     }
     try {
+      const activeGeneration = this.credentialsWatcherGeneration;
       this.credsWatcher = fs.watch(dir, (_event, filename) => {
+        if (this.disposed || activeGeneration !== this.credentialsWatcherGeneration) return;
         if (filename && String(filename) !== name) {
           return;
         }
         if (this.credsDebounceTimer) {
-          clearTimeout(this.credsDebounceTimer);
+          const timer = this.credsDebounceTimer;
+          const timerLease = this.credsDebounceTimerLease;
+          this.credsDebounceTimer = undefined;
+          this.credsDebounceTimerLease = undefined;
+          if (timerLease?.active) {
+            this.trackResourceStop(
+              timerLease.stop('cancelled', () => clearTimeout(timer)),
+            );
+          } else {
+            clearTimeout(timer);
+          }
         }
         this.credsDebounceTimer = setTimeout(() => {
-          this.handleCredentialsChange();
+          const timerLease = this.credsDebounceTimerLease;
+          this.credsDebounceTimer = undefined;
+          this.credsDebounceTimerLease = undefined;
+          if (timerLease?.active) {
+            this.trackResourceStop(timerLease.stop('settled', () => undefined));
+          }
+          if (!this.disposed && activeGeneration === this.credentialsWatcherGeneration) {
+            this.handleCredentialsChange();
+          }
         }, 800);
+        this.credsDebounceTimerLease = this.resourceOwnership.register({
+          kind: 'timer',
+          capability: 'quota',
+          scope: 'claude',
+          creator: 'extension',
+          stopConditions: [
+            'settled',
+            'cancelled',
+            'window-blur',
+            'extension-dispose',
+            'settings-change',
+            'profile-change',
+          ],
+          boundedException: 'none',
+        });
+      });
+      this.credsWatcherLease = this.resourceOwnership.register({
+        kind: 'watcher',
+        capability: 'quota',
+        scope: 'claude',
+        creator: 'extension',
+        stopConditions: [
+          'window-blur',
+          'extension-dispose',
+          'settings-change',
+          'profile-change',
+        ],
+        boundedException: 'none',
       });
     } catch {
       // Watching unsupported on this platform/filesystem — the refresh tick
@@ -1452,18 +2181,37 @@ export class ClaudeCodeUsageExtension {
     void this.refreshData(false, 'credentials');
   }
 
-  private stopCredentialsWatching(): void {
+  private stopCredentialsWatching(
+    condition: Extract<
+      ResourceStopCondition,
+      'window-blur' | 'extension-dispose' | 'settings-change' | 'profile-change'
+    > = 'settings-change',
+  ): void {
+    this.credentialsWatcherGeneration += 1;
     if (this.credsDebounceTimer) {
-      clearTimeout(this.credsDebounceTimer);
+      const timer = this.credsDebounceTimer;
+      const lease = this.credsDebounceTimerLease;
       this.credsDebounceTimer = undefined;
-    }
-    if (this.credsWatcher) {
-      try {
-        this.credsWatcher.close();
-      } catch {
-        // Already closed.
+      this.credsDebounceTimerLease = undefined;
+      if (lease?.active) {
+        this.trackResourceStop(lease.stop(condition, () => clearTimeout(timer)));
       }
-      this.credsWatcher = undefined;
+      else clearTimeout(timer);
+    }
+    const watcher = this.credsWatcher;
+    const lease = this.credsWatcherLease;
+    this.credsWatcher = undefined;
+    this.credsWatcherLease = undefined;
+    if (watcher) {
+      const close = (): void => {
+        try {
+          watcher.close();
+        } catch {
+          // Already closed.
+        }
+      };
+      if (lease?.active) this.trackResourceStop(lease.stop(condition, close));
+      else close();
     }
   }
 
@@ -1473,13 +2221,20 @@ export class ClaudeCodeUsageExtension {
   }
 
   private suspendRecurringWork(): void {
-    this.stopAutoRefresh();
-    this.stopFileWatching();
-    this.stopCodexWatching();
-    this.stopCredentialsWatching();
+    this.stopAutoRefresh('window-blur');
+    this.stopQuotaColdRetry('window-blur');
+    void this.cancelQuotaNetworks('window-blur');
+    this.stopFileWatching('window-blur');
+    this.stopCodexWatching('window-blur');
+    this.stopCredentialsWatching('window-blur');
+    if (this.codexRefreshing && !this.codexFirstBackfillActive) {
+      this.codexWorkerCancellationRequested = true;
+      void this.cancelCodexProviderAndWait();
+    }
   }
 
   private resumeRecurringWork(): void {
+    if (this.disposed) return;
     this.startAutoRefresh();
     void this.startFileWatching();
     this.startCodexWatching();
@@ -1488,6 +2243,7 @@ export class ClaudeCodeUsageExtension {
   }
 
   private handleWindowFocusChange(focused: boolean): void {
+    if (this.disposed) return;
     const transition = this.windowActivity.update(focused);
     if (transition === 'suspend') {
       this.suspendRecurringWork();
@@ -1503,37 +2259,70 @@ export class ClaudeCodeUsageExtension {
   private startWindowFocusRefresh(): void {
     this.context.subscriptions.push(
       vscode.window.onDidChangeWindowState((state) => {
+        if (this.disposed) return;
         this.handleWindowFocusChange(state.focused);
       })
     );
   }
 
-  private stopAutoRefresh(): void {
+  private stopAutoRefresh(
+    condition: Extract<
+      ResourceStopCondition,
+      'window-blur' | 'extension-dispose' | 'settings-change'
+    > = 'settings-change',
+  ): void {
     this.refreshGen += 1;
-    if (this.refreshTimer) {
-      clearTimeout(this.refreshTimer);
-      this.refreshTimer = undefined;
+    const timer = this.refreshTimer;
+    const lease = this.refreshTimerLease;
+    this.refreshTimer = undefined;
+    this.refreshTimerLease = undefined;
+    if (timer) {
+      if (lease?.active) {
+        this.trackResourceStop(lease.stop(condition, () => clearTimeout(timer)));
+      }
+      else clearTimeout(timer);
     }
   }
 
   private startAutoRefresh(): void {
+    if (this.disposed) return;
     this.stopAutoRefresh();
     if (!this.windowActivity.focused) {
       return;
     }
     const gen = this.refreshGen;
     const tick = (): void => {
-      if (gen !== this.refreshGen) {
+      if (this.disposed || gen !== this.refreshGen) {
         return; // superseded by a newer startAutoRefresh — stop this chain
       }
       const intervalMs = pollIntervalMs(this.getConfiguration().refreshInterval);
       this.refreshTimer = setTimeout(() => {
+        const timerLease = this.refreshTimerLease;
+        this.refreshTimer = undefined;
+        this.refreshTimerLease = undefined;
+        if (timerLease?.active) {
+          this.trackResourceStop(timerLease.stop('settled', () => undefined));
+        }
+        if (this.disposed || gen !== this.refreshGen) return;
         this.refreshData(false, 'poll').finally(() => {
-          if (gen === this.refreshGen) {
+          if (!this.disposed && gen === this.refreshGen) {
             tick();
           }
         });
       }, intervalMs);
+      this.refreshTimerLease = this.resourceOwnership.register({
+        kind: 'timer',
+        capability: 'refresh',
+        scope: 'extension',
+        creator: 'refresh-coordinator',
+        stopConditions: [
+          'settled',
+          'window-blur',
+          'extension-dispose',
+          'settings-change',
+        ],
+        boundedException: 'none',
+      });
     };
     tick();
   }
@@ -1616,7 +2405,7 @@ export class ClaudeCodeUsageExtension {
   }
 
   private async maybeFetchUsageLimits(config: ExtensionConfig): Promise<ClaudeApiUsageResponse | null> {
-    if (!config.usageLimitTracking) {
+    if (this.disposed || !config.usageLimitTracking) {
       return null;
     }
     const now = Date.now();
@@ -1642,7 +2431,47 @@ export class ClaudeCodeUsageExtension {
     }
     const profileGeneration = this.claudeProfileGeneration;
     const apiClient = this.apiClient;
-    const fetched = await apiClient.fetchUsageLimits();
+    const controller = new AbortController();
+    const quotaNetworkLease = this.resourceOwnership.register({
+      kind: 'network',
+      capability: 'quota',
+      scope: 'claude',
+      creator: 'claude-api-client',
+      stopConditions: [
+        'settled',
+        'cancelled',
+        'window-blur',
+        'feature-disabled',
+        'extension-dispose',
+        'settings-change',
+        'profile-change',
+      ],
+      boundedException: 'none',
+    });
+    let markSettled!: () => void;
+    const settled = new Promise<void>((resolve) => {
+      markSettled = resolve;
+    });
+    this.activeQuotaNetworks.set(controller, {
+      lease: quotaNetworkLease,
+      settled,
+    });
+    let fetched: ClaudeApiUsageResponse | null;
+    try {
+      fetched = await apiClient.fetchUsageLimits(controller.signal);
+    } finally {
+      this.activeQuotaNetworks.delete(controller);
+      markSettled();
+      if (quotaNetworkLease.active) {
+        await quotaNetworkLease.stop(
+          controller.signal.aborted ? 'cancelled' : 'settled',
+          () => undefined,
+        );
+      }
+    }
+    if (controller.signal.aborted) {
+      return this.cache.usageLimits;
+    }
     if (
       profileGeneration !== this.claudeProfileGeneration ||
       apiClient !== this.apiClient
@@ -1692,6 +2521,7 @@ export class ClaudeCodeUsageExtension {
     forceReload: boolean = false,
     trigger: RefreshTrigger = 'poll'
   ): Promise<void> {
+    if (this.disposed) return;
     // `watch` reaches this shared path only from the Claude projects watcher.
     // Codex has its own watcher and quiet-delay setting, so refreshing it here
     // would bypass codex.fileWatchSeconds whenever Claude writes a JSONL line.
@@ -1729,30 +2559,26 @@ export class ClaudeCodeUsageExtension {
     this.coalescedTriggersSinceRefresh = 0;
     let updateWebview = request.trigger === 'manual';
     try {
+      if (this.disposed) return;
       const config = this.getConfiguration();
       updateWebview = updateWebview || config.dashboardAutoRefresh;
 
       // Account quota is independent from local JSONL. Do not let a slow OAuth
       // request delay the local usage refresh.
-      this.maybeFetchUsageLimits(config).then((limits) => {
+      void this.maybeFetchUsageLimits(config).then((limits) => {
+        if (this.disposed) return;
         this.statusBar.updateQuota(limits);
         this.webviewProvider.updateQuota(limits);
         if (!limits && !this.cache.usageLimits && !this.quotaColdRetryDone) {
           this.quotaColdRetryDone = true;
-          setTimeout(() => {
-            this.maybeFetchUsageLimits(this.getConfiguration()).then((retry) => {
-              if (retry) {
-                this.statusBar.updateQuota(retry);
-                this.webviewProvider.updateQuota(retry);
-              }
-            });
-          }, 8000);
+          this.scheduleQuotaColdRetry();
         }
-      });
+      }).catch(() => undefined);
 
       const dataDirectory = await ClaudeDataLoader.findClaudeDataDirectory(
         config.dataDirectory || undefined
       );
+      if (this.disposed) return;
       if (!dataDirectory) {
         const error = 'Claude data directory not found. Please check your configuration.';
         this.statusBar.updateUsageData(null, null, error);
@@ -1954,34 +2780,82 @@ export class ClaudeCodeUsageExtension {
         totalMs: performance.now() - totalStarted,
       }));
     } finally {
-      this.syncProviderUi();
+      if (!this.disposed) this.syncProviderUi();
       const next = this.refreshGate.complete();
-      if (next !== null) {
-        setTimeout(() => void this.runRefresh(next), 0);
+      if (!this.disposed && next !== null) {
+        queueMicrotask(() => void this.runRefresh(next));
       }
     }
   }
 
-  dispose(): void {
-    this.stopAutoRefresh();
-    this.stopFileWatching();
-    this.stopCodexWatching();
-    this.stopCredentialsWatching();
-    this.codexProvider.dispose();
-    this.statusBar.dispose();
-    this.webviewProvider.dispose();
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
+    this.disposed = true;
+    this.configurationGeneration += 1;
+    this.disposal = (async () => {
+      const failures: unknown[] = [];
+      const capture = async (operation: Promise<unknown>): Promise<boolean> => {
+        try {
+          await operation;
+          return true;
+        } catch (error) {
+          failures.push(error);
+          return false;
+        }
+      };
+      this.stopQuotaColdRetry('extension-dispose');
+      this.stopAutoRefresh('extension-dispose');
+      this.stopFileWatching('extension-dispose');
+      this.stopCodexWatching('extension-dispose');
+      this.stopCredentialsWatching('extension-dispose');
+      await capture(Promise.all([
+        this.cancelAdviceNetworks('extension-dispose'),
+        this.cancelQuotaNetworks('extension-dispose'),
+      ]));
+      this.codexWorkerCancellationRequested = true;
+      this.codexProvider.cancel();
+      const providerStopped = await capture(Promise.all([
+        this.waitForCodexProviderRetirements(),
+        this.codexProvider.dispose(),
+      ]));
+      while (this.activeCodexRefreshes.size > 0) {
+        await Promise.allSettled([...this.activeCodexRefreshes]);
+      }
+      if (providerStopped) {
+        await capture(this.releaseCodexOwnership('extension-dispose'));
+      }
+      await capture(this.codexBackgroundStateWrite.catch((error) => {
+        throw error;
+      }));
+      await capture(this.drainResourceStops());
+      this.statusBar.dispose();
+      this.webviewProvider.dispose();
+      if (failures.length > 0) {
+        const first = failures[0];
+        throw first instanceof Error
+          ? first
+          : new Error('Extension resources could not be stopped safely');
+      }
+    })();
+    return this.disposal;
   }
 }
+
+let activeExtension: ClaudeCodeUsageExtension | null = null;
 
 export function activate(context: vscode.ExtensionContext) {
   console.log('Claude Code Usage extension is now active');
 
   const extension = new ClaudeCodeUsageExtension(context);
+  activeExtension = extension;
   context.subscriptions.push({
-    dispose: () => extension.dispose()
+    dispose: () => { void extension.dispose(); }
   });
 }
 
-export function deactivate() {
+export async function deactivate(): Promise<void> {
   console.log('Claude Code Usage extension is now deactivated');
+  const extension = activeExtension;
+  activeExtension = null;
+  await extension?.dispose();
 }

@@ -2,6 +2,7 @@ import {
   CodexInsightEvidenceKey,
   CodexInsightKind,
 } from './providers/codex/codexInsights';
+import type { BackgroundWorkReason } from './backgroundWorkState';
 
 /** Copy contract retained for provider-aware renderers in webview.ts. */
 export const CODEX_QUALITY_FLAGS = [
@@ -149,6 +150,7 @@ export interface CodexViewCopy {
   indexedAllTime: string;
   indexedSubtotal: string;
   indexingInProgress: string;
+  indexingReasons: Record<BackgroundWorkReason, string>;
   updatedAt: string;
   claudeTokenAccounting: string;
   codexTokenAccounting: string;
@@ -289,6 +291,15 @@ export const CODEX_COPY_EN: CodexViewCopy = {
   observedSessionDuration: 'Elapsed span between the first and last observed events; a proxy, not actual active time.',
   indexedSubtotal: 'Indexed subtotal',
   indexingInProgress: 'Indexing is still in progress; unverified legacy totals are excluded.',
+  indexingReasons: {
+    'first-index': 'First local history setup',
+    'parser-migration': 'Updating the local parser index',
+    'period-migration': 'Updating date history',
+    'hourly-history': 'Building recent hourly history',
+    'history-backfill': 'Completing local history',
+    'rule-migration': 'Updating measurement rules',
+    resume: 'Resuming local history',
+  },
   indexedLogEntries: 'Indexed log entries',
   indexedStorage: 'Indexed storage',
   indexedAllTime: 'Indexed all time',

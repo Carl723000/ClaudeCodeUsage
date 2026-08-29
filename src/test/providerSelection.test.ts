@@ -208,6 +208,7 @@ test('Codex tab stays visible while its first index is still running', () => {
           totalFiles: 1_827,
           indexedBytes: 1_024,
           totalBytes: 4_096,
+          reason: 'first-index',
         },
       },
     );
@@ -217,6 +218,7 @@ test('Codex tab stays visible while its first index is still running', () => {
     assert.match(html, /id="provider-tab-codex"/);
     assert.doesNotMatch(html, /id="provider-tab-compare"/);
     assert.match(html, /Indexing is still in progress/);
+    assert.match(html, /First local history setup/);
     assert.match(html, /Indexed log entries[^<]*1,566\/1,827 \(86%\)/);
     assert.doesNotMatch(html, /1\.6K\/1\.8K/);
     assert.match(html, /Indexed storage[^<]*1kB\/4kB/i);
@@ -353,7 +355,7 @@ test('provider and Codex view copy is complete in every UI locale', () => {
         if (typeof value === 'string') {
           assert.notEqual(value.trim(), '', `${language} has empty Codex copy`);
         } else {
-          assert.ok([5, 15, 16, 17, 18].includes(Object.keys(value).length));
+          assert.ok([5, 7, 15, 16, 17, 18].includes(Object.keys(value).length));
         }
       }
       assert.deepEqual(

@@ -12,12 +12,14 @@ import {
   CodexIndexCoverage,
   CodexIndexProgress,
   CodexIndexRecovery,
+  CodexHourlyCoverage,
   CodexTodayCoverage,
   CodexIndexV1,
   createEmptyCodexIndex,
   isCodexUsageContributionCurrent,
   loadCodexIndex,
 } from './codexIndex';
+import { CODEX_ROLLING_HOURLY_DAYS } from './codexPeriodIndex';
 import { CodexIndexClient } from './codexIndexClient';
 import {
   CodexWorkerRefreshInput,
@@ -40,7 +42,9 @@ export interface CodexIndexClientLike {
     input: CodexWorkerRefreshInput,
     onProgress?: (progress: CodexIndexProgress) => void,
   ): Promise<CodexWorkerResult>;
-  dispose(): void;
+  cancel?(): void;
+  whenIdle?(): Promise<void>;
+  dispose(): void | Promise<void>;
 }
 
 export interface CodexProviderSnapshot {
@@ -53,6 +57,8 @@ export interface CodexProviderSnapshot {
   limit: ProviderLimitSnapshot | null;
   /** Aggregate-only inputs for reset-aligned API-equivalent value estimates. */
   weeklyValueInputs?: WeeklyValueInputs;
+  /** Exact sparse configured-zone hour coverage for the rolling 30-day view. */
+  hourlyCoverage?: CodexHourlyCoverage;
   /** Independent exact-hour backfill state for the current civil day. */
   todayCoverage: CodexTodayCoverage;
   todayPartial: boolean;
@@ -246,6 +252,17 @@ function snapshotFromIndex(
         (right.session.startedAt ?? 0) - (left.session.startedAt ?? 0),
     );
   const limits = latestLimits(contributions);
+  const hourlyCoverage = index.coverage.hourly ?? {
+    timeZone: index.coverage.period.timeZone,
+    asOfDay: index.coverage.period.asOfDay,
+    windowDays: CODEX_ROLLING_HOURLY_DAYS,
+    indexedFiles: 0,
+    totalFiles: 0,
+    indexedBytes: 0,
+    totalBytes: 0,
+    complete: false,
+    days: {},
+  };
   return {
     provider: 'codex',
     total: aggregateTotal(usageContributions),
@@ -255,6 +272,7 @@ function snapshotFromIndex(
     limits,
     limit: limits[0] ?? null,
     weeklyValueInputs: codexWeeklyValueInputs(usageContributions),
+    hourlyCoverage,
     todayCoverage: index.coverage.today,
     todayPartial: !index.coverage.today.complete,
   };
@@ -275,6 +293,8 @@ export class CodexProvider {
   private lastProgress: CodexIndexProgress | undefined;
   private snapshotGeneration = 0;
   private persistedSnapshotLoad: Promise<CodexProviderSnapshot | null> | null = null;
+  private disposed = false;
+  private disposal: Promise<void> | null = null;
 
   constructor(
     private readonly options: CodexProviderOptions,
@@ -283,7 +303,7 @@ export class CodexProvider {
   ) {}
 
   async isAvailable(): Promise<boolean> {
-    if (!this.options.enabled) {
+    if (this.disposed || !this.options.enabled) {
       return false;
     }
     const [sessions, archive] = await Promise.all([
@@ -301,6 +321,7 @@ export class CodexProvider {
    * lineage reconciliation continues in the background.
    */
   async loadPersistedSnapshot(): Promise<CodexProviderSnapshot | null> {
+    if (this.disposed) return null;
     if (this.currentSnapshot) {
       return this.currentSnapshot;
     }
@@ -346,7 +367,14 @@ export class CodexProvider {
   async refresh(
     profile: 'background' | 'foreground' = 'background',
     onProgress?: (progress: CodexIndexProgress) => void,
+    allowHistoricalBackfill: boolean = true,
   ): Promise<CodexProviderResult> {
+    if (this.disposed) {
+      return {
+        outcome: 'unavailable',
+        snapshot: this.currentSnapshot ?? emptySnapshot(this.options.timeZone),
+      };
+    }
     if (!(await this.isAvailable())) {
       return {
         outcome: 'unavailable',
@@ -354,15 +382,17 @@ export class CodexProvider {
       };
     }
     this.client ??= this.clientFactory();
+    const client = this.client;
     this.lastProgress = undefined;
     try {
-      const result = await this.client.refresh(
+      const result = await client.refresh(
         {
           codexHome: this.options.codexHome,
           indexPath: this.options.indexPath,
           salt: this.options.salt,
           timeZone: this.options.timeZone,
           profile,
+          allowHistoricalBackfill,
         },
         (progress) => {
           this.lastProgress = progress;
@@ -381,7 +411,9 @@ export class CodexProvider {
           !result.index.coverage.identity.complete ||
           !result.index.coverage.period.last7Days.complete ||
           !result.index.coverage.period.last30Days.complete ||
-          !result.index.coverage.period.allTime.complete
+          !result.index.coverage.period.allTime.complete ||
+          (result.index.coverage.hourly !== undefined &&
+            !result.index.coverage.hourly.complete)
           ? 'partial'
           : 'success';
       return {
@@ -400,6 +432,11 @@ export class CodexProvider {
         },
       };
     } catch {
+      try {
+        await client.dispose();
+      } finally {
+        if (this.client === client) this.client = null;
+      }
       return {
         outcome: 'error',
         snapshot: this.currentSnapshot ?? emptySnapshot(this.options.timeZone),
@@ -412,9 +449,25 @@ export class CodexProvider {
     return this.currentSnapshot;
   }
 
-  dispose(): void {
+  cancel(): void {
+    this.client?.cancel?.();
+  }
+
+  async cancelAndWait(): Promise<void> {
+    const client = this.client;
+    client?.cancel?.();
+    await client?.whenIdle?.();
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
+    this.disposed = true;
     this.snapshotGeneration += 1;
-    this.client?.dispose();
+    const client = this.client;
     this.client = null;
+    this.disposal = Promise.resolve()
+      .then(() => client?.dispose())
+      .then(() => undefined);
+    await this.disposal;
   }
 }

@@ -12,6 +12,7 @@ export const ADVICE_REMOTE_PAYLOAD_VERSION = 1 as const;
 export const MAX_PROMPT_SAMPLES = 20;
 export const MAX_PROMPT_SAMPLE_CHARS = 1_000;
 export const MAX_PROMPT_SAMPLE_TOTAL_CHARS = 12_000;
+export const MAX_USER_CONTEXT_CHARS = 1_000;
 
 /** Adding a metric here is an explicit remote-data/privacy review point. */
 export const REMOTE_ADVICE_METRIC_ALLOWLIST = [
@@ -63,6 +64,8 @@ export interface AdviceAggregateSnapshot {
 
 export interface PromptSampleOptIn {
   consent: 'explicit';
+  /** Configured context shares the same separate prompt-personalisation consent. */
+  userContext?: string;
   /** Only text is accepted. Extra runtime fields such as cwd are discarded. */
   samples: readonly { text: string }[];
 }
@@ -78,11 +81,14 @@ export interface PrepareAdvicePayloadInput {
 
 export interface PreparedAdvicePayload {
   contentType: 'application/json';
-  dataMode: 'aggregates-only' | 'aggregates-with-prompt-samples';
+  dataMode:
+    | 'aggregates-only'
+    | 'aggregates-with-personalization'
+    | 'aggregates-with-prompt-samples';
   promptSampleCount: number;
   /** The one canonical serialization used by both preview and transport. */
   serializedBody: string;
-  /** Exact UTF-8 bytes derived once from serializedBody. Future senders use these bytes directly. */
+  /** Exact UTF-8 bytes derived once from serializedBody. The sender uses these bytes directly. */
   canonicalBytes: Uint8Array;
   /** SHA-256 of canonicalBytes, lowercase hexadecimal. */
   sha256: string;
@@ -135,7 +141,9 @@ interface RemoteAdviceRequest {
     dataMode: PreparedAdvicePayload['dataMode'];
     promptSampleConsent: 'not-granted' | 'explicit';
     promptSampleCount: number;
+    userContextIncluded: boolean;
   };
+  userContext?: string;
   promptSamples?: { id: string; text: string }[];
 }
 
@@ -321,8 +329,16 @@ function promptSamples(optIn: PromptSampleOptIn | undefined): { id: string; text
     out.push({ id: `prompt-${out.length + 1}`, text: bounded });
     totalChars += bounded.length;
   }
-  if (out.length === 0) throw new Error('explicit prompt opt-in must contain at least one non-empty sample');
   return out;
+}
+
+function userContext(optIn: PromptSampleOptIn | undefined): string | undefined {
+  if (optIn === undefined || optIn.userContext === undefined) return undefined;
+  if (optIn.consent !== 'explicit' || typeof optIn.userContext !== 'string') {
+    throw new Error('user context requires the separate prompt-personalisation opt-in');
+  }
+  const text = optIn.userContext.trim().slice(0, MAX_USER_CONTEXT_CHARS);
+  return text.length > 0 ? text : undefined;
 }
 
 function canonicalize(value: unknown): unknown {
@@ -353,8 +369,16 @@ export function prepareAdvicePayload(input: PrepareAdvicePayloadInput): Prepared
   validateAdviceAggregateSnapshot(input.aggregate);
   validateSignalGraph(input);
   const samples = promptSamples(input.promptSamples);
+  const context = userContext(input.promptSamples);
+  if (input.promptSamples !== undefined && samples.length === 0 && context === undefined) {
+    throw new Error('explicit prompt opt-in must contain a sample or user context');
+  }
   const dataMode: PreparedAdvicePayload['dataMode'] =
-    samples.length > 0 ? 'aggregates-with-prompt-samples' : 'aggregates-only';
+    samples.length > 0
+      ? 'aggregates-with-prompt-samples'
+      : context !== undefined
+        ? 'aggregates-with-personalization'
+        : 'aggregates-only';
 
   const request: RemoteAdviceRequest = {
     schemaVersion: ADVICE_REMOTE_PAYLOAD_VERSION,
@@ -414,10 +438,12 @@ export function prepareAdvicePayload(input: PrepareAdvicePayloadInput): Prepared
     },
     privacy: {
       dataMode,
-      promptSampleConsent: samples.length > 0 ? 'explicit' : 'not-granted',
+      promptSampleConsent: input.promptSamples !== undefined ? 'explicit' : 'not-granted',
       promptSampleCount: samples.length,
+      userContextIncluded: context !== undefined,
     },
   };
+  if (context !== undefined) request.userContext = context;
   if (samples.length > 0) request.promptSamples = samples;
 
   const serializedBody = stableAdvicePayloadStringify(request);
@@ -444,7 +470,7 @@ function assertPreparedAdvicePayloadIntegrity(prepared: PreparedAdvicePayload): 
   }
 }
 
-/** Preview decodes the same canonical bytes that a future sender receives. */
+/** Preview decodes the same canonical bytes that the explicit sender receives. */
 export function previewAdvicePayload(prepared: PreparedAdvicePayload): AdvicePayloadPreview {
   assertPreparedAdvicePayloadIntegrity(prepared);
   return {

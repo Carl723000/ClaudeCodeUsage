@@ -436,24 +436,66 @@ test('daily and monthly Codex rows retain exact-model API-equivalent cost and co
 
 test('Today is a calendar-day scope with exact sparse hourly cost and token composition', () => {
   const snapshot = snapshotFixture();
-  for (const [index, file] of snapshot.files.slice(0, 2).entries()) {
-    const slice = file.period!.days['2026-07-20'];
-    const hour = index === 0 ? '10' : '11';
+  for (const [index, file] of snapshot.files.slice(0, 3).entries()) {
+    const day = index < 2 ? '2026-07-20' : '2026-07-10';
+    const slice = file.period!.days[day];
+    const hours = index === 0
+      ? {
+          '10': {
+            total: {
+              inputTotal: 250,
+              cachedInput: 200,
+              outputTotal: 50,
+              reasoningOutput: 30,
+              sourceTotal: 300,
+            },
+            byModel: {
+              'gpt-5.6-sol': {
+                inputTotal: 250,
+                cachedInput: 200,
+                outputTotal: 50,
+                reasoningOutput: 30,
+                sourceTotal: 300,
+              },
+            },
+          },
+          '11': {
+            total: {
+              inputTotal: 250,
+              cachedInput: 200,
+              outputTotal: 50,
+              reasoningOutput: 30,
+              sourceTotal: 300,
+            },
+            byModel: {
+              'gpt-5.6-sol': {
+                inputTotal: 250,
+                cachedInput: 200,
+                outputTotal: 50,
+                reasoningOutput: 30,
+                sourceTotal: 300,
+              },
+            },
+          },
+        }
+      : {
+          [index === 1 ? '11' : '09']: {
+            total: { ...slice.total },
+            byModel: Object.fromEntries(
+              Object.entries(slice.byModel).map(([model, tokens]) => [
+                model,
+                { ...tokens },
+              ]),
+            ),
+          },
+        };
     file.today = {
       day: '2026-07-20',
       timeZone: 'UTC',
       indexedThrough: file.period!.indexedThrough,
-      hours: {
-        [hour]: {
-          total: { ...slice.total },
-          byModel: Object.fromEntries(
-            Object.entries(slice.byModel).map(([model, tokens]) => [
-              model,
-              { ...tokens },
-            ]),
-          ),
-        },
-      },
+      windowDays: 30,
+      days: { [day]: hours },
+      hours: day === '2026-07-20' ? hours : {},
     };
   }
   snapshot.coverage.today = {
@@ -465,17 +507,64 @@ test('Today is a calendar-day scope with exact sparse hourly cost and token comp
     totalBytes: 2,
     complete: true,
   };
+  const hourlyCoverage = {
+    timeZone: 'UTC',
+    asOfDay: '2026-07-20',
+    windowDays: 30,
+    indexedFiles: 3,
+    totalFiles: 3,
+    indexedBytes: 3,
+    totalBytes: 3,
+    complete: true,
+    days: {
+      '2026-07-10': {
+        day: '2026-07-10',
+        indexedFiles: 1,
+        totalFiles: 1,
+        indexedBytes: 1,
+        totalBytes: 1,
+        complete: true,
+      },
+      '2026-07-20': {
+        day: '2026-07-20',
+        indexedFiles: 2,
+        totalFiles: 2,
+        indexedBytes: 2,
+        totalBytes: 2,
+        complete: true,
+      },
+    },
+  };
+  snapshot.coverage.hourly = hourlyCoverage;
+  snapshot.hourlyCoverage = hourlyCoverage;
 
   const view = buildCodexUsageView(snapshot, NOW);
 
   assert.equal(view.today.total.processed, 1_200);
   assert.equal(view.today.threads, 2);
   assert.deepEqual(view.todayHourly.map((row) => row.hour), ['10', '11']);
-  assert.equal(view.todayHourly[0].total.processed, 600);
-  assert.equal(view.todayHourly[0].apiEquivalent.equivalentUsd, 0.0037);
+  assert.deepEqual(view.todayHourly.map((row) => row.label), ['10:00', '11:00']);
+  assert.equal(view.todayHourly[0].total.processed, 300);
+  assert.equal(view.todayHourly[0].apiEquivalent.equivalentUsd, 0.00185);
   assert.equal(view.todayHourly[0].apiEquivalent.pricingCoverage, 1);
   assert.equal(view.todayHourly[0].threads, 1);
   assert.equal(view.todayCoverage.complete, true);
+  assert.equal(view.last30DaysHourlyByDay['2026-07-10'][0].hour, '09');
+  assert.equal(view.last30DaysHourlyByDay['2026-07-10'][0].label, '09:00');
+  assert.equal(view.last30DaysHourlyByDay['2026-07-10'][0].threads, 1);
+  assert.equal(view.hourlyCoverage.days['2026-07-10'].complete, true);
+
+  const hourlyProcessed = view.todayHourly.reduce(
+    (sum, row) => sum + row.total.processed,
+    0,
+  );
+  const hourlyThreads = view.todayHourly.reduce(
+    (sum, row) => sum + row.threads,
+    0,
+  );
+  assert.equal(hourlyProcessed, view.today.total.processed);
+  assert.equal(hourlyThreads, 3);
+  assert.equal(view.today.threads, 2);
 });
 
 test('rolling scopes stay anchored to snapshot coverage across Hong Kong midnight', () => {

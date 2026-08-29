@@ -33,6 +33,7 @@ interface ActiveRefresh {
   reject: (error: CodexWorkerError) => void;
   progressListeners: Array<(progress: CodexIndexProgress) => void>;
   cancelSent: boolean;
+  finishing: boolean;
   profile: 'background' | 'foreground';
 }
 
@@ -48,6 +49,9 @@ export class CodexIndexClient {
   private worker: CodexWorkerLike | null = null;
   private active: ActiveRefresh | null = null;
   private disposed = false;
+  private termination: Promise<void> | null = null;
+  private terminationFailure: unknown = null;
+  private disposal: Promise<void> | null = null;
 
   constructor(private readonly workerFactory: CodexWorkerFactory = defaultWorkerFactory) {}
 
@@ -91,6 +95,7 @@ export class CodexIndexClient {
       reject,
       progressListeners: onProgress ? [onProgress] : [],
       cancelSent: false,
+      finishing: false,
       profile: input.profile ?? 'background',
     };
     worker.postMessage({ type: 'refresh', requestId, ...input });
@@ -108,19 +113,51 @@ export class CodexIndexClient {
     });
   }
 
-  dispose(): void {
-    if (this.disposed) {
-      return;
+  async whenIdle(): Promise<void> {
+    const active = this.active;
+    if (active) {
+      try {
+        await active.promise;
+      } catch {
+        // Idle is a lifecycle condition, independent of the refresh outcome.
+      }
     }
+    if (this.termination) {
+      try {
+        await this.termination;
+      } catch {
+        // A terminal refresh already surfaces termination failure to callers.
+      }
+    }
+  }
+
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
     this.disposed = true;
-    if (this.active) {
-      this.active.reject(
+    const active = this.active;
+    if (active) {
+      active.reject(
         new CodexWorkerError('disposed', 'Codex index client is disposed'),
       );
       this.active = null;
     }
-    void this.worker?.terminate();
+    const worker = this.worker;
     this.worker = null;
+    const terminating = worker
+      ? Promise.resolve(worker.terminate())
+          .then(() => undefined)
+          .catch((error: unknown) => {
+            this.terminationFailure ??= error;
+            throw error;
+          })
+      : Promise.resolve();
+    this.disposal = Promise.all([
+      terminating,
+      this.termination ?? Promise.resolve(),
+    ]).then(() => {
+      if (this.terminationFailure) throw this.terminationFailure;
+    });
+    return this.disposal;
   }
 
   private ensureWorker(): CodexWorkerLike {
@@ -145,24 +182,58 @@ export class CodexIndexClient {
       }
       return;
     }
-    this.active = null;
-    if (message.type === 'result') {
-      active.resolve(message.result);
-    } else {
-      active.reject(new CodexWorkerError(message.error.code, message.error.message));
+    if (active.finishing) return;
+    active.finishing = true;
+    const terminal = message;
+    void this.terminateSettledWorker()
+      .then(() => {
+        if (this.active === active) this.active = null;
+        if (terminal.type === 'result') {
+          active.resolve(terminal.result);
+        } else {
+          active.reject(new CodexWorkerError(terminal.error.code, terminal.error.message));
+        }
+      })
+      .catch(() => {
+        if (this.active === active) this.active = null;
+        active.reject(new CodexWorkerError(
+          'worker-failed',
+          'Codex index worker could not be stopped safely',
+        ));
+      });
+  }
+
+  /** A worker owns no steady-state responsibility after one terminal reply. */
+  private async terminateSettledWorker(): Promise<void> {
+    const worker = this.worker;
+    this.worker = null;
+    const termination = worker
+      ? Promise.resolve(worker.terminate()).then(() => undefined)
+      : Promise.resolve();
+    this.termination = termination;
+    try {
+      await termination;
+    } catch (error) {
+      this.terminationFailure ??= error;
+      throw error;
+    } finally {
+      if (this.termination === termination) this.termination = null;
     }
   }
 
   private handleWorkerFailure(): void {
-    if (this.active) {
-      this.active.reject(
+    const active = this.active;
+    if (!active || active.finishing) return;
+    active.finishing = true;
+    const settle = (): void => {
+      if (this.active === active) this.active = null;
+      active.reject(
         new CodexWorkerError(
           'worker-failed',
           'Codex index worker stopped unexpectedly',
         ),
       );
-      this.active = null;
-    }
-    this.worker = null;
+    };
+    void this.terminateSettledWorker().then(settle, settle);
   }
 }

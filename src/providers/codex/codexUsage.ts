@@ -1,13 +1,15 @@
 import { CodexProviderSnapshot } from './codexProvider';
 import {
   CodexFileAggregate,
+  CodexHourlyCoverage,
   CodexIndexCoverage,
   CodexPeriodCoverage,
   CodexRangeCoverage,
   CodexStructuralSummary,
   CodexTodayCoverage,
 } from './codexIndex';
-import { rollingDayKeysFromDayKey } from '../../dateKeys';
+import { formatHourLabel, rollingDayKeysFromDayKey } from '../../dateKeys';
+import { CODEX_ROLLING_HOURLY_DAYS } from './codexPeriodIndex';
 import {
   freshInputPlusOutput,
   processedTokens,
@@ -132,6 +134,7 @@ export interface CodexPeriodUsageView {
 
 export interface CodexHourlyUsageView {
   hour: string;
+  label: string;
   total: CodexMetricTotals;
   apiEquivalent: EquivalentCostBreakdown;
   threads: number;
@@ -170,6 +173,9 @@ export interface CodexUsageView {
   /** Exact, sparse current-day hours from the independently resumable sidecar. */
   todayHourly: CodexHourlyUsageView[];
   todayCoverage: CodexTodayCoverage;
+  /** Sparse data-day -> exact hour rows for the configured rolling window. */
+  last30DaysHourlyByDay: Record<string, CodexHourlyUsageView[]>;
+  hourlyCoverage: CodexHourlyCoverage;
   lastTask: CodexUsageScopeView | null;
   lastTaskIdentity: CodexTaskIdentityView | null;
   last7Days: CodexUsageScopeView;
@@ -591,7 +597,7 @@ function monthlyRows(
     });
 }
 
-function todayHourlyRows(
+function hourlyRows(
   files: CodexFileAggregate[],
   day: string,
   timeZone: string,
@@ -605,10 +611,16 @@ function todayHourlyRows(
     }
   >();
   for (const file of files) {
-    if (file.today?.day !== day || file.today.timeZone !== timeZone) {
+    if (!file.today || file.today.timeZone !== timeZone) {
       continue;
     }
-    for (const [hour, slice] of Object.entries(file.today.hours)) {
+    const slices =
+      file.today.windowDays === CODEX_ROLLING_HOURLY_DAYS && file.today.days
+        ? file.today.days[day] ?? {}
+        : file.today.day === day
+          ? file.today.hours
+          : {};
+    for (const [hour, slice] of Object.entries(slices)) {
       if (!/^(?:[01]\d|2[0-3])$/.test(hour)) {
         continue;
       }
@@ -629,6 +641,7 @@ function todayHourlyRows(
       const total = metrics(row.tokens);
       return {
         hour,
+        label: formatHourLabel(hour),
         total,
         apiEquivalent: apiEquivalentForBuckets(row.models, total.processed),
         threads: row.threads.size,
@@ -933,6 +946,18 @@ export function buildCodexUsageView(
   const periodCoverage = snapshot.coverage.period;
   const last7DayKeys = rollingDayKeysFromDayKey(periodCoverage.asOfDay, 7);
   const last30DayKeys = rollingDayKeysFromDayKey(periodCoverage.asOfDay, 30);
+  const hourlyCoverage = snapshot.hourlyCoverage ??
+    snapshot.coverage.hourly ?? {
+      timeZone: periodCoverage.timeZone,
+      asOfDay: periodCoverage.asOfDay,
+      windowDays: CODEX_ROLLING_HOURLY_DAYS,
+      indexedFiles: 0,
+      totalFiles: 0,
+      indexedBytes: 0,
+      totalBytes: 0,
+      complete: false,
+      days: {},
+    };
   const periodContext: CodexThreadPeriodContext = {
     recentSessionKeys: new Set(recent.map(sessionIdentityKey)),
     last7DayKeys: new Set(last7DayKeys),
@@ -982,6 +1007,14 @@ export function buildCodexUsageView(
   );
   const allTime = scope(snapshot.files, aggregateIndexIncomplete);
   const daily = dailyRows(snapshot.files, periodCoverage.timeZone);
+  const last30DaysHourlyByDay = Object.fromEntries(
+    last30DayKeys.flatMap((day) => {
+      const rows = hourlyRows(snapshot.files, day, periodCoverage.timeZone);
+      return rows.length > 0 || (hourlyCoverage.days[day]?.totalFiles ?? 0) > 0
+        ? [[day, rows]]
+        : [];
+    }),
+  );
   const taskRoot = taskRootFile(recent);
   const taskIdentityFile = taskRoot ?? fallbackTaskIdentityFile(recent);
   const sourceLimits = snapshot.limits.length > 0
@@ -1020,12 +1053,14 @@ export function buildCodexUsageView(
 
   return {
     today: todayScope,
-    todayHourly: todayHourlyRows(
+    todayHourly: hourlyRows(
       snapshot.files,
       periodCoverage.asOfDay,
       periodCoverage.timeZone,
     ),
     todayCoverage: snapshot.coverage.today,
+    last30DaysHourlyByDay,
+    hourlyCoverage,
     lastTask: recentScope,
     lastTaskIdentity: recent.length > 0
       ? {

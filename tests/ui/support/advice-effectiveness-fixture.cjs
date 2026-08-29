@@ -12,6 +12,7 @@ const {
 } = require('../../../out/adviceEffectiveness/payload.js');
 
 const PROMPT_SENTINEL = 'SAFE_PROMPT_SENTINEL_測試_🚦';
+const USER_CONTEXT_SENTINEL = 'SAFE_USER_CONTEXT_SENTINEL_私人_🔒';
 const GENERATED_AT = '2026-07-20T12:00:00.000Z';
 
 function numericUsage() {
@@ -146,6 +147,7 @@ function buildAdviceEffectivenessFixture({ locale = 'en' } = {}) {
     contract: claude.contract,
     remotePreviewEligible: claude.remoteEvidenceEligible,
     aggregate: claude.aggregate,
+    userContext: USER_CONTEXT_SENTINEL,
     promptSamples: [{ text: PROMPT_SENTINEL }],
   };
   const codexState = {
@@ -165,6 +167,7 @@ function buildAdviceEffectivenessFixture({ locale = 'en' } = {}) {
 
   return {
     promptSentinel: PROMPT_SENTINEL,
+    userContextSentinel: USER_CONTEXT_SENTINEL,
     states: { claude: claudeState, codex: codexState },
     snapshotMessages: {
       aggregateOnly: snapshotMessage(aggregateOnly, 0),
@@ -175,5 +178,6 @@ function buildAdviceEffectivenessFixture({ locale = 'en' } = {}) {
 
 module.exports = {
   PROMPT_SENTINEL,
+  USER_CONTEXT_SENTINEL,
   buildAdviceEffectivenessFixture,
 };

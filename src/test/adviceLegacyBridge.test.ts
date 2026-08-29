@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
-import { AdviceOptions } from '../advisor';
 import {
+  LegacyByokCallOptions,
   LegacyByokModelCall,
   requestStructuredAdviceViaLegacyByok,
 } from '../adviceEffectiveness/legacyBridge';
@@ -19,7 +19,7 @@ const byok = {
 test('legacy BYOK bridge uses the sealed serialization as the exact user turn and strict-parses the result', async () => {
   const prepared = prepareAdvicePayload(payloadInputFixture());
   let capturedUser = '';
-  let capturedOptions: AdviceOptions | undefined;
+  let capturedOptions: LegacyByokCallOptions | undefined;
   const invoke: LegacyByokModelCall = async (_system, userContent, options) => {
     capturedUser = userContent;
     capturedOptions = options;
@@ -39,7 +39,12 @@ test('legacy BYOK bridge uses the sealed serialization as the exact user turn an
   assert.equal(result.ok, true);
   assert.equal(capturedUser, prepared.serializedBody);
   assert.equal(capturedOptions?.summary, '');
-  assert.equal(capturedOptions?.userContext, undefined);
+  assert.equal(
+    capturedOptions === undefined
+      ? false
+      : Object.prototype.hasOwnProperty.call(capturedOptions, 'userContext'),
+    false,
+  );
   assert.equal(capturedOptions?.backend, 'api');
 });
 

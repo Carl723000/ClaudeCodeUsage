@@ -101,3 +101,33 @@ test('refreshed credentials are written back to the selected profile', async () 
   const stored = JSON.parse(fs.readFileSync(path.join(profile, '.credentials.json'), 'utf8'));
   assert.deepEqual(stored, credentials);
 });
+
+test('quota fetch forwards caller cancellation through the active request', async () => {
+  const client = new ClaudeApiClient(null) as any;
+  const controller = new AbortController();
+  let observedSignal: AbortSignal | undefined;
+  client.getValidCredentials = async () => ({
+    claudeAiOauth: {
+      accessToken: 'test-access',
+      refreshToken: 'test-refresh',
+      expiresAt: Date.now() + 60_000,
+    },
+  });
+  client.callUsageApi = (_token: string, signal?: AbortSignal) =>
+    new Promise((_resolve, reject) => {
+      observedSignal = signal;
+      signal?.addEventListener(
+        'abort',
+        () => reject(new Error('Request cancelled')),
+        { once: true },
+      );
+    });
+
+  const pending = client.fetchUsageLimits(controller.signal);
+  await Promise.resolve();
+  controller.abort();
+
+  assert.equal(await pending, null);
+  assert.strictEqual(observedSignal, controller.signal);
+  assert.equal(observedSignal?.aborted, true);
+});

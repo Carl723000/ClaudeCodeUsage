@@ -189,15 +189,21 @@ export class ClaudeApiClient {
     return Date.now() >= credentials.claudeAiOauth.expiresAt - 60 * 1000;
   }
 
-  private async refreshAccessToken(credentials: ClaudeCredentials): Promise<ClaudeCredentials> {
+  private async refreshAccessToken(
+    credentials: ClaudeCredentials,
+    signal?: AbortSignal,
+  ): Promise<ClaudeCredentials> {
+    if (signal?.aborted) throw new Error('Request cancelled');
     const r = await this.request('https://console.anthropic.com/v1/oauth/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         refresh_token: credentials.claudeAiOauth.refreshToken,
         grant_type: 'refresh_token'
-      })
+      }),
+      signal,
     });
+    if (signal?.aborted) throw new Error('Request cancelled');
     if (r.status !== 200) {
       throw new Error(`Token refresh failed: ${r.status}`);
     }
@@ -214,7 +220,8 @@ export class ClaudeApiClient {
     return updated;
   }
 
-  private async getValidCredentials(): Promise<ClaudeCredentials | null> {
+  private async getValidCredentials(signal?: AbortSignal): Promise<ClaudeCredentials | null> {
+    if (signal?.aborted) throw new Error('Request cancelled');
     // Re-read from disk/keychain on every call so switching Claude accounts is
     // honoured without a window reload. #45: a switched-in account has a *valid*
     // (non-expired) token, so the expiry-only re-read below never noticed it and
@@ -222,6 +229,7 @@ export class ClaudeApiClient {
     // loadCredentials refreshes this.credentials; fall back to the cached copy
     // only if the fresh read transiently fails.
     let credentials = (await this.loadCredentials()) || this.credentials;
+    if (signal?.aborted) throw new Error('Request cancelled');
     if (!credentials) {
       return null;
     }
@@ -238,7 +246,7 @@ export class ClaudeApiClient {
       }
       this.log('token: expired, refreshing');
       try {
-        credentials = await this.refreshAccessToken(fresh || credentials);
+        credentials = await this.refreshAccessToken(fresh || credentials, signal);
       } catch (e) {
         this.log(`token: refresh failed: ${(e as Error).message}`);
         return null;
@@ -262,8 +270,14 @@ export class ClaudeApiClient {
    * rejection ("403 Request not allowed"). */
   private async request(
     url: string,
-    opts: { method?: string; headers?: Record<string, string>; body?: string }
+    opts: {
+      method?: string;
+      headers?: Record<string, string>;
+      body?: string;
+      signal?: AbortSignal;
+    }
   ): Promise<HttpResponse> {
+    if (opts.signal?.aborted) throw new Error('Request cancelled');
     if (!this.preferCurl) {
       try {
         const r = await requestViaFetch(url, opts);
@@ -275,22 +289,25 @@ export class ClaudeApiClient {
           return r;
         }
       } catch (e) {
+        if (opts.signal?.aborted) throw new Error('Request cancelled');
         this.log(`fetch: error ${(e as Error).message} → trying curl`);
       }
     }
+    if (opts.signal?.aborted) throw new Error('Request cancelled');
     const r = await requestViaCurl(url, opts, (line) => this.log(line));
     this.log(`curl:  ${r.status} ${url}`);
     return r;
   }
 
-  private callUsageApi(accessToken: string): Promise<HttpResponse> {
+  private callUsageApi(accessToken: string, signal?: AbortSignal): Promise<HttpResponse> {
     return this.request('https://api.anthropic.com/api/oauth/usage', {
       method: 'GET',
       headers: {
         Authorization: `Bearer ${accessToken}`,
         'anthropic-beta': 'oauth-2025-04-20',
         'Content-Type': 'application/json'
-      }
+      },
+      signal,
     });
   }
 
@@ -300,19 +317,24 @@ export class ClaudeApiClient {
    * or when anything else goes wrong. All decisions are logged to the
    * "Claude Code Usage" output channel for diagnosis.
    */
-  async fetchUsageLimits(): Promise<ClaudeApiUsageResponse | null> {
+  async fetchUsageLimits(signal?: AbortSignal): Promise<ClaudeApiUsageResponse | null> {
+    if (signal?.aborted) return null;
     if (Date.now() < this.rateLimitedUntil) {
       this.log(`skip: cooling down for ${Math.round((this.rateLimitedUntil - Date.now()) / 1000)}s after 429`);
       return null;
     }
 
     try {
-      const credentials = await this.getValidCredentials();
+      const credentials = await this.getValidCredentials(signal);
       if (!credentials) {
         return null;
       }
 
-      let response = await this.callUsageApi(credentials.claudeAiOauth.accessToken);
+      if (signal?.aborted) return null;
+      let response = await this.callUsageApi(
+        credentials.claudeAiOauth.accessToken,
+        signal,
+      );
 
       if (response.status === 429) {
         // 60 s cool-down. The old flat 5-minute cool-down made a single 429
@@ -328,8 +350,11 @@ export class ClaudeApiClient {
       if (response.status === 401) {
         this.log('401: forcing token refresh and retrying once');
         try {
-          const refreshed = await this.refreshAccessToken(credentials);
-          response = await this.callUsageApi(refreshed.claudeAiOauth.accessToken);
+          const refreshed = await this.refreshAccessToken(credentials, signal);
+          response = await this.callUsageApi(
+            refreshed.claudeAiOauth.accessToken,
+            signal,
+          );
         } catch (e) {
           this.log(`401 retry: refresh failed: ${(e as Error).message}`);
           return null;

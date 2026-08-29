@@ -226,30 +226,36 @@ test('Codex Today exposes hourly API-equivalent cost and token composition', asy
 
   const table = hourly.locator('.daily-table');
   await expect(table.locator('thead th').first()).toHaveText('Hour');
-  await expect(table.locator('thead th').nth(1)).toHaveText('API-equivalent cost');
-  await expect(table.locator('tbody .cost-cell').first()).toHaveText(/^(?:\$[\d,.]+|—)$/);
+  await expect(table.locator(':scope > thead > tr > th').nth(1)).toHaveText('API-equivalent cost');
+  await expect(table.locator(':scope > tbody > tr .cost-cell').first())
+    .toHaveText(/^(?:\$[\d,.]+|—)$/);
 });
 
 test('Codex month chart defaults to API-equivalent cost and retains token switches', async ({ page }) => {
   await openCodex(page);
   await page.locator('#tab-month').click();
 
-  const chart = page.locator('#month .daily-breakdown');
+  const chart = page.locator('#month [data-codex-last30-daily]');
   await expect(chart).toBeVisible();
-  await expect(chart.locator('.chart-tab')).toHaveCount(6);
-  await expect(chart.locator('.chart-tab.active')).toHaveAttribute('data-metric', 'cost');
-  await expect(chart.locator('.chart-tab.active')).toHaveText('API-equivalent cost');
-  await expect(chart.locator('.chart-bar[data-cost]').first()).toBeVisible();
-  await expect(chart.locator('.hc-yaxis .hc-yval').first()).toHaveText(/^\$/);
-  await expect(chart.locator('.daily-table thead th').nth(1)).toHaveText('API-equivalent cost');
-  await expect(chart.locator('.daily-table tbody .cost-cell').first()).toHaveText(/^(?:\$[\d,.]+|—)$/);
+  const tabs = chart.locator(':scope > .chart-tabs .chart-tab');
+  const mainChart = chart.locator(':scope > .chart-content');
+  const table = chart.locator(':scope > .daily-table-container > .daily-table');
+  await expect(tabs).toHaveCount(6);
+  await expect(chart.locator(':scope > .chart-tabs .chart-tab.active'))
+    .toHaveAttribute('data-metric', 'cost');
+  await expect(chart.locator(':scope > .chart-tabs .chart-tab.active')).toHaveText('API-equivalent cost');
+  await expect(mainChart.locator('.chart-bar[data-cost]').first()).toBeVisible();
+  await expect(mainChart.locator('.hc-yaxis .hc-yval').first()).toHaveText(/^\$/);
+  await expect(table.locator(':scope > thead > tr > th').nth(1)).toHaveText('API-equivalent cost');
+  await expect(table.locator(':scope > tbody > tr.daily-row .cost-cell').first())
+    .toHaveText(/^(?:\$[\d,.]+|—)$/);
 
-  await chart.locator('.chart-tab[data-metric="outputTokens"]').click();
-  await expect(chart.locator('.chart-tab[data-metric="outputTokens"]')).toHaveClass(/active/);
-  await chart.locator('.chart-tab[data-metric="cost"]').click();
-  await expect(chart.locator('.chart-tab[data-metric="cost"]')).toHaveClass(/active/);
-  await expect(chart.locator('.hc-barval').first()).toHaveText(/^(?:\$[\d,.]+|—)$/);
-  await expect(chart.locator('.chart-bar[data-cost]').first()).toHaveAttribute(
+  await chart.locator(':scope > .chart-tabs .chart-tab[data-metric="outputTokens"]').click();
+  await expect(chart.locator(':scope > .chart-tabs .chart-tab[data-metric="outputTokens"]')).toHaveClass(/active/);
+  await chart.locator(':scope > .chart-tabs .chart-tab[data-metric="cost"]').click();
+  await expect(chart.locator(':scope > .chart-tabs .chart-tab[data-metric="cost"]')).toHaveClass(/active/);
+  await expect(mainChart.locator('.hc-barval').first()).toHaveText(/^(?:\$[\d,.]+|—)$/);
+  await expect(mainChart.locator('.chart-bar[data-cost]').first()).toHaveAttribute(
     'title',
     /Priced model coverage:/,
   );

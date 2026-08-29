@@ -6,6 +6,14 @@ import * as path from 'node:path';
 
 import { ClaudeDataLoader } from '../dataLoader';
 import { WindowActivityGate } from '../refreshPolicy';
+import {
+  beginBackgroundWork,
+  createBackgroundWorkState,
+  pauseBackgroundWork,
+  recordBackgroundWorkFailure,
+  recordBackgroundWorkProgress,
+} from '../backgroundWorkState';
+import { ResourceOwnershipRegistry } from '../resourceOwnership';
 import { snapshotFixture } from './codexFixtures';
 
 type ExtensionModule = typeof import('../extension');
@@ -36,7 +44,37 @@ function loadExtensionModule(): ExtensionModule {
 const { ClaudeCodeUsageExtension } = loadExtensionModule();
 
 function bareExtension(): any {
-  return Object.create(ClaudeCodeUsageExtension.prototype) as any;
+  const extension = Object.create(ClaudeCodeUsageExtension.prototype) as any;
+  extension.resourceOwnership = new ResourceOwnershipRegistry();
+  extension.codexWatcherLeases = new Map();
+  extension.debounceTimerLeases = new Map();
+  extension.activeAdviceNetworks = new Map();
+  extension.activeQuotaNetworks = new Map();
+  extension.codexProviderRetirements = new Set();
+  extension.activeCodexRefreshes = new Set();
+  extension.pendingResourceStops = new Set();
+  extension.resourceStopFailure = null;
+  extension.codexProviderRetirementFailure = null;
+  extension.codexBackgroundStateWrite = Promise.resolve();
+  extension.configurationGeneration = 0;
+  extension.fileWatcherGeneration = 0;
+  extension.codexWatcherGeneration = 0;
+  extension.credentialsWatcherGeneration = 0;
+  extension.disposed = false;
+  extension.codexBackgroundState = createBackgroundWorkState({
+    measurementVersion: 1,
+    reason: 'first-index',
+    now: 0,
+  });
+  extension.codexFirstBackfillActive = false;
+  extension.codexWorkerCancellationRequested = false;
+  extension.context = {
+    globalState: {
+      update: async () => undefined,
+    },
+  };
+  extension.outputChannel = { appendLine: () => undefined };
+  return extension;
 }
 
 test('background transition stops every Claude and Codex recurring resource once', () => {
@@ -196,15 +234,15 @@ test('Codex becomes available in the dashboard before a slow cold index finishes
   });
 
   const pending = extension.runCodexRefresh('startup');
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
 
-  assert.deepEqual(states, [{
+  assert.deepEqual(states[0], {
     available: true,
     hasData: false,
     refreshing: true,
     scannedFiles: null,
-  }]);
+  });
+  assert.ok(states.every((state) => state.available && state.refreshing));
   assert.deepEqual(liveProgress, [12]);
 
   releaseRefresh?.({ outcome: 'unavailable' });
@@ -245,8 +283,7 @@ test('a verified Codex checkpoint stays visible while its index refresh continue
   });
 
   const pending = extension.runCodexRefresh('startup');
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise((resolve) => setImmediate(resolve));
 
   assert.ok(releaseRefresh, 'the background worker refresh should still be running');
   assert.ok(
@@ -299,11 +336,17 @@ test('Codex live index progress coalesces dashboard renders', () => {
   const originalNow = Date.now;
   let now = 1_000;
   let renders = 0;
+  const reasons: unknown[] = [];
   extension.codexProgress = null;
   extension.codexProgressLastRenderedAt = 0;
+  extension.codexBackgroundState = beginBackgroundWork(
+    extension.codexBackgroundState,
+    { trigger: 'automatic', now, reason: 'first-index' },
+  ).state;
   extension.webviewProvider = {
-    updateCodexProgress: () => {
+    updateCodexProgress: (rendered: { reason?: unknown }) => {
       renders += 1;
+      reasons.push(rendered.reason);
     },
   };
   const progress = (scannedFiles: number) => ({
@@ -330,9 +373,659 @@ test('Codex live index progress coalesces dashboard renders', () => {
     extension.onCodexIndexProgress(progress(40));
     assert.equal(renders, 2);
     assert.equal(extension.codexProgress.scannedFiles, 40);
+    assert.deepEqual(reasons, ['first-index', 'first-index']);
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('cooldown, user pause, and completed measurement suppress historical backfill', async () => {
+  const originalNow = Date.now;
+  Date.now = () => 1_001;
+  const snapshot = snapshotFixture();
+  snapshot.coverage.complete = false;
+  snapshot.coverage.indexedFiles = Math.max(0, snapshot.coverage.totalFiles - 1);
+  const progress = {
+    completedUnits: 1,
+    totalUnits: 2,
+    completedBytes: 10,
+    totalBytes: 20,
+  };
+  const seed = createBackgroundWorkState({
+    measurementVersion: 1,
+    reason: 'history-backfill',
+    now: 1_000,
+    progress,
+  });
+  const running = beginBackgroundWork(seed, {
+    trigger: 'automatic',
+    now: 1_000,
+  }).state;
+  const states = [
+    recordBackgroundWorkFailure(running, { now: 1_000 }),
+    pauseBackgroundWork(seed, { now: 1_000 }),
+    recordBackgroundWorkProgress(running, {
+      now: 1_000,
+      complete: true,
+      progress,
+    }),
+  ];
+  const allowed: boolean[] = [];
+
+  try {
+    for (const state of states) {
+      const extension = bareExtension();
+      extension.codexBackgroundState = state;
+      extension.getConfiguration = () => ({ codexEnabled: true });
+      extension.webviewProvider = { updateCodexProgress: () => undefined };
+      extension.syncProviderUi = () => undefined;
+      extension.codexProvider = {
+        isAvailable: async () => true,
+        loadPersistedSnapshot: async () => snapshot,
+        refresh: async (
+          _profile: string,
+          _onProgress: unknown,
+          allowHistoricalBackfill: boolean,
+        ) => {
+          allowed.push(allowHistoricalBackfill);
+          return {
+            outcome: 'partial',
+            snapshot,
+            diagnostic: {
+              bodyReads: 0,
+              failedFiles: 0,
+              metadataMs: 0,
+              parseMs: 0,
+              migrationPending: true,
+            },
+          };
+        },
+      };
+
+      await extension.runCodexRefresh('poll');
+      assert.equal(extension.codexBackgroundState.status, state.status);
+    }
+  } finally {
+    Date.now = originalNow;
+  }
+
+  assert.deepEqual(allowed, [false, false, false]);
+});
+
+test('a missing persisted index invalidates same-version complete background work', async () => {
+  const extension = bareExtension();
+  const completeSnapshot = snapshotFixture();
+  const seed = createBackgroundWorkState({
+    measurementVersion: 1,
+    reason: 'history-backfill',
+    now: 1,
+    progress: {
+      completedUnits: 1,
+      totalUnits: 1,
+      completedBytes: 1,
+      totalBytes: 1,
+    },
+  });
+  extension.codexBackgroundState = recordBackgroundWorkProgress(
+    beginBackgroundWork(seed, { trigger: 'automatic', now: 1 }).state,
+    {
+      now: 2,
+      complete: true,
+      progress: seed.progress,
+    },
+  );
+  extension.getConfiguration = () => ({ codexEnabled: true });
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.webviewProvider = { updateCodexProgress: () => undefined };
+  extension.syncProviderUi = () => undefined;
+  let historicalAllowed: boolean | undefined;
+  extension.codexProvider = {
+    isAvailable: async () => true,
+    loadPersistedSnapshot: async () => null,
+    refresh: async (
+      _profile: string,
+      _onProgress: unknown,
+      allowHistoricalBackfill: boolean,
+    ) => {
+      historicalAllowed = allowHistoricalBackfill;
+      return {
+        outcome: 'success',
+        snapshot: completeSnapshot,
+        diagnostic: {
+          bodyReads: 1,
+          failedFiles: 0,
+          metadataMs: 1,
+          parseMs: 1,
+          migrationPending: false,
+        },
+      };
+    },
+  };
+
+  await extension.runCodexRefresh('startup');
+
+  assert.equal(historicalAllowed, true);
+  assert.equal(extension.codexBackgroundState.status, 'eligible');
+});
+
+test('a failed preflight state write never strands in-memory background work as running', async () => {
+  const extension = bareExtension();
+  const snapshot = snapshotFixture();
+  snapshot.coverage.complete = false;
+  snapshot.coverage.indexedFiles = Math.max(0, snapshot.coverage.totalFiles - 1);
+  let writes = 0;
+  extension.context.globalState.update = async () => {
+    writes += 1;
+    if (writes === 1) throw new Error('persistence unavailable');
+  };
+  extension.getConfiguration = () => ({ codexEnabled: true });
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.webviewProvider = { updateCodexProgress: () => undefined };
+  extension.syncProviderUi = () => undefined;
+  extension.codexProvider = {
+    isAvailable: async () => true,
+    loadPersistedSnapshot: async () => snapshot,
+    refresh: async () => assert.fail('worker must not start before state is durable'),
+  };
+
+  await assert.rejects(extension.runCodexRefresh('poll'), /persistence unavailable/);
+
+  assert.equal(extension.codexBackgroundState.status, 'eligible');
+  assert.equal(extension.codexBackgroundState.reason, 'resume');
+  assert.ok(writes >= 1);
+});
+
+test('background state writes are serialized and preserve their captured order', async () => {
+  const extension = bareExtension();
+  let finishFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { finishFirst = resolve; });
+  const writes: Array<{ status: string; reason: string }> = [];
+  extension.context.globalState.update = async (_key: string, value: any) => {
+    writes.push({ status: value.status, reason: value.reason });
+    if (writes.length === 1) await firstGate;
+  };
+
+  const first = extension.saveCodexBackgroundState();
+  extension.codexBackgroundState = beginBackgroundWork(
+    extension.codexBackgroundState,
+    { trigger: 'automatic', now: 1, reason: 'first-index' },
+  ).state;
+  const second = extension.saveCodexBackgroundState();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(writes, [{ status: 'eligible', reason: 'first-index' }]);
+
+  finishFirst();
+  await Promise.all([first, second]);
+  assert.deepEqual(writes, [
+    { status: 'eligible', reason: 'first-index' },
+    { status: 'running', reason: 'first-index' },
+  ]);
+});
+
+test('a recovered index invalidates complete state and queues historical reconciliation', async () => {
+  const extension = bareExtension();
+  const pending = snapshotFixture();
+  pending.coverage.complete = false;
+  pending.coverage.indexedFiles = Math.max(0, pending.coverage.totalFiles - 1);
+  const seed = createBackgroundWorkState({
+    measurementVersion: 1,
+    reason: 'history-backfill',
+    now: 1,
+    progress: {
+      completedUnits: 1,
+      totalUnits: 1,
+      completedBytes: 1,
+      totalBytes: 1,
+    },
+  });
+  extension.codexBackgroundState = recordBackgroundWorkProgress(
+    beginBackgroundWork(seed, { trigger: 'automatic', now: 1 }).state,
+    { now: 2, complete: true, progress: seed.progress },
+  );
+  extension.getConfiguration = () => ({ codexEnabled: true });
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.webviewProvider = { updateCodexProgress: () => undefined };
+  extension.syncProviderUi = () => undefined;
+  const continuations: string[] = [];
+  extension.refreshCodexData = async (trigger: string) => {
+    continuations.push(trigger);
+  };
+  extension.codexProvider = {
+    isAvailable: async () => true,
+    loadPersistedSnapshot: async () => pending,
+    refresh: async () => ({
+      outcome: 'partial',
+      snapshot: pending,
+      diagnostic: {
+        bodyReads: 0,
+        failedFiles: 0,
+        metadataMs: 1,
+        parseMs: 1,
+        migrationPending: true,
+        indexRecovery: { reason: 'invalid-json' },
+      },
+    }),
+  };
+
+  await extension.runCodexRefresh('poll');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(extension.codexBackgroundState.status, 'eligible');
+  assert.deepEqual(continuations, ['poll']);
+});
+
+test('successful historical progress queues one immediate continuation without a timer', async () => {
+  const extension = bareExtension();
+  const before = snapshotFixture();
+  const after = structuredClone(before);
+  before.coverage.complete = false;
+  after.coverage.complete = false;
+  before.coverage.indexedFiles = Math.max(0, before.coverage.totalFiles - 2);
+  after.coverage.indexedFiles = Math.max(0, after.coverage.totalFiles - 1);
+  before.coverage.indexedBytes = Math.max(0, before.coverage.totalBytes - 200);
+  after.coverage.indexedBytes = Math.max(0, after.coverage.totalBytes - 100);
+  const continuations: string[] = [];
+  extension.getConfiguration = () => ({ codexEnabled: true });
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.webviewProvider = { updateCodexProgress: () => undefined };
+  extension.syncProviderUi = () => undefined;
+  extension.refreshCodexData = async (trigger: string) => {
+    continuations.push(trigger);
+  };
+  extension.codexProvider = {
+    isAvailable: async () => true,
+    loadPersistedSnapshot: async () => before,
+    refresh: async () => ({
+      outcome: 'partial',
+      snapshot: after,
+      diagnostic: {
+        bodyReads: 1,
+        failedFiles: 0,
+        metadataMs: 1,
+        parseMs: 1,
+        migrationPending: true,
+      },
+    }),
+  };
+
+  await extension.runCodexRefresh('startup');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(extension.codexBackgroundState.status, 'eligible');
+  assert.deepEqual(continuations, ['startup']);
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+});
+
+test('timer and watcher ownership clear only after their real handles stop', async () => {
+  const extension = bareExtension();
+  extension.refreshGen = 0;
+  extension.watchDebounce = { clear: () => undefined };
+  let fired = false;
+  let watcherClosed = 0;
+  const timer = setTimeout(() => { fired = true; }, 20);
+  extension.refreshTimer = timer;
+  extension.refreshTimerLease = extension.resourceOwnership.register({
+    kind: 'timer',
+    capability: 'refresh',
+    scope: 'extension',
+    creator: 'refresh-coordinator',
+    stopConditions: ['window-blur'],
+    boundedException: 'none',
+  });
+  extension.fileWatcher = {
+    close: () => { watcherClosed += 1; },
+  };
+  extension.fileWatcherLease = extension.resourceOwnership.register({
+    kind: 'watcher',
+    capability: 'refresh',
+    scope: 'claude',
+    creator: 'extension',
+    stopConditions: ['window-blur'],
+    boundedException: 'none',
+  });
+
+  extension.stopAutoRefresh('window-blur');
+  extension.stopFileWatching('window-blur');
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(watcherClosed, 1);
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(fired, false);
+});
+
+test('watch quiet-delay timers are owned and actually cancelled', async () => {
+  const extension = bareExtension();
+  extension.debounceTimerLeases = new Map();
+  const debounce = extension.createOwnedRefreshDebounce('codex');
+  let fired = false;
+
+  debounce.push(20, () => { fired = true; });
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 1);
+  debounce.clear();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 0);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(fired, false);
+});
+
+test('backgrounding aborts an active quota network before releasing ownership', async () => {
+  const extension = bareExtension();
+  let observedSignal: AbortSignal | undefined;
+  extension.cache = {
+    usageLimits: null,
+    usageLimitsLastUpdate: new Date(0),
+    usageLimitsBackoffUntil: new Date(0),
+    usageLimitsFailStreak: 0,
+  };
+  extension.isActive = () => false;
+  extension.apiClient = {
+    fetchUsageLimits: (signal?: AbortSignal) => new Promise<null>((resolve) => {
+      observedSignal = signal;
+      assert.ok(signal);
+      signal.addEventListener('abort', () => resolve(null), { once: true });
+    }),
+  };
+
+  const pending = extension.maybeFetchUsageLimits({ usageLimitTracking: true });
+  await Promise.resolve();
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 1);
+
+  await extension.cancelQuotaNetworks('window-blur');
+  assert.equal(observedSignal?.aborted, true);
+  await pending;
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 0);
+  assert.equal(extension.cache.usageLimitsFailStreak, 0);
+});
+
+test('network ownership remains active until an aborted request actually settles', async () => {
+  const extension = bareExtension();
+  let releaseRequest!: () => void;
+  let aborted = false;
+  const pending = extension.runAdviceNetwork((signal: AbortSignal) =>
+    new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        aborted = true;
+        releaseRequest = () => reject(new Error('request finally settled'));
+      }, { once: true });
+    }),
+  );
+  await Promise.resolve();
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 1);
+
+  let cancellationSettled = false;
+  const cancellation = extension.cancelAdviceNetworks('cancelled').then(() => {
+    cancellationSettled = true;
+  });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(aborted, true);
+  assert.equal(cancellationSettled, false);
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 1);
+
+  releaseRequest();
+  await assert.rejects(pending, /finally settled/);
+  await cancellation;
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 0);
+});
+
+test('quota cold retry timer is owned and cleared on blur', async () => {
+  const extension = bareExtension();
+  const originalSetTimeout = global.setTimeout;
+  const originalClearTimeout = global.clearTimeout;
+  let cleared = 0;
+  const fakeTimer = { fake: true } as unknown as NodeJS.Timeout;
+  global.setTimeout = ((_callback: () => void, _ms: number) =>
+    fakeTimer) as typeof setTimeout;
+  global.clearTimeout = ((handle: NodeJS.Timeout) => {
+    assert.equal(handle, fakeTimer);
+    cleared += 1;
+  }) as typeof clearTimeout;
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.getConfiguration = () => ({ usageLimitTracking: true });
+  extension.maybeFetchUsageLimits = async () => null;
+
+  try {
+    extension.scheduleQuotaColdRetry();
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 1);
+    extension.stopQuotaColdRetry('window-blur');
+    await Promise.resolve();
+    await Promise.resolve();
+    assert.equal(cleared, 1);
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 0);
+  } finally {
+    global.setTimeout = originalSetTimeout;
+    global.clearTimeout = originalClearTimeout;
+  }
+});
+
+test('extension disposal releases worker and backfill only after provider termination', async () => {
+  const extension = bareExtension();
+  let finishProviderDispose!: () => void;
+  const providerDisposed = new Promise<void>((resolve) => {
+    finishProviderDispose = resolve;
+  });
+  let providerCancelCalls = 0;
+  let hostDisposals = 0;
+  extension.stopAutoRefresh = () => undefined;
+  extension.stopFileWatching = () => undefined;
+  extension.stopCodexWatching = () => undefined;
+  extension.stopCredentialsWatching = () => undefined;
+  extension.codexProviderRetirements = new Set();
+  extension.codexProvider = {
+    cancel: () => { providerCancelCalls += 1; },
+    dispose: () => providerDisposed,
+  };
+  extension.statusBar = { dispose: () => { hostDisposals += 1; } };
+  extension.webviewProvider = { dispose: () => { hostDisposals += 1; } };
+  extension.codexWorkerLease = extension.resourceOwnership.register({
+    kind: 'worker',
+    capability: 'codex-index',
+    scope: 'codex',
+    creator: 'codex-index-client',
+    stopConditions: ['extension-dispose'],
+    boundedException: 'none',
+  });
+  extension.codexBackfillLease = extension.resourceOwnership.register({
+    kind: 'backfill',
+    capability: 'codex-history',
+    scope: 'codex',
+    creator: 'refresh-coordinator',
+    stopConditions: ['extension-dispose'],
+    boundedException: 'first-codex-history',
+  });
+
+  let disposalSettled = false;
+  const disposal = extension.dispose().then(() => {
+    disposalSettled = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(providerCancelCalls, 1);
+  assert.equal(disposalSettled, false);
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 2);
+  assert.equal(hostDisposals, 0);
+
+  finishProviderDispose();
+  await disposal;
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+  assert.equal(hostDisposals, 2);
+});
+
+test('extension disposal keeps worker ownership active when termination fails', async () => {
+  const extension = bareExtension();
+  let hostDisposals = 0;
+  extension.stopAutoRefresh = () => undefined;
+  extension.stopFileWatching = () => undefined;
+  extension.stopCodexWatching = () => undefined;
+  extension.stopCredentialsWatching = () => undefined;
+  extension.codexProvider = {
+    cancel: () => undefined,
+    dispose: async () => { throw new Error('provider terminate failed'); },
+  };
+  extension.statusBar = { dispose: () => { hostDisposals += 1; } };
+  extension.webviewProvider = { dispose: () => { hostDisposals += 1; } };
+  extension.codexWorkerLease = extension.resourceOwnership.register({
+    kind: 'worker',
+    capability: 'codex-index',
+    scope: 'codex',
+    creator: 'codex-index-client',
+    stopConditions: ['extension-dispose'],
+    boundedException: 'none',
+  });
+  extension.codexBackfillLease = extension.resourceOwnership.register({
+    kind: 'backfill',
+    capability: 'codex-history',
+    scope: 'codex',
+    creator: 'refresh-coordinator',
+    stopConditions: ['extension-dispose'],
+    boundedException: 'first-codex-history',
+  });
+
+  await assert.rejects(extension.dispose(), /provider terminate failed/);
+
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 2);
+  assert.equal(hostDisposals, 2);
+});
+
+test('a refresh termination failure retains its worker and backfill leases for disposal', async () => {
+  const extension = bareExtension();
+  const snapshot = snapshotFixture();
+  snapshot.coverage.complete = false;
+  snapshot.coverage.indexedFiles = Math.max(0, snapshot.coverage.totalFiles - 1);
+  extension.getConfiguration = () => ({ codexEnabled: true });
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.webviewProvider = { updateCodexProgress: () => undefined };
+  extension.syncProviderUi = () => undefined;
+  extension.codexProvider = {
+    isAvailable: async () => true,
+    loadPersistedSnapshot: async () => snapshot,
+    refresh: async () => { throw new Error('worker could not terminate'); },
+  };
+
+  await assert.rejects(extension.runCodexRefresh('poll'), /could not terminate/);
+
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.worker, 1);
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.backfill, 1);
+  assert.equal(extension.codexWorkerLease?.active, true);
+  assert.equal(extension.codexBackfillLease?.active, true);
+});
+
+test('disposal drains every resource kind and stale callbacks cannot recreate work', async () => {
+  const extension = bareExtension();
+  let releaseNetwork!: () => void;
+  let releaseProvider!: () => void;
+  let releaseStaleCallbacks!: () => void;
+  let watcherClosed = 0;
+  let providerCancelled = 0;
+  let hostDisposals = 0;
+  const providerDisposal = new Promise<void>((resolve) => {
+    releaseProvider = resolve;
+  });
+  const staleCallbacks = new Promise<void>((resolve) => {
+    releaseStaleCallbacks = resolve;
+  });
+
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.refreshGen = 0;
+  extension.refreshTimer = setTimeout(() => assert.fail('disposed timer fired'), 60_000);
+  extension.refreshTimerLease = extension.resourceOwnership.register({
+    kind: 'timer',
+    capability: 'refresh',
+    scope: 'extension',
+    creator: 'refresh-coordinator',
+    stopConditions: ['extension-dispose'],
+    boundedException: 'none',
+  });
+  extension.watchDebounce = { clear: () => undefined };
+  extension.codexWatchDebounce = { clear: () => undefined };
+  extension.fileWatcher = { close: () => { watcherClosed += 1; } };
+  extension.fileWatcherLease = extension.resourceOwnership.register({
+    kind: 'watcher',
+    capability: 'refresh',
+    scope: 'claude',
+    creator: 'extension',
+    stopConditions: ['extension-dispose'],
+    boundedException: 'none',
+  });
+  extension.codexWatchers = [];
+  extension.codexWorkerLease = extension.resourceOwnership.register({
+    kind: 'worker',
+    capability: 'codex-index',
+    scope: 'codex',
+    creator: 'codex-index-client',
+    stopConditions: ['extension-dispose'],
+    boundedException: 'none',
+  });
+  extension.codexBackfillLease = extension.resourceOwnership.register({
+    kind: 'backfill',
+    capability: 'codex-history',
+    scope: 'codex',
+    creator: 'refresh-coordinator',
+    stopConditions: ['extension-dispose'],
+    boundedException: 'first-codex-history',
+  });
+  extension.codexProvider = {
+    cancel: () => { providerCancelled += 1; },
+    dispose: () => providerDisposal,
+  };
+  extension.statusBar = { dispose: () => { hostDisposals += 1; } };
+  extension.webviewProvider = { dispose: () => { hostDisposals += 1; } };
+  extension.stopQuotaColdRetry = ClaudeCodeUsageExtension.prototype['stopQuotaColdRetry'];
+  extension.stopAutoRefresh = ClaudeCodeUsageExtension.prototype['stopAutoRefresh'];
+  extension.stopFileWatching = ClaudeCodeUsageExtension.prototype['stopFileWatching'];
+  extension.stopCodexWatching = ClaudeCodeUsageExtension.prototype['stopCodexWatching'];
+  extension.stopCredentialsWatching = () => undefined;
+
+  const network = extension.runAdviceNetwork((signal: AbortSignal) =>
+    new Promise<void>((_resolve, reject) => {
+      signal.addEventListener('abort', () => {
+        releaseNetwork = () => reject(new Error('network closed'));
+      }, { once: true });
+    }),
+  ).catch(() => undefined);
+  await Promise.resolve();
+  assert.deepEqual(extension.resourceOwnership.snapshotForTests().byKind, {
+    timer: 1,
+    watcher: 1,
+    worker: 1,
+    network: 1,
+    backfill: 1,
+  });
+
+  const stale = staleCallbacks.then(async () => {
+    extension.startAutoRefresh();
+    await extension.startFileWatching();
+    extension.startCodexWatching();
+    extension.scheduleQuotaColdRetry();
+    await extension.refreshData(false, 'poll');
+  });
+  const disposal = extension.dispose();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 1);
+
+  releaseStaleCallbacks();
+  releaseNetwork();
+  releaseProvider();
+  await Promise.all([network, stale, disposal]);
+  await Promise.resolve();
+  await Promise.resolve();
+
+  assert.equal(watcherClosed, 1);
+  assert.equal(providerCancelled, 1);
+  assert.equal(hostDisposals, 2);
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+  await assert.rejects(
+    extension.runAdviceNetwork(async () => undefined),
+    /disposed/i,
+  );
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
 });
 
 test('Claude watcher is not created when the window loses focus during directory lookup', async () => {
@@ -371,6 +1064,114 @@ test('Claude watcher is not created when the window loses focus during directory
     (fs as any).watch = originalWatch;
     fs.rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('Claude watcher is not created after disposal or a stale settings generation', async () => {
+  const extension = bareExtension();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-watch-dispose-'));
+  fs.mkdirSync(path.join(root, 'projects'));
+  const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
+  const originalWatch = fs.watch;
+  let resolveDirectory!: (value: string) => void;
+  let watchCalls = 0;
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.watchDebounce = { clear: () => undefined };
+  extension.fileWatcher = undefined;
+  extension.watchedDir = null;
+  extension.getConfiguration = () => ({
+    fileWatchSeconds: 30,
+    dataDirectory: '',
+  });
+  (ClaudeDataLoader as any).findClaudeDataDirectory = () => new Promise<string>((resolve) => {
+    resolveDirectory = resolve;
+  });
+  (fs as any).watch = () => {
+    watchCalls += 1;
+    return { close: () => undefined };
+  };
+
+  try {
+    const pending = extension.startFileWatching();
+    extension.disposed = true;
+    extension.fileWatcherGeneration += 1;
+    resolveDirectory(root);
+    await pending;
+    assert.equal(watchCalls, 0);
+    assert.equal(extension.fileWatcher, undefined);
+  } finally {
+    (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
+    (fs as any).watch = originalWatch;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('rapid settings changes wait for every provider retirement and only latest generation restarts', async () => {
+  const extension = bareExtension();
+  let finishFirst!: () => void;
+  let finishSecond!: () => void;
+  const firstDisposal = new Promise<void>((resolve) => { finishFirst = resolve; });
+  const secondDisposal = new Promise<void>((resolve) => { finishSecond = resolve; });
+  const calls: string[] = [];
+  const provider = (name: string, disposal: Promise<void>) => ({
+    cancel: () => calls.push(`${name}:cancel`),
+    dispose: () => disposal,
+  });
+  const first = provider('first', firstDisposal);
+  const second = provider('second', secondDisposal);
+  const third = provider('third', Promise.resolve());
+  const replacements = [second, third];
+  extension.codexProvider = first;
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.webviewProvider = {
+    invalidatePreparedAiRequests: () => undefined,
+  };
+  extension.statusBar = {
+    setVisibility: () => undefined,
+  };
+  extension.getConfiguration = () => ({
+    language: 'en',
+    decimalPlaces: 2,
+    tokenDecimalPlaces: 0,
+    compactNumbers: true,
+    timezone: 'UTC',
+    showCost: true,
+    showContext: true,
+    usageLimitTracking: false,
+    statusBarMetric: 'tokens',
+    showScopedWeekly: false,
+    quotaFiveHourOnly: false,
+    showResetInStatusBar: false,
+    resetCountdownFormat: 'short',
+    dataDirectory: '',
+  });
+  extension.cancelAdviceNetworks = async () => undefined;
+  extension.cancelQuotaNetworks = async () => undefined;
+  extension.stopQuotaColdRetry = () => undefined;
+  extension.startAutoRefresh = () => undefined;
+  extension.stopFileWatching = () => undefined;
+  extension.stopCodexWatching = () => undefined;
+  extension.stopCredentialsWatching = () => undefined;
+  extension.selectClaudeProfile = () => undefined;
+  extension.createCodexProvider = () => replacements.shift();
+  extension.refreshData = async () => { calls.push('refresh'); };
+  extension.startFileWatching = async () => { calls.push('claude:start'); };
+  extension.startCodexWatching = () => { calls.push('codex:start'); };
+  extension.startCredentialsWatching = () => { calls.push('credentials:start'); };
+
+  extension.onConfigurationChanged();
+  extension.onConfigurationChanged();
+  finishSecond();
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.deepEqual(calls.filter((call) => call === 'refresh'), []);
+
+  finishFirst();
+  await new Promise((resolve) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(calls.filter((call) => call === 'refresh'), ['refresh']);
+  assert.equal(calls.filter((call) => call === 'claude:start').length, 1);
+  assert.equal(calls.filter((call) => call === 'codex:start').length, 1);
+  assert.equal(calls.filter((call) => call === 'credentials:start').length, 1);
 });
 
 test('credentials change clears quota failure backoff before refreshing', async () => {

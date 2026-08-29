@@ -34,15 +34,28 @@ export interface CodexHourlySlice {
   byModel: Record<string, ProviderTokenCounts>;
 }
 
+export const CODEX_ROLLING_HOURLY_DAYS = 30;
+
+/** Sparse local civil-day -> hour buckets. Empty dates and hours are omitted. */
+export type CodexHourlyDays = Record<
+  string,
+  Record<string, CodexHourlySlice>
+>;
+
 /**
- * Deliberately ephemeral across civil days: only one target day is persisted,
- * and empty hours do not consume index space.
+ * The historic `day` / `hours` fields remain as the current-day compatibility
+ * projection. New indexes also persist `days`, a sparse rolling window whose
+ * semantic width is identified by `windowDays`.
  */
 export interface CodexFileTodayIndex {
   day: string;
   timeZone: string;
   indexedThrough: number;
   hours: Record<string, CodexHourlySlice>;
+  /** Missing on v2.3.0 one-day sidecars and therefore migration-required. */
+  windowDays?: number;
+  /** Missing on v2.3.0 one-day sidecars and therefore migration-required. */
+  days?: CodexHourlyDays;
 }
 
 export interface CodexTodayMigrationState extends CodexJsonlCursor {
@@ -52,6 +65,10 @@ export interface CodexTodayMigrationState extends CodexJsonlCursor {
   tokenEventsSeen: number;
   parserState: CodexParserState;
   hours: Record<string, CodexHourlySlice>;
+  /** Missing on v2.3.0 drafts; a missing value restarts the bounded pass. */
+  windowDays?: number;
+  /** Sparse rolling buckets checkpointed with the existing file cursor. */
+  days?: CodexHourlyDays;
   qualityFlags: string[];
 }
 
@@ -171,6 +188,43 @@ export function reduceCodexHourlySlice(
   const slice = (hours[hour] ??= emptyHourlySlice());
   addTokens(slice.total, event.tokens);
   addTokens(tokenBucket(slice.byModel, event.model ?? 'unknown'), event.tokens);
+}
+
+/**
+ * Add an event to a precomputed rolling civil-day window. Callers construct
+ * `allowedDays` once per file pass so multi-gigabyte backfills do not rebuild a
+ * 30-day set for every JSONL event.
+ */
+export function reduceCodexRollingHourlySlice(
+  days: CodexHourlyDays,
+  event: NormalizedUsageEvent,
+  allowedDays: ReadonlySet<string>,
+  timeZone: string,
+): void {
+  if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
+    return;
+  }
+  const day = dayKeyInZone(new Date(event.timestamp), timeZone);
+  if (!allowedDays.has(day)) {
+    return;
+  }
+  const hours = (days[day] ??= {});
+  reduceCodexHourlySlice(hours, event, day, timeZone);
+  if (Object.keys(hours).length === 0) {
+    delete days[day];
+  }
+}
+
+/** Mutate a sparse rolling map in place, discarding every out-of-window day. */
+export function pruneCodexHourlyDays(
+  days: CodexHourlyDays,
+  allowedDays: ReadonlySet<string>,
+): void {
+  for (const day of Object.keys(days)) {
+    if (!allowedDays.has(day)) {
+      delete days[day];
+    }
+  }
 }
 
 export function reduceCodexStructuralSlice(

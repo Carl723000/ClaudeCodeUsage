@@ -69,17 +69,53 @@ test('prompt text appears only behind the separate explicit opt-in and is bounde
   const input = payloadInputFixture();
   input.promptSamples = {
     consent: 'explicit',
+    userContext: `  private project context ${'y'.repeat(2_000)}  `,
     samples: [{ text: `private prompt ${'x'.repeat(2_000)}` }],
   };
   const prepared = prepareAdvicePayload(input);
   const parsed = JSON.parse(prepared.serializedBody) as {
     promptSamples: { text: string }[];
-    privacy: { promptSampleConsent: string };
+    privacy: { promptSampleConsent: string; userContextIncluded: boolean };
+    userContext: string;
   };
   assert.equal(prepared.dataMode, 'aggregates-with-prompt-samples');
   assert.equal(parsed.privacy.promptSampleConsent, 'explicit');
+  assert.equal(parsed.privacy.userContextIncluded, true);
+  assert.equal(parsed.userContext.length, 1_000);
+  assert.equal(parsed.userContext.startsWith('private project context'), true);
   assert.equal(parsed.promptSamples.length, 1);
   assert.equal(parsed.promptSamples[0].text.length, 1_000);
+});
+
+test('configured user context is absent without the separate prompt-personalisation consent', () => {
+  const input = payloadInputFixture();
+  (input as typeof input & { userContext?: string }).userContext = 'must not be accepted here';
+  const prepared = prepareAdvicePayload(input);
+  const parsed = JSON.parse(prepared.serializedBody) as Record<string, unknown>;
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed, 'userContext'), false);
+  assert.equal(
+    (parsed.privacy as { userContextIncluded: boolean }).userContextIncluded,
+    false,
+  );
+});
+
+test('configured context can be the only explicitly consented personalisation field', () => {
+  const input = payloadInputFixture();
+  input.promptSamples = {
+    consent: 'explicit',
+    userContext: 'private project constraint',
+    samples: [],
+  };
+  const prepared = prepareAdvicePayload(input);
+  const parsed = JSON.parse(prepared.serializedBody) as {
+    userContext: string;
+    privacy: { promptSampleConsent: string; promptSampleCount: number };
+  };
+  assert.equal(prepared.dataMode, 'aggregates-with-personalization');
+  assert.equal(prepared.promptSampleCount, 0);
+  assert.equal(parsed.userContext, 'private project constraint');
+  assert.equal(parsed.privacy.promptSampleConsent, 'explicit');
+  assert.equal(parsed.privacy.promptSampleCount, 0);
 });
 
 test('invalid aggregates and empty explicit prompt consent fail before a payload exists', () => {
@@ -89,7 +125,7 @@ test('invalid aggregates and empty explicit prompt consent fail before a payload
 
   const empty = payloadInputFixture();
   empty.promptSamples = { consent: 'explicit', samples: [{ text: '   ' }] };
-  assert.throws(() => prepareAdvicePayload(empty), /at least one non-empty/);
+  assert.throws(() => prepareAdvicePayload(empty), /sample or user context/);
 });
 
 test('remote observations require reviewed metrics and sufficiently clean source evidence', () => {
