@@ -210,6 +210,10 @@ test('optimizer feedback uses the same retractable local ledger and rendered con
   const snoozedHtml = provider.renderOptimizerCard();
   assert.doesNotMatch(snoozedHtml, /id="optDraft"|id="optResult"|id="optSendBtn"/);
   assert.match(snoozedHtml, /data-snooze-mode="resume"/);
+  provider.optimizerState.adviceId = 'advice-optimizer-reloaded-dynamic';
+  provider.adviceLocalState = durable;
+  const reloadedHtml = provider.renderOptimizerCard();
+  assert.match(reloadedHtml, /data-snooze-mode="resume"/);
 });
 
 test('snoozed advice leaves a closed, on-demand resume control instead of the default recommendation summary', async () => {
@@ -279,7 +283,8 @@ test('snoozed advice leaves a closed, on-demand resume control instead of the de
   };
   const snoozeNow = Date.now();
   const result = snoozeAdviceRecommendation(durable, {
-    adviceId: 'advice-claude-snooze-test',
+    provider: 'claude',
+    surface: 'advice',
     recommendationId: 'recommendation-claude-snooze',
     updatedAtEpochMs: snoozeNow,
     snoozedUntilEpochMs: snoozeNow + 86_400_000,

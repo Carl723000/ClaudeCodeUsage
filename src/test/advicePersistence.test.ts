@@ -139,6 +139,38 @@ test('v2 migration preserves feedback, application time, pairs, and results whil
   assert.deepEqual(result.value.suppression, []);
 });
 
+test('v3 suppression migration maps only explicit provider prefixes and drops ambiguous identities', async () => {
+  const storage = new MemoryStorage();
+  storage.value = {
+    ...createClosedAdviceLocalState(),
+    suppression: [
+      {
+        adviceId: 'advice-claude-20260830',
+        recommendationId: 'recommendation-1',
+        snoozedUntilEpochMs: 1_777_000_100_000,
+        updatedAtEpochMs: 1_777_000_000_000,
+      },
+      {
+        adviceId: 'advice-unknown-dynamic',
+        recommendationId: 'recommendation-2',
+        snoozedUntilEpochMs: 1_777_000_100_100,
+        updatedAtEpochMs: 1_777_000_000_000,
+      },
+    ],
+  };
+  const result = await loadAndMigrateAdviceLocalState(storage);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.migrated, true);
+  assert.deepEqual(result.value.suppression, [{
+    provider: 'claude',
+    surface: 'advice',
+    recommendationId: 'recommendation-1',
+    snoozedUntilEpochMs: 1_777_000_100_000,
+    updatedAtEpochMs: 1_777_000_000_000,
+  }]);
+});
+
 test('unknown, corrupt, or identifying local data fails closed and is never overwritten', async () => {
   for (const value of [
     { schemaVersion: 99, prompt: 'PRIVATE_PROMPT' },
@@ -294,7 +326,8 @@ test('explicit snooze is bounded, expires, resumes, and never overwrites feedbac
   assert.equal(rated.ok, true);
   if (!rated.ok) return;
   const snoozed = snoozeAdviceRecommendation(rated.value, {
-    adviceId: 'advice-1',
+    provider: 'claude',
+    surface: 'advice',
     recommendationId: 'recommendation-1',
     updatedAtEpochMs: now + 1,
     snoozedUntilEpochMs: now + 1 + ADVICE_SNOOZE_DURATION_MS,
@@ -304,7 +337,8 @@ test('explicit snooze is bounded, expires, resumes, and never overwrites feedbac
   assert.equal(snoozed.value.feedback[0].rating, 'helpful');
   assert.equal(
     adviceRecommendationSnoozedUntil(snoozed.value, {
-      adviceId: 'advice-1',
+      provider: 'claude',
+      surface: 'advice',
       recommendationId: 'recommendation-1',
       nowEpochMs: now + 2,
     }),
@@ -312,7 +346,8 @@ test('explicit snooze is bounded, expires, resumes, and never overwrites feedbac
   );
   assert.equal(
     adviceRecommendationSnoozedUntil(snoozed.value, {
-      adviceId: 'advice-1',
+      provider: 'claude',
+      surface: 'advice',
       recommendationId: 'recommendation-1',
       nowEpochMs: now + 1 + ADVICE_SNOOZE_DURATION_MS,
     }),
@@ -320,15 +355,17 @@ test('explicit snooze is bounded, expires, resumes, and never overwrites feedbac
   );
   assert.equal(
     adviceRecommendationSnoozedUntil(snoozed.value, {
-      adviceId: 'advice-2',
-      recommendationId: 'recommendation-1',
+      provider: 'claude',
+      surface: 'advice',
+      recommendationId: 'recommendation-new',
       nowEpochMs: now + 2,
     }),
     null,
     'a new evidence/advice revision must reappear immediately',
   );
   const resumed = resumeAdviceRecommendation(snoozed.value, {
-    adviceId: 'advice-1',
+    provider: 'claude',
+    surface: 'advice',
     recommendationId: 'recommendation-1',
   });
   assert.equal(resumed.ok, true);
@@ -341,20 +378,30 @@ test('suppression rejects unbounded duration and identifying payload fields', ()
   const now = 1_777_000_000_000;
   const state = createClosedAdviceLocalState();
   const tooLong = snoozeAdviceRecommendation(state, {
-    adviceId: 'advice-1',
+    provider: 'claude',
+    surface: 'advice',
     recommendationId: 'recommendation-1',
     updatedAtEpochMs: now,
     snoozedUntilEpochMs: now + 31 * 24 * 60 * 60 * 1_000,
   });
   assert.deepEqual(tooLong, { ok: false, reason: 'invalid-input' });
   const rawPayload = snoozeAdviceRecommendation(state, {
-    adviceId: 'advice-1',
+    provider: 'claude',
+    surface: 'advice',
     recommendationId: 'recommendation-1',
     updatedAtEpochMs: now,
     snoozedUntilEpochMs: now + ADVICE_SNOOZE_DURATION_MS,
     prompt: 'PRIVATE_PROMPT',
   } as never);
   assert.deepEqual(rawPayload, { ok: false, reason: 'invalid-input' });
+  const crossProvider = snoozeAdviceRecommendation(state, {
+    provider: 'optimizer',
+    surface: 'advice',
+    recommendationId: 'recommendation-1',
+    updatedAtEpochMs: now,
+    snoozedUntilEpochMs: now + ADVICE_SNOOZE_DURATION_MS,
+  });
+  assert.deepEqual(crossProvider, { ok: false, reason: 'invalid-input' });
 });
 
 function comparablePair(): StoredComparablePair {

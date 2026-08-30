@@ -30,6 +30,8 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   and Codex use the configured timezone and shared `HH:00` labels.
 
 ### Changed
+- **System-reminder prompt filtering remains intentional** — framework reminder
+  messages are excluded from user-input counts; token and cost totals are unchanged.
 - **One AI request boundary** — the former Get AI Advice command and Usage
   Optimizer now enter the same preview, explicit-send, cancellation, strict
   response parsing, and local-state boundary. The optimizer still sends only

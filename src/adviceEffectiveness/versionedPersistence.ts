@@ -43,7 +43,8 @@ export type AdviceFeedbackMutationKind = 'helpful' | 'not-helpful' | 'applied';
 
 /** A separate, bounded suppression record; it never changes the feedback rating. */
 export interface PersistedAdviceSuppression {
-  adviceId: string;
+  provider: 'claude' | 'codex' | 'optimizer';
+  surface: 'advice' | 'optimizer';
   recommendationId: string;
   snoozedUntilEpochMs: number;
   updatedAtEpochMs: number;
@@ -130,6 +131,13 @@ const LEGACY_FEEDBACK_KEYS = [
   'updatedAtEpochMs',
 ] as const;
 const SUPPRESSION_KEYS = [
+  'provider',
+  'recommendationId',
+  'surface',
+  'snoozedUntilEpochMs',
+  'updatedAtEpochMs',
+] as const;
+const LEGACY_SUPPRESSION_KEYS = [
   'adviceId',
   'recommendationId',
   'snoozedUntilEpochMs',
@@ -158,8 +166,8 @@ function parseFeedback(value: unknown): PersistedAdviceFeedback | undefined {
   if (!isObject(value) || !hasExactKeys(value, FEEDBACK_KEYS)) return undefined;
   if (
     typeof value.adviceId !== 'string' ||
-    typeof value.recommendationId !== 'string' ||
     !isAdviceIdentifier(value.adviceId) ||
+    typeof value.recommendationId !== 'string' ||
     !isAdviceIdentifier(value.recommendationId) ||
     !oneOf(value.rating, ['unrated', 'helpful', 'not-helpful'] as const) ||
     !oneOf(value.applied, ['not-applied', 'applied'] as const) ||
@@ -183,16 +191,42 @@ function parseFeedback(value: unknown): PersistedAdviceFeedback | undefined {
 function parseSuppression(value: unknown): PersistedAdviceSuppression | undefined {
   if (!isObject(value) || !hasExactKeys(value, SUPPRESSION_KEYS)) return undefined;
   if (
-    typeof value.adviceId !== 'string' ||
+    !oneOf(value.provider, ['claude', 'codex', 'optimizer'] as const) ||
+    !oneOf(value.surface, ['advice', 'optimizer'] as const) ||
+    (value.provider === 'optimizer' && value.surface !== 'optimizer') ||
+    (value.provider !== 'optimizer' && value.surface !== 'advice') ||
     typeof value.recommendationId !== 'string' ||
-    !isAdviceIdentifier(value.adviceId) ||
     !isAdviceIdentifier(value.recommendationId) ||
     !isEpochMs(value.snoozedUntilEpochMs) ||
     !isEpochMs(value.updatedAtEpochMs) ||
     value.snoozedUntilEpochMs <= value.updatedAtEpochMs
   ) return undefined;
   return {
-    adviceId: value.adviceId,
+    provider: value.provider,
+    surface: value.surface,
+    recommendationId: value.recommendationId,
+    snoozedUntilEpochMs: value.snoozedUntilEpochMs,
+    updatedAtEpochMs: value.updatedAtEpochMs,
+  };
+}
+
+function migrateLegacySuppression(value: unknown): PersistedAdviceSuppression | undefined {
+  if (!isObject(value) || !hasExactKeys(value, LEGACY_SUPPRESSION_KEYS)) return undefined;
+  if (
+    typeof value.adviceId !== 'string' ||
+    !isAdviceIdentifier(value.adviceId) ||
+    typeof value.recommendationId !== 'string' ||
+    !isAdviceIdentifier(value.recommendationId) ||
+    !isEpochMs(value.snoozedUntilEpochMs) ||
+    !isEpochMs(value.updatedAtEpochMs) ||
+    value.snoozedUntilEpochMs <= value.updatedAtEpochMs
+  ) return undefined;
+  const match = /^advice-(claude|codex|optimizer)(?:-|$)/.exec(value.adviceId);
+  if (!match) return undefined;
+  const provider = match[1] as 'claude' | 'codex' | 'optimizer';
+  return {
+    provider,
+    surface: provider === 'optimizer' ? 'optimizer' : 'advice',
     recommendationId: value.recommendationId,
     snoozedUntilEpochMs: value.snoozedUntilEpochMs,
     updatedAtEpochMs: value.updatedAtEpochMs,
@@ -223,7 +257,7 @@ function parseCurrentState(value: unknown): AdviceLocalState | undefined {
   for (const raw of value.suppression) {
     const item = parseSuppression(raw);
     if (!item) return undefined;
-    const target = `${item.adviceId}\0${item.recommendationId}`;
+    const target = `${item.provider}\0${item.surface}\0${item.recommendationId}`;
     if (suppressionTargets.has(target)) return undefined;
     suppressionTargets.add(target);
     suppression.push(item);
@@ -294,6 +328,26 @@ function migrateLegacyV2(value: Record<string, unknown>): AdviceLocalState | und
     suppression: [],
     comparisonResults: completeRoot ? value.comparisonResults : [],
   });
+}
+
+function migrateLegacyV3(value: Record<string, unknown>): AdviceLocalState | undefined {
+  if (!hasExactKeys(value, STATE_KEYS) || value.schemaVersion !== ADVICE_LOCAL_STATE_VERSION) {
+    return undefined;
+  }
+  if (!Array.isArray(value.suppression) || value.suppression.length > MAX_PERSISTED_ADVICE_FEEDBACK) {
+    return undefined;
+  }
+  const suppression: PersistedAdviceSuppression[] = [];
+  const targets = new Set<string>();
+  for (const raw of value.suppression) {
+    const migrated = migrateLegacySuppression(raw);
+    if (!migrated) continue;
+    const target = `${migrated.provider}\0${migrated.surface}\0${migrated.recommendationId}`;
+    if (targets.has(target)) continue;
+    targets.add(target);
+    suppression.push(migrated);
+  }
+  return parseCurrentState({ ...value, suppression });
 }
 
 interface LegacyFeedbackV1 {
@@ -403,7 +457,9 @@ export async function loadAndMigrateAdviceLocalState(
   if (!isObject(raw)) {
     return { ok: false, reason: 'invalid-local-data', value: closed };
   }
-  const migrated = raw.schemaVersion === 2
+  const migrated = raw.schemaVersion === ADVICE_LOCAL_STATE_VERSION
+    ? migrateLegacyV3(raw)
+    : raw.schemaVersion === 2
     ? migrateLegacyV2(raw)
     : raw.schemaVersion === 1
       ? migrateV1(raw)
@@ -490,7 +546,8 @@ export function upsertAdviceLocalFeedback(
 export function snoozeAdviceRecommendation(
   state: AdviceLocalState,
   input: {
-    adviceId: string;
+    provider: 'claude' | 'codex' | 'optimizer';
+    surface: 'advice' | 'optimizer';
     recommendationId: string;
     snoozedUntilEpochMs: number;
     updatedAtEpochMs: number;
@@ -501,12 +558,16 @@ export function snoozeAdviceRecommendation(
   if (
     !isObject(input) ||
     !hasExactKeys(input, [
-      'adviceId',
+      'provider',
       'recommendationId',
+      'surface',
       'snoozedUntilEpochMs',
       'updatedAtEpochMs',
     ]) ||
-    !isAdviceIdentifier(input.adviceId) ||
+    !oneOf(input.provider, ['claude', 'codex', 'optimizer'] as const) ||
+    !oneOf(input.surface, ['advice', 'optimizer'] as const) ||
+    (input.provider === 'optimizer' && input.surface !== 'optimizer') ||
+    (input.provider !== 'optimizer' && input.surface !== 'advice') ||
     !isAdviceIdentifier(input.recommendationId) ||
     !isEpochMs(input.snoozedUntilEpochMs) ||
     !isEpochMs(input.updatedAtEpochMs) ||
@@ -517,10 +578,13 @@ export function snoozeAdviceRecommendation(
     .filter(
       (item) =>
         item.snoozedUntilEpochMs > input.updatedAtEpochMs &&
-        (item.adviceId !== input.adviceId || item.recommendationId !== input.recommendationId),
+        (item.provider !== input.provider ||
+          item.surface !== input.surface ||
+          item.recommendationId !== input.recommendationId),
     )
     .concat({
-      adviceId: input.adviceId,
+      provider: input.provider,
+      surface: input.surface,
       recommendationId: input.recommendationId,
       snoozedUntilEpochMs: input.snoozedUntilEpochMs,
       updatedAtEpochMs: input.updatedAtEpochMs,
@@ -531,14 +595,21 @@ export function snoozeAdviceRecommendation(
 
 export function resumeAdviceRecommendation(
   state: AdviceLocalState,
-  input: { adviceId: string; recommendationId: string },
+  input: {
+    provider: 'claude' | 'codex' | 'optimizer';
+    surface: 'advice' | 'optimizer';
+    recommendationId: string;
+  },
 ): AdviceLocalStateMutationResult {
   const current = parseCurrentState(state);
   if (!current) return { ok: false, reason: 'invalid-local-data' };
   if (
     !isObject(input) ||
-    !hasExactKeys(input, ['adviceId', 'recommendationId']) ||
-    !isAdviceIdentifier(input.adviceId) ||
+    !hasExactKeys(input, ['provider', 'recommendationId', 'surface']) ||
+    !oneOf(input.provider, ['claude', 'codex', 'optimizer'] as const) ||
+    !oneOf(input.surface, ['advice', 'optimizer'] as const) ||
+    (input.provider === 'optimizer' && input.surface !== 'optimizer') ||
+    (input.provider !== 'optimizer' && input.surface !== 'advice') ||
     !isAdviceIdentifier(input.recommendationId)
   ) return { ok: false, reason: 'invalid-input' };
   return {
@@ -547,7 +618,9 @@ export function resumeAdviceRecommendation(
       ...current,
       suppression: current.suppression.filter(
         (item) =>
-          item.adviceId !== input.adviceId || item.recommendationId !== input.recommendationId,
+        item.provider !== input.provider ||
+        item.surface !== input.surface ||
+        item.recommendationId !== input.recommendationId,
       ),
     },
   };
@@ -555,12 +628,18 @@ export function resumeAdviceRecommendation(
 
 export function adviceRecommendationSnoozedUntil(
   state: AdviceLocalState,
-  input: { adviceId: string; recommendationId: string; nowEpochMs: number },
+  input: {
+    provider: 'claude' | 'codex' | 'optimizer';
+    surface: 'advice' | 'optimizer';
+    recommendationId: string;
+    nowEpochMs: number;
+  },
 ): number | null {
   if (!parseCurrentState(state) || !isEpochMs(input.nowEpochMs)) return null;
   const record = state.suppression.find(
     (item) =>
-      item.adviceId === input.adviceId &&
+      item.provider === input.provider &&
+      item.surface === input.surface &&
       item.recommendationId === input.recommendationId &&
       item.snoozedUntilEpochMs > input.nowEpochMs,
   );

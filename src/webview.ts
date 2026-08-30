@@ -799,11 +799,13 @@ export class UsageWebviewProvider {
       if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
       const changed = resume
         ? resumeAdviceRecommendation(current, {
-            adviceId: targetAdviceId as string,
+            provider: optimizerTarget ? 'optimizer' : message.provider as 'claude' | 'codex',
+            surface: optimizerTarget ? 'optimizer' : 'advice',
             recommendationId: targetRecommendationId as string,
           })
         : snoozeAdviceRecommendation(current, {
-            adviceId: targetAdviceId as string,
+            provider: optimizerTarget ? 'optimizer' : message.provider as 'claude' | 'codex',
+            surface: optimizerTarget ? 'optimizer' : 'advice',
             recommendationId: targetRecommendationId as string,
             updatedAtEpochMs: now,
             snoozedUntilEpochMs: now + ADVICE_SNOOZE_DURATION_MS,
@@ -819,7 +821,8 @@ export class UsageWebviewProvider {
       return;
     }
     const until = adviceRecommendationSnoozedUntil(saved.value, {
-      adviceId: targetAdviceId as string,
+      provider: optimizerTarget ? 'optimizer' : message.provider as 'claude' | 'codex',
+      surface: optimizerTarget ? 'optimizer' : 'advice',
       recommendationId: targetRecommendationId as string,
       nowEpochMs: now,
     });
@@ -4884,7 +4887,8 @@ export class UsageWebviewProvider {
           item.recommendationId === recommendation.id,
       );
       const snoozedUntil = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
-        adviceId: state.contract.adviceId,
+        provider,
+        surface: 'advice',
         recommendationId: recommendation.id,
         nowEpochMs: Date.now(),
       });
@@ -4941,7 +4945,8 @@ export class UsageWebviewProvider {
     };
     const activeRecommendations = state
       ? recommendations.filter((recommendation) => !adviceRecommendationSnoozedUntil(this.adviceLocalState, {
-          adviceId: state.contract.adviceId,
+          provider,
+          surface: 'advice',
           recommendationId: recommendation.id,
           nowEpochMs: Date.now(),
         }))
@@ -4986,7 +4991,8 @@ export class UsageWebviewProvider {
           );
         }).join('') + suppressedRecommendations.map((recommendation) => {
           const until = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
-            adviceId: state.contract.adviceId,
+            provider,
+            surface: 'advice',
             recommendationId: recommendation.id,
             nowEpochMs: Date.now(),
           });
@@ -4999,7 +5005,8 @@ export class UsageWebviewProvider {
       : state && suppressedRecommendations.length > 0
         ? suppressedRecommendations.map((recommendation) => {
             const until = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
-              adviceId: state.contract.adviceId,
+              provider,
+              surface: 'advice',
               recommendationId: recommendation.id,
               nowEpochMs: Date.now(),
             });
@@ -5152,7 +5159,8 @@ export class UsageWebviewProvider {
       : undefined;
     const optimizerSnoozedUntil = optimizerAdviceId
       ? adviceRecommendationSnoozedUntil(this.adviceLocalState, {
-          adviceId: optimizerAdviceId,
+          provider: 'optimizer',
+          surface: 'optimizer',
           recommendationId: OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
           nowEpochMs: Date.now(),
         })
