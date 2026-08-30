@@ -28,16 +28,26 @@ export { toComparableTaskPairs } from './comparisonPairing';
 
 /** Stable key: schema versions migrate in-place instead of changing the key. */
 export const ADVICE_LOCAL_STATE_KEY = 'ccu.adviceEffectiveness.localState';
-export const ADVICE_LOCAL_STATE_VERSION = 2 as const;
+export const ADVICE_LOCAL_STATE_VERSION = 3 as const;
 export const MAX_PERSISTED_ADVICE_FEEDBACK = 500;
 export const MAX_PERSISTED_COMPARABLE_PAIRS = 200;
 export const MAX_PERSISTED_ADVICE_COMPARISON_RESULTS = 200;
+export const ADVICE_SNOOZE_DURATION_MS = 7 * 24 * 60 * 60 * 1_000;
+export const MAX_ADVICE_SNOOZE_DURATION_MS = 30 * 24 * 60 * 60 * 1_000;
 
 export type AdviceFeatureMode = 'disabled' | 'enabled';
 export type AdviceConsentState = 'not-granted' | 'explicit';
 export type PersistedAdviceRating = 'unrated' | 'helpful' | 'not-helpful';
 export type PersistedAdviceApplied = 'not-applied' | 'applied';
 export type AdviceFeedbackMutationKind = 'helpful' | 'not-helpful' | 'applied';
+
+/** A separate, bounded suppression record; it never changes the feedback rating. */
+export interface PersistedAdviceSuppression {
+  adviceId: string;
+  recommendationId: string;
+  snoozedUntilEpochMs: number;
+  updatedAtEpochMs: number;
+}
 
 export interface PersistedAdviceFeedback {
   adviceId: string;
@@ -55,6 +65,7 @@ export interface AdviceLocalState {
   aggregateConsent: AdviceConsentState;
   promptSampleConsent: AdviceConsentState;
   feedback: PersistedAdviceFeedback[];
+  suppression: PersistedAdviceSuppression[];
   comparablePairs: StoredComparablePair[];
   comparisonResults: AdviceComparisonResultEnvelope[];
 }
@@ -83,11 +94,21 @@ const STATE_KEYS = [
   'featureMode',
   'feedback',
   'promptSampleConsent',
+  'suppression',
   'schemaVersion',
 ] as const;
 const LEGACY_V2_STATE_KEYS = [
   'aggregateConsent',
   'comparablePairs',
+  'featureMode',
+  'feedback',
+  'promptSampleConsent',
+  'schemaVersion',
+] as const;
+const LEGACY_V2_COMPLETE_STATE_KEYS = [
+  'aggregateConsent',
+  'comparablePairs',
+  'comparisonResults',
   'featureMode',
   'feedback',
   'promptSampleConsent',
@@ -106,6 +127,12 @@ const LEGACY_FEEDBACK_KEYS = [
   'applied',
   'rating',
   'recommendationId',
+  'updatedAtEpochMs',
+] as const;
+const SUPPRESSION_KEYS = [
+  'adviceId',
+  'recommendationId',
+  'snoozedUntilEpochMs',
   'updatedAtEpochMs',
 ] as const;
 
@@ -153,6 +180,25 @@ function parseFeedback(value: unknown): PersistedAdviceFeedback | undefined {
   };
 }
 
+function parseSuppression(value: unknown): PersistedAdviceSuppression | undefined {
+  if (!isObject(value) || !hasExactKeys(value, SUPPRESSION_KEYS)) return undefined;
+  if (
+    typeof value.adviceId !== 'string' ||
+    typeof value.recommendationId !== 'string' ||
+    !isAdviceIdentifier(value.adviceId) ||
+    !isAdviceIdentifier(value.recommendationId) ||
+    !isEpochMs(value.snoozedUntilEpochMs) ||
+    !isEpochMs(value.updatedAtEpochMs) ||
+    value.snoozedUntilEpochMs <= value.updatedAtEpochMs
+  ) return undefined;
+  return {
+    adviceId: value.adviceId,
+    recommendationId: value.recommendationId,
+    snoozedUntilEpochMs: value.snoozedUntilEpochMs,
+    updatedAtEpochMs: value.updatedAtEpochMs,
+  };
+}
+
 function parseCurrentState(value: unknown): AdviceLocalState | undefined {
   if (!isObject(value) || !hasExactKeys(value, STATE_KEYS)) return undefined;
   if (
@@ -163,12 +209,24 @@ function parseCurrentState(value: unknown): AdviceLocalState | undefined {
     (value.promptSampleConsent === 'explicit' && value.aggregateConsent !== 'explicit') ||
     !Array.isArray(value.feedback) ||
     value.feedback.length > MAX_PERSISTED_ADVICE_FEEDBACK ||
+    !Array.isArray(value.suppression) ||
+    value.suppression.length > MAX_PERSISTED_ADVICE_FEEDBACK ||
     !Array.isArray(value.comparablePairs) ||
     value.comparablePairs.length > MAX_PERSISTED_COMPARABLE_PAIRS ||
     !Array.isArray(value.comparisonResults) ||
     value.comparisonResults.length > MAX_PERSISTED_ADVICE_COMPARISON_RESULTS
   ) {
     return undefined;
+  }
+  const suppression: PersistedAdviceSuppression[] = [];
+  const suppressionTargets = new Set<string>();
+  for (const raw of value.suppression) {
+    const item = parseSuppression(raw);
+    if (!item) return undefined;
+    const target = `${item.adviceId}\0${item.recommendationId}`;
+    if (suppressionTargets.has(target)) return undefined;
+    suppressionTargets.add(target);
+    suppression.push(item);
   }
   const feedback: PersistedAdviceFeedback[] = [];
   const feedbackTargets = new Set<string>();
@@ -202,6 +260,7 @@ function parseCurrentState(value: unknown): AdviceLocalState | undefined {
     aggregateConsent: value.aggregateConsent,
     promptSampleConsent: value.promptSampleConsent,
     feedback,
+    suppression,
     comparablePairs,
     comparisonResults,
   };
@@ -209,10 +268,10 @@ function parseCurrentState(value: unknown): AdviceLocalState | undefined {
 
 function migrateLegacyV2(value: Record<string, unknown>): AdviceLocalState | undefined {
   const oldRoot = hasExactKeys(value, LEGACY_V2_STATE_KEYS);
-  const currentRoot = hasExactKeys(value, STATE_KEYS);
+  const completeRoot = hasExactKeys(value, LEGACY_V2_COMPLETE_STATE_KEYS);
   if (
-    (!oldRoot && !currentRoot) ||
-    value.schemaVersion !== ADVICE_LOCAL_STATE_VERSION ||
+    (!oldRoot && !completeRoot) ||
+    value.schemaVersion !== 2 ||
     !Array.isArray(value.feedback) ||
     (oldRoot && (!Array.isArray(value.comparablePairs) || value.comparablePairs.length !== 0))
   ) {
@@ -230,8 +289,10 @@ function migrateLegacyV2(value: Record<string, unknown>): AdviceLocalState | und
   }
   return parseCurrentState({
     ...value,
+    schemaVersion: ADVICE_LOCAL_STATE_VERSION,
     feedback,
-    comparisonResults: currentRoot ? value.comparisonResults : [],
+    suppression: [],
+    comparisonResults: completeRoot ? value.comparisonResults : [],
   });
 }
 
@@ -298,6 +359,7 @@ function migrateV1(value: Record<string, unknown>): AdviceLocalState | undefined
     aggregateConsent: 'not-granted',
     promptSampleConsent: 'not-granted',
     feedback,
+    suppression: [],
     comparablePairs: [],
     comparisonResults: [],
   };
@@ -310,6 +372,7 @@ export function createClosedAdviceLocalState(): AdviceLocalState {
     aggregateConsent: 'not-granted',
     promptSampleConsent: 'not-granted',
     feedback: [],
+    suppression: [],
     comparablePairs: [],
     comparisonResults: [],
   };
@@ -340,7 +403,7 @@ export async function loadAndMigrateAdviceLocalState(
   if (!isObject(raw)) {
     return { ok: false, reason: 'invalid-local-data', value: closed };
   }
-  const migrated = raw.schemaVersion === ADVICE_LOCAL_STATE_VERSION
+  const migrated = raw.schemaVersion === 2
     ? migrateLegacyV2(raw)
     : raw.schemaVersion === 1
       ? migrateV1(raw)
@@ -422,6 +485,86 @@ export function upsertAdviceLocalFeedback(
     : withoutTarget.concat(next))
     .slice(-MAX_PERSISTED_ADVICE_FEEDBACK);
   return { ok: true, value: { ...current, feedback } };
+}
+
+export function snoozeAdviceRecommendation(
+  state: AdviceLocalState,
+  input: {
+    adviceId: string;
+    recommendationId: string;
+    snoozedUntilEpochMs: number;
+    updatedAtEpochMs: number;
+  },
+): AdviceLocalStateMutationResult {
+  const current = parseCurrentState(state);
+  if (!current) return { ok: false, reason: 'invalid-local-data' };
+  if (
+    !isObject(input) ||
+    !hasExactKeys(input, [
+      'adviceId',
+      'recommendationId',
+      'snoozedUntilEpochMs',
+      'updatedAtEpochMs',
+    ]) ||
+    !isAdviceIdentifier(input.adviceId) ||
+    !isAdviceIdentifier(input.recommendationId) ||
+    !isEpochMs(input.snoozedUntilEpochMs) ||
+    !isEpochMs(input.updatedAtEpochMs) ||
+    input.snoozedUntilEpochMs <= input.updatedAtEpochMs ||
+    input.snoozedUntilEpochMs - input.updatedAtEpochMs > MAX_ADVICE_SNOOZE_DURATION_MS
+  ) return { ok: false, reason: 'invalid-input' };
+  const suppression = current.suppression
+    .filter(
+      (item) =>
+        item.snoozedUntilEpochMs > input.updatedAtEpochMs &&
+        (item.adviceId !== input.adviceId || item.recommendationId !== input.recommendationId),
+    )
+    .concat({
+      adviceId: input.adviceId,
+      recommendationId: input.recommendationId,
+      snoozedUntilEpochMs: input.snoozedUntilEpochMs,
+      updatedAtEpochMs: input.updatedAtEpochMs,
+    })
+    .slice(-MAX_PERSISTED_ADVICE_FEEDBACK);
+  return { ok: true, value: { ...current, suppression } };
+}
+
+export function resumeAdviceRecommendation(
+  state: AdviceLocalState,
+  input: { adviceId: string; recommendationId: string },
+): AdviceLocalStateMutationResult {
+  const current = parseCurrentState(state);
+  if (!current) return { ok: false, reason: 'invalid-local-data' };
+  if (
+    !isObject(input) ||
+    !hasExactKeys(input, ['adviceId', 'recommendationId']) ||
+    !isAdviceIdentifier(input.adviceId) ||
+    !isAdviceIdentifier(input.recommendationId)
+  ) return { ok: false, reason: 'invalid-input' };
+  return {
+    ok: true,
+    value: {
+      ...current,
+      suppression: current.suppression.filter(
+        (item) =>
+          item.adviceId !== input.adviceId || item.recommendationId !== input.recommendationId,
+      ),
+    },
+  };
+}
+
+export function adviceRecommendationSnoozedUntil(
+  state: AdviceLocalState,
+  input: { adviceId: string; recommendationId: string; nowEpochMs: number },
+): number | null {
+  if (!parseCurrentState(state) || !isEpochMs(input.nowEpochMs)) return null;
+  const record = state.suppression.find(
+    (item) =>
+      item.adviceId === input.adviceId &&
+      item.recommendationId === input.recommendationId &&
+      item.snoozedUntilEpochMs > input.nowEpochMs,
+  );
+  return record?.snoozedUntilEpochMs ?? null;
 }
 
 export function appendStoredComparablePair(

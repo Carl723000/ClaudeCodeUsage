@@ -7,6 +7,7 @@ import {
   AdviceLocalState,
   AdviceLocalStateStorage,
   createClosedAdviceLocalState,
+  snoozeAdviceRecommendation,
 } from '../adviceEffectiveness/versionedPersistence';
 
 class ControlledStorage implements AdviceLocalStateStorage {
@@ -113,6 +114,7 @@ test('clear is serialized after an older consent write and remains the final dur
   assert.equal(storage.value.aggregateConsent, 'not-granted');
   assert.equal(storage.value.promptSampleConsent, 'not-granted');
   assert.deepEqual(storage.value.feedback, []);
+  assert.deepEqual(storage.value.suppression, []);
   assert.deepEqual(storage.value.comparablePairs, []);
   assert.deepEqual(storage.value.comparisonResults, []);
 });
@@ -198,6 +200,87 @@ test('optimizer feedback uses the same retractable local ledger and rendered con
   assert.equal((html.match(/data-advice-action="feedback"/g) ?? []).length, 3);
   assert.match(html, /data-provider="optimizer"/);
   assert.match(html, /recommendation-optimizer-result-v1/);
+});
+
+test('snoozed advice leaves a closed, on-demand resume control instead of the default recommendation summary', async () => {
+  let durable = createClosedAdviceLocalState();
+  const provider = await createProvider({
+    get: <T>() => durable as T,
+    update: async (_key: string, value: unknown) => {
+      durable = value as AdviceLocalState;
+    },
+  });
+  provider.settings = { get: (key: string) => key === 'advice.effectiveness.enabled' };
+  provider.adviceLocalState = durable;
+  provider.adviceEffectivenessStates = {
+    claude: {
+      provider: 'claude',
+      remotePreviewEligible: false,
+      aggregate: { windowDays: 30 },
+      promptSamples: [],
+      contract: {
+        schemaVersion: 1,
+        adviceId: 'advice-claude-snooze-test',
+        observations: [{
+          id: 'observation-1',
+          metric: 'long-session-share',
+          value: 0.5,
+          unit: 'ratio',
+          method: 'measured',
+          sourceId: 'source-1',
+          summary: 'local',
+        }],
+        evidence: [{
+          id: 'evidence-1',
+          observationIds: ['observation-1'],
+          strength: 'direct',
+          summary: 'local',
+          limitations: [],
+        }],
+        recommendations: [{
+          id: 'recommendation-claude-snooze',
+          title: 'Boundary',
+          evidenceIds: ['evidence-1'],
+          explanation: { summary: 'local', proxyMetricObservationIds: [], limitations: [] },
+          conditionalActions: [{ when: 'next task', action: 'try', evidenceIds: ['evidence-1'] }],
+          successCriteria: [],
+        }],
+        privacy: {
+          dataMode: 'local-only',
+          promptSampleConsent: 'not-applicable',
+          promptSampleCount: 0,
+          feedbackStorage: 'local-only',
+        },
+        provenance: {
+          generatedBy: { kind: 'local-rules' },
+          generatedAt: new Date(1_777_000_000_000).toISOString(),
+          locale: 'en',
+          sources: [{
+            id: 'source-1',
+            kind: 'claude-local-insight',
+            scope: 'overall',
+            window: { kind: 'rolling-days', days: 30 },
+            confidence: 'high',
+            qualityFlags: [],
+          }],
+        },
+      },
+    },
+  };
+  const snoozeNow = Date.now();
+  const result = snoozeAdviceRecommendation(durable, {
+    adviceId: 'advice-claude-snooze-test',
+    recommendationId: 'recommendation-claude-snooze',
+    updatedAtEpochMs: snoozeNow,
+    snoozedUntilEpochMs: snoozeNow + 86_400_000,
+  });
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  provider.adviceLocalState = result.value;
+  const html = provider.renderAdviceEffectivenessBody('claude');
+  assert.doesNotMatch(html, /advice-recommendation-boundary/);
+  assert.match(html, /advice-recommendation-snoozed/);
+  assert.match(html, /data-snooze-mode="resume"/);
 });
 
 test('a failed feedback save returns the validated target identity so only its controls unlock', async () => {

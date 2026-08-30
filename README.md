@@ -82,6 +82,9 @@ helpful**, and **Applied** stay on this device. Once enough reliable, similar
 before/after tasks exist, the card reports the frozen comparison result;
 otherwise it says that the evidence is insufficient.
 
+Each recommendation can be snoozed for a bounded period; it leaves the default
+summary and returns after expiry or when you choose to show it again.
+
 AI personalisation is a separate choice. Aggregate-only is the default and
 prompt samples remain off until separately allowed. The extension prepares the
 complete request once and shows its exact JSON, byte count, and SHA-256. Preview

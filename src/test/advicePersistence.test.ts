@@ -6,15 +6,19 @@ import { compareAdviceEffectiveness } from '../adviceEffectiveness/comparison';
 import {
   ADVICE_LOCAL_STATE_KEY,
   ADVICE_LOCAL_STATE_VERSION,
+  ADVICE_SNOOZE_DURATION_MS,
   MAX_PERSISTED_ADVICE_COMPARISON_RESULTS,
   AdviceLocalStateStorage,
   StoredComparablePair,
   appendAdviceComparisonResult,
   appendStoredComparablePair,
+  adviceRecommendationSnoozedUntil,
   createClearedAdviceLocalState,
   createClosedAdviceLocalState,
   loadAndMigrateAdviceLocalState,
   saveAdviceLocalState,
+  snoozeAdviceRecommendation,
+  resumeAdviceRecommendation,
   selectStoredComparablePairLineage,
   toComparableTaskPairs,
   upsertAdviceLocalFeedback,
@@ -86,6 +90,7 @@ test('v1 migration preserves validated local feedback but conservatively closes 
   assert.equal(result.value.aggregateConsent, 'not-granted');
   assert.equal(result.value.promptSampleConsent, 'not-granted');
   assert.deepEqual(result.value.comparisonResults, []);
+  assert.deepEqual(result.value.suppression, []);
   assert.deepEqual(result.value.feedback, [
     {
       adviceId: 'advice-1',
@@ -97,6 +102,41 @@ test('v1 migration preserves validated local feedback but conservatively closes 
     },
   ]);
   assert.deepEqual(storage.updates, [result.value]);
+});
+
+test('v2 migration preserves feedback, application time, pairs, and results while adding empty suppression', async () => {
+  const storage = new MemoryStorage();
+  const legacy = {
+    schemaVersion: 2,
+    featureMode: 'disabled',
+    aggregateConsent: 'not-granted',
+    promptSampleConsent: 'not-granted',
+    feedback: [{
+      adviceId: 'advice-1',
+      recommendationId: 'recommendation-1',
+      rating: 'not-helpful',
+      applied: 'applied',
+      updatedAtEpochMs: 1_777_000_000_001,
+    }],
+    comparablePairs: [],
+    comparisonResults: [],
+  } as Record<string, unknown>;
+  storage.value = legacy;
+
+  const result = await loadAndMigrateAdviceLocalState(storage);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.migrated, true);
+  assert.equal(result.value.schemaVersion, ADVICE_LOCAL_STATE_VERSION);
+  assert.deepEqual(result.value.feedback, [{
+    adviceId: 'advice-1',
+    recommendationId: 'recommendation-1',
+    rating: 'not-helpful',
+    applied: 'applied',
+    appliedAtEpochMs: 1_777_000_000_001,
+    updatedAtEpochMs: 1_777_000_000_001,
+  }]);
+  assert.deepEqual(result.value.suppression, []);
 });
 
 test('unknown, corrupt, or identifying local data fails closed and is never overwritten', async () => {
@@ -241,6 +281,80 @@ test('feedback upsert keeps rating mutually exclusive while applied remains inde
   assert.equal(applicationRetracted.ok, true);
   if (!applicationRetracted.ok) return;
   assert.deepEqual(applicationRetracted.value.feedback, []);
+});
+
+test('explicit snooze is bounded, expires, resumes, and never overwrites feedback', () => {
+  const now = 1_777_000_000_000;
+  const rated = upsertAdviceLocalFeedback(createClosedAdviceLocalState(), {
+    adviceId: 'advice-1',
+    recommendationId: 'recommendation-1',
+    kind: 'helpful',
+    updatedAtEpochMs: now,
+  });
+  assert.equal(rated.ok, true);
+  if (!rated.ok) return;
+  const snoozed = snoozeAdviceRecommendation(rated.value, {
+    adviceId: 'advice-1',
+    recommendationId: 'recommendation-1',
+    updatedAtEpochMs: now + 1,
+    snoozedUntilEpochMs: now + 1 + ADVICE_SNOOZE_DURATION_MS,
+  });
+  assert.equal(snoozed.ok, true);
+  if (!snoozed.ok) return;
+  assert.equal(snoozed.value.feedback[0].rating, 'helpful');
+  assert.equal(
+    adviceRecommendationSnoozedUntil(snoozed.value, {
+      adviceId: 'advice-1',
+      recommendationId: 'recommendation-1',
+      nowEpochMs: now + 2,
+    }),
+    now + 1 + ADVICE_SNOOZE_DURATION_MS,
+  );
+  assert.equal(
+    adviceRecommendationSnoozedUntil(snoozed.value, {
+      adviceId: 'advice-1',
+      recommendationId: 'recommendation-1',
+      nowEpochMs: now + 1 + ADVICE_SNOOZE_DURATION_MS,
+    }),
+    null,
+  );
+  assert.equal(
+    adviceRecommendationSnoozedUntil(snoozed.value, {
+      adviceId: 'advice-2',
+      recommendationId: 'recommendation-1',
+      nowEpochMs: now + 2,
+    }),
+    null,
+    'a new evidence/advice revision must reappear immediately',
+  );
+  const resumed = resumeAdviceRecommendation(snoozed.value, {
+    adviceId: 'advice-1',
+    recommendationId: 'recommendation-1',
+  });
+  assert.equal(resumed.ok, true);
+  if (!resumed.ok) return;
+  assert.deepEqual(resumed.value.suppression, []);
+  assert.equal(resumed.value.feedback[0].rating, 'helpful');
+});
+
+test('suppression rejects unbounded duration and identifying payload fields', () => {
+  const now = 1_777_000_000_000;
+  const state = createClosedAdviceLocalState();
+  const tooLong = snoozeAdviceRecommendation(state, {
+    adviceId: 'advice-1',
+    recommendationId: 'recommendation-1',
+    updatedAtEpochMs: now,
+    snoozedUntilEpochMs: now + 31 * 24 * 60 * 60 * 1_000,
+  });
+  assert.deepEqual(tooLong, { ok: false, reason: 'invalid-input' });
+  const rawPayload = snoozeAdviceRecommendation(state, {
+    adviceId: 'advice-1',
+    recommendationId: 'recommendation-1',
+    updatedAtEpochMs: now,
+    snoozedUntilEpochMs: now + ADVICE_SNOOZE_DURATION_MS,
+    prompt: 'PRIVATE_PROMPT',
+  } as never);
+  assert.deepEqual(rawPayload, { ok: false, reason: 'invalid-input' });
 });
 
 function comparablePair(): StoredComparablePair {
@@ -397,7 +511,7 @@ test('comparison lineage spans rotating advice instances while preserving strict
 test('legacy exact v2 state migrates in-place to the same ledger with empty comparison results', async () => {
   const storage = new MemoryStorage();
   storage.value = {
-    schemaVersion: ADVICE_LOCAL_STATE_VERSION,
+    schemaVersion: 2,
     featureMode: 'disabled',
     aggregateConsent: 'not-granted',
     promptSampleConsent: 'not-granted',

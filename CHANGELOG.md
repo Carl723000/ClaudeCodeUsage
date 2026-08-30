@@ -21,6 +21,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   comparison-result envelopes retain only coarse provider, cohort, metric,
   quality, coverage, and version fields. Prompt text, response text, paths,
   session identifiers, and task bodies have no persistence field.
+- **Bounded local advice snooze** — each recommendation can be paused for seven
+  days (up to thirty days), moved out of the default summary, and shown again
+  on demand or after expiry; ratings and applied feedback remain independent.
 - **Thirty-day Codex hourly drill-down** — every populated date in the rolling
   30-day view can expand from the already-indexed sparse date/hour sidecar.
   Clicking a date reads zero JSONL bodies; the 31st day is evicted, and Claude

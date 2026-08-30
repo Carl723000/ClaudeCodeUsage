@@ -80,6 +80,9 @@ export interface AdviceEffectivenessTranslations {
   helpful: string;
   notHelpful: string;
   applied: string;
+  snooze: string;
+  resume: string;
+  snoozedUntil: string;
   feedbackLocalOnly: string;
   feedbackSaveFailed: string;
   comparisonTitle: string;
@@ -1235,6 +1238,9 @@ const translations: Record<SupportedLanguage, Translations> = {
         helpful: 'Helpful',
         notHelpful: 'Not helpful',
         applied: 'Applied',
+        snooze: 'Snooze 7 days',
+        resume: 'Show again',
+        snoozedUntil: 'Snoozed until {date}',
         feedbackLocalOnly: 'Stored only on this device and never added to a remote payload.',
         feedbackSaveFailed: 'Feedback could not be saved locally. Nothing was sent.',
         comparisonTitle: 'Comparable task results',
@@ -1527,6 +1533,9 @@ const translations: Record<SupportedLanguage, Translations> = {
         helpful: 'Hilfreich',
         notHelpful: 'Nicht hilfreich',
         applied: 'Angewendet',
+        snooze: '7 Tage zurückstellen',
+        resume: 'Wieder anzeigen',
+        snoozedUntil: 'Zurückgestellt bis {date}',
         feedbackLocalOnly: 'Wird nur auf diesem Gerät gespeichert und nie einer Remote-Payload hinzugefügt.',
         feedbackSaveFailed: 'Das Feedback konnte lokal nicht gespeichert werden. Es wurde nichts gesendet.',
         comparisonTitle: 'Ergebnisse vergleichbarer Aufgaben',
@@ -1822,6 +1831,9 @@ const translations: Record<SupportedLanguage, Translations> = {
         helpful: '有用',
         notHelpful: '無用',
         applied: '已套用',
+        snooze: '暫停 7 天',
+        resume: '再次顯示',
+        snoozedUntil: '暫停至 {date}',
         feedbackLocalOnly: '只儲存在此裝置，絕不加入遠端 payload。',
         feedbackSaveFailed: '無法在本機儲存回饋。未傳送任何內容。',
         comparisonTitle: '可比任務結果',
@@ -2110,6 +2122,9 @@ const translations: Record<SupportedLanguage, Translations> = {
         helpful: '有用',
         notHelpful: '无用',
         applied: '已应用',
+        snooze: '暂停 7 天',
+        resume: '再次显示',
+        snoozedUntil: '暂停至 {date}',
         feedbackLocalOnly: '只存储在此设备上，绝不加入远程 payload。',
         feedbackSaveFailed: '无法在本地保存反馈。未发送任何内容。',
         comparisonTitle: '可比任务结果',
@@ -2398,6 +2413,9 @@ const translations: Record<SupportedLanguage, Translations> = {
         helpful: '役に立った',
         notHelpful: '役に立たなかった',
         applied: '適用済み',
+        snooze: '7日間保留',
+        resume: '再表示',
+        snoozedUntil: '{date} まで保留',
         feedbackLocalOnly: 'この端末だけに保存され、リモート payload には追加されません。',
         feedbackSaveFailed: 'フィードバックをローカルに保存できませんでした。何も送信されていません。',
         comparisonTitle: '比較可能なタスクの結果',
@@ -2691,6 +2709,9 @@ const translations: Record<SupportedLanguage, Translations> = {
         helpful: '유용함',
         notHelpful: '유용하지 않음',
         applied: '적용함',
+        snooze: '7일간 숨기기',
+        resume: '다시 표시',
+        snoozedUntil: '{date}까지 숨김',
         feedbackLocalOnly: '이 기기에만 저장되며 원격 payload에는 절대 추가되지 않습니다.',
         feedbackSaveFailed: '피드백을 로컬에 저장하지 못했습니다. 아무것도 전송되지 않았습니다.',
         comparisonTitle: '비교 가능한 작업 결과',
@@ -2984,6 +3005,9 @@ const translations: Record<SupportedLanguage, Translations> = {
         helpful: 'Útil',
         notHelpful: 'Não útil',
         applied: 'Aplicado',
+        snooze: 'Adiar por 7 dias',
+        resume: 'Mostrar novamente',
+        snoozedUntil: 'Adiado até {date}',
         feedbackLocalOnly: 'Armazenado somente neste dispositivo e nunca adicionado a um payload remoto.',
         feedbackSaveFailed: 'Não foi possível salvar o feedback localmente. Nada foi enviado.',
         comparisonTitle: 'Resultados de tarefas comparáveis',
@@ -3276,6 +3300,9 @@ const translations: Record<SupportedLanguage, Translations> = {
         helpful: 'Bermanfaat',
         notHelpful: 'Tidak bermanfaat',
         applied: 'Diterapkan',
+        snooze: 'Tunda 7 hari',
+        resume: 'Tampilkan lagi',
+        snoozedUntil: 'Ditunda hingga {date}',
         feedbackLocalOnly: 'Disimpan hanya di perangkat ini dan tidak pernah ditambahkan ke payload jarak jauh.',
         feedbackSaveFailed: 'Umpan balik tidak dapat disimpan secara lokal. Tidak ada yang dikirim.',
         comparisonTitle: 'Hasil tugas yang sebanding',

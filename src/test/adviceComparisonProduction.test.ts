@@ -228,7 +228,7 @@ test('advice rendering gives every recommendation its own feedback and compariso
       const matches = html.match(
         new RegExp(`<button[^>]+data-recommendation-id="${recommendation.id}"`, 'g'),
       ) ?? [];
-      assert.equal(matches.length, 3, `${recommendation.id} needs three independent feedback buttons`);
+      assert.equal(matches.length, 4, `${recommendation.id} needs three feedback buttons plus snooze`);
     }
     assert.doesNotMatch(
       provider.renderAdviceEffectivenessBody.toString(),

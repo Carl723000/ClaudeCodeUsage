@@ -73,7 +73,11 @@ import {
   createClearedAdviceLocalState,
   createClosedAdviceLocalState,
   loadAndMigrateAdviceLocalState,
+  adviceRecommendationSnoozedUntil,
+  ADVICE_SNOOZE_DURATION_MS,
+  resumeAdviceRecommendation,
   saveAdviceLocalState,
+  snoozeAdviceRecommendation,
   upsertAdviceLocalFeedback,
 } from './adviceEffectiveness/versionedPersistence';
 import {
@@ -760,6 +764,69 @@ export class UsageWebviewProvider {
     });
   }
 
+  private async handleAdviceSnoozeMessage(message: Record<string, unknown>): Promise<void> {
+    const optimizerTarget =
+      message.provider === 'optimizer' &&
+      this.setting<boolean>('advice.optimizer.enabled', false) &&
+      typeof this.optimizerState?.adviceId === 'string' &&
+      this.optimizerState.adviceId === message.adviceId &&
+      message.recommendationId === OPTIMIZER_FEEDBACK_RECOMMENDATION_ID;
+    const providerState = optimizerTarget ? undefined : this.adviceProviderState(message.provider);
+    const adviceId = message.adviceId;
+    const recommendationId = message.recommendationId;
+    const targetAdviceId = optimizerTarget ? this.optimizerState!.adviceId : providerState?.contract.adviceId;
+    const targetRecommendationId = optimizerTarget
+      ? OPTIMIZER_FEEDBACK_RECOMMENDATION_ID
+      : providerState?.contract.recommendations.find((item) => item.id === recommendationId)?.id;
+    const valid =
+      (optimizerTarget || Boolean(providerState)) &&
+      typeof adviceId === 'string' &&
+      typeof recommendationId === 'string' &&
+      targetAdviceId === adviceId &&
+      targetRecommendationId === recommendationId &&
+      this.adviceLocalStateStatus === 'ready' &&
+      Boolean(this.adviceStateStorage());
+    const response = { command: 'adviceSnoozeResult', provider: message.provider, adviceId, recommendationId };
+    if (!valid) {
+      this.postAdviceMessage({ ...response, ok: false });
+      return;
+    }
+    const stateGeneration = this.adviceLocalStateGeneration;
+    const now = Date.now();
+    const resume = message.mode === 'resume';
+    let mutationAccepted = true;
+    const saved = await this.enqueueAdviceLocalStateWrite((current) => {
+      if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
+      const changed = resume
+        ? resumeAdviceRecommendation(current, {
+            adviceId: targetAdviceId as string,
+            recommendationId: targetRecommendationId as string,
+          })
+        : snoozeAdviceRecommendation(current, {
+            adviceId: targetAdviceId as string,
+            recommendationId: targetRecommendationId as string,
+            updatedAtEpochMs: now,
+            snoozedUntilEpochMs: now + ADVICE_SNOOZE_DURATION_MS,
+          });
+      if (!changed.ok) {
+        mutationAccepted = false;
+        return undefined;
+      }
+      return { ...changed.value, featureMode: 'enabled' as const };
+    });
+    if (!saved.ok || !saved.changed || !mutationAccepted) {
+      this.postAdviceMessage({ ...response, ok: false });
+      return;
+    }
+    const until = adviceRecommendationSnoozedUntil(saved.value, {
+      adviceId: targetAdviceId as string,
+      recommendationId: targetRecommendationId as string,
+      nowEpochMs: now,
+    });
+    this.postAdviceMessage({ ...response, ok: true, snoozedUntilEpochMs: until });
+    this.updateWebview();
+  }
+
   private async handlePrepareOptimizerMessage(message: Record<string, unknown>): Promise<void> {
     if (!this.setting<boolean>('advice.optimizer.enabled', false)) {
       this.discardPreparedOptimizer();
@@ -949,6 +1016,9 @@ export class UsageWebviewProvider {
         }
         case 'recordAdviceFeedback':
           await this.handleAdviceFeedbackMessage(message as Record<string, unknown>);
+          break;
+        case 'snoozeAdvice':
+          await this.handleAdviceSnoozeMessage(message as Record<string, unknown>);
           break;
         case 'clearAdviceLocalData':
           await this.handleClearAdviceLocalDataMessage();
@@ -4806,13 +4876,18 @@ export class UsageWebviewProvider {
     const step = (index: number, label: string, content: string): string =>
       '<li><span class="advice-step-marker" aria-hidden="true">' + index + '</span>' +
       '<div><strong>' + html(label) + '</strong><p>' + content + '</p></div></li>';
-    const feedbackFor = (recommendation: AdviceRecommendation): string => {
+    const feedbackFor = (recommendation: AdviceRecommendation, suppressed = false): string => {
       if (!state) return '';
       const feedback = this.adviceLocalState.feedback.find(
         (item) =>
           item.adviceId === state.contract.adviceId &&
           item.recommendationId === recommendation.id,
       );
+      const snoozedUntil = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+        adviceId: state.contract.adviceId,
+        recommendationId: recommendation.id,
+        nowEpochMs: Date.now(),
+      });
       const disabled = this.adviceLocalStateStatus !== 'ready' ? ' disabled' : '';
       const button = (
         kind: 'helpful' | 'not-helpful' | 'applied',
@@ -4829,11 +4904,20 @@ export class UsageWebviewProvider {
         '<div class="advice-feedback-section">' +
         '<h5>' + html(t.feedbackTitle) + '</h5>' +
         '<div class="advice-feedback-group" role="group" aria-label="' + html(t.feedbackTitle) + '">' +
-        button('helpful', t.helpful, feedback?.rating === 'helpful') +
-        button('not-helpful', t.notHelpful, feedback?.rating === 'not-helpful') +
-        button('applied', t.applied, feedback?.applied === 'applied') +
+        (suppressed ? '' :
+          button('helpful', t.helpful, feedback?.rating === 'helpful') +
+          button('not-helpful', t.notHelpful, feedback?.rating === 'not-helpful') +
+          button('applied', t.applied, feedback?.applied === 'applied')) +
+        '<button type="button" class="advice-feedback-button" data-advice-action="snooze"' +
+        ' data-provider="' + provider + '" data-advice-id="' + html(state.contract.adviceId) +
+        '" data-recommendation-id="' + html(recommendation.id) + '" data-snooze-mode="' +
+        (snoozedUntil ? 'resume' : 'snooze') + '"' + disabled + '>' +
+        html(snoozedUntil ? t.resume : t.snooze) + '</button>' +
         '</div>' +
         '<p class="advice-local-note">' + html(t.feedbackLocalOnly) + '</p>' +
+        (snoozedUntil
+          ? '<p class="advice-local-note">' + html(t.snoozedUntil.replace('{date}', new Date(snoozedUntil).toLocaleDateString())) + '</p>'
+          : '') +
         '<p class="advice-inline-status" data-advice-feedback-status="' + provider + '"' +
         ' data-advice-id="' + html(state.contract.adviceId) + '"' +
         ' data-recommendation-id="' + html(recommendation.id) + '" aria-live="polite"></p>' +
@@ -4855,8 +4939,18 @@ export class UsageWebviewProvider {
           : t.noEvidenceAdvice,
       };
     };
-    const recommendationHtml = state && recommendations.length > 0
-      ? recommendations.map((recommendation) => {
+    const activeRecommendations = state
+      ? recommendations.filter((recommendation) => !adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+          adviceId: state.contract.adviceId,
+          recommendationId: recommendation.id,
+          nowEpochMs: Date.now(),
+        }))
+      : [];
+    const suppressedRecommendations = state
+      ? recommendations.filter((recommendation) => !activeRecommendations.includes(recommendation))
+      : [];
+    const recommendationHtml = state && activeRecommendations.length > 0
+      ? activeRecommendations.map((recommendation) => {
           const copy = recommendationCopy(recommendation);
           const comparison = this.adviceComparison(state, recommendation.id);
           const resultText = comparison.status === 'quality-guardrail-failed'
@@ -4890,7 +4984,31 @@ export class UsageWebviewProvider {
             ) +
             '</ol>' + feedbackFor(recommendation) + '</div>'
           );
+        }).join('') + suppressedRecommendations.map((recommendation) => {
+          const until = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+            adviceId: state.contract.adviceId,
+            recommendationId: recommendation.id,
+            nowEpochMs: Date.now(),
+          });
+          return '<details class="advice-recommendation-snoozed" data-advice-recommendation="' +
+            html(recommendation.id) + '"><summary>' + html(t.snoozedUntil.replace(
+              '{date}',
+              until ? new Date(until).toLocaleDateString() : '',
+            )) + '</summary>' + feedbackFor(recommendation, true) + '</details>';
         }).join('')
+      : state && suppressedRecommendations.length > 0
+        ? suppressedRecommendations.map((recommendation) => {
+            const until = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+              adviceId: state.contract.adviceId,
+              recommendationId: recommendation.id,
+              nowEpochMs: Date.now(),
+            });
+            return '<details class="advice-recommendation-snoozed" data-advice-recommendation="' +
+              html(recommendation.id) + '"><summary>' + html(t.snoozedUntil.replace(
+                '{date}',
+                until ? new Date(until).toLocaleDateString() : '',
+              )) + '</summary>' + feedbackFor(recommendation, true) + '</details>';
+          }).join('')
       : '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
         step(3, t.recommendation, html(t.noEvidenceAdvice)) +
         step(4, t.action, html(t.noEvidenceAdvice)) +
@@ -5032,6 +5150,13 @@ export class UsageWebviewProvider {
             item.recommendationId === OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
         )
       : undefined;
+    const optimizerSnoozedUntil = optimizerAdviceId
+      ? adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+          adviceId: optimizerAdviceId,
+          recommendationId: OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
+          nowEpochMs: Date.now(),
+        })
+      : null;
     const feedbackDisabled =
       !optimizerAdviceId || this.adviceLocalStateStatus !== 'ready' ? ' disabled' : '';
     const feedbackButton = (
@@ -5055,7 +5180,15 @@ export class UsageWebviewProvider {
       feedbackButton('helpful', ai.helpful, optimizerFeedback?.rating === 'helpful') +
       feedbackButton('not-helpful', ai.notHelpful, optimizerFeedback?.rating === 'not-helpful') +
       feedbackButton('applied', ai.applied, optimizerFeedback?.applied === 'applied') +
+      '<button type="button" class="advice-feedback-button" data-advice-action="snooze" data-provider="optimizer"' +
+      ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '" data-recommendation-id="' +
+      OPTIMIZER_FEEDBACK_RECOMMENDATION_ID + '" data-snooze-mode="' +
+      (optimizerSnoozedUntil ? 'resume' : 'snooze') + '"' + feedbackDisabled + '>' +
+      this.escapeHtml(optimizerSnoozedUntil ? ai.resume : ai.snooze) + '</button>' +
       '</div><p class="advice-local-note">' + this.escapeHtml(ai.feedbackLocalOnly) + '</p>' +
+      (optimizerSnoozedUntil
+        ? '<p class="advice-local-note">' + this.escapeHtml(ai.snoozedUntil.replace('{date}', new Date(optimizerSnoozedUntil).toLocaleDateString())) + '</p>'
+        : '') +
       '<p class="advice-inline-status" data-advice-feedback-status="optimizer"' +
       ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '"' +
       ' data-recommendation-id="' + OPTIMIZER_FEEDBACK_RECOMMENDATION_ID +
@@ -9344,6 +9477,18 @@ document.addEventListener('click', function(event) {
     });
     return;
   }
+  if (action.getAttribute('data-advice-action') === 'snooze') {
+    event.preventDefault();
+    action.disabled = true;
+    vscode.postMessage({
+      command: 'snoozeAdvice',
+      provider: provider,
+      adviceId: action.getAttribute('data-advice-id'),
+      recommendationId: action.getAttribute('data-recommendation-id'),
+      mode: action.getAttribute('data-snooze-mode') === 'resume' ? 'resume' : 'snooze',
+    });
+    return;
+  }
   if (action.getAttribute('data-advice-action') === 'clear') {
     event.preventDefault();
     if (!window.confirm(__adviceCopy.clearLocalDataConfirm)) { return; }
@@ -9515,6 +9660,17 @@ window.addEventListener('message', async function(event) {
         if (feedbackStatus) { feedbackStatus.textContent = __adviceCopy.feedbackSaveFailed; }
       }
     }
+  }
+
+  if (message.command === 'adviceSnoozeResult' && message.ok !== true) {
+    document.querySelectorAll('[data-advice-action="snooze"]').forEach(function(button) {
+      if (
+        button.getAttribute('data-advice-id') === message.adviceId &&
+        button.getAttribute('data-recommendation-id') === message.recommendationId
+      ) {
+        button.disabled = false;
+      }
+    });
   }
 
   if (message.command === 'adviceClearResult' && message.ok !== true) {

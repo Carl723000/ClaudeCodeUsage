@@ -322,7 +322,7 @@ test('candidate exposes only bounded advice actions and feedback posts identifie
   await expect(root.locator('[data-advice-action="send"]')).toBeDisabled();
   expect(await root.locator('[data-advice-action]').evaluateAll((elements) =>
     [...new Set(elements.map((element) => element.getAttribute('data-advice-action')))].sort()))
-    .toEqual(['clear', 'feedback', 'preview', 'send']);
+    .toEqual(['clear', 'feedback', 'preview', 'send', 'snooze']);
 
   const feedbackKinds = await root.locator('[data-advice-action="feedback"]')
     .evaluateAll((buttons) => buttons.map((button) => button.getAttribute('data-feedback-kind')));
@@ -368,6 +368,22 @@ test('candidate exposes only bounded advice actions and feedback posts identifie
   expect((await postedMessages(page, 'clearAdviceLocalData')).at(-1)).toEqual({
     command: 'clearAdviceLocalData',
   });
+});
+
+test('snooze posts only opaque recommendation identity and does not send a network request', async ({ page }) => {
+  const root = await openCandidate(page, 'claude');
+  const snooze = root.locator('[data-advice-action="snooze"]').first();
+  await snooze.click();
+  await expectPostedCount(page, 'snoozeAdvice', 1);
+  const message = (await postedMessages(page, 'snoozeAdvice')).at(-1);
+  expect(message).toEqual({
+    command: 'snoozeAdvice',
+    provider: 'claude',
+    adviceId: 'advice-claude-ui-fixture',
+    recommendationId: 'recommendation-claude-clear-between-tasks',
+    mode: 'snooze',
+  });
+  expect(JSON.stringify(message)).not.toMatch(/prompt|body|path|session|payload/i);
 });
 
 test('one recommendation feedback leaves sibling recommendations interactive and recovers on failure', async ({ page }) => {
