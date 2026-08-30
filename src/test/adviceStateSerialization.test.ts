@@ -196,6 +196,10 @@ test('optimizer feedback uses the same retractable local ledger and rendered con
   assert.equal(durable.feedback[0].rating, 'helpful');
   assert.equal(durable.feedback[0].applied, 'not-applied');
   assert.doesNotMatch(JSON.stringify(durable), /host-only draft|Paste-ready result|Effort: high/);
+  const html = provider.renderOptimizerCard();
+  assert.equal((html.match(/data-advice-action="feedback"/g) ?? []).length, 3);
+  assert.match(html, /data-provider="optimizer"/);
+  assert.match(html, /recommendation-optimizer-result-v1/);
   await provider.handleAdviceSnoozeMessage({
     provider: 'optimizer',
     adviceId: provider.optimizerState.adviceId,
@@ -203,10 +207,9 @@ test('optimizer feedback uses the same retractable local ledger and rendered con
     mode: 'snooze',
   });
   assert.equal(durable.suppression.length, 1);
-  const html = provider.renderOptimizerCard();
-  assert.equal((html.match(/data-advice-action="feedback"/g) ?? []).length, 3);
-  assert.match(html, /data-provider="optimizer"/);
-  assert.match(html, /recommendation-optimizer-result-v1/);
+  const snoozedHtml = provider.renderOptimizerCard();
+  assert.doesNotMatch(snoozedHtml, /id="optDraft"|id="optResult"|id="optSendBtn"/);
+  assert.match(snoozedHtml, /data-snooze-mode="resume"/);
 });
 
 test('snoozed advice leaves a closed, on-demand resume control instead of the default recommendation summary', async () => {

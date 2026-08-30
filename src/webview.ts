@@ -5193,6 +5193,23 @@ export class UsageWebviewProvider {
       ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '"' +
       ' data-recommendation-id="' + OPTIMIZER_FEEDBACK_RECOMMENDATION_ID +
       '" aria-live="polite"></p></div>';
+    if (optimizerSnoozedUntil && optimizerAdviceId) {
+      const untilText = ai.snoozedUntil.replace(
+        '{date}',
+        new Date(optimizerSnoozedUntil).toLocaleDateString(),
+      );
+      return (
+        '<div class="action-card" data-advice-provider="optimizer">' +
+        head('') +
+        '<div class="advice-recommendation-snoozed" role="status">' +
+        '<p class="advice-local-note">' + this.escapeHtml(untilText) + '</p>' +
+        '<button type="button" class="advice-feedback-button" data-advice-action="snooze" data-provider="optimizer"' +
+        ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '" data-recommendation-id="' +
+        OPTIMIZER_FEEDBACK_RECOMMENDATION_ID + '" data-snooze-mode="resume"' + feedbackDisabled + '>' +
+        this.escapeHtml(ai.resume) + '</button>' +
+        '</div></div>'
+      );
+    }
     const lens = (id: string, label: string, hint: string, on?: boolean): string =>
       '<label title="' + this.escapeHtml(hint) + '"><input type="checkbox" id="' + id + '"' +
       ck(on) + '> ' + this.escapeHtml(label) + '</label>';
