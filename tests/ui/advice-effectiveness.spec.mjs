@@ -489,6 +489,35 @@ test('optimizer result records the same retractable local feedback events', asyn
   }
 });
 
+test('optimizer snooze is keyboard reachable and posts only its opaque target', async ({ page }) => {
+  await openClaude(page, { fixture: 'advice-optimizer' });
+  await page.locator('#tab-content').click();
+  const snooze = page.locator(
+    '.action-card[data-advice-provider="optimizer"] [data-advice-action="snooze"]',
+  );
+  await expect(snooze).toBeVisible();
+  await snooze.focus();
+  await snooze.press('Enter');
+  await expectPostedCount(page, 'snoozeAdvice', 1);
+  const message = (await postedMessages(page, 'snoozeAdvice')).at(-1);
+  expect(message).toEqual({
+    command: 'snoozeAdvice',
+    provider: 'optimizer',
+    adviceId: 'advice-optimizer-0123456789abcdef01234567',
+    recommendationId: 'recommendation-optimizer-result-v1',
+    mode: 'snooze',
+  });
+  expect(JSON.stringify(message)).not.toMatch(/prompt|body|path|session|payload/i);
+});
+
+test('optimizer snooze control remains within the narrow shared card', async ({ page }) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await openClaude(page, { fixture: 'advice-optimizer' });
+  await page.locator('#tab-content').click();
+  expect(await page.locator('body').evaluate((element) =>
+    element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+});
+
 test('a new optimizer result does not inherit feedback from the previous run', async ({ page }) => {
   await openClaude(page, { fixture: 'advice-optimizer' });
   await page.locator('#tab-content').click();
