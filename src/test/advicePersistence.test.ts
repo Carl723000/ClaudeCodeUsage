@@ -171,6 +171,34 @@ test('v3 suppression migration maps only explicit provider prefixes and drops am
   }]);
 });
 
+test('v3 migration preserves stable suppression records in a mixed-generation write', async () => {
+  const storage = new MemoryStorage();
+  storage.value = {
+    ...createClosedAdviceLocalState(),
+    suppression: [
+      {
+        provider: 'optimizer',
+        surface: 'optimizer',
+        recommendationId: 'recommendation-optimizer-result-v1',
+        snoozedUntilEpochMs: 1_777_000_100_000,
+        updatedAtEpochMs: 1_777_000_000_000,
+      },
+      {
+        adviceId: 'advice-claude-20260830',
+        recommendationId: 'recommendation-2',
+        snoozedUntilEpochMs: 1_777_000_100_100,
+        updatedAtEpochMs: 1_777_000_000_000,
+      },
+    ],
+  };
+  const result = await loadAndMigrateAdviceLocalState(storage);
+  assert.equal(result.ok, true);
+  if (!result.ok) return;
+  assert.equal(result.value.suppression.length, 2);
+  assert.equal(result.value.suppression[0]?.provider, 'optimizer');
+  assert.equal(result.value.suppression[1]?.provider, 'claude');
+});
+
 test('unknown, corrupt, or identifying local data fails closed and is never overwritten', async () => {
   for (const value of [
     { schemaVersion: 99, prompt: 'PRIVATE_PROMPT' },

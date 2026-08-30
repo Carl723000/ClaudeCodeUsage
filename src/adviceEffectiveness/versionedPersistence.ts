@@ -340,7 +340,9 @@ function migrateLegacyV3(value: Record<string, unknown>): AdviceLocalState | und
   const suppression: PersistedAdviceSuppression[] = [];
   const targets = new Set<string>();
   for (const raw of value.suppression) {
-    const migrated = migrateLegacySuppression(raw);
+    // Mixed v3 writes can contain both the new stable shape and an older
+    // adviceId record; preserve only records whose provider scope is explicit.
+    const migrated = parseSuppression(raw) ?? migrateLegacySuppression(raw);
     if (!migrated) continue;
     const target = `${migrated.provider}\0${migrated.surface}\0${migrated.recommendationId}`;
     if (targets.has(target)) continue;
