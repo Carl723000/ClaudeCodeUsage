@@ -196,6 +196,13 @@ test('optimizer feedback uses the same retractable local ledger and rendered con
   assert.equal(durable.feedback[0].rating, 'helpful');
   assert.equal(durable.feedback[0].applied, 'not-applied');
   assert.doesNotMatch(JSON.stringify(durable), /host-only draft|Paste-ready result|Effort: high/);
+  await provider.handleAdviceSnoozeMessage({
+    provider: 'optimizer',
+    adviceId: provider.optimizerState.adviceId,
+    recommendationId: 'recommendation-optimizer-result-v1',
+    mode: 'snooze',
+  });
+  assert.equal(durable.suppression.length, 1);
   const html = provider.renderOptimizerCard();
   assert.equal((html.match(/data-advice-action="feedback"/g) ?? []).length, 3);
   assert.match(html, /data-provider="optimizer"/);
