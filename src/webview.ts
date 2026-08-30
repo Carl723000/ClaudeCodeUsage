@@ -842,6 +842,18 @@ export class UsageWebviewProvider {
       distil: message.distil === true,
       aesthetic: message.aesthetic === true,
     };
+    // An explicit rerun is an active user decision: it re-opens the stable
+    // optimizer recommendation scope without changing its independent feedback.
+    if (this.adviceLocalStateStatus === 'ready' && this.adviceStateStorage()) {
+      await this.enqueueAdviceLocalStateWrite((current) => {
+        const resumed = resumeAdviceRecommendation(current, {
+          provider: 'optimizer',
+          surface: 'optimizer',
+          recommendationId: OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
+        });
+        return resumed.ok ? resumed.value : undefined;
+      });
+    }
     this.optimizerConsentGeneration += 1;
     this.preparedOptimizerRequests.clear();
     const sourceRevision = `optimizer-${createHash('sha256')
@@ -5201,29 +5213,57 @@ export class UsageWebviewProvider {
       ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '"' +
       ' data-recommendation-id="' + OPTIMIZER_FEEDBACK_RECOMMENDATION_ID +
       '" aria-live="polite"></p></div>';
-    if (optimizerSnoozedUntil && optimizerAdviceId) {
-      const untilText = ai.snoozedUntil.replace(
-        '{date}',
-        new Date(optimizerSnoozedUntil).toLocaleDateString(),
-      );
-      return (
-        '<div class="action-card" data-advice-provider="optimizer">' +
-        head('') +
-        '<div class="advice-recommendation-snoozed" role="status">' +
-        '<p class="advice-local-note">' + this.escapeHtml(untilText) + '</p>' +
+    const optimizerSnoozedHtml = optimizerSnoozedUntil && optimizerAdviceId
+      ? '<div class="advice-recommendation-snoozed" role="status">' +
+        '<p class="advice-local-note">' + this.escapeHtml(ai.snoozedUntil.replace(
+          '{date}',
+          new Date(optimizerSnoozedUntil).toLocaleDateString(),
+        )) + '</p>' +
         '<button type="button" class="advice-feedback-button" data-advice-action="snooze" data-provider="optimizer"' +
         ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '" data-recommendation-id="' +
         OPTIMIZER_FEEDBACK_RECOMMENDATION_ID + '" data-snooze-mode="resume"' + feedbackDisabled + '>' +
-        this.escapeHtml(ai.resume) + '</button>' +
-        '</div></div>'
-      );
-    }
+        this.escapeHtml(ai.resume) + '</button></div>'
+      : '';
+    const optimizerResultHtml = optimizerSnoozedUntil
+      ? ''
+      : '<div id="optResult" class="opt-result" style="display:' + (hasResult ? '' : 'none') + '">' +
+        '<h4 class="opt-subhead">' + t.optimizerPromptHeading + '</h4>' +
+        '<div class="opt-output"><pre id="optPrompt">' +
+        (st && st.prompt ? this.escapeHtml(st.prompt) : '') + '</pre>' +
+        '<button class="opt-copy" data-copy="' + this.escapeHtml(t.optimizerCopy) +
+        '" data-copied="' + this.escapeHtml(t.optimizerCopied) +
+        '" title="' + this.escapeHtml(t.optimizerCopy) + '" onclick="copyOptPrompt(this)">' +
+        '<span class="opt-copy-ico">⧉</span><span class="opt-copy-lbl">' +
+        this.escapeHtml(t.optimizerCopy) + '</span></button></div>' +
+        '<h4 class="opt-subhead">' + t.optimizerSettingsHeading + '</h4>' +
+        '<div id="optSettings" class="opt-settings" data-raw="' +
+        (st && st.settings ? this.escapeHtml(st.settings) : '') + '">' +
+        (st && st.settings ? this.escapeHtml(st.settings) : '') + '</div>' +
+        optimizerFeedbackHtml + '</div>';
+    const optimizerPreviewHtml = optimizerSnoozedUntil
+      ? ''
+      : '<details id="optPreview" class="advice-payload-preview"' + (hasPreview ? ' open' : '') +
+        ' style="display:' + (hasPreview ? '' : 'none') + '" data-snapshot-id="' +
+        (hasPreview ? this.escapeHtml(st!.snapshotId as string) : '') + '">' +
+        '<summary><span>' + this.escapeHtml(ai.payloadTitle) +
+        '</span><span class="advice-seal-stamp">SHA-256</span></summary>' +
+        '<div class="advice-payload-meta"><span id="optPreviewBytes">' +
+        (hasPreview ? this.escapeHtml(ai.payloadBytes.replace('{bytes}', String(st!.previewBytes))) : '') +
+        '</span><code id="optPreviewDigest">' +
+        (hasPreview ? this.escapeHtml(`SHA-256 ${st!.previewSha256}`) : '') +
+        '</code></div><pre id="optPreviewBody" tabindex="0">' +
+        (hasPreview ? this.escapeHtml(st!.previewBody as string) : '') +
+        '</pre><div class="advice-payload-actions"><button type="button" class="btn-primary btn-small"' +
+        ' id="optSendBtn" onclick="sendOptimizer()"' + (hasPreview ? '' : ' disabled') + '>' +
+        this.escapeHtml(ai.sendPreparedRequest) +
+        '</button><span>' + this.escapeHtml(ai.noNetworkTransport) + '</span></div></details>';
     const lens = (id: string, label: string, hint: string, on?: boolean): string =>
       '<label title="' + this.escapeHtml(hint) + '"><input type="checkbox" id="' + id + '"' +
       ck(on) + '> ' + this.escapeHtml(label) + '</label>';
     return (
       '<div class="action-card" data-advice-provider="optimizer">' +
       head('') +
+      optimizerSnoozedHtml +
       '<p class="action-card-howto">' + t.optimizerHowto + '</p>' +
       '<textarea id="optDraft" class="opt-input" rows="4" placeholder="' +
       this.escapeHtml(t.optimizerPlaceholder) + '">' + draftVal + '</textarea>' +
@@ -5238,36 +5278,8 @@ export class UsageWebviewProvider {
       '</div>' +
       '<div id="optError" class="opt-error" style="display:' + (hasErr ? '' : 'none') + '">' +
       (hasErr ? this.escapeHtml(st!.error as string) : '') + '</div>' +
-      '<details id="optPreview" class="advice-payload-preview"' + (hasPreview ? ' open' : '') +
-      ' style="display:' + (hasPreview ? '' : 'none') + '" data-snapshot-id="' +
-      (hasPreview ? this.escapeHtml(st!.snapshotId as string) : '') + '">' +
-      '<summary><span>' + this.escapeHtml(ai.payloadTitle) +
-      '</span><span class="advice-seal-stamp">SHA-256</span></summary>' +
-      '<div class="advice-payload-meta"><span id="optPreviewBytes">' +
-      (hasPreview ? this.escapeHtml(ai.payloadBytes.replace('{bytes}', String(st!.previewBytes))) : '') +
-      '</span><code id="optPreviewDigest">' +
-      (hasPreview ? this.escapeHtml(`SHA-256 ${st!.previewSha256}`) : '') + '</code></div>' +
-      '<pre id="optPreviewBody" tabindex="0">' +
-      (hasPreview ? this.escapeHtml(st!.previewBody as string) : '') + '</pre>' +
-      '<div class="advice-payload-actions"><button type="button" class="btn-primary btn-small"' +
-      ' id="optSendBtn" onclick="sendOptimizer()"' + (hasPreview ? '' : ' disabled') + '>' +
-      this.escapeHtml(ai.sendPreparedRequest) +
-      '</button><span>' + this.escapeHtml(ai.noNetworkTransport) + '</span></div>' +
-      '</details>' +
-      '<div id="optResult" class="opt-result" style="display:' + (hasResult ? '' : 'none') + '">' +
-      '<h4 class="opt-subhead">' + t.optimizerPromptHeading + '</h4>' +
-      '<div class="opt-output"><pre id="optPrompt">' +
-      (st && st.prompt ? this.escapeHtml(st.prompt) : '') + '</pre>' +
-      '<button class="opt-copy" data-copy="' + this.escapeHtml(t.optimizerCopy) +
-      '" data-copied="' + this.escapeHtml(t.optimizerCopied) +
-      '" title="' + this.escapeHtml(t.optimizerCopy) + '" onclick="copyOptPrompt(this)">' +
-      '<span class="opt-copy-ico">⧉</span><span class="opt-copy-lbl">' +
-      this.escapeHtml(t.optimizerCopy) + '</span></button></div>' +
-      '<h4 class="opt-subhead">' + t.optimizerSettingsHeading + '</h4>' +
-      '<div id="optSettings" class="opt-settings" data-raw="' +
-      (st && st.settings ? this.escapeHtml(st.settings) : '') + '">' +
-      (st && st.settings ? this.escapeHtml(st.settings) : '') + '</div>' +
-      optimizerFeedbackHtml + '</div>' +
+      optimizerPreviewHtml +
+      optimizerResultHtml +
       '</div>'
     );
   }

@@ -208,7 +208,9 @@ test('optimizer feedback uses the same retractable local ledger and rendered con
   });
   assert.equal(durable.suppression.length, 1);
   const snoozedHtml = provider.renderOptimizerCard();
-  assert.doesNotMatch(snoozedHtml, /id="optDraft"|id="optResult"|id="optSendBtn"/);
+  assert.match(snoozedHtml, /id="optDraft"/);
+  assert.match(snoozedHtml, /id="optRunBtn"/);
+  assert.doesNotMatch(snoozedHtml, /id="optResult"|id="optSendBtn"|id="optFeedback"/);
   assert.match(snoozedHtml, /data-snooze-mode="resume"/);
   provider.optimizerState.adviceId = 'advice-optimizer-reloaded-dynamic';
   provider.adviceLocalState = durable;
@@ -369,6 +371,28 @@ test('optimizer host seam fails closed while its feature is disabled', async () 
 
   assert.equal(prepares, 0);
   assert.equal(sends, 0);
+});
+
+test('explicit optimizer rerun resumes the stable recommendation scope without touching feedback', async () => {
+  let durable = createClosedAdviceLocalState();
+  durable.suppression = [{
+    provider: 'optimizer',
+    surface: 'optimizer',
+    recommendationId: 'recommendation-optimizer-result-v1',
+    snoozedUntilEpochMs: Date.now() + 60_000,
+    updatedAtEpochMs: Date.now(),
+  }];
+  const provider = await createProvider({
+    get: <T>() => durable as T,
+    update: async (_key: string, value: unknown) => { durable = value as AdviceLocalState; },
+  });
+  provider.settings = { get: (key: string) => key === 'advice.optimizer.enabled' };
+  provider.adviceLocalState = durable;
+  provider.onPrepareOptimizerInvocation = async () => ({ error: 'no prepared result' });
+
+  await provider.handlePrepareOptimizerMessage({ draft: 'explicit rerun' });
+
+  assert.deepEqual(durable.suppression, []);
 });
 
 test('successful optimizer send creates an opaque feedback target without deriving it from content', async () => {
