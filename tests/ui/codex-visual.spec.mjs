@@ -119,6 +119,9 @@ test('Codex explains multi-sign-in usage and last-observed limits', async ({ pag
   await expect(limits).toContainText(
     'Usage combines sign-ins in this Codex home · limits are last observed, not combined',
   );
+  await expect(limits).toContainText(/\d+% used · \d+% remaining/);
+  await expect(limits).toContainText(/Last observed:/);
+  await expect(limits).toContainText(/Resets:/);
 });
 
 test('Claude and Codex receive the exact same production stylesheet', async ({ page }) => {

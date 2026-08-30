@@ -2022,13 +2022,20 @@ export class UsageWebviewProvider {
               ? copy.unlimited
               : limit.state === 'missing'
                 ? copy.limitMissing
-                : `${I18n.formatNumber(limit.usedPercent ?? 0)}% ${copy.used}`;
+                : `${I18n.formatNumber(limit.usedPercent ?? 0)}% ${copy.used} · ` +
+                  `${I18n.formatNumber(limit.remainingPercent ?? Math.max(0, 100 - (limit.usedPercent ?? 0)))}% ${copy.remaining}`;
             const reset = limit.resetsAt && limit.state === 'current'
               ? '<div class="model-details">' + this.escapeHtml(copy.resets) + ': ' +
-                this.escapeHtml(formatters.formatDateTime(limit.resetsAt)) + '</div>'
+                this.escapeHtml(formatters.formatDateTime(limit.resetsAt)) + ' · ' +
+                this.escapeHtml(formatters.formatRelativeTime(limit.resetsAt, Date.now())) + '</div>'
+              : '';
+            const observed = limit.observedAt
+              ? '<div class="model-details">' + this.escapeHtml(copy.lastObserved) + ': ' +
+                this.escapeHtml(formatters.formatDateTime(limit.observedAt)) + ' · ' +
+                this.escapeHtml(copy.localLogNotLive) + '</div>'
               : '';
             return '<div class="summary-item"><div class="label">' + this.escapeHtml(label) +
-              '</div><div class="value">' + this.escapeHtml(value) + '</div>' + reset + '</div>';
+              '</div><div class="value">' + this.escapeHtml(value) + '</div>' + reset + observed + '</div>';
           }).join('') + '</div></div>'
         : '';
       const qualityFlags = view.qualityFlags.length > 0
