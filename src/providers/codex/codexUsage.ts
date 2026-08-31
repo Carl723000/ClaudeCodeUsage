@@ -611,7 +611,9 @@ function monthlyRows(
     }
   }
   return [...months.entries()]
-    .sort(([left], [right]) => right.localeCompare(left))
+    // Monthly history is a time series: keep the oldest month first so the
+    // chart, table, and screen-reader order all read chronologically.
+    .sort(([left], [right]) => left.localeCompare(right))
     .map(([period, row]) => {
       const total = metrics(row.tokens);
       return {

@@ -310,12 +310,17 @@ first-use latency, but extension disposal, provider disable, or explicit
 cancellation still owns its termination.
 
 Weekly API-equivalent history is derived from already-aggregated token usage.
-Observed weekly resets align seven-day buckets; otherwise usage-only history
-uses Monday-to-Monday UTC calendar weeks. A token log can prove used value, but
-not an historical subscription capacity: full and unused estimates are emitted
-only where a real quota-utilization sample exists. Codex usage-only history may
-combine multiple sign-ins in one home, while quota-derived rows remain bound to
-their observed reset series.
+The newest valid reset observation anchors non-overlapping seven-day display
+buckets; without one, usage-only history uses Monday-to-Monday UTC calendar
+weeks. A real utilization sample can support a full-window estimate, including
+for historical buckets. For Codex, the account-wide `codex` series is allowed to
+use all eligible local files in the same home because file keys are not account
+identities. A reset that drifts from the seven-day grid is mapped by observation
+time to the corresponding display bucket; source uncertainty, reset drift, and
+daily slices crossing a boundary lower confidence and are rendered as an
+approximation. A genuinely different quota series remains usage-only. Current
+unused value is withheld, while historical unused value is shown only alongside
+a full estimate. Each usage row still contributes to exactly one bucket.
 
 v2.3.0 does not infer a $20, $100, or $200 subscription tier. Local Codex logs
 do not expose a reliable account-and-plan identity, so a future comparison must

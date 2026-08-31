@@ -803,9 +803,12 @@ test('all-time, monthly, and behavior views stay provider-native', () => {
 
   assert.equal(view.allTime.total.processed, 1_560);
   assert.equal(view.allTime.total.fresh, 640);
-  assert.equal(view.monthly[0].period, '2026-07');
-  assert.equal(view.monthly[0].total.processed, 1_440);
-  assert.equal(view.monthly[0].threads, 3);
+  assert.deepEqual(
+    view.monthly.map((row) => row.period),
+    ['2026-06', '2026-07'],
+  );
+  assert.equal(view.monthly[1].total.processed, 1_440);
+  assert.equal(view.monthly[1].threads, 3);
   assert.equal(view.last7DaysDaily.length, 7);
   assert.equal(view.last7DaysDaily[0].day, '2026-07-14');
   assert.equal(view.last7DaysDaily[6].day, '2026-07-20');

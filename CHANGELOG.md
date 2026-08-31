@@ -50,8 +50,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   The existing index pass also keeps a small, account-neutral history of
   account-wide weekly reset observations, preserving irregular reset boundaries
   across file replacement or removal without polling, credentials, or a second
-  scanner. Ambiguous history remains used-value-only rather than producing a
-  guessed allowance.
+  scanner. The weekly-value timeline now treats Codex file keys as local-source
+  evidence rather than account identities: the same account-wide `codex` series
+  can estimate historical and current full values from all eligible files. Reset
+  drift and daily boundary crossings are mapped conservatively and lower
+  confidence; genuinely different quota series remain used-value-only. Codex
+  monthly charts and tables now list months oldest-first.
 
 ### Privacy and packaging
 - Disabled or unconsented advice adds no timer, watcher, worker, network request,
@@ -76,16 +80,19 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Weekly API-equivalent periods no longer overlap or double-count usage** —
   the newest valid official reset observation anchors one sequence of unique
   `[start, reset)` weekly buckets, so each local usage event contributes to
-  exactly one period. Any overlapping, non-aligned future reset is treated as a
-  conflict even when its series name differs; it cannot create an additional
+  exactly one period. A genuinely different quota series with an overlapping,
+  non-aligned future reset is treated as a conflict; same-series observations
+  remain one low-confidence series rather than creating an additional
   "current" row. Codex usage is persisted in daily slices, so a slice that
   crosses an official intraday reset remains counted once but marks the affected
-  period as a boundary approximation and suppresses total / unused allowance
-  inference. This display-only correction does not change the index schema or
-  trigger a rebuild. Historical Codex periods are always used-value-only; only
-  the newest current period may infer a total when its reset is unambiguous and
-  its indexed usage can be attributed to one observation source. Current unused
-  value remains withheld, and ambiguous multi-sign-in usage stays used-only.
+  period as a boundary approximation and lowers confidence on any full
+  allowance estimate. Drifted reset observations are mapped by observation time
+  to the corresponding display bucket. This display-only correction does not
+  change the index schema or trigger a rebuild. Same-series Codex observations
+  can estimate historical as well as current full values from all eligible local
+  files; current unused value remains withheld, historical unused value requires
+  a full estimate, and genuinely different quota series or missing evidence stays
+  used-only.
 - **Claude changed-file refreshes no longer reread the full corpus (#87)** —
   the production refresh path now keeps an exact in-memory per-file index,
   reads only a verified append tail, and rebuilds only affected files for
@@ -148,10 +155,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   views now calculate historical used API-equivalent value directly from local
   token logs. One valid observed reset anchors unique, non-overlapping weekly
   buckets; without one, usage-only rows use Monday-to-Monday UTC calendar weeks.
-  Codex historical periods, boundary-approximate daily slices, conflicting reset
-  sequences, and usage that cannot be assigned to one observed sign-in remain
-  used-value-only. Only an unambiguous newest current period with single-source
-  attribution may infer a total allowance; its unused value is still withheld.
+  Codex account-wide observations can decorate historical and current buckets;
+  reset drift is mapped by observation time, while source ambiguity and boundary
+  slices lower confidence. Genuinely conflicting quota series and periods with
+  no usable observation remain used-value-only. Current unused value is still
+  withheld, while historical unused value is shown only when a full estimate is
+  available.
   Current official API prices are applied consistently and each period includes
   model-price coverage. This remains an estimate, not a bill or an official
   subscription price. The panel is enabled by default and can be hidden with

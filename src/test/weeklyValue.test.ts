@@ -323,7 +323,7 @@ test('conflicting stale Codex reset schedules do not choose an arbitrary alignme
   assert.equal(points[0]?.fullEquivalentUsd, null);
 });
 
-test('a fresh Codex reset starts a new current period instead of carrying the old week forward', () => {
+test('a fresh Codex reset starts a new current period and estimates both observed windows', () => {
   const now = RESET + HOUR;
   const nextReset = RESET + 7 * DAY;
   const points = buildWeeklyValueTimeline('codex', {
@@ -342,8 +342,8 @@ test('a fresh Codex reset starts a new current period instead of carrying the ol
       }),
     ],
     usage: [
-      usage(40, RESET - 30 * 60 * 1000, 'one-file'),
-      usage(7, RESET + 45 * 60 * 1000, 'one-file'),
+      usage(40, RESET - 2 * HOUR, 'one-file'),
+      usage(7, RESET + 15 * 60 * 1000, 'one-file'),
     ],
   }, { now });
 
@@ -352,10 +352,12 @@ test('a fresh Codex reset starts a new current period instead of carrying the ol
   assert.equal(current?.resetAt, nextReset);
   assert.equal(current?.usedEquivalentUsd, 7);
   assert.equal(current?.utilizationPercent, 10);
-  assert.equal(current?.fullEquivalentUsd, null);
+  assert.equal(points.find((point) => point.resetAt === RESET)?.fullEquivalentUsd, 50);
+  assert.equal(points.find((point) => point.resetAt === RESET)?.unusedEquivalentUsd, 10);
+  assert.equal(current?.fullEquivalentUsd, 70);
 });
 
-test('ambiguous overlapping Codex reset observations do not invent a combined allowance', () => {
+test('same account-wide Codex series uses the newest coherent observation across stale reset forecasts', () => {
   const now = Date.parse('2026-08-27T04:00:00.000Z');
   const points = buildWeeklyValueTimeline('codex', {
     observations: [
@@ -377,9 +379,9 @@ test('ambiguous overlapping Codex reset observations do not invent a combined al
 
   const current = points.find((point) => point.current);
   assert.equal(current?.utilizationPercent, 43);
-  assert.equal(current?.fullEquivalentUsd, null);
+  assert.equal(current?.fullEquivalentUsd, 40 / 0.43);
   assert.equal(current?.unusedEquivalentUsd, null);
-  assert.equal(current?.confidence, 'usage-only');
+  assert.equal(current?.confidence, 'medium');
 });
 
 test('different anonymous Codex series with overlapping current resets are still ambiguous', () => {
@@ -408,7 +410,7 @@ test('different anonymous Codex series with overlapping current resets are still
   assert.equal(current?.confidence, 'usage-only');
 });
 
-test('Codex allowance inference is withheld when combined usage has multiple log sources', () => {
+test('Codex allowance inference includes multiple local log sources but lowers confidence', () => {
   const now = RESET - HOUR;
   const points = buildWeeklyValueTimeline('codex', {
     observations: [observation({
@@ -424,11 +426,12 @@ test('Codex allowance inference is withheld when combined usage has multiple log
 
   assert.equal(points[0].usedEquivalentUsd, 50);
   assert.equal(points[0].utilizationPercent, 50);
-  assert.equal(points[0].fullEquivalentUsd, null);
-  assert.equal(points[0].confidence, 'usage-only');
+  assert.equal(points[0].fullEquivalentUsd, 100);
+  assert.equal(points[0].unusedEquivalentUsd, null);
+  assert.equal(points[0].confidence, 'low');
 });
 
-test('completed Codex periods remain usage-only because account attribution is unavailable', () => {
+test('completed Codex periods estimate total and unused value from an observed window', () => {
   const points = buildWeeklyValueTimeline('codex', {
     observations: [observation({ sourceKey: 'one-file' })],
     usage: [usage(40, RESET - 2 * HOUR, 'one-file')],
@@ -437,12 +440,12 @@ test('completed Codex periods remain usage-only because account attribution is u
   assert.equal(points[0].current, false);
   assert.equal(points[0].usedEquivalentUsd, 40);
   assert.equal(points[0].utilizationPercent, 75);
-  assert.equal(points[0].fullEquivalentUsd, null);
-  assert.equal(points[0].unusedEquivalentUsd, null);
-  assert.equal(points[0].confidence, 'usage-only');
+  assert.equal(points[0].fullEquivalentUsd, 40 / 0.75);
+  assert.ok(Math.abs((points[0].unusedEquivalentUsd ?? 0) - 40 / 3) < 1e-9);
+  assert.equal(points[0].confidence, 'high');
 });
 
-test('a daily Codex aggregate crossing a reset is marked approximate and cannot infer allowance', () => {
+test('a daily Codex aggregate crossing a reset keeps a low-confidence allowance estimate', () => {
   const now = RESET + HOUR;
   const points = buildWeeklyValueTimeline('codex', {
     observations: [observation({
@@ -459,8 +462,47 @@ test('a daily Codex aggregate crossing a reset is marked approximate and cannot 
 
   const affected = points.find((point) => point.resetAt === RESET + 7 * DAY);
   assert.equal(affected?.boundaryUncertain, true);
-  assert.equal(affected?.fullEquivalentUsd, null);
-  assert.equal(affected?.confidence, 'usage-only');
+  assert.equal(affected?.fullEquivalentUsd, 80);
+  assert.equal(affected?.unusedEquivalentUsd, null);
+  assert.equal(affected?.confidence, 'low');
+});
+
+test('an irregular Codex reset is mapped to the fixed period containing its observation', () => {
+  const now = Date.parse('2026-08-31T12:00:00.000Z');
+  const currentReset = Date.parse('2026-09-07T00:00:00.000Z');
+  const driftingReset = Date.parse('2026-08-31T02:00:00.000Z');
+  const points = buildWeeklyValueTimeline('codex', {
+    observations: [
+      observation({
+        observedAt: Date.parse('2026-08-25T12:00:00.000Z'),
+        resetAt: driftingReset,
+        usedPercent: 40,
+        sourceKey: 'older-file',
+      }),
+      observation({
+        observedAt: Date.parse('2026-08-31T11:00:00.000Z'),
+        resetAt: currentReset,
+        usedPercent: 20,
+        sourceKey: 'current-file',
+      }),
+    ],
+    usage: [
+      usage(30, Date.parse('2026-08-25T10:00:00.000Z'), 'older-file'),
+      usage(40, Date.parse('2026-08-31T10:00:00.000Z'), 'current-file'),
+    ],
+  }, { now });
+
+  const previous = points.find((point) => point.resetAt === driftingReset - 2 * HOUR);
+  const current = points.find((point) => point.resetAt === currentReset);
+  assert.equal(previous?.usedEquivalentUsd, 30);
+  assert.equal(previous?.utilizationPercent, 40);
+  assert.equal(previous?.fullEquivalentUsd, 75);
+  assert.equal(previous?.unusedEquivalentUsd, 45);
+  assert.equal(previous?.confidence, 'low');
+  assert.equal(current?.usedEquivalentUsd, 40);
+  assert.equal(current?.utilizationPercent, 20);
+  assert.equal(current?.fullEquivalentUsd, 200);
+  assert.equal(current?.unusedEquivalentUsd, null);
 });
 
 test('quota observations at the reset boundary do not decorate the closed period', () => {

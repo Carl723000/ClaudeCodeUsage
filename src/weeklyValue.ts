@@ -551,10 +551,12 @@ function latestKnownCodexResetAnchor(
  * observations may then decorate their matching bucket with utilization and a
  * conservative allowance estimate; they never add a second usage row.
  *
- * Codex logs do not expose a reliable account identity. Any overlapping,
- * non-aligned future reset makes the current allowance ambiguous regardless of
- * its label. Historical Codex periods and source-mixed current periods remain
- * usage-only rather than manufacturing an account split.
+ * Codex logs do not expose a reliable account identity, but a file source key
+ * is not an account key either: one Codex home commonly contributes many
+ * files to the same account-wide quota series. Those rows may therefore be
+ * aggregated for an allowance estimate, with low confidence when the source
+ * or reset boundary is approximate. A genuinely different quota series still
+ * blocks the estimate rather than manufacturing an account split.
  */
 export function buildWeeklyValueTimeline(
   provider: UsageProvider,
@@ -639,23 +641,47 @@ export function buildWeeklyValueTimeline(
       .sort((left, right) => right.resetAt - left.resetAt);
   }
 
-  const alignedClusters = new Map<number, typeof validClusters[number]>();
+  type MappedObservation = {
+    entry: typeof validClusters[number];
+    resetAligned: boolean;
+  };
+  const historyByReset = new Map(history.map((point) => [point.resetAt, point]));
+  const mappedObservations = new Map<number, MappedObservation>();
   for (const entry of validClusters) {
     if (entry.cluster.seriesKey !== anchorEntry.cluster.seriesKey) {
       continue;
     }
-    const resetAt = alignedResetAt(entry.cluster.resetAt, anchorResetAt);
-    if (resetAt === null) {
+    const alignedReset = alignedResetAt(entry.cluster.resetAt, anchorResetAt);
+    const target = alignedReset === null
+      ? history.find((point) =>
+          entry.latest.observedAt >= point.windowStart &&
+          entry.latest.observedAt < point.resetAt,
+        )
+      : historyByReset.get(alignedReset);
+    if (!target) {
       continue;
     }
-    const previous = alignedClusters.get(resetAt);
-    if (!previous || entry.latest.observedAt > previous.latest.observedAt) {
-      alignedClusters.set(resetAt, entry);
+    const candidate: MappedObservation = {
+      entry,
+      resetAligned: alignedReset !== null,
+    };
+    const previous = mappedObservations.get(target.resetAt);
+    if (
+      !previous ||
+      entry.latest.observedAt > previous.entry.latest.observedAt ||
+      (
+        entry.latest.observedAt === previous.entry.latest.observedAt &&
+        candidate.resetAligned &&
+        !previous.resetAligned
+      )
+    ) {
+      mappedObservations.set(target.resetAt, candidate);
     }
   }
   const ambiguousCurrentCodexReset = provider === 'codex' && validClusters.some((entry) => {
     if (
       entry === anchorEntry ||
+      entry.cluster.seriesKey === anchorEntry.cluster.seriesKey ||
       entry.cluster.resetAt <= now ||
       alignedResetAt(entry.cluster.resetAt, anchorResetAt) !== null
     ) {
@@ -667,10 +693,11 @@ export function buildWeeklyValueTimeline(
   });
 
   return history.map((point): WeeklyValuePoint => {
-    const entry = alignedClusters.get(point.resetAt);
-    if (!entry) {
+    const mapped = mappedObservations.get(point.resetAt);
+    if (!mapped) {
       return point;
     }
+    const { entry, resetAligned } = mapped;
     const latest = entry.latest;
     const sourceKeys = new Set(
       entry.cluster.observations.flatMap((item) => item.sourceKey ? [item.sourceKey] : []),
@@ -681,11 +708,17 @@ export function buildWeeklyValueTimeline(
       row.timestamp >= point.windowStart &&
       row.timestamp < point.resetAt,
     );
-    const seriesRows = sourceKeys.size === 0
+    // Codex's source key identifies a local log file, not a quota account.
+    // The provider reports the weekly window at the home/account level, so
+    // filter-by-file would systematically undercount the observed window.
+    // Claude observations remain profile-scoped and keep their source filter.
+    const seriesRows = provider === 'codex'
       ? bucketRows
-      : bucketRows.filter((row) =>
-          row.sourceKey !== undefined && sourceKeys.has(row.sourceKey),
-        );
+      : sourceKeys.size === 0
+        ? bucketRows
+        : bucketRows.filter((row) =>
+            row.sourceKey !== undefined && sourceKeys.has(row.sourceKey),
+          );
     const bucketSourceKeys = new Set(
       bucketRows.flatMap((row) => row.sourceKey ? [row.sourceKey] : []),
     );
@@ -693,7 +726,7 @@ export function buildWeeklyValueTimeline(
       entry.cluster.observations.some((item) => !item.sourceKey);
     const hasMixedMissingUsageSource = bucketSourceKeys.size > 0 &&
       bucketRows.some((row) => !row.sourceKey && finiteNonNegative(row.totalTokens) > 0);
-    const codexSourceAttributionSafe = provider !== 'codex' || (
+    const codexSourceAttributionExact = provider !== 'codex' || (
       (sourceKeys.size === 0 && bucketSourceKeys.size === 0) ||
       (
         !hasMixedMissingObservationSource &&
@@ -713,10 +746,11 @@ export function buildWeeklyValueTimeline(
       (point.current ? now : point.resetAt) - latest.observedAt,
     );
     const withholdInference = provider === 'codex' && (
-      !point.current ||
-      Math.abs(point.resetAt - anchorResetAt) > RESET_CLUSTER_MS ||
-      ambiguousCurrentCodexReset ||
-      !codexSourceAttributionSafe ||
+      (point.current && ambiguousCurrentCodexReset)
+    );
+    const approximateInference = provider === 'codex' && (
+      !resetAligned ||
+      !codexSourceAttributionExact ||
       point.boundaryUncertain === true
     );
     let fullEquivalentUsd: number | null = null;
@@ -749,7 +783,7 @@ export function buildWeeklyValueTimeline(
       observationGapMs,
       confidence: fullEquivalentUsd === null
         ? 'usage-only'
-        : observationOverrun
+        : observationOverrun || approximateInference
           ? 'low'
           : confidenceFor(point.current, observationGapMs, point.pricingCoverage),
       basis: 'quota-observation',

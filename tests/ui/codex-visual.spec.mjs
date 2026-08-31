@@ -298,7 +298,7 @@ test('weekly allowance value uses the shared all-time chart and exposes uncertai
   await expect(panel).toContainText('When usage cannot be reliably attributed to a single quota observation');
   await expect(panel).toContainText('no account split or allowance estimate is invented');
   await expect(panel).toContainText('If an official reset falls within a recorded day');
-  await expect(panel.locator('tbody')).toContainText('Usage only · Boundary approx.');
+  await expect(panel.locator('tbody')).toContainText('Low · Boundary approx.');
   await expect(panel.locator('.hc-col')).toHaveCount(2);
   await expect(panel.locator('tbody tr')).toHaveCount(2);
   await expect(panel.locator('thead')).toContainText('Full allowance est.');

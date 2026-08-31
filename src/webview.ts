@@ -3118,7 +3118,9 @@ export class UsageWebviewProvider {
     };
     const confidenceLabel = (point: WeeklyValuePoint): string => {
       if (point.boundaryUncertain) {
-        return `${copy.usageOnly} · ${copy.boundaryApproximate}`;
+        return point.fullEquivalentUsd === null
+          ? `${copy.usageOnly} · ${copy.boundaryApproximate}`
+          : `${copy.low} · ${copy.boundaryApproximate}`;
       }
       switch (point.confidence) {
         case 'high': return copy.high;

@@ -171,7 +171,7 @@ release.
   row keeps pricing coverage visible. The schema-3-compatible hourly sidecar
   keeps sparse buckets for the rolling last 30 days, is checkpointed and
   resumable, evicts day 31, and serves date expansion with zero JSONL reads on
-  click.
+  click. Codex monthly charts and tables list months oldest-first.
 - **Request-level token attribution** — valid `last_token_usage` components are
   preferred, while its `total_tokens` remains an active-context measurement,
   not request usage. A full numeric total-plus-last signature suppresses only
@@ -183,20 +183,25 @@ release.
   newest valid official reset observation anchors one sequence of unique,
   non-overlapping weekly periods, and each usage event belongs to exactly one
   period; without a usable observation, usage-only rows fall back to
-  Monday-to-Monday UTC calendar weeks. Any overlapping, non-aligned future reset
-  is a conflict even if its series name differs; it cannot create a second current
-  period, and period ranges are shown separately from reset times. Codex usage is
+  Monday-to-Monday UTC calendar weeks. A genuinely different quota series with
+  an overlapping, non-aligned future reset is a conflict; same-series observations
+  remain one series and may be shown as a low-confidence approximation. It cannot
+  create a second current period, and period ranges are shown separately from reset times. Codex usage is
   stored in daily slices: when one crosses an official intraday reset, its tokens
   are still counted once, the affected period is labelled a boundary
-  approximation, and only used equivalent is shown. This display rule neither
-  changes the index schema nor triggers a rebuild. Codex historical periods are
-  always used-value-only. Only the newest current period may infer a total when
-  the reset is unambiguous and indexed usage can be attributed to one observation
-  source; current unused value is still withheld. Multi-sign-in usage that cannot
-  be attributed reliably also remains used-only, without inventing an account
-  split. Current official API rates are applied consistently across history. This
-  is a proxy, not a bill or an official subscription price. The panel is enabled
-  by default and can be hidden in Settings with `showWeeklyEquivalentValue`.
+  approximation. Codex's account-wide `codex` observations can decorate both
+  historical and current buckets. If an observed reset drifts from the seven-day
+  grid, the sample is mapped to the display period containing its observation
+  time; file-source uncertainty, reset drift, and daily boundary crossings lower
+  confidence and are labelled as approximate. File keys are not account
+  identities, so eligible local files in one home are included together. A
+  genuinely different quota series, or a period without a usable observation,
+  remains usage-only rather than inventing an account split. Current unused value
+  is withheld; historical unused value appears only when a full estimate exists.
+  This display rule neither changes the index schema nor triggers a rebuild.
+  Current official API rates are applied consistently across history. This is a
+  proxy, not a bill or an official subscription price. The panel is enabled by
+  default and can be hidden in Settings with `showWeeklyEquivalentValue`.
 - **One dashboard render stack** — switching to Codex keeps the established
   Today / Month / All time / Sessions / Projects / Content / Settings structure,
   relabelled where Codex semantics differ. The same render functions, HTML
