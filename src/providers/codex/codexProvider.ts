@@ -16,10 +16,23 @@ import {
   CodexTodayCoverage,
   CodexIndexV1,
   createEmptyCodexIndex,
+  isReadableCodexPeriod,
   isCodexUsageContributionCurrent,
   loadCodexIndex,
 } from './codexIndex';
-import { CODEX_ROLLING_HOURLY_DAYS } from './codexPeriodIndex';
+import {
+  CODEX_ROLLING_HOURLY_DAYS,
+  codexPeriodFitsAggregate,
+  isCompatibleCodexPeriodLineage,
+} from './codexPeriodIndex';
+import {
+  appendCodexQuotaHistory,
+  CODEX_QUOTA_HISTORY_LIMIT,
+  CODEX_QUOTA_RESET_CLUSTER_MS,
+  CodexQuotaObservation,
+  weeklyQuotaObservationsFromCodexHistory,
+  weeklyQuotaObservationsFromCodexLimit,
+} from './codexQuotaHistory';
 import { CodexIndexClient } from './codexIndexClient';
 import {
   CodexWorkerRefreshInput,
@@ -150,57 +163,77 @@ function aggregateTotal(
   return total;
 }
 
-function isAccountWideCodexLimit(snapshot: ProviderLimitSnapshot): boolean {
-  const id = (snapshot.limitId ?? '').trim().toLowerCase();
-  const name = (snapshot.limitName ?? '').trim().toLowerCase();
-  return id === 'codex' || name === 'codex' || (!name && id === '');
-}
-
 function codexWeeklyValueInputs(
   files: CodexFileContribution[],
+  persistedHistory: readonly CodexQuotaObservation[] = [],
+  timeZone = 'UTC',
 ): WeeklyValueInputs {
-  const observations: WeeklyQuotaObservation[] = [];
+  const currentObservations: WeeklyQuotaObservation[] = [];
   const usage: WeeklyValueInputs['usage'] = [];
+  const seenObservations = new Set<string>();
+  const fileHistory: CodexQuotaObservation[] = [];
   for (const file of files) {
     const sourceKey = file.fileKey;
-    const seenSnapshots = new Set<string>();
+    fileHistory.push(...(file.quotaHistory ?? []));
     for (const snapshot of [
       ...Object.values(file.limits ?? {}),
       ...(file.limit ? [file.limit] : []),
     ]) {
-      if (!isAccountWideCodexLimit(snapshot)) {
-        continue;
-      }
-      const seriesKey = snapshot.limitId ?? snapshot.limitName ?? 'codex';
-      for (const window of snapshot.windows) {
-        if (
-          window.windowMinutes !== 7 * 24 * 60 ||
-          window.resetsAt === undefined
-        ) {
-          continue;
-        }
+      for (const observation of weeklyQuotaObservationsFromCodexLimit(
+        snapshot,
+        sourceKey,
+      )) {
         const identity = [
-          seriesKey,
-          snapshot.observedAt,
-          window.resetsAt,
-          window.usedPercent,
+          observation.observedAt,
+          observation.resetAt,
+          observation.usedPercent,
+          observation.sourceKey ?? '',
         ].join('|');
-        if (seenSnapshots.has(identity)) {
-          continue;
+        if (!seenObservations.has(identity)) {
+          seenObservations.add(identity);
+          currentObservations.push(observation);
         }
-        seenSnapshots.add(identity);
-        observations.push({
-          provider: 'codex',
-          seriesKey,
-          ...(snapshot.limitName ? { seriesLabel: snapshot.limitName } : {}),
-          observedAt: snapshot.observedAt,
-          resetAt: window.resetsAt,
-          usedPercent: window.usedPercent,
-          sourceKey,
-        });
       }
     }
-    for (const slice of Object.values(file.aggregate.period?.days ?? {})) {
+  }
+
+  const cachedHistory = appendCodexQuotaHistory(
+    persistedHistory,
+    fileHistory,
+    CODEX_QUOTA_HISTORY_LIMIT,
+  );
+  const cachedObservations = weeklyQuotaObservationsFromCodexHistory(
+    cachedHistory,
+  ).filter((cached) => !currentObservations.some((current) =>
+    Math.abs(current.resetAt - cached.resetAt) <= CODEX_QUOTA_RESET_CLUSTER_MS,
+  ));
+  const observations = [...currentObservations, ...cachedObservations];
+
+  for (const file of files) {
+    const sourceKey = file.fileKey;
+    const usageReady = isCodexUsageContributionCurrent(file) &&
+      !file.lineageReconciliation &&
+      (
+        !file.lineage ||
+        file.lineage.appliedPrefixEvents === file.lineage.desiredPrefixEvents
+      );
+    if (!usageReady) {
+      continue;
+    }
+    const period = file.aggregate.period;
+    const prefixEvents = file.lineage?.desiredPrefixEvents ?? 0;
+    if (
+      !period ||
+      period.timeZone !== timeZone ||
+      !isCompatibleCodexPeriodLineage(period, prefixEvents) ||
+      !codexPeriodFitsAggregate(period, file.aggregate.total)
+    ) {
+      // A pre-fix or still-rebuilding period projection may contain copied
+      // lineage records. Do not turn the reliable all-time total into a false
+      // model-priced weekly estimate; the next bounded refresh will rebuild it.
+      continue;
+    }
+    for (const slice of Object.values(period.days)) {
       const timestamp = slice.lastObservedAt ?? slice.firstObservedAt;
       if (timestamp === undefined) {
         continue;
@@ -242,13 +275,22 @@ function snapshotFromIndex(
     ),
   );
   const files = usageContributions
-    .map((file) => ({
-      ...file.aggregate,
-      session: {
-        ...file.aggregate.session,
-        sessionTitle: sessionTitles.get(file.aggregate.session.sessionKey),
-      },
-    }))
+    .map((file) => {
+      const periodReadable = isReadableCodexPeriod(
+        file,
+        index.coverage.period.timeZone,
+      );
+      return {
+        ...file.aggregate,
+        // Keep the trusted all-time aggregate visible, but do not let a
+        // rejected or rebuilding period projection reach any period consumer.
+        ...(periodReadable ? {} : { period: undefined }),
+        session: {
+          ...file.aggregate.session,
+          sessionTitle: sessionTitles.get(file.aggregate.session.sessionKey),
+        },
+      };
+    })
     .sort(
       (left, right) =>
         (right.session.startedAt ?? 0) - (left.session.startedAt ?? 0),
@@ -274,7 +316,11 @@ function snapshotFromIndex(
     qualityFlags: qualityCounts(contributions),
     limits,
     limit: limits[0] ?? null,
-    weeklyValueInputs: codexWeeklyValueInputs(usageContributions),
+    weeklyValueInputs: codexWeeklyValueInputs(
+      usageContributions,
+      index.quotaHistory ?? [],
+      index.coverage.period.timeZone,
+    ),
     hourlyCoverage,
     todayCoverage: index.coverage.today,
     todayPartial: !index.coverage.today.complete,

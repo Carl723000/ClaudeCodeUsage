@@ -44,6 +44,14 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   and backfills expose their creator, stop conditions, and actual disposal to
   lifecycle tests. A bounded first-index exception may finish after focus loss,
   but disable, explicit cancellation, and extension disposal still stop it.
+- **Safer Codex rolling totals and reset history** — recent 7/30-day views no
+  longer trust an inflated or still-rebuilding period sidecar; they use the
+  verified daily aggregate until the configured-zone projection catches up.
+  The existing index pass also keeps a small, account-neutral history of
+  account-wide weekly reset observations, preserving irregular reset boundaries
+  across file replacement or removal without polling, credentials, or a second
+  scanner. Ambiguous history remains used-value-only rather than producing a
+  guessed allowance.
 
 ### Privacy and packaging
 - Disabled or unconsented advice adds no timer, watcher, worker, network request,

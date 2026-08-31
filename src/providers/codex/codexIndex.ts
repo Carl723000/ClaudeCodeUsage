@@ -26,6 +26,7 @@ import {
   parseCodexLine,
 } from './codexParser';
 import {
+  CODEX_PERIOD_LINEAGE_VERSION,
   CODEX_ROLLING_HOURLY_DAYS,
   CodexFilePeriodIndex,
   CodexFileTodayIndex,
@@ -33,10 +34,12 @@ import {
   CodexPeriodMigrationState,
   CodexStructuralSummary,
   CodexTodayMigrationState,
+  isCompatibleCodexPeriodLineage,
   pruneCodexHourlyDays,
   reduceCodexRollingHourlySlice,
   reduceCodexStructuralSlice,
   reduceCodexUsageSlice,
+  codexPeriodFitsAggregate,
 } from './codexPeriodIndex';
 import { parseJsonObject, stringField } from './codexSchema';
 import {
@@ -68,11 +71,20 @@ import {
   CODEX_LINEAGE_FINGERPRINTS_PER_BLOCK,
   CodexLineageTrace,
 } from './codexLineage';
+import {
+  appendCodexQuotaHistory,
+  CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  CODEX_QUOTA_HISTORY_LIMIT,
+  codexQuotaObservationsFromLimit,
+  CodexQuotaObservation,
+  sanitizeCodexQuotaHistory,
+} from './codexQuotaHistory';
 
 export {
   CodexPeriodMigrationState,
   CodexStructuralSummary,
 } from './codexPeriodIndex';
+export type { CodexQuotaObservation } from './codexQuotaHistory';
 
 export interface CodexFileAggregate {
   total: ProviderTokenCounts;
@@ -111,6 +123,8 @@ export interface CodexFileContribution {
   aggregate: CodexFileAggregate;
   limit?: ProviderLimitSnapshot;
   limits?: Record<string, ProviderLimitSnapshot>;
+  /** Small neutral history of weekly reset observations found in this file. */
+  quotaHistory?: CodexQuotaObservation[];
   qualityFlags: string[];
   identityChecked?: boolean;
   periodMigration?: CodexPeriodMigrationState;
@@ -236,6 +250,8 @@ export interface CodexIndexV3 {
   files: Record<string, CodexFileContribution>;
   aggregate: CodexProviderAggregate;
   coverage: CodexIndexCoverage;
+  /** Bounded neutral history retained across file replacement/removal. */
+  quotaHistory?: CodexQuotaObservation[];
 }
 
 /** @deprecated Compatibility name until the remaining v2 consumers are rewired. */
@@ -643,8 +659,12 @@ function promoteCaughtUpPeriod(
   timeZone: string,
 ): void {
   const migration = contribution.periodMigration;
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
   if (
     migration?.timeZone !== timeZone ||
+    migration.prefixEvents !== prefixEvents ||
+    !Number.isFinite(migration.tokenEventsSeen) ||
+    (migration.tokenEventsSeen ?? 0) < prefixEvents ||
     migration.offset < contribution.offset ||
     migration.discardingOversizedLine
   ) {
@@ -654,6 +674,8 @@ function promoteCaughtUpPeriod(
     timeZone,
     indexedThrough: contribution.offset,
     days: migration.days,
+    lineageVersion: CODEX_PERIOD_LINEAGE_VERSION,
+    lineagePrefixEvents: prefixEvents,
   };
   contribution.qualityFlags = uniqueFlags(
     contribution.qualityFlags,
@@ -836,15 +858,24 @@ async function updateContribution(
   const pseudonymize = pseudonymizer(options.salt);
   let limit = contribution.limit;
   const limits = { ...(contribution.limits ?? {}) };
+  let quotaHistory = appendCodexQuotaHistory(
+    contribution.quotaHistory ?? [],
+    [],
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
   const timeZone = resolveTimeZone(options.timeZone);
   const asOfDay = options.asOfDay ?? dayKeyInZone(
     new Date((options.now ?? Date.now)()),
     timeZone,
   );
   const rollingDays = rollingHourlyDaySet(asOfDay);
+  const desiredPrefixEvents = lineage.desiredPrefixEvents ?? 0;
   const advancePeriod =
     aggregate.period?.timeZone === timeZone &&
-    aggregate.period.indexedThrough === contribution.offset;
+    aggregate.period.indexedThrough === contribution.offset &&
+    lineage.appliedPrefixEvents === desiredPrefixEvents &&
+    isCompatibleCodexPeriodLineage(aggregate.period, desiredPrefixEvents) &&
+    codexPeriodFitsAggregate(aggregate.period, aggregate.total);
   if (aggregate.today && !reanchorRollingToday(aggregate.today, asOfDay, timeZone)) {
     delete aggregate.today;
   }
@@ -880,6 +911,7 @@ async function updateContribution(
       aggregate,
       limit,
       limits,
+      ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
       qualityFlags: uniqueFlags(
         contribution.qualityFlags,
         parserState.qualityFlags,
@@ -939,6 +971,11 @@ async function updateContribution(
           limit = parsed.limit ?? limit;
         }
         if (parsed.limit) {
+          quotaHistory = appendCodexQuotaHistory(
+            quotaHistory,
+            codexQuotaObservationsFromLimit(parsed.limit),
+            CODEX_FILE_QUOTA_HISTORY_LIMIT,
+          );
           const limitKey =
             parsed.limit.limitId ?? parsed.limit.limitName ?? 'default';
           const previousLimit = limits[limitKey];
@@ -997,6 +1034,10 @@ function promoteCaughtUpLineage(
   }
   contribution.aggregate = reconciliation.aggregate;
   lineage.appliedPrefixEvents = reconciliation.prefixEvents;
+  if (contribution.aggregate.period) {
+    contribution.aggregate.period.lineageVersion = CODEX_PERIOD_LINEAGE_VERSION;
+    contribution.aggregate.period.lineagePrefixEvents = reconciliation.prefixEvents;
+  }
   contribution.qualityFlags = uniqueFlags(
     contribution.qualityFlags,
     reconciliation.qualityFlags,
@@ -1045,6 +1086,11 @@ async function reconcileContributionLineage(
   const aggregate = initial.aggregate;
   let invalidEventTimestamp = false;
   const pseudonymize = pseudonymizer(options.salt);
+  let quotaHistory = appendCodexQuotaHistory(
+    contribution.quotaHistory ?? [],
+    [],
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
 
   const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => {
     syncSession(aggregate, parserState);
@@ -1059,6 +1105,7 @@ async function reconcileContributionLineage(
     }
     return {
       ...contribution,
+      ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
       lineageReconciliation: {
         prefixEvents,
         tokenEventsSeen,
@@ -1089,6 +1136,13 @@ async function reconcileContributionLineage(
       }
       const parsed = parseCodexLine(line, parserState, pseudonymize);
       parserState = parsed.state;
+      if (parsed.limit) {
+        quotaHistory = appendCodexQuotaHistory(
+          quotaHistory,
+          codexQuotaObservationsFromLimit(parsed.limit),
+          CODEX_FILE_QUOTA_HISTORY_LIMIT,
+        );
+      }
       if (parsed.lineageTokenKey) {
         tokenEventsSeen += 1;
       }
@@ -1154,10 +1208,18 @@ async function migrateContributionPeriod(
   onChunk: ContributionChunkHandler,
 ): Promise<CodexFilePassResult> {
   const timeZone = resolveTimeZone(options.timeZone);
-  const initial = contribution.periodMigration?.timeZone === timeZone
-    ? contribution.periodMigration
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+  const savedMigration = contribution.periodMigration;
+  const canResume = savedMigration?.timeZone === timeZone &&
+    savedMigration.prefixEvents === prefixEvents &&
+    Number.isFinite(savedMigration.tokenEventsSeen) &&
+    (savedMigration.tokenEventsSeen ?? 0) >= prefixEvents;
+  const initial: CodexPeriodMigrationState = canResume
+    ? savedMigration
     : {
         timeZone,
+        prefixEvents,
+        tokenEventsSeen: 0,
         offset: 0,
         discardingOversizedLine: false,
         parserState: createCodexParserState(entry.fileKey),
@@ -1166,17 +1228,26 @@ async function migrateContributionPeriod(
       };
   let parserState = initial.parserState;
   const days = initial.days;
+  let tokenEventsSeen = initial.tokenEventsSeen ?? 0;
   let invalidEventTimestamp = false;
   const pseudonymize = pseudonymizer(options.salt);
+  let quotaHistory = appendCodexQuotaHistory(
+    contribution.quotaHistory ?? [],
+    [],
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
 
   const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => ({
     ...contribution,
+    ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
     aggregate: {
       ...contribution.aggregate,
       period: undefined,
     },
     periodMigration: {
       timeZone,
+      prefixEvents,
+      tokenEventsSeen,
       offset: cursor.offset,
       discardingOversizedLine: cursor.discardingOversizedLine,
       parserState,
@@ -1203,14 +1274,26 @@ async function migrateContributionPeriod(
       }
       const parsed = parseCodexLine(line, parserState, pseudonymize);
       parserState = parsed.state;
-      for (const event of parsed.events) {
-        if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
-          invalidEventTimestamp = true;
-        } else {
-          reduceCodexUsageSlice(days, event, timeZone);
+      if (parsed.limit) {
+        quotaHistory = appendCodexQuotaHistory(
+          quotaHistory,
+          codexQuotaObservationsFromLimit(parsed.limit),
+          CODEX_FILE_QUOTA_HISTORY_LIMIT,
+        );
+      }
+      if (parsed.lineageTokenKey) {
+        tokenEventsSeen += 1;
+      }
+      if (tokenEventsSeen > prefixEvents) {
+        for (const event of parsed.events) {
+          if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
+            invalidEventTimestamp = true;
+          } else {
+            reduceCodexUsageSlice(days, event, timeZone);
+          }
         }
       }
-      if (parsed.structural) {
+      if (parsed.structural && tokenEventsSeen >= prefixEvents) {
         if (
           !Number.isFinite(parsed.structural.timestamp) ||
           parsed.structural.timestamp <= 0
@@ -1244,6 +1327,8 @@ async function migrateContributionPeriod(
       timeZone,
       indexedThrough: contribution.offset,
       days: updated.periodMigration.days,
+      lineageVersion: CODEX_PERIOD_LINEAGE_VERSION,
+      lineagePrefixEvents: prefixEvents,
     };
     updated.qualityFlags = uniqueFlags(
       updated.qualityFlags,
@@ -1296,9 +1381,15 @@ async function migrateContributionToday(
   pruneCodexHourlyDays(days, rollingDays);
   let invalidEventTimestamp = false;
   const pseudonymize = pseudonymizer(options.salt);
+  let quotaHistory = appendCodexQuotaHistory(
+    contribution.quotaHistory ?? [],
+    [],
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
 
   const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => ({
     ...contribution,
+    ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
     aggregate: {
       ...contribution.aggregate,
       today: undefined,
@@ -1336,6 +1427,13 @@ async function migrateContributionToday(
       }
       const parsed = parseCodexLine(line, parserState, pseudonymize);
       parserState = parsed.state;
+      if (parsed.limit) {
+        quotaHistory = appendCodexQuotaHistory(
+          quotaHistory,
+          codexQuotaObservationsFromLimit(parsed.limit),
+          CODEX_FILE_QUOTA_HISTORY_LIMIT,
+        );
+      }
       if (parsed.lineageTokenKey) {
         tokenEventsSeen += 1;
       }
@@ -1762,6 +1860,54 @@ function recomputeAggregate(
   return aggregate;
 }
 
+/**
+ * Merge the small per-file observations into the index-level history before
+ * any manifest removals can discard their last copy. The history is neutral by
+ * construction, so it can preserve reset boundaries without pretending to
+ * identify which account produced them.
+ */
+function mergeCodexQuotaHistory(index: CodexIndexV3): void {
+  const additions: CodexQuotaObservation[] = [];
+  for (const contribution of Object.values(index.files)) {
+    additions.push(...(contribution.quotaHistory ?? []));
+    for (const snapshot of [
+      ...Object.values(contribution.limits ?? {}),
+      ...(contribution.limit ? [contribution.limit] : []),
+    ]) {
+      additions.push(...codexQuotaObservationsFromLimit(snapshot));
+    }
+  }
+  const history = appendCodexQuotaHistory(
+    sanitizeCodexQuotaHistory(index.quotaHistory, CODEX_QUOTA_HISTORY_LIMIT),
+    additions,
+    CODEX_QUOTA_HISTORY_LIMIT,
+  );
+  index.quotaHistory = history.length > 0 ? history : undefined;
+}
+
+function hasCodexQuotaEvidence(index: CodexIndexV3): boolean {
+  return Object.values(index.files).some((contribution) =>
+    (contribution.quotaHistory?.length ?? 0) > 0 || [
+      ...Object.values(contribution.limits ?? {}),
+      ...(contribution.limit ? [contribution.limit] : []),
+    ].some((snapshot) => codexQuotaObservationsFromLimit(snapshot).length > 0),
+  );
+}
+
+export function isReadableCodexPeriod(
+  contribution: CodexFileContribution | undefined,
+  timeZone: string,
+): boolean {
+  if (!contribution || !isCodexUsageContributionCurrent(contribution)) {
+    return false;
+  }
+  const period = contribution.aggregate.period;
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+  return period?.timeZone === timeZone &&
+    isCompatibleCodexPeriodLineage(period, prefixEvents) &&
+    codexPeriodFitsAggregate(period, contribution.aggregate.total);
+}
+
 function coverageFor(
   files: Record<string, CodexFileContribution>,
   manifest: CodexManifest,
@@ -1831,8 +1977,18 @@ function coverageFor(
       }
       rangeTotalFiles += 1;
       rangeTotalBytes += entry.size;
-      const periodIsCurrent = Boolean(
-        contribution && isCodexUsageContributionCurrent(contribution),
+      const periodIsCurrent = isReadableCodexPeriod(contribution, timeZone);
+      const periodMigration = contribution?.periodMigration;
+      // A migration draft is intentionally not a readable period yet, but
+      // its cursor still represents verified work for the progress display.
+      // Keep this separate from periodIsCurrent so a rejected legacy sidecar
+      // cannot be rendered as data while an active rebuild remains visible.
+      const periodMigrationIsCurrent = Boolean(
+        contribution &&
+        isCodexUsageContributionCurrent(contribution) &&
+        periodMigration?.timeZone === timeZone &&
+        periodMigration.prefixEvents ===
+          (contribution.lineage?.desiredPrefixEvents ?? 0),
       );
       const promoted = periodIsCurrent &&
         contribution?.aggregate.period?.timeZone === timeZone
@@ -1842,9 +1998,8 @@ function coverageFor(
             entry.size,
           )
         : 0;
-      const draft = periodIsCurrent &&
-        contribution?.periodMigration?.timeZone === timeZone
-        ? Math.min(contribution.periodMigration.offset, contribution.offset, entry.size)
+      const draft = periodMigrationIsCurrent && periodMigration
+        ? Math.min(periodMigration.offset, contribution.offset, entry.size)
         : 0;
       const migrated = Math.max(0, Math.max(promoted, draft));
       migratedBytes += migrated;
@@ -1893,11 +2048,11 @@ function coverageFor(
       contribution.lineageReconciliation ||
       contribution.lineage?.appliedPrefixEvents !==
         contribution.lineage?.desiredPrefixEvents ||
-      contribution.aggregate.period?.timeZone !== timeZone
+      !isReadableCodexPeriod(contribution, timeZone)
     ) {
       continue;
     }
-    const eligibleDays = Object.keys(contribution.aggregate.period.days)
+    const eligibleDays = Object.keys(contribution.aggregate.period!.days)
       .filter((day) => rollingDays.has(day));
     if (eligibleDays.length === 0) {
       continue;
@@ -2023,6 +2178,7 @@ function recomputeDerivedIndex(
       initialDeduplication.canonicalFileKeys,
     );
   }
+  mergeCodexQuotaHistory(index);
   const deduplication = classifyCodexSessionDuplicates(index.files);
   index.aggregate = recomputeAggregate(index.files, deduplication);
   index.coverage = coverageFor(
@@ -2052,6 +2208,12 @@ function isWarmNoOp(
   timeZone: string,
   asOfDay: string,
 ): boolean {
+  // Older schema-3 indexes have a current `limit` projection but no neutral
+  // reset history. Give the next refresh one chance to seed the bounded cache
+  // even when the JSONL manifest itself has not changed.
+  if (hasCodexQuotaEvidence(previous) && !previous.quotaHistory?.length) {
+    return false;
+  }
   const totalBytes = manifest.files.reduce((sum, entry) => sum + entry.size, 0);
   const hourlyCoverage = previous.coverage.hourly;
   if (
@@ -2094,6 +2256,7 @@ function isWarmNoOp(
       !contribution.lineageReconciliation &&
       contribution.aggregate.period?.timeZone === timeZone &&
       contribution.aggregate.period.indexedThrough >= contribution.offset &&
+      isReadableCodexPeriod(contribution, timeZone) &&
       !contribution.qualityFlags.includes('stale-file') &&
       !contribution.qualityFlags.includes('stale-reset-required'),
     );
@@ -2177,6 +2340,9 @@ export async function updateCodexIndex(
     };
   }
   const index = cloneIndex(previous);
+  // Seed the durable neutral history before moved/removed files disappear.
+  // This also upgrades an older index without rereading unchanged JSONL.
+  mergeCodexQuotaHistory(index);
   if (previous.coverage.period.timeZone !== timeZone) {
     index.indexGeneration = Math.max(1, Math.floor(previous.indexGeneration ?? 0) + 1);
   }
@@ -2227,10 +2393,29 @@ export async function updateCodexIndex(
   }
   for (const contribution of Object.values(index.files)) {
     promoteCaughtUpLineage(contribution);
-    if (contribution.aggregate.period?.timeZone !== timeZone) {
+    const desiredPrefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+    if (contribution.aggregate.period && (
+      !isCompatibleCodexPeriodLineage(
+        contribution.aggregate.period,
+        desiredPrefixEvents,
+      ) ||
+      !codexPeriodFitsAggregate(
+        contribution.aggregate.period,
+        contribution.aggregate.total,
+      ) ||
+      contribution.aggregate.period.timeZone !== timeZone
+    )) {
       delete contribution.aggregate.period;
     }
-    if (contribution.periodMigration?.timeZone !== timeZone) {
+    if (
+      contribution.periodMigration &&
+      (
+        contribution.periodMigration.timeZone !== timeZone ||
+        contribution.periodMigration.prefixEvents !== desiredPrefixEvents ||
+        !Number.isFinite(contribution.periodMigration.tokenEventsSeen) ||
+        (contribution.periodMigration.tokenEventsSeen ?? 0) < desiredPrefixEvents
+      )
+    ) {
       delete contribution.periodMigration;
     }
     promoteCaughtUpPeriod(contribution, timeZone);
@@ -2740,6 +2925,14 @@ export async function updateCodexIndex(
         contribution.offset >= entry.size &&
         !contribution.discardingOversizedLine &&
         (
+          !isCompatibleCodexPeriodLineage(
+            contribution.aggregate.period,
+            contribution.lineage?.desiredPrefixEvents ?? 0,
+          ) ||
+          !codexPeriodFitsAggregate(
+            contribution.aggregate.period,
+            contribution.aggregate.total,
+          ) ||
           contribution.aggregate.period?.timeZone !== timeZone ||
           contribution.aggregate.period.indexedThrough !== contribution.offset
         ),
@@ -2765,7 +2958,12 @@ export async function updateCodexIndex(
         continue;
       }
       const base = cloneContribution(prior);
-      const start = base.periodMigration?.timeZone === timeZone
+      const start = base.periodMigration?.timeZone === timeZone &&
+          base.periodMigration.prefixEvents ===
+            (base.lineage?.desiredPrefixEvents ?? 0) &&
+          Number.isFinite(base.periodMigration.tokenEventsSeen) &&
+          (base.periodMigration.tokenEventsSeen ?? 0) >=
+            (base.lineage?.desiredPrefixEvents ?? 0)
         ? base.periodMigration.offset
         : 0;
       const endExclusive = Math.min(
@@ -2805,7 +3003,12 @@ export async function updateCodexIndex(
       continue;
     }
     const base = cloneContribution(prior);
-    const start = base.periodMigration?.timeZone === timeZone
+    const start = base.periodMigration?.timeZone === timeZone &&
+        base.periodMigration.prefixEvents ===
+          (base.lineage?.desiredPrefixEvents ?? 0) &&
+        Number.isFinite(base.periodMigration.tokenEventsSeen) &&
+        (base.periodMigration.tokenEventsSeen ?? 0) >=
+          (base.lineage?.desiredPrefixEvents ?? 0)
       ? base.periodMigration.offset
       : 0;
     const endExclusive = Math.min(
@@ -3102,6 +3305,7 @@ interface LegacyCodexIndexV1 {
   readonly files: Readonly<Record<string, LegacyCodexFileContribution>>;
   readonly aggregate?: unknown;
   readonly coverage?: unknown;
+  readonly quotaHistory?: unknown;
 }
 
 interface LegacyCodexFileContribution {
@@ -3118,6 +3322,7 @@ interface LegacyCodexFileContribution {
   readonly aggregate?: unknown;
   readonly limit?: unknown;
   readonly limits?: unknown;
+  readonly quotaHistory?: unknown;
   readonly qualityFlags?: unknown;
   readonly identityChecked?: unknown;
 }
@@ -3139,6 +3344,7 @@ interface LegacyCodexIndexV2 {
   readonly files: Readonly<Record<string, unknown>>;
   readonly aggregate?: unknown;
   readonly coverage?: unknown;
+  readonly quotaHistory?: unknown;
 }
 
 function isLegacyIndexV2(value: unknown): value is LegacyCodexIndexV2 {
@@ -3418,6 +3624,12 @@ function sanitizePeriod(value: unknown): CodexFilePeriodIndex | undefined {
     timeZone: resolveTimeZone(value.timeZone),
     indexedThrough: Math.max(0, finiteNumber(value.indexedThrough)),
     days,
+    ...(optionalNumber(value.lineageVersion) !== undefined
+      ? { lineageVersion: optionalNumber(value.lineageVersion) }
+      : {}),
+    ...(optionalNumber(value.lineagePrefixEvents) !== undefined
+      ? { lineagePrefixEvents: Math.max(0, Math.floor(optionalNumber(value.lineagePrefixEvents)!)) }
+      : {}),
   };
 }
 
@@ -3559,6 +3771,12 @@ function sanitizePeriodMigration(
   }
   return {
     timeZone: period.timeZone,
+    ...(optionalNumber(value.prefixEvents) !== undefined
+      ? { prefixEvents: Math.max(0, Math.floor(optionalNumber(value.prefixEvents)!)) }
+      : {}),
+    ...(optionalNumber(value.tokenEventsSeen) !== undefined
+      ? { tokenEventsSeen: Math.max(0, Math.floor(optionalNumber(value.tokenEventsSeen)!)) }
+      : {}),
     offset: Math.max(0, finiteNumber(value.offset)),
     discardingOversizedLine: value.discardingOversizedLine === true,
     parserState: sanitizeParserState(value.parserState, fileKey),
@@ -3932,11 +4150,15 @@ function migrateIndexV1(index: LegacyCodexIndexV1): CodexIndexV3 {
       false,
     );
   }
+  const quotaHistory = sanitizeCodexQuotaHistory(index.quotaHistory);
   return {
     schemaVersion: 3,
     files,
     aggregate: sanitizeProviderAggregate(index.aggregate),
     coverage: sanitizeCoverage(index.coverage),
+    ...(quotaHistory.length > 0
+      ? { quotaHistory }
+      : {}),
   };
 }
 
@@ -3959,6 +4181,10 @@ function sanitizeFileContribution(
   const safeOffset = offsetOverride ?? Math.max(0, finiteNumber(contribution.offset));
   const limit = sanitizeLimit(contribution.limit);
   const limits = sanitizeLimits(contribution.limits);
+  const quotaHistory = sanitizeCodexQuotaHistory(
+    contribution.quotaHistory,
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
   const lineage = sanitizeLineage(contribution.lineage);
   const lineageReconciliation = sanitizeLineageReconciliation(
     contribution.lineageReconciliation,
@@ -3984,6 +4210,20 @@ function sanitizeFileContribution(
   );
   if (periodMigration) {
     periodMigration.offset = Math.min(periodMigration.offset, safeOffset);
+    if (lineage) {
+      if (periodMigration.prefixEvents !== undefined) {
+        periodMigration.prefixEvents = Math.min(
+          periodMigration.prefixEvents,
+          lineage.tokenEvents,
+        );
+      }
+      if (periodMigration.tokenEventsSeen !== undefined) {
+        periodMigration.tokenEventsSeen = Math.min(
+          periodMigration.tokenEventsSeen,
+          lineage.tokenEvents,
+        );
+      }
+    }
   }
   const todayMigration = sanitizeTodayMigration(
     contribution.todayMigration,
@@ -4029,6 +4269,7 @@ function sanitizeFileContribution(
     aggregate,
     ...(limit ? { limit } : {}),
     ...(limits ? { limits } : {}),
+    ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
     qualityFlags: sanitizeQualityFlags(contribution.qualityFlags),
     ...(typeof contribution.identityChecked === 'boolean'
       ? { identityChecked: contribution.identityChecked }
@@ -4068,6 +4309,7 @@ function sanitizeIndexV2(value: unknown): CodexIndexV3 {
       delete contribution.todayMigration;
     }
   }
+  const quotaHistory = sanitizeCodexQuotaHistory(index.quotaHistory);
   return {
     schemaVersion: 3,
     ...(typeof index.indexGeneration === 'number' &&
@@ -4077,6 +4319,9 @@ function sanitizeIndexV2(value: unknown): CodexIndexV3 {
     files,
     aggregate: sanitizeProviderAggregate(index.aggregate),
     coverage,
+    ...(quotaHistory.length > 0
+      ? { quotaHistory }
+      : {}),
   };
 }
 

@@ -202,12 +202,14 @@ function functionDeclarations(file: ts.SourceFile): ReadonlyMap<string, ts.Funct
 
 function sanitizedDtoViolations(file: ts.SourceFile): string[] {
   const declarations = functionDeclarations(file);
-  const trustedLabelSanitizerBindings = new Set<string>();
+  const trustedSanitizerBindings = new Set<string>();
   for (const statement of file.statements) {
     if (
       !ts.isImportDeclaration(statement) ||
       !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== './codexMetadataLabel' ||
+      !['./codexMetadataLabel', './codexQuotaHistory'].includes(
+        statement.moduleSpecifier.text,
+      ) ||
       !statement.importClause ||
       statement.importClause.isTypeOnly ||
       !statement.importClause.namedBindings ||
@@ -217,8 +219,14 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
     }
     for (const specifier of statement.importClause.namedBindings.elements) {
       const exportedName = specifier.propertyName?.text ?? specifier.name.text;
-      if (!specifier.isTypeOnly && exportedName === 'sanitizeCodexMetadataLabel') {
-        trustedLabelSanitizerBindings.add(specifier.name.text);
+      if (
+        !specifier.isTypeOnly &&
+        (
+          exportedName === 'sanitizeCodexMetadataLabel' ||
+          exportedName === 'sanitizeCodexQuotaHistory'
+        )
+      ) {
+        trustedSanitizerBindings.add(specifier.name.text);
       }
     }
   }
@@ -250,7 +258,7 @@ function sanitizedDtoViolations(file: ts.SourceFile): string[] {
     if (ts.isIdentifier(call.expression)) {
       return call.expression.text === 'resolveTimeZone' ||
         call.expression.text === 'dayKeyInZone' ||
-        (trustedLabelSanitizerBindings.has(call.expression.text) &&
+        (trustedSanitizerBindings.has(call.expression.text) &&
           !shadowedBindings.has(call.expression.text));
     }
     if (!ts.isPropertyAccessExpression(call.expression)) {

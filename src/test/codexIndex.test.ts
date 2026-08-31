@@ -746,6 +746,39 @@ function tokenLine(input: number, output: number, timestamp: string): string {
   });
 }
 
+function tokenLineWithWeeklyLimit(
+  input: number,
+  output: number,
+  timestamp: string,
+  resetAt: string,
+  usedPercent: number,
+): string {
+  return JSON.stringify({
+    timestamp,
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: {
+          input_tokens: input,
+          cached_input_tokens: Math.floor(input / 2),
+          output_tokens: output,
+          reasoning_output_tokens: Math.floor(output / 2),
+          total_tokens: input + output,
+        },
+      },
+      rate_limits: {
+        limit_id: 'codex',
+        secondary: {
+          used_percent: usedPercent,
+          window_minutes: 7 * 24 * 60,
+          resets_at: resetAt,
+        },
+      },
+    },
+  });
+}
+
 function structuralLine(
   timestamp: string,
   type: 'event_msg' | 'response_item',
@@ -797,6 +830,153 @@ function chunkingIo(chunkBytes: number): CodexIndexIo {
     },
   };
 }
+
+test('weekly quota history retains separate resets after the source file is removed', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-quota-history-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'quota-history.jsonl'),
+      [
+        sessionLine('quota-history'),
+        contextLine(),
+        tokenLineWithWeeklyLimit(
+          100,
+          20,
+          '2026-08-28T08:00:00.000Z',
+          '2026-08-28T11:00:00.000Z',
+          18,
+        ),
+        tokenLineWithWeeklyLimit(
+          200,
+          40,
+          '2026-08-30T04:00:00.000Z',
+          '2026-08-30T07:00:00.000Z',
+          42,
+        ),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const now = Date.parse('2026-08-31T12:00:00.000Z');
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+    });
+
+    assert.deepEqual(
+      cold.index.quotaHistory?.map(({ resetAt, usedPercent }) => ({ resetAt, usedPercent })),
+      [
+        { resetAt: Date.parse('2026-08-28T11:00:00.000Z'), usedPercent: 18 },
+        { resetAt: Date.parse('2026-08-30T07:00:00.000Z'), usedPercent: 42 },
+      ],
+    );
+
+    await saveCodexIndexAtomic(indexPath, {
+      ...cold.index,
+      quotaHistory: cold.index.quotaHistory?.map((observation) => ({
+        ...observation,
+        account: 'must-not-persist',
+      })) as any,
+    });
+    const reloaded = await loadCodexIndex(indexPath, 'UTC');
+    assert.deepEqual(
+      reloaded.quotaHistory?.map(({ resetAt, usedPercent }) => ({ resetAt, usedPercent })),
+      [
+        { resetAt: Date.parse('2026-08-28T11:00:00.000Z'), usedPercent: 18 },
+        { resetAt: Date.parse('2026-08-30T07:00:00.000Z'), usedPercent: 42 },
+      ],
+    );
+    assert.doesNotMatch(await readFile(indexPath, 'utf8'), /must-not-persist/);
+
+    const removed = await updateCodexIndex(
+      reloaded,
+      persistableManifest([]),
+      { salt: SALT, timeZone: 'UTC', now: () => now },
+    );
+    assert.equal(removed.bodyReads, 0);
+    assert.deepEqual(
+      removed.index.quotaHistory?.map(({ resetAt, usedPercent }) => ({ resetAt, usedPercent })),
+      [
+        { resetAt: Date.parse('2026-08-28T11:00:00.000Z'), usedPercent: 18 },
+        { resetAt: Date.parse('2026-08-30T07:00:00.000Z'), usedPercent: 42 },
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy indexed quota projections seed reset history once without rereading bodies', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-quota-seed-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'quota-seed.jsonl'),
+      [
+        sessionLine('quota-seed'),
+        contextLine(),
+        tokenLineWithWeeklyLimit(
+          100,
+          20,
+          '2026-08-30T04:00:00.000Z',
+          '2026-08-30T07:00:00.000Z',
+          42,
+        ),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const now = Date.parse('2026-08-31T12:00:00.000Z');
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+    });
+    const legacy = structuredClone(cold.index);
+    delete legacy.quotaHistory;
+    for (const contribution of Object.values(legacy.files)) {
+      // Model an older complete schema-3 index: it has the last observed
+      // limit projection, but predates the neutral reset-history cache.
+      delete contribution.quotaHistory;
+    }
+
+    const io = trackingIo();
+    const seeded = await updateCodexIndex(legacy, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+      io,
+    });
+
+    assert.equal(seeded.bodyReads, 0);
+    assert.equal(io.bodyReads.size, 0);
+    assert.deepEqual(
+      seeded.index.quotaHistory?.map(({ resetAt, usedPercent }) => ({ resetAt, usedPercent })),
+      [{ resetAt: Date.parse('2026-08-30T07:00:00.000Z'), usedPercent: 42 }],
+    );
+    assert.equal(seeded.indexChanged, true);
+
+    const warmIo = trackingIo();
+    const warm = await updateCodexIndex(seeded.index, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+      io: warmIo,
+    });
+    assert.equal(warm.indexChanged, false);
+    assert.equal(warm.bodyReads, 0);
+    assert.equal(warmIo.bodyReads.size, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('fully indexed unchanged corpus returns a warm no-op without body reads', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-noop-'));

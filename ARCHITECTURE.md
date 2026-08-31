@@ -11,8 +11,9 @@
 v2.3.0 preserves the complete Claude experience and adds Codex Beta as a
 provider-specific usage and optimization view.
 The v2.3.1 candidate adds a default-off, local-first advice-effectiveness loop,
-a single explicit BYOK request boundary, durable historical-work state, and a
-rolling 30-day Codex date/hour projection without changing provider accounting.
+a single explicit BYOK request boundary, durable historical-work state, a
+bounded local history of Codex weekly reset observations, and a rolling 30-day
+Codex date/hour projection without changing provider accounting.
 
 - Claude: exact local token buckets, model pricing estimates, and Anthropic
   OAuth 5-hour/weekly quota.
@@ -46,6 +47,7 @@ aggregate sync are deferred to v2.4.x after a separate privacy review.
 | `providers/codex/codexParser.ts` | Codex exact-request parsing with cumulative high-water fallback, pseudonymous lineage metadata, structural counters, quality flags, and last-observed limits. |
 | `providers/codex/codexManifest.ts` | Allowlisted Codex directory discovery, HMAC file keys, fingerprints, and manifest diffing. |
 | `providers/codex/codexIndex.ts` | Schema-3 persistent per-file numeric aggregates and replay evidence, bounded cold/tail parsing, independent aggregate/period/rolling-30-day-hour coverage, and atomic save/load. |
+| `providers/codex/codexQuotaHistory.ts` | Small account-neutral weekly reset-observation cache; compacts repeated local samples without retaining credentials, account names, or raw labels. |
 | `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | Background coordinator, recent-first progress, cancellation, resume, checkpoint persistence, and single-flight client. |
 | `providers/codex/codexFilePassPool.ts` / `codexFilePassWorker.ts` | Adaptive bounded local pool for independent per-file main, lineage, period, current-day, and identity passes during incomplete backfills. |
 | `providers/codex/codexProvider.ts` | Extension-facing Codex snapshot facade and partial/unavailable/error outcomes. |
@@ -76,7 +78,8 @@ allowlisted Codex JSONL
   ──> manifest metadata
   ──> background worker
   ──> schema guard + exact-request parser with lineage high-water fallback
-  ──> per-file numeric aggregate index + rolling sparse 30-day hourly sidecar
+  ──> per-file numeric aggregate index + bounded neutral weekly-reset history
+  ──> rolling sparse 30-day hourly sidecar
   ──> CodexProviderSnapshot
   ──> Codex scopes + insights
   ──> Codex status + provider-aware dashboard render inputs
@@ -143,9 +146,14 @@ fallback and may include an inherited parent baseline. That path uses
 per-component, per-lineage high-water marks. Unknown parents, regressions, and
 schema drift produce quality flags rather than negative or fabricated usage.
 
-Codex `rate_limits.primary` found in local logs is a last-observed snapshot only.
-It is hidden once its reset time passes. v2.3.0 does not read Codex credentials
-or make a network call to refresh it.
+Codex `rate_limits` found in local logs is a last-observed snapshot only. It is
+hidden once its reset time passes. The v2.3.1 candidate also keeps a bounded,
+account-neutral history of account-wide weekly observations: repeated samples
+for one reset boundary collapse to one representative, while genuinely
+different reset times remain separate. This history is evidence for aligning
+and auditing weekly estimates; it is not an account registry and cannot reveal
+a reset that never appears in a local log line. v2.3.0 does not read Codex
+credentials or make a network call to refresh it.
 
 ## Privacy and persistence
 
@@ -157,9 +165,10 @@ Codex discovery is restricted to:
 
 It never reads `auth.json`, SQLite databases, config secrets, keychains, browser
 state, or unknown files. Raw paths/session/parent IDs stay in short-lived local
-worker memory. Disk persistence contains machine-salted pseudonymous keys and
-numeric per-day/model/effort/session aggregates only—never prompt, response,
-command, tool-argument, raw-line, or raw-path content.
+worker memory. Disk persistence contains machine-salted pseudonymous keys,
+numeric per-day/model/effort/session aggregates, and the bounded neutral quota
+history described above—never prompt, response, command, tool-argument,
+raw-line, raw-path, account name, credential, or raw provider-label content.
 
 Advice starts from materialized aggregates rather than rereading JSONL or
 walking retained records. Aggregate-only is the remote default. Prompt samples
@@ -283,6 +292,12 @@ Codex history is designed for multi-gigabyte local corpora:
 - cancellation checkpoints atomically save per-file contributions and migration
   progress, so the next run resumes from the verified cursor;
 - concurrent refresh requests share one worker run.
+
+Quota history is populated opportunistically by those same JSONL passes. An
+older complete index may receive one metadata-only seed from its already saved
+last-observed limit, but there is no second quota scanner, timer, network poll,
+or credential lookup. Once that seed is present, an unchanged warm refresh
+continues to read zero usage-record bodies.
 
 Historical work also has a small durable control state: measurement version,
 reason, progress, failure streak, next eligible time, and pause reason. Progress

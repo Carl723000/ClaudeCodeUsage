@@ -9,7 +9,12 @@ import {
   CodexTodayCoverage,
 } from './codexIndex';
 import { formatHourLabel, rollingDayKeysFromDayKey } from '../../dateKeys';
-import { CODEX_ROLLING_HOURLY_DAYS } from './codexPeriodIndex';
+import {
+  CODEX_ROLLING_HOURLY_DAYS,
+  CodexDailySlice,
+  CODEX_PERIOD_LINEAGE_VERSION,
+  codexPeriodFitsAggregate,
+} from './codexPeriodIndex';
 import {
   freshInputPlusOutput,
   processedTokens,
@@ -314,6 +319,39 @@ function apiEquivalentForBuckets(
   );
 }
 
+function fallbackPeriodSlice(total: ProviderTokenCounts): CodexDailySlice {
+  return {
+    total,
+    byModel: {},
+    byEffort: {},
+    structural: zeroStructural(),
+  };
+}
+
+/**
+ * Period sidecars are a configured-zone, model-aware projection. A legacy or
+ * currently rebuilding sidecar must not be allowed to inflate a range beyond
+ * the verified per-file all-time aggregate. The UTC-keyed all-time day map is
+ * a conservative temporary fallback until the zone-aware sidecar is rebuilt;
+ * it preserves totals without pretending to know model/day attribution.
+ */
+function periodSlicesForFile(
+  file: CodexFileAggregate,
+  timeZone: string,
+): Array<[string, CodexDailySlice]> {
+  if (
+    file.period?.timeZone === timeZone &&
+    (file.period.lineageVersion === undefined ||
+      file.period.lineageVersion === CODEX_PERIOD_LINEAGE_VERSION) &&
+    codexPeriodFitsAggregate(file.period, file.total)
+  ) {
+    return Object.entries(file.period.days);
+  }
+  return Object.entries(file.byDay)
+    .filter(([day]) => /^\d{4}-\d{2}-\d{2}$/.test(day))
+    .map(([day, total]) => [day, fallbackPeriodSlice(total)]);
+}
+
 function ratio(numerator: number, denominator: number): number {
   return denominator > 0 ? numerator / denominator : 0;
 }
@@ -400,10 +438,7 @@ function scopeFromPeriodDays(
   let approvalReviewerThreads = 0;
 
   for (const file of files) {
-    if (file.period?.timeZone !== timeZone) {
-      continue;
-    }
-    const slices = Object.entries(file.period.days)
+    const slices = periodSlicesForFile(file, timeZone)
       .filter(([day]) => selectedKeys.has(day))
       .map(([, slice]) => slice);
     if (slices.length === 0) {
@@ -508,10 +543,7 @@ function dailyRows(
     }
   >();
   for (const file of files) {
-    if (file.period?.timeZone !== timeZone) {
-      continue;
-    }
-    for (const [day, slice] of Object.entries(file.period.days)) {
+    for (const [day, slice] of periodSlicesForFile(file, timeZone)) {
       const row = days.get(day) ?? {
         tokens: zeroTokens(),
         models: new Map<string, ProviderTokenCounts>(),
@@ -562,10 +594,7 @@ function monthlyRows(
     }
   >();
   for (const file of files) {
-    if (file.period?.timeZone !== timeZone) {
-      continue;
-    }
-    for (const [day, slice] of Object.entries(file.period.days)) {
+    for (const [day, slice] of periodSlicesForFile(file, timeZone)) {
       const period = day.slice(0, 7);
       if (!/^\d{4}-\d{2}$/.test(period)) {
         continue;
@@ -719,10 +748,7 @@ function periodMembership(
   if (context.recentSessionKeys.has(sessionIdentityKey(file))) {
     result.push('recent');
   }
-  if (file.period?.timeZone !== context.timeZone) {
-    return result;
-  }
-  const days = Object.keys(file.period.days);
+  const days = periodSlicesForFile(file, context.timeZone).map(([day]) => day);
   if (days.some((day) => context.last7DayKeys.has(day))) {
     result.push('7d');
   }
@@ -739,9 +765,9 @@ function dayMembership(
   file: CodexFileAggregate,
   context: CodexThreadPeriodContext,
 ): string[] {
-  return file.period?.timeZone === context.timeZone
-    ? Object.keys(file.period.days).sort()
-    : [];
+  return periodSlicesForFile(file, context.timeZone)
+    .map(([day]) => day)
+    .sort();
 }
 
 function recentThreadRows(

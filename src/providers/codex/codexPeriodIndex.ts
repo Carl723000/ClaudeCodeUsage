@@ -27,6 +27,10 @@ export interface CodexFilePeriodIndex {
   timeZone: string;
   indexedThrough: number;
   days: Record<string, CodexDailySlice>;
+  /** Semantic marker for period data produced after lineage filtering. */
+  lineageVersion?: number;
+  /** The lineage prefix excluded while this period was built. */
+  lineagePrefixEvents?: number;
 }
 
 export interface CodexHourlySlice {
@@ -74,9 +78,140 @@ export interface CodexTodayMigrationState extends CodexJsonlCursor {
 
 export interface CodexPeriodMigrationState extends CodexJsonlCursor {
   timeZone: string;
+  /** Missing on pre-fix drafts; those drafts must restart from byte zero. */
+  prefixEvents?: number;
+  /** Number of lineage token events consumed by the resumable cursor. */
+  tokenEventsSeen?: number;
   parserState: CodexParserState;
   days: Record<string, CodexDailySlice>;
   qualityFlags: string[];
+}
+
+/** Increment when the period lineage filtering algorithm changes. */
+export const CODEX_PERIOD_LINEAGE_VERSION = 1;
+
+export function isCurrentCodexPeriodLineage(
+  period: CodexFilePeriodIndex | undefined,
+  prefixEvents: number,
+): boolean {
+  return Boolean(
+    period &&
+    period.lineageVersion === CODEX_PERIOD_LINEAGE_VERSION &&
+    period.lineagePrefixEvents === Math.max(0, Math.floor(prefixEvents)),
+  );
+}
+
+/**
+ * Pre-fix schema-3 indexes did not carry a lineage marker. A bounded
+ * aggregate-size check can still safely read those legacy slices; once a
+ * marker exists, it must match the current filtering algorithm exactly.
+ */
+export function isCompatibleCodexPeriodLineage(
+  period: CodexFilePeriodIndex | undefined,
+  prefixEvents: number,
+): boolean {
+  if (!period) {
+    return false;
+  }
+  const hasMarker =
+    period.lineageVersion !== undefined ||
+    period.lineagePrefixEvents !== undefined;
+  return !hasMarker || isCurrentCodexPeriodLineage(period, prefixEvents);
+}
+
+const TOKEN_FIELDS = [
+  'inputTotal',
+  'cachedInput',
+  'cacheWriteInput',
+  'outputTotal',
+  'reasoningOutput',
+  'sourceTotal',
+] as const;
+
+type TokenField = (typeof TOKEN_FIELDS)[number];
+
+function tokenValue(tokens: ProviderTokenCounts, field: TokenField): number {
+  const value = tokens[field];
+  return typeof value === 'number' && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
+function tokenShapeIsValid(tokens: ProviderTokenCounts): boolean {
+  return TOKEN_FIELDS.every((field) => {
+    const value = tokens[field];
+    return value === undefined ||
+      (typeof value === 'number' && Number.isFinite(value) && value >= 0);
+  });
+}
+
+function sumTokenBuckets(
+  buckets: readonly ProviderTokenCounts[],
+): ProviderTokenCounts {
+  const total: ProviderTokenCounts = {
+    inputTotal: 0,
+    cachedInput: 0,
+    cacheWriteInput: 0,
+    outputTotal: 0,
+    reasoningOutput: 0,
+    sourceTotal: 0,
+  };
+  for (const bucket of buckets) {
+    for (const field of TOKEN_FIELDS) {
+      total[field] = tokenValue(total, field) + tokenValue(bucket, field);
+    }
+  }
+  return total;
+}
+
+function tokensFitWithin(
+  actual: ProviderTokenCounts,
+  allowed: ProviderTokenCounts,
+): boolean {
+  if (!tokenShapeIsValid(actual) || !tokenShapeIsValid(allowed)) {
+    return false;
+  }
+  // Older persisted DTOs legitimately omit optional buckets such as
+  // reasoningOutput, sourceTotal, or cacheWriteInput. An omitted allowance is
+  // unknown, not zero; constraining it to zero would reject otherwise valid
+  // legacy period projections and make the reader fall back unnecessarily.
+  return TOKEN_FIELDS.every((field) => {
+    if (allowed[field] === undefined) {
+      return true;
+    }
+    return tokenValue(actual, field) <= tokenValue(allowed, field);
+  });
+}
+
+/**
+ * A period is a subset of a file's all-time aggregate. This inexpensive
+ * invariant lets readers reject old/replayed sidecars immediately, before a
+ * background rebuild has finished.
+ */
+export function codexPeriodFitsAggregate(
+  period: CodexFilePeriodIndex | undefined,
+  aggregateTotal: ProviderTokenCounts,
+): boolean {
+  if (!period || !tokenShapeIsValid(aggregateTotal)) {
+    return false;
+  }
+  const periodTotal = sumTokenBuckets(
+    Object.values(period.days).map((slice) => slice.total),
+  );
+  if (!tokensFitWithin(periodTotal, aggregateTotal)) {
+    return false;
+  }
+  return Object.values(period.days).every((slice) =>
+    tokenShapeIsValid(slice.total) &&
+    tokensFitWithin(
+      sumTokenBuckets(Object.values(slice.byModel)),
+      slice.total,
+    ) &&
+    tokensFitWithin(
+      sumTokenBuckets(Object.values(slice.byEffort)),
+      slice.total,
+    ),
+  );
 }
 
 function zeroTokens(): ProviderTokenCounts {

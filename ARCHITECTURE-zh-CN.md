@@ -9,8 +9,8 @@
 **Claude Code Usage** 继续保持 local-first、无 runtime dependency 和 read-mostly。
 v2.3.0 保留完整 Claude 体验，并增加 provider-specific 的 Codex Beta 用量与优化视图。
 v2.3.1 候选在不改变 provider 计量口径的前提下，增加一套默认关闭、
-local-first 的建议有效性闭环、唯一的显式 BYOK 请求边界、可持久的历史任务状态，
-以及 Codex 滚动 30 天的日期→小时投影。
+local-first 的建议有效性闭环、唯一的显式 BYOK 请求边界、可持久的历史任务状态、
+Codex 有界的本地每周重置观测历史，以及滚动 30 天的日期→小时投影。
 
 - Claude：精确的本地 token bucket、模型成本估算和 Anthropic OAuth 5 小时/每周配额。
 - Codex Beta：本地 processed/fresh/cache/output/reasoning 指标、模型与 effort 拆分、
@@ -39,6 +39,7 @@ Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做�
 | `providers/codex/codexParser.ts` | Codex 精确单次请求解析及 cumulative high-water 回退、伪名 lineage metadata、结构计数、quality flag 和 last-observed limit。 |
 | `providers/codex/codexManifest.ts` | Codex 允许目录发现、HMAC file key、fingerprint 和 manifest diff。 |
 | `providers/codex/codexIndex.ts` | schema-3 的 per-file 数字聚合与重放证据持久化、有界 cold/tail parse、独立 aggregate/period/滚动 30 天小时 coverage 和原子存取。 |
+| `providers/codex/codexQuotaHistory.ts` | 小型、账户中性的每周重置观测缓存；压缩重复本地样本，不保留凭据、账户名或原始标签。 |
 | `providers/codex/codexIndexWorker.ts` / `codexIndexClient.ts` | 后台协调器、recent-first progress、cancel、resume、checkpoint 持久化和 single-flight client。 |
 | `providers/codex/codexFilePassPool.ts` / `codexFilePassWorker.ts` | 未完成回填期间，用于独立 main、lineage、period、current-day 和 identity per-file pass 的自适应受限本地 pool。 |
 | `providers/codex/codexProvider.ts` | 面向 extension 的 Codex snapshot facade 与 partial/unavailable/error outcome。 |
@@ -68,7 +69,8 @@ Claude JSONL
   ──> manifest metadata
   ──> background worker
   ──> schema guard + 精确单次请求 parser（lineage high-water 回退）
-  ──> per-file 数字聚合索引 + 滚动稀疏 30 天小时 sidecar
+  ──> per-file 数字聚合索引 + 有界账户中性的每周重置历史
+  ──> 滚动稀疏 30 天小时 sidecar
   ──> CodexProviderSnapshot
   ──> Codex scope + insight
   ──> Codex 状态栏 + provider-aware dashboard render input
@@ -121,7 +123,10 @@ output 与 reasoning component 是精确的单次请求归因。`last_token_usag
 parent baseline，因此该路径按 component 与 lineage 维护 high-water。Unknown parent、counter
 regression 和 schema drift 产生 quality flag，不生成负用量或伪造精度。
 
-本地日志中的 Codex `rate_limits.primary` 只是 last-observed snapshot，到 reset 时间后隐藏。
+本地日志中的 Codex `rate_limits` 只是 last-observed snapshot，到 reset 时间后隐藏。
+v2.3.1 候选还会保留一份有界、账户中性的 account-wide 每周观测历史：同一重置边界的
+重复样本只保留一个代表，真正不同的重置时刻则分别保留。这份历史用于对齐和复核每周
+估算，不是账户注册表；如果某次重置从未出现在本地日志行里，插件也无法凭空发现它。
 v2.3.0 不读 Codex credential，也不发网络请求刷新它。
 
 ## 隐私与持久化
@@ -133,9 +138,9 @@ Codex 发现仅限：
 - 默认 `$CODEX_HOME`：`~/.codex`
 
 绝不读取 `auth.json`、SQLite、config secret、keychain、浏览器状态或未知文件。
-Raw path/session/parent ID 只留在本地 worker 的短期内存。磁盘只持久化 machine-salted 伪名 key
-和按 day/model/effort/session 聚合的数字，绝不存 prompt、response、command、tool arguments、
-raw line 或 raw path。
+Raw path/session/parent ID 只留在本地 worker 的短期内存。磁盘只持久化 machine-salted 伪名 key、
+按 day/model/effort/session 聚合的数字，以及上面所述的有界账户中性额度历史；绝不存 prompt、
+response、command、tool arguments、raw line、raw path、账户名、凭据或原始 provider label。
 
 Advice 只消费已物化聚合，不重读 JSONL，也不重遍历保留的 records。远程默认为
 aggregate-only；prompt sample 与可选 user context 需单独明确同意，并必须原样出现在精确请求预览中。
@@ -219,6 +224,10 @@ Codex 按多 GiB 本地历史设计：
 - truncate/replacement 只重解析受影响文件；
 - cancel checkpoint 会原子保存 per-file contribution 与 migration progress，下一轮从已验证 cursor resume；
 - 并发 refresh 共享同一 worker run。
+
+额度历史由同一批 JSONL 解析流程顺便填充。旧的完整索引最多接受一次基于已保存
+last-observed limit 的 metadata-only 播种；不会增加第二套额度扫描器、timer、网络轮询或凭据读取。
+播种完成后，未变化的 warm refresh 仍然读取 0 字节用量正文。
 
 历史任务还使用一份精简的可持久控制状态：measurement version、reason、progress、
 failure streak、next eligible time 和 pause reason。成功后立即继续，不人为等待；失败或无进展后

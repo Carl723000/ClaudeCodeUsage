@@ -42,6 +42,8 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 - Setelah saran diterapkan, hanya tugas serupa yang andal yang dapat menjadi perbandingan lokal sebelum / sesudah dengan versi. Ledger hanya menyimpan metrik kasar, kualitas, cakupan, dan versi—tidak pernah prompt, isi, jalur, atau session ID. Tanpa pasangan yang andal, UI menyatakan bahwa buktinya tidak cukup.
 - Pekerjaan riwayat Codex menyimpan progres, jumlah kegagalan beruntun, waktu berikutnya yang memenuhi syarat, dan alasan jeda. Pemrosesan berat yang terbatas hanya boleh terjadi sekali pada penggunaan pertama; setelah selesai tidak diulang, dan kegagalan atau ketiadaan progres tidak dipicu terus oleh refresh biasa.
 - Setiap tanggal Codex yang memiliki data dalam 30 hari terakhir dapat membuka bucket per jam yang sudah diindeks. Klik membaca nol JSONL; Claude dan Codex memakai zona waktu konfigurasi serta format `HH:00` yang sama.
+- Pengamatan kuota mingguan Codex dipadatkan selama proses indeks yang sudah ada menjadi riwayat lokal yang terbatas dan netral terhadap akun, sehingga batas reset yang tidak teratur tetap dapat dipertahankan. Tidak ada polling, pembacaan kredensial, atau pemindai kedua; setelah seed sekali, refresh tanpa perubahan tetap membaca nol byte isi catatan penggunaan. Reset yang tidak pernah muncul di log lokal tidak dapat disimpulkan.
+- Tampilan 7/30 hari terakhir menolak proyeksi periode yang kedaluwarsa atau membengkak, lalu sementara kembali ke agregat harian terverifikasi sampai proyeksi zona waktu selesai dibangun ulang.
 
 Versi paket tetap tidak berubah; ini kandidat validasi lokal, bukan rilis yang diterbitkan.
 

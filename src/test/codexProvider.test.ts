@@ -520,6 +520,98 @@ test('provider snapshots promote exact period slices for scoped consumers', asyn
   }
 });
 
+test('an invalid period sidecar cannot create a false weekly priced estimate', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-period-guard-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const index = duplicateIndex(false);
+    const file = index.files['active-key'];
+    file.aggregate.period = {
+      timeZone: 'UTC',
+      indexedThrough: file.offset,
+      days: {
+        '2026-07-20': {
+          total: { inputTotal: 10_000_000_000, outputTotal: 5_000_000_000 },
+          byModel: {
+            'gpt-5.6-sol': {
+              inputTotal: 10_000_000_000,
+              outputTotal: 5_000_000_000,
+            },
+          },
+          byEffort: {},
+          structural: file.aggregate.structural,
+        },
+      },
+    };
+
+    const provider = new CodexProvider(
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'UTC',
+      },
+      () => new FakeClient([{ ...workerResult(index), failedFiles: 0 }]),
+    );
+
+    const refreshed = await provider.refresh();
+
+    assert.equal(refreshed.snapshot.total.inputTotal, 80);
+    assert.deepEqual(refreshed.snapshot.weeklyValueInputs?.usage, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('a period with a mismatched lineage marker stays hidden during rebuild', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-period-marker-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const index = duplicateIndex(false);
+    const file = index.files['active-key'];
+    file.lineage = {
+      fingerprintBlocks: [],
+      pendingFingerprints: [],
+      tokenEvents: 0,
+      desiredPrefixEvents: 0,
+      appliedPrefixEvents: 0,
+    };
+    file.aggregate.period = {
+      timeZone: 'UTC',
+      indexedThrough: file.offset,
+      lineageVersion: 1,
+      lineagePrefixEvents: 1,
+      days: {
+        '2026-07-20': {
+          total: { ...file.aggregate.total },
+          byModel: { ...file.aggregate.byModel },
+          byEffort: { ...file.aggregate.byEffort },
+          structural: file.aggregate.structural,
+        },
+      },
+    };
+
+    const provider = new CodexProvider(
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'UTC',
+      },
+      () => new FakeClient([{ ...workerResult(index), failedFiles: 0 }]),
+    );
+
+    const refreshed = await provider.refresh();
+
+    assert.equal(refreshed.snapshot.files[0].period, undefined);
+    assert.deepEqual(refreshed.snapshot.weeklyValueInputs?.usage, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('a worker failure retains the last verified provider snapshot', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-stale-'));
   try {

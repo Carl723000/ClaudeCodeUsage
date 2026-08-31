@@ -42,6 +42,8 @@ Hover the quota indicator for a breakdown:
 - Reliable similar tasks may be paired into a versioned local comparison result after a recommendation is applied. The ledger stores coarse metric, quality, coverage, and version fields only—never prompts, bodies, paths, or session IDs. Without a reliable pair, the UI says the evidence is insufficient.
 - Codex historical work persists progress, failure streak, next-eligible time, and pause reason. First-use work may perform one bounded heavy pass, then does not repeat equivalent work after completion or hot-loop after failure/no progress.
 - Every populated Codex day in the rolling last 30 days can expand to its already-indexed hourly buckets with zero JSONL reads on click. Claude and Codex share the configured timezone and `HH:00` formatter.
+- Weekly Codex quota observations are compacted during those existing index passes into a bounded, account-neutral local history, so separate irregular reset boundaries can survive file replacement or removal. It does not poll, read credentials, or add a second scanner; unchanged warm refreshes still read zero usage-record bodies. If a reset never appears in a local log line, it cannot be inferred.
+- Recent 7/30-day views reject stale or inflated period projections and temporarily fall back to the verified daily aggregate until the zone-aware projection is rebuilt.
 
 The package version remains unchanged; this is a local validation candidate, not a published release.
 

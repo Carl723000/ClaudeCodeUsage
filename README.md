@@ -132,6 +132,15 @@ same full-request preview and separate explicit Send action as AI advice.
 - **Thirty-day hour drill-down** — any populated Codex day in the last 30 days
   expands from the existing index with zero JSONL reads on click. Claude and
   Codex use the configured timezone and the same `HH:00` labels.
+- **Reset-aware local evidence** — weekly Codex quota observations are compacted
+  during the existing index passes into a bounded, account-neutral history, so
+  irregular reset boundaries survive file replacement or removal. It adds no
+  polling, credential read, or second scanner; after the one-time seed, unchanged
+  refreshes still read zero usage-record bodies. A reset absent from local logs
+  cannot be inferred.
+- **Safe rolling totals** — recent 7/30-day views reject stale or inflated period
+  projections and temporarily use the verified daily aggregate until the
+  configured-zone projection is rebuilt.
 
 The candidate keeps the package version unchanged and is not a published
 release.

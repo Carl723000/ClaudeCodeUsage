@@ -84,6 +84,49 @@ test('partial period coverage disables unreliable session membership ranges', ()
   });
 });
 
+test('an inflated period sidecar falls back to the verified daily aggregate', () => {
+  const snapshot = snapshotFixture();
+  const file = snapshot.files[0];
+  const safeDay = Object.keys(file.byDay)[0];
+  const safeDailyTotal = file.byDay[safeDay];
+  file.period = {
+    ...file.period!,
+    days: {
+      [safeDay]: {
+        ...file.period!.days[safeDay],
+        total: {
+          inputTotal: 10_000_000_000,
+          outputTotal: 5_000_000_000,
+        },
+      },
+    },
+  };
+  snapshot.files = [file];
+  snapshot.total = { ...file.total };
+
+  const view = buildCodexUsageView(snapshot, NOW);
+  const daily = view.daily.find((row) => row.day === safeDay);
+
+  assert.equal(
+    daily?.total.processed,
+    safeDailyTotal.inputTotal + safeDailyTotal.outputTotal,
+  );
+  assert.equal(
+    view.allTime.total.processed,
+    file.total.inputTotal + file.total.outputTotal,
+  );
+  assert.equal(view.last30Days.total.processed <= view.allTime.total.processed, true);
+  assert.deepEqual(daily?.apiEquivalent, {
+    equivalentUsd: 0,
+    freshInputUsd: 0,
+    cachedInputUsd: 0,
+    outputUsd: 0,
+    pricedTokens: 0,
+    totalTokens: safeDailyTotal.inputTotal + safeDailyTotal.outputTotal,
+    pricingCoverage: 0,
+  });
+});
+
 test('index backfill quality warning follows index convergence', () => {
   const snapshot = snapshotFixture();
   const incomplete = buildCodexUsageView(snapshot, NOW);
@@ -414,6 +457,18 @@ test('daily and monthly Codex rows retain exact-model API-equivalent cost and co
         structural: { ...file.structural },
       },
     },
+  };
+  // The period projection is now required to be a subset of the verified
+  // file aggregate. Keep this synthetic cost fixture internally consistent so
+  // it exercises pricing rather than the corrupted-period fallback.
+  file.total = {
+    inputTotal: 5_000_000,
+    // Both period days are part of this file's verified aggregate. Keep the
+    // cache bucket consistent as well so the test exercises pricing rather
+    // than the corrupted-period fallback.
+    cachedInput: 2_000_000,
+    outputTotal: 2_500_000,
+    reasoningOutput: 1_750_000,
   };
   snapshot.files = [file];
 
