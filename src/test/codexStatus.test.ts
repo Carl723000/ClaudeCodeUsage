@@ -35,29 +35,72 @@ const scope: CodexUsageScopeView = {
   efforts: [],
 };
 
-function limit(resetsAt: number): ProviderLimitSnapshot {
+function limit(
+  resetsAt: number,
+  windows: ProviderLimitSnapshot['windows'] = [
+    {
+      label: 'primary',
+      usedPercent: 42,
+      windowMinutes: 300,
+      resetsAt,
+    },
+  ],
+): ProviderLimitSnapshot {
   return {
     provider: 'codex',
     observedAt: NOW - 60_000,
     source: 'local-log',
     confidence: 'last-observed',
-    windows: [
-      {
-        label: 'primary',
-        usedPercent: 42,
-        windowMinutes: 300,
-        resetsAt,
-      },
-    ],
+    windows,
   };
 }
 
-test('Codex status defaults to fresh and labels last-observed limits', () => {
-  assert.deepEqual(formatCodexStatus(scope, 'fresh', limit(NOW + 60_000), NOW), {
+test('Codex status defaults to fresh and shows remaining weekly quota', () => {
+  const formatted = formatCodexStatus(scope, 'fresh', limit(NOW + 60_000, [
+    {
+      label: 'primary',
+      usedPercent: 42,
+      windowMinutes: 300,
+      resetsAt: NOW + 60_000,
+    },
+    {
+      label: 'secondary',
+      usedPercent: 67,
+      windowMinutes: 10_080,
+      resetsAt: NOW + 86_400_000,
+    },
+  ]), NOW);
+
+  assert.deepEqual(formatted, {
     text: 'CX 400',
-    limitText: '5h 42%',
+    limitText: 'wk 33%',
+    limit: {
+      label: 'wk',
+      windowMinutes: 10_080,
+      usedPercent: 67,
+      remainingPercent: 33,
+      observedAt: NOW - 60_000,
+      resetsAt: NOW + 86_400_000,
+    },
     stale: false,
   });
+});
+
+test('the existing five-hour-only preference selects the five-hour remaining quota', () => {
+  const formatted = formatCodexStatus(scope, 'fresh', limit(NOW + 60_000, [
+    { label: 'primary', usedPercent: 42, windowMinutes: 300, resetsAt: NOW + 60_000 },
+    { label: 'secondary', usedPercent: 67, windowMinutes: 10_080, resetsAt: NOW + 86_400_000 },
+  ]), NOW, { quotaFiveHourOnly: true });
+
+  assert.equal(formatted.limitText, '5h 58%');
+  assert.equal(formatted.limit?.windowMinutes, 300);
+  assert.equal(formatted.limit?.remainingPercent, 58);
+});
+
+test('the default falls back to a live five-hour window when weekly data is absent', () => {
+  const formatted = formatCodexStatus(scope, 'fresh', limit(NOW + 60_000), NOW);
+  assert.equal(formatted.limitText, '5h 58%');
+  assert.equal(formatted.limit?.remainingPercent, 58);
 });
 
 test('processed and output metrics stay distinct', () => {

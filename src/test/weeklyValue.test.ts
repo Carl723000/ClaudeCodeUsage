@@ -274,6 +274,87 @@ test('weekly timeline keeps only the latest current reset for one anonymous Code
   assert.equal(points.reduce((sum, point) => sum + point.usedEquivalentUsd, 0), 65);
 });
 
+test('Codex keeps post-reset usage in a new reset-aligned period when the quota sample is stale', () => {
+  const now = RESET + HOUR;
+  const points = buildWeeklyValueTimeline('codex', {
+    // Older than the sample window, but still a trustworthy reset timestamp.
+    observations: [observation({
+      observedAt: RESET - 8 * DAY,
+      resetAt: RESET,
+      sourceKey: 'one-file',
+    })],
+    usage: [
+      usage(40, RESET - HOUR, 'one-file'),
+      usage(7, RESET + 30 * 60 * 1000, 'one-file'),
+    ],
+  }, { now });
+
+  const previous = points.find((point) => point.resetAt === RESET);
+  const current = points.find((point) => point.resetAt === RESET + 7 * DAY);
+  assert.equal(previous?.usedEquivalentUsd, 40);
+  assert.equal(current?.usedEquivalentUsd, 7);
+  assert.equal(previous?.basis, 'reset-aligned-usage');
+  assert.equal(current?.basis, 'reset-aligned-usage');
+  assert.equal(current?.utilizationPercent, null);
+  assert.equal(current?.fullEquivalentUsd, null);
+  assert.equal(points.reduce((sum, point) => sum + point.usedEquivalentUsd, 0), 47);
+});
+
+test('conflicting stale Codex reset schedules do not choose an arbitrary alignment', () => {
+  const now = RESET + HOUR;
+  const points = buildWeeklyValueTimeline('codex', {
+    observations: [
+      observation({
+        observedAt: RESET - 8 * DAY,
+        resetAt: RESET,
+        sourceKey: 'older-login',
+      }),
+      observation({
+        observedAt: RESET - 8 * DAY + 1,
+        resetAt: RESET + DAY,
+        sourceKey: 'other-login',
+      }),
+    ],
+    usage: [usage(7, RESET + 30 * 60 * 1000, 'older-login')],
+  }, { now });
+
+  assert.equal(points.some((point) => point.resetAt === RESET + 7 * DAY), false);
+  assert.equal(points[0]?.basis, 'calendar-usage');
+  assert.equal(points[0]?.fullEquivalentUsd, null);
+});
+
+test('a fresh Codex reset starts a new current period instead of carrying the old week forward', () => {
+  const now = RESET + HOUR;
+  const nextReset = RESET + 7 * DAY;
+  const points = buildWeeklyValueTimeline('codex', {
+    observations: [
+      observation({
+        observedAt: RESET - HOUR,
+        resetAt: RESET,
+        usedPercent: 80,
+        sourceKey: 'one-file',
+      }),
+      observation({
+        observedAt: RESET + 30 * 60 * 1000,
+        resetAt: nextReset,
+        usedPercent: 10,
+        sourceKey: 'one-file',
+      }),
+    ],
+    usage: [
+      usage(40, RESET - 30 * 60 * 1000, 'one-file'),
+      usage(7, RESET + 45 * 60 * 1000, 'one-file'),
+    ],
+  }, { now });
+
+  assert.equal(points.find((point) => point.resetAt === RESET)?.usedEquivalentUsd, 40);
+  const current = points.find((point) => point.current);
+  assert.equal(current?.resetAt, nextReset);
+  assert.equal(current?.usedEquivalentUsd, 7);
+  assert.equal(current?.utilizationPercent, 10);
+  assert.equal(current?.fullEquivalentUsd, null);
+});
+
 test('ambiguous overlapping Codex reset observations do not invent a combined allowance', () => {
   const now = Date.parse('2026-08-27T04:00:00.000Z');
   const points = buildWeeklyValueTimeline('codex', {

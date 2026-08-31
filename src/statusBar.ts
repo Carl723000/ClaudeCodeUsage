@@ -369,7 +369,13 @@ export class StatusBarManager {
     metric: CodexStatusMetric,
     limit: ProviderLimitSnapshot | null,
   ): void {
-    const formatted = formatCodexStatus(scope, metric, limit);
+    const formatted = formatCodexStatus(
+      scope,
+      metric,
+      limit,
+      Date.now(),
+      { quotaFiveHourOnly: this.quotaFiveHourOnly },
+    );
     const copy = I18n.t.providers.codex;
     this.isLoading = false;
     this.statusBarItem.text = formatted.text;
@@ -388,9 +394,35 @@ export class StatusBarManager {
     this.statusBarItem.tooltip = md;
     this.applyCostVisibility();
 
-    if (formatted.limitText) {
+    if (formatted.limitText && formatted.limit) {
       this.quotaItem.text = `$(dashboard) ${formatted.limitText}`;
-      this.quotaItem.tooltip = `${copy.accountSnapshotLastObserved} — ${formatted.limitText}`;
+      const windowName = formatted.limit.windowMinutes === 7 * 24 * 60
+        ? copy.weeklyWindow
+        : formatted.limit.windowMinutes === 5 * 60
+          ? copy.fiveHourWindow
+          : formatted.limit.label;
+      let resetText = '';
+      if (formatted.limit.resetsAt !== undefined) {
+        try {
+          const reset = new Intl.DateTimeFormat(
+            I18n.getLocale(),
+            I18n.dateFormatOptions({
+              year: 'numeric',
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            }),
+          ).format(new Date(formatted.limit.resetsAt));
+          resetText = ` · ${copy.resets}: ${reset}`;
+        } catch {
+          resetText = '';
+        }
+      }
+      this.quotaItem.tooltip =
+        `${windowName}: ${copy.remaining} ${Math.round(formatted.limit.remainingPercent)}% ` +
+        `(${copy.used} ${Math.round(formatted.limit.usedPercent)}%)${resetText}\n\n` +
+        `${copy.accountSnapshotLastObserved}`;
       this.quotaItem.backgroundColor = undefined;
       this.quotaItem.show();
     } else {

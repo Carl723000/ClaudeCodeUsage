@@ -512,6 +512,40 @@ function alignedResetAt(resetAt: number, anchorResetAt: number): number | null {
 }
 
 /**
+ * A quota sample can outlive the seven-day interval it describes. When that
+ * is the only evidence left after a reset, falling back to Monday buckets would
+ * put the new usage in a different period from the provider's actual window.
+ * Recover the reset as an alignment hint only when every observed Codex reset
+ * sits on the same seven-day sequence. This helper never supplies a quota
+ * observation, so it cannot enable an allowance estimate on its own.
+ */
+function latestKnownCodexResetAnchor(
+  observations: WeeklyQuotaObservation[],
+  now: number,
+): number | undefined {
+  const candidates = observations
+    .filter((item) =>
+      item.provider === 'codex' &&
+      Number.isFinite(item.observedAt) &&
+      item.observedAt <= now &&
+      Number.isFinite(item.resetAt) &&
+      item.resetAt > 0,
+    )
+    .sort((left, right) =>
+      right.observedAt - left.observedAt || right.resetAt - left.resetAt,
+    );
+  const latest = candidates[0];
+  if (!latest) {
+    return undefined;
+  }
+  return candidates.every((item) =>
+    alignedResetAt(item.resetAt, latest.resetAt) !== null,
+  )
+    ? latest.resetAt
+    : undefined;
+}
+
+/**
  * Builds the dashboard's one authoritative weekly timeline. Token-log usage is
  * first assigned to non-overlapping [start, reset) buckets exactly once. Quota
  * observations may then decorate their matching bucket with utilization and a
@@ -557,7 +591,16 @@ export function buildWeeklyValueTimeline(
       right.latest.observedAt - left.latest.observedAt ||
       right.cluster.resetAt - left.cluster.resetAt,
     )[0];
-  const anchorResetAt = anchorEntry?.cluster.resetAt ?? options.anchorResetAt;
+  // If the newest reset sample is older than its own seven-day window, it is
+  // still useful for grouping usage after a rollover. It remains alignment-only
+  // until a valid in-window sample exists, so no allowance is inferred here.
+  const staleResetAnchor = !anchorEntry &&
+    options.anchorResetAt === undefined &&
+    provider === 'codex'
+    ? latestKnownCodexResetAnchor(normalizedObservations, now)
+    : undefined;
+  const anchorResetAt = anchorEntry?.cluster.resetAt ??
+    options.anchorResetAt ?? staleResetAnchor;
   const limit = Math.max(1, Math.floor(options.limit ?? 12));
   let history = buildWeeklyUsageHistory(provider, inputs.usage, {
     now,
