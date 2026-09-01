@@ -831,6 +831,28 @@ test('all-time, monthly, and behavior views stay provider-native', () => {
   assert.equal(view.behaviorScopes.allTime.childFreshShare, view.behavior.childFreshShare);
 });
 
+test('v2.3.1 acceptance fixture keeps non-negative ranges monotonic and reconciled', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const monthProcessed = view.monthly.reduce(
+    (sum, row) => sum + row.total.processed,
+    0,
+  );
+  const allDailyProcessed = view.daily.reduce(
+    (sum, row) => sum + row.total.processed,
+    0,
+  );
+
+  assert.equal(view.today.total.processed >= 0, true);
+  assert.equal(view.today.total.processed <= view.last30Days.total.processed, true);
+  assert.equal(view.last30Days.total.processed <= view.allTime.total.processed, true);
+  assert.equal(monthProcessed, view.allTime.total.processed);
+  assert.equal(allDailyProcessed, view.allTime.total.processed);
+  assert.deepEqual(
+    view.monthly.map((row) => row.period),
+    [...view.monthly.map((row) => row.period)].sort(),
+  );
+});
+
 test('behavior exposes patch and tool call proxies without file or command claims', () => {
   const snapshot = snapshotFixture();
   snapshot.files[0].structural = {
