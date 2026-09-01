@@ -15,10 +15,16 @@ export const CLAUDE_ORANGE_SCALE = ['#ebedf0', '#fadcc9', '#f0aa82', '#e07d4f', 
 export interface HeatmapSvgOptions {
   metric?: HeatMetric; // default 'tokens'
   weeks?: number; // trailing weeks to show (default 53, GitHub-like)
+  startDateISO?: string; // explicit inclusive start for deterministic custom ranges
   endDateISO?: string; // last day to show (default today)
   title?: string; // override the auto summary heading
+  subtitle?: string; // optional aggregate breakdown below the heading
+  footerNote?: string; // optional semantic disclaimer above the watermark row
   watermark?: string; // bottom-left source note (default "Made with Claude Code Usage")
   scale?: string[]; // 5 colours, empty→max (default CLAUDE_ORANGE_SCALE)
+  minWidth?: number; // optional card width floor for short date ranges
+  ariaLabel?: string;
+  tooltip?: (dateISO: string, usage: DayUsage, value: number, metric: HeatMetric) => string;
 }
 
 function valueOf(u: DayUsage, metric: HeatMetric): number {
@@ -134,7 +140,7 @@ export function renderHeatmapSvg(daily: Record<string, DayUsage>, opts: HeatmapS
   // Trailing window: full weeks ending on the Saturday of today's week, cells
   // only up to today (no future) — GitHub's default contribution view.
   const gridEndSat = addDays(today, 6 - weekdayOf(today));
-  const startISO = addDays(gridEndSat, -(weeks * 7 - 1)); // a Sunday, `weeks` back
+  const startISO = opts.startDateISO ?? addDays(gridEndSat, -(weeks * 7 - 1)); // a Sunday, `weeks` back
   const grid = buildContributionGrid(daily, startISO, today, metric);
 
   // Auto summary heading, e.g. "5.3B tokens in Claude Code · 2026".
@@ -152,29 +158,34 @@ export function renderHeatmapSvg(daily: Record<string, DayUsage>, opts: HeatmapS
   const gap = 3;
   const step = cell + gap;
   const padL = 38; // weekday labels
-  const titleH = 24;
+  const titleH = opts.subtitle ? 43 : 24;
   const monthH = 18;
   const padT = titleH + monthH;
   const gridW = grid.columns * step;
   const gridH = 7 * step;
-  const footerH = 30;
-  const width = padL + gridW + 10;
+  const footerH = opts.footerNote ? 48 : 30;
+  const width = Math.max(padL + gridW + 10, Math.max(0, opts.minWidth ?? 0));
   const height = padT + gridH + footerH;
 
   const parts: string[] = [];
   parts.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">`
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="${esc(opts.ariaLabel ?? summary)}">`
   );
   parts.push(`<rect width="${width}" height="${height}" fill="#ffffff"/>`);
   parts.push(`<text x="${padL}" y="16" font-size="15" font-weight="600" fill="#24292f">${esc(summary)}</text>`);
+  if (opts.subtitle) {
+    parts.push(`<text x="${padL}" y="34" font-size="11" fill="#57606a">${esc(opts.subtitle)}</text>`);
+  }
 
   // Cells with GitHub-style tooltips: "1.2M tokens on June 18th".
   for (const c of grid.cells) {
     const x = padL + c.col * step;
     const y = padT + c.row * step;
     const when = longDate(c.dateISO);
-    const tip =
-      c.value <= 0
+    const usage = daily[c.dateISO] ?? { tokens: 0, cost: 0, sessions: 0 };
+    const tip = opts.tooltip
+      ? opts.tooltip(c.dateISO, usage, c.value, metric)
+      : c.value <= 0
         ? `No ${noun || 'usage'} on ${when}`
         : metric === 'cost'
           ? `$${compactNum(c.value)} on ${when}`
@@ -203,7 +214,11 @@ export function renderHeatmapSvg(daily: Record<string, DayUsage>, opts: HeatmapS
     parts.push(`<text x="0" y="${padT + row * step + cell - 1}" font-size="11" fill="#57606a">${label}</text>`);
   }
 
-  const footY = padT + gridH + 18;
+  const footY = padT + gridH + (opts.footerNote ? 36 : 18);
+
+  if (opts.footerNote) {
+    parts.push(`<text x="${padL}" y="${padT + gridH + 15}" font-size="10" fill="#6e7781">${esc(opts.footerNote)}</text>`);
+  }
 
   // Watermark, bottom-left (an orange dot + source, to point back at the tool).
   parts.push(`<rect x="${padL}" y="${footY - 8}" width="9" height="9" rx="2" ry="2" fill="${scale[3]}"/>`);

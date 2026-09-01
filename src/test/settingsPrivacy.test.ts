@@ -290,7 +290,11 @@ test('the tracked bilingual data contract covers quota, retention, clearing, and
       '512',
       'ccu.heatmapRepo',
       'ccu.heatmapPath',
+      'ccu.combinedHeatmap.title',
+      'ccu.combinedHeatmap.range',
+      'ccu.combinedHeatmap.privacyPreview',
       'Codex processed',
+      'public_repo',
     ]) {
       assert.match(document, new RegExp(required.replace('.', '\\.')));
     }
@@ -300,4 +304,34 @@ test('the tracked bilingual data contract covers quota, retention, clearing, and
     assert.match(document, /clear|清除/i);
     assert.match(document, /remote|network|远程|网络/i);
   }
+});
+
+test('GitHub heatmap publication is public-only, exact-target confirmed, and persists destinations after success', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'extension.ts'), 'utf8');
+  const start = source.indexOf('private async publishHeatmapToGitHub');
+  const end = source.indexOf('/** Export a one-page usage share card', start);
+  const publish = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(publish, /GITHUB_PUBLIC_REPO_SCOPE/);
+  assert.doesNotMatch(publish, /\['repo'\]/);
+  assert.match(publish, /probePublicGitHubPublishTarget/);
+  assert.match(publish, /githubPublishConfirmationDetail/);
+  assert.match(publish, /Confirm the exact GitHub write/);
+  const write = publish.indexOf('publishPublicGitHubFile');
+  const persistRepo = publish.indexOf("globalState.update('ccu.heatmapRepo'");
+  const persistPath = publish.indexOf("globalState.update('ccu.heatmapPath'");
+  assert.ok(write >= 0 && persistRepo > write && persistPath > write);
+});
+
+test('reset sharing preferences clears only the remembered GitHub destination', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'webview.ts'), 'utf8');
+  const start = source.indexOf("case 'resetCombinedHeatmapPreferences'");
+  const end = source.indexOf("case 'buildShareCard'", start);
+  const reset = source.slice(start, end);
+
+  assert.ok(start >= 0 && end > start);
+  assert.match(reset, /globalState\.update\('ccu\.heatmapRepo', undefined\)/);
+  assert.match(reset, /globalState\.update\('ccu\.heatmapPath', undefined\)/);
+  assert.doesNotMatch(reset, /quota|index|secret|token|cookie|log/i);
 });

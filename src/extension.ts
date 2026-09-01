@@ -17,7 +17,14 @@ import {
 import { StatusBarManager } from './statusBar';
 import { UsageWebviewProvider } from './webview';
 import { I18n } from './i18n';
-import { resolveTimeZone } from './dateKeys';
+import { dayKeyInZone, resolveTimeZone } from './dateKeys';
+import {
+  GITHUB_PUBLIC_REPO_SCOPE,
+  createGitHubPublishPlan,
+  githubPublishConfirmationDetail,
+  probePublicGitHubPublishTarget,
+  publishPublicGitHubFile,
+} from './githubHeatmapPublish';
 import { fetchLatestPricing } from './pricing';
 import { ClaudeApiClient } from './claudeApiClient';
 import {
@@ -693,8 +700,11 @@ export class ClaudeCodeUsageExtension {
       vscode.window.showWarningMessage(I18n.t.popup.noDataMessage);
       return;
     }
-    const daily = ClaudeDataLoader.getDailyUsageMap(records, I18n.getTimezone());
-    const svg = renderHeatmapSvg(daily);
+    const timeZone = I18n.getTimezone();
+    const daily = ClaudeDataLoader.getDailyUsageMap(records, timeZone);
+    const svg = renderHeatmapSvg(daily, {
+      endDateISO: dayKeyInZone(new Date(), timeZone),
+    });
     const uri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(os.homedir(), 'claude-code-heatmap.svg')),
       filters: { 'SVG image': ['svg'] },
@@ -755,9 +765,12 @@ export class ClaudeCodeUsageExtension {
     });
   }
 
-  /** Publish the token heatmap SVG to a GitHub repo (e.g. the user's profile
-   * repo, so it shows on their GitHub home) using VS Code's built-in GitHub
-   * auth — no PAT handling. Creates or updates the file via the Contents API. */
+  /**
+   * Publish one aggregate SVG to a verified public repository. v2.3.1 no
+   * longer requests the broad `repo` scope: private targets fail closed and
+   * retain the local SVG + Markdown path. A second modal names the exact
+   * owner/repo/branch/path and create-vs-overwrite action before any PUT.
+   */
   private async publishHeatmapToGitHub(): Promise<void> {
     const records = this.cache.records;
     if (!records || records.length === 0) {
@@ -765,15 +778,13 @@ export class ClaudeCodeUsageExtension {
       return;
     }
 
-    // This is an authorization + write action, not a local export — make that
-    // explicit and get consent before touching GitHub.
-    const proceed = 'Sign in & publish';
+    const proceed = 'Continue with public-only access';
     const ok = await vscode.window.showWarningMessage(
-      'Publish the token heatmap to GitHub?',
+      'Publish the token heatmap to a public GitHub repository?',
       {
         modal: true,
         detail:
-          'This signs you in to GitHub (VS Code asks once) and commits a single SVG image to a repo you choose (default: your profile repo, so it shows on your GitHub home). Only the aggregate heatmap is uploaded — never prompts, file paths, or session ids. You can delete it from the repo anytime.',
+          'VS Code will request the narrower public_repo permission. Private repositories are intentionally unsupported; use local SVG export there. The plugin will read repository metadata and then show the exact public repository, branch, path, create/overwrite action, and payload size before writing.',
       },
       proceed
     );
@@ -783,8 +794,11 @@ export class ClaudeCodeUsageExtension {
 
     let session: vscode.AuthenticationSession | undefined;
     try {
-      // 'repo' so private profile repos work too; VS Code shows its own consent.
-      session = await vscode.authentication.getSession('github', ['repo'], { createIfNone: true });
+      session = await vscode.authentication.getSession(
+        'github',
+        [GITHUB_PUBLIC_REPO_SCOPE],
+        { createIfNone: true },
+      );
     } catch {
       vscode.window.showErrorMessage('GitHub sign-in was cancelled.');
       return;
@@ -796,9 +810,16 @@ export class ClaudeCodeUsageExtension {
     const login = session.account.label.split(/\s/)[0];
 
     const repo = await vscode.window.showInputBox({
-      prompt: 'Target repo (owner/name). Your profile repo (name = username) shows the heatmap on your GitHub home page.',
+      prompt: 'Public target repository (owner/name). Private repositories use local SVG export.',
       value: this.context.globalState.get<string>('ccu.heatmapRepo') || `${login}/${login}`,
-      validateInput: (v) => (/^[^/\s]+\/[^/\s]+$/.test(v.trim()) ? undefined : 'Use the form owner/name'),
+      validateInput: (value) => {
+        try {
+          createGitHubPublishPlan(value, 'heatmap.svg');
+          return undefined;
+        } catch (error) {
+          return error instanceof Error ? error.message : 'Use the form owner/name';
+        }
+      },
     });
     if (!repo) {
       return;
@@ -811,58 +832,70 @@ export class ClaudeCodeUsageExtension {
     if (!filePath) {
       return;
     }
-    await this.context.globalState.update('ccu.heatmapRepo', repo.trim());
-    await this.context.globalState.update('ccu.heatmapPath', filePath.trim());
-
-    const [owner, name] = repo.trim().split('/');
-    const svg = renderHeatmapSvg(ClaudeDataLoader.getDailyUsageMap(records, I18n.getTimezone()));
+    let plan;
+    try {
+      plan = createGitHubPublishPlan(repo, filePath);
+    } catch (error) {
+      vscode.window.showErrorMessage(error instanceof Error ? error.message : String(error));
+      return;
+    }
+    const timeZone = I18n.getTimezone();
+    const svg = renderHeatmapSvg(
+      ClaudeDataLoader.getDailyUsageMap(records, timeZone),
+      { endDateISO: dayKeyInZone(new Date(), timeZone) },
+    );
     const contentB64 = Buffer.from(svg, 'utf8').toString('base64');
-    const apiPath = `/repos/${owner}/${name}/contents/${filePath.trim().split('/').map(encodeURIComponent).join('/')}`;
+    const request = (
+      method: 'GET' | 'PUT',
+      apiPath: string,
+      body?: unknown,
+    ) => this.githubApi(method, apiPath, token, body);
+
+    let preview;
+    try {
+      preview = await probePublicGitHubPublishTarget(plan, request);
+    } catch (error) {
+      vscode.window.showErrorMessage(`Heatmap publish unavailable: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
+
+    const exactProceed = preview.action === 'update'
+      ? 'Overwrite exactly this file'
+      : 'Create exactly this file';
+    const exact = await vscode.window.showWarningMessage(
+      'Confirm the exact GitHub write',
+      {
+        modal: true,
+        detail: githubPublishConfirmationDetail(preview, Buffer.byteLength(svg, 'utf8')),
+      },
+      exactProceed,
+    );
+    if (exact !== exactProceed) {
+      return;
+    }
 
     try {
       await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Publishing heatmap to GitHub…' },
-        async () => {
-          // Look up the current sha (needed to update an existing file).
-          let sha: string | undefined;
-          const getRes = await this.githubApi('GET', apiPath, token);
-          if (getRes.status === 200) {
-            sha = JSON.parse(getRes.body).sha as string;
-          } else if (getRes.status !== 404) {
-            throw new Error(this.githubError(getRes));
-          }
-          const putRes = await this.githubApi('PUT', apiPath, token, {
-            message: 'Update Claude Code usage heatmap',
-            content: contentB64,
-            sha,
-          });
-          if (putRes.status !== 200 && putRes.status !== 201) {
-            throw new Error(this.githubError(putRes));
-          }
-        }
+        () => publishPublicGitHubFile(preview, contentB64, request),
       );
     } catch (e) {
       vscode.window.showErrorMessage(`Heatmap publish failed: ${(e as Error).message}`);
       return;
     }
 
+    // Destination strings are convenience preferences, not credentials. Save
+    // them only after the exact, confirmed write succeeds.
+    await this.context.globalState.update('ccu.heatmapRepo', `${preview.owner}/${preview.repository}`);
+    await this.context.globalState.update('ccu.heatmapPath', preview.filePath);
+
     const view = 'View on GitHub';
     const pick = await vscode.window.showInformationMessage(
-      `Heatmap published to ${repo.trim()}.`,
+      `Heatmap published to ${preview.owner}/${preview.repository}.`,
       view
     );
     if (pick === view) {
-      void vscode.env.openExternal(vscode.Uri.parse(`https://github.com/${owner}/${name}/blob/HEAD/${filePath.trim()}`));
-    }
-  }
-
-  /** Pull a human message out of a GitHub error response. */
-  private githubError(res: { status: number; body: string }): string {
-    try {
-      const msg = JSON.parse(res.body).message;
-      return `GitHub ${res.status}: ${msg || res.body.slice(0, 120)}`;
-    } catch {
-      return `GitHub ${res.status}`;
+      void vscode.env.openExternal(vscode.Uri.parse(preview.browserUrl));
     }
   }
 

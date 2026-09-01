@@ -41,6 +41,7 @@ const server = createServer(async (request, response) => {
       'advice-effectiveness',
       'advice-effectiveness-disabled',
       'advice-optimizer',
+      'combined-heatmap',
     ].includes(requestedFixture)
       ? requestedFixture
       : 'default';

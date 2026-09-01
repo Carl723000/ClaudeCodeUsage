@@ -216,6 +216,36 @@ function addClaudeData(provider, { fixture = 'default', enableContent = false } 
   const now = new Date(CODEX_WEBVIEW_NOW);
   const completedWeeklyFixture = fixture === 'weekly-claude-completed';
   const completedResetAt = CODEX_WEBVIEW_NOW - 24 * 60 * 60_000;
+  const combinedHeatmapRecords = fixture === 'combined-heatmap'
+    ? [
+        {
+          timestamp: '2026-07-19T10:00:00.000Z',
+          _sessionId: 'privacy-safe-share-fixture-a',
+          message: {
+            model: 'claude-sonnet-4-5-20250929',
+            usage: {
+              input_tokens: 120_000,
+              output_tokens: 30_000,
+              cache_creation_input_tokens: 40_000,
+              cache_read_input_tokens: 310_000,
+            },
+          },
+        },
+        {
+          timestamp: '2026-07-20T08:00:00.000Z',
+          _sessionId: 'privacy-safe-share-fixture-b',
+          message: {
+            model: 'claude-sonnet-4-5-20250929',
+            usage: {
+              input_tokens: 180_000,
+              output_tokens: 45_000,
+              cache_creation_input_tokens: 55_000,
+              cache_read_input_tokens: 420_000,
+            },
+          },
+        },
+      ]
+    : [];
   const weeklyRecords = completedWeeklyFixture
     ? [{
         timestamp: new Date(completedResetAt - 2 * 60 * 60_000).toISOString(),
@@ -229,7 +259,7 @@ function addClaudeData(provider, { fixture = 'default', enableContent = false } 
           },
         },
       }]
-    : [];
+    : combinedHeatmapRecords;
   provider.updateData(
     { ...today, sessionStart: new Date(now.getTime() - 3_600_000), sessionEnd: now },
     today,

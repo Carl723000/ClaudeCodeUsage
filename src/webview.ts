@@ -11,6 +11,18 @@ import {
 } from './settings';
 import { buildResumeCommand, isUsableCwd, isValidSessionId, isUnderDir } from './sessionResume';
 import { renderHeatmapSvg } from './heatmapSvg';
+import {
+  CombinedHeatmapRange,
+  claudeDailyPointsFromUsage,
+  codexDailyPointsFromUsage,
+  combinedHeatmapFilename,
+  combinedHeatmapMarkdown,
+  mergeCombinedDailyUsage,
+  normalizeCombinedHeatmapRange,
+  sanitizeCombinedHeatmapTitle,
+  selectCombinedHeatmapWindow,
+} from './combinedHeatmap';
+import { renderCombinedHeatmapSvg } from './combinedHeatmapSvg';
 import { DEFAULT_SECTIONS, ShareSections, buildShareCardData, shareCardFilename } from './shareCard';
 import { renderShareCardSvg, ShareCardTheme } from './shareCardSvg';
 import { parseConversation } from './conversationLog';
@@ -102,6 +114,7 @@ import {
   UsageData,
   WorkflowUsage,
 } from './types';
+import { dayKeyInZone } from './dateKeys';
 
 interface CodexRenderProgress {
   scannedFiles: number;
@@ -112,6 +125,114 @@ interface CodexRenderProgress {
 }
 
 const OPTIMIZER_FEEDBACK_RECOMMENDATION_ID = 'recommendation-optimizer-result-v1';
+
+interface CombinedHeatmapUiCopy {
+  panelTitle: string;
+  description: string;
+  defaultTitle: string;
+  titleLabel: string;
+  rangeLabel: string;
+  last30: string;
+  last90: string;
+  year: string;
+  privacyToggle: string;
+  privacyIncludes: string;
+  privacyExcludes: string;
+  updatePreview: string;
+  exportSvg: string;
+  copyMarkdown: string;
+  resetSharing: string;
+  resetComplete: string;
+  resetFailed: string;
+  markdownLabel: string;
+  noData: string;
+  activityDisclaimer: string;
+  combinedLabel: string;
+  processedTokensLabel: string;
+  svgFooterNote: string;
+}
+
+function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
+  if (locale === 'zh-CN') {
+    return {
+      panelTitle: '综合活动热力图与分享卡',
+      description: '按本地自然日合并 Claude 与 Codex 的已处理 Token 活动量；默认强度不是成本。',
+      defaultTitle: 'Claude + Codex 本地活动',
+      titleLabel: '分享标题',
+      rangeLabel: '时间范围',
+      last30: '最近 30 天',
+      last90: '最近 90 天',
+      year: '最近一年',
+      privacyToggle: '显示隐私预览',
+      privacyIncludes: '导出包含：自定义标题、日期范围，以及 Claude、Codex 和综合的每日已处理 Token 汇总。',
+      privacyExcludes: '明确排除：账号、项目、线程标题、本地路径和日志内容。',
+      updatePreview: '更新预览',
+      exportSvg: '导出 SVG…',
+      copyMarkdown: '复制 Markdown',
+      resetSharing: '重置分享偏好',
+      resetComplete: '分享偏好已重置。',
+      resetFailed: '无法完全重置分享偏好。',
+      markdownLabel: 'README / Markdown 引用片段',
+      noData: '所选时间范围内尚无本地活动。',
+      activityDisclaimer: '综合 Token 仅表示本地活动量，不代表生产率、订阅账单或两个 provider 的能力等价。',
+      combinedLabel: '综合',
+      processedTokensLabel: '已处理 Token',
+      svgFooterNote: '本地活动量 · 不代表生产率、账单或 provider 能力等价',
+    };
+  }
+  if (locale === 'zh-TW') {
+    return {
+      panelTitle: '綜合活動熱力圖與分享卡',
+      description: '依本機自然日合併 Claude 與 Codex 的已處理 Token 活動量；預設強度不是成本。',
+      defaultTitle: 'Claude + Codex 本機活動',
+      titleLabel: '分享標題',
+      rangeLabel: '時間範圍',
+      last30: '最近 30 天',
+      last90: '最近 90 天',
+      year: '最近一年',
+      privacyToggle: '顯示隱私預覽',
+      privacyIncludes: '匯出包含：自訂標題、日期範圍，以及 Claude、Codex 和綜合的每日已處理 Token 彙總。',
+      privacyExcludes: '明確排除：帳號、專案、執行緒標題、本機路徑和記錄內容。',
+      updatePreview: '更新預覽',
+      exportSvg: '匯出 SVG…',
+      copyMarkdown: '複製 Markdown',
+      resetSharing: '重設分享偏好',
+      resetComplete: '分享偏好已重設。',
+      resetFailed: '無法完全重設分享偏好。',
+      markdownLabel: 'README / Markdown 引用片段',
+      noData: '所選時間範圍內尚無本機活動。',
+      activityDisclaimer: '綜合 Token 僅表示本機活動量，不代表生產力、訂閱帳單或兩個 provider 的能力等價。',
+      combinedLabel: '綜合',
+      processedTokensLabel: '已處理 Token',
+      svgFooterNote: '本機活動量 · 不代表生產力、帳單或 provider 能力等價',
+    };
+  }
+  return {
+    panelTitle: 'Combined activity heatmap and share card',
+    description: 'Combines Claude and Codex processed-token activity by local calendar day. Cost is not the default intensity.',
+    defaultTitle: 'Claude + Codex local activity',
+    titleLabel: 'Share title',
+    rangeLabel: 'Date range',
+    last30: 'Last 30 days',
+    last90: 'Last 90 days',
+    year: 'Last year',
+    privacyToggle: 'Show privacy preview',
+    privacyIncludes: 'Export includes: the custom title, date range, and daily aggregate Claude, Codex, and combined processed-token totals.',
+    privacyExcludes: 'Explicitly excluded: accounts, projects, thread titles, local paths, and log content.',
+    updatePreview: 'Update preview',
+    exportSvg: 'Export SVG…',
+    copyMarkdown: 'Copy Markdown',
+    resetSharing: 'Reset sharing preferences',
+    resetComplete: 'Sharing preferences reset.',
+    resetFailed: 'Could not fully reset sharing preferences.',
+    markdownLabel: 'README / Markdown snippet',
+    noData: 'No local activity is available in the selected range yet.',
+    activityDisclaimer: 'Combined tokens describe local activity volume, not productivity, subscription billing, or provider capability equivalence.',
+    combinedLabel: 'Combined',
+    processedTokensLabel: 'processed tokens',
+    svgFooterNote: 'Local activity volume · not productivity, billing, or provider equivalence',
+  };
+}
 
 export class UsageWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
@@ -1044,6 +1165,86 @@ export class UsageWebviewProvider {
         case 'publishHeatmap':
           vscode.commands.executeCommand('claudeCodeUsage.publishHeatmapToGitHub');
           break;
+        case 'previewCombinedHeatmap': {
+          if (!this.panel) {
+            break;
+          }
+          try {
+            const artifact = this.buildCombinedHeatmapArtifact(message.range, message.title);
+            this.panel.webview.postMessage({
+              command: 'combinedHeatmapResult',
+              svg: artifact.svg,
+              markdown: artifact.markdown,
+              filename: artifact.filename,
+              hasData: artifact.hasData,
+            });
+          } catch (error) {
+            this.panel.webview.postMessage({
+              command: 'combinedHeatmapResult',
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          break;
+        }
+        case 'exportCombinedHeatmap': {
+          const copy = combinedHeatmapUiCopy(I18n.getLocale());
+          let artifact: ReturnType<UsageWebviewProvider['buildCombinedHeatmapArtifact']>;
+          try {
+            artifact = this.buildCombinedHeatmapArtifact(message.range, message.title);
+          } catch (error) {
+            vscode.window.showErrorMessage(`Combined heatmap export failed: ${error instanceof Error ? error.message : String(error)}`);
+            break;
+          }
+          if (!artifact.hasData) {
+            vscode.window.showWarningMessage(copy.noData);
+            break;
+          }
+          const uri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(path.join(os.homedir(), artifact.filename)),
+            filters: { 'SVG image': ['svg'] },
+            saveLabel: copy.exportSvg.replace('…', ''),
+          });
+          if (!uri) {
+            break;
+          }
+          try {
+            await vscode.workspace.fs.writeFile(uri, Buffer.from(artifact.svg, 'utf8'));
+            vscode.window.showInformationMessage(`Combined activity SVG exported: ${path.basename(uri.fsPath)}`);
+          } catch (error) {
+            vscode.window.showErrorMessage(`Combined heatmap export failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          break;
+        }
+        case 'copyCombinedHeatmapMarkdown': {
+          try {
+            const artifact = this.buildCombinedHeatmapArtifact(message.range, message.title);
+            await vscode.env.clipboard.writeText(artifact.markdown);
+            this.panel?.webview.postMessage({ command: 'combinedHeatmapMarkdownCopied', ok: true });
+          } catch (error) {
+            this.panel?.webview.postMessage({
+              command: 'combinedHeatmapMarkdownCopied',
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          break;
+        }
+        case 'resetCombinedHeatmapPreferences': {
+          try {
+            await this.context.globalState.update('ccu.heatmapRepo', undefined);
+            await this.context.globalState.update('ccu.heatmapPath', undefined);
+            this.panel?.webview.postMessage({
+              command: 'combinedHeatmapPreferencesReset',
+              ok: true,
+            });
+          } catch {
+            this.panel?.webview.postMessage({
+              command: 'combinedHeatmapPreferencesReset',
+              ok: false,
+            });
+          }
+          break;
+        }
         case 'buildShareCard': {
           // On-demand preview: build the SVG from the panel's config and send
           // it back for injection (no full re-render).
@@ -1649,6 +1850,89 @@ export class UsageWebviewProvider {
     return html + '</nav>';
   }
 
+  private buildCombinedHeatmapArtifact(rangeInput: unknown, titleInput: unknown): {
+    range: CombinedHeatmapRange;
+    title: string;
+    endDateISO: string;
+    filename: string;
+    markdown: string;
+    svg: string;
+    hasData: boolean;
+  } {
+    const copy = combinedHeatmapUiCopy(I18n.getLocale());
+    const range = normalizeCombinedHeatmapRange(rangeInput);
+    const title = sanitizeCombinedHeatmapTitle(titleInput, copy.defaultTitle);
+    const timeZone = I18n.getTimezone();
+    const endDateISO = dayKeyInZone(new Date(), timeZone);
+    if (!endDateISO) {
+      throw new Error('Could not resolve the configured timezone date.');
+    }
+    const claudeDaily = ClaudeDataLoader.getDailyUsageMap(this.allRecords ?? [], timeZone);
+    const daily = mergeCombinedDailyUsage(
+      claudeDailyPointsFromUsage(claudeDaily),
+      codexDailyPointsFromUsage(this.codexView?.daily ?? []),
+    );
+    const selected = selectCombinedHeatmapWindow(daily, range, endDateISO);
+    const filename = combinedHeatmapFilename(range, endDateISO);
+    return {
+      range,
+      title,
+      endDateISO,
+      filename,
+      markdown: combinedHeatmapMarkdown(filename, title),
+      svg: renderCombinedHeatmapSvg(daily, {
+        range,
+        endDateISO,
+        title,
+        labels: {
+          combined: copy.combinedLabel,
+          processedTokens: copy.processedTokensLabel,
+          footerNote: copy.svgFooterNote,
+        },
+      }),
+      hasData: selected.totals.combinedProcessed > 0,
+    };
+  }
+
+  private renderCombinedHeatmapPanel(): string {
+    const copy = combinedHeatmapUiCopy(I18n.getLocale());
+    const artifact = this.buildCombinedHeatmapArtifact('year', copy.defaultTitle);
+    const preview = artifact.hasData
+      ? artifact.svg
+      : '<p class="table-hint">' + this.escapeHtml(copy.noData) + '</p>';
+    return '<section class="heatmap-panel combined-heatmap-panel" aria-labelledby="combinedHeatmapHeading">' +
+      '<h2 id="combinedHeatmapHeading">' + this.escapeHtml(copy.panelTitle) + '</h2>' +
+      '<p class="model-details">' + this.escapeHtml(copy.description) + '</p>' +
+      '<div class="combined-heatmap-controls">' +
+      '<label class="sc-field" for="combinedHeatmapTitle"><span>' + this.escapeHtml(copy.titleLabel) + '</span>' +
+      '<input id="combinedHeatmapTitle" maxlength="80" value="' + this.escapeHtml(artifact.title) + '" data-default-value="' + this.escapeHtml(artifact.title) + '"></label>' +
+      '<label class="sc-field" for="combinedHeatmapRange"><span>' + this.escapeHtml(copy.rangeLabel) + '</span>' +
+      '<select id="combinedHeatmapRange" data-default-value="year">' +
+      '<option value="30d">' + this.escapeHtml(copy.last30) + '</option>' +
+      '<option value="90d">' + this.escapeHtml(copy.last90) + '</option>' +
+      '<option value="year" selected>' + this.escapeHtml(copy.year) + '</option>' +
+      '</select></label>' +
+      '</div>' +
+      '<label class="sc-check combined-privacy-toggle"><input type="checkbox" id="combinedHeatmapPrivacy" checked onchange="toggleCombinedHeatmapPrivacy(true)"> ' +
+      this.escapeHtml(copy.privacyToggle) + '</label>' +
+      '<div id="combinedHeatmapPrivacyPreview" class="combined-privacy-preview" role="note">' +
+      '<p>✓ ' + this.escapeHtml(copy.privacyIncludes) + '</p>' +
+      '<p>✓ ' + this.escapeHtml(copy.privacyExcludes) + '</p>' +
+      '</div>' +
+      '<p class="combined-activity-disclaimer">' + this.escapeHtml(copy.activityDisclaimer) + '</p>' +
+      '<div class="share-actions">' +
+      '<button class="btn-secondary btn-small" onclick="generateCombinedHeatmapPreview()">' + this.escapeHtml(copy.updatePreview) + '</button>' +
+      '<button class="btn-secondary btn-small" onclick="exportCombinedHeatmap()">' + this.escapeHtml(copy.exportSvg) + '</button>' +
+      '<button class="btn-secondary btn-small" onclick="copyCombinedHeatmapMarkdown()">' + this.escapeHtml(copy.copyMarkdown) + '</button>' +
+      '<button class="btn-secondary btn-small" onclick="resetCombinedHeatmapPreferences()">' + this.escapeHtml(copy.resetSharing) + '</button>' +
+      '</div>' +
+      '<label class="combined-markdown-label" for="combinedHeatmapMarkdown">' + this.escapeHtml(copy.markdownLabel) + '</label>' +
+      '<textarea id="combinedHeatmapMarkdown" class="combined-markdown" rows="2" readonly>' + this.escapeHtml(artifact.markdown) + '</textarea>' +
+      '<div id="combinedHeatmapStatus" class="table-hint" role="status" aria-live="polite"></div>' +
+      '<div id="combinedHeatmapPreview" class="heatmap-svg combined-heatmap-preview">' + preview + '</div>' +
+      '</section>';
+  }
+
   private renderCodexCompare(): string {
     const claude = this.allTimeData;
     const updatedAt = Date.now();
@@ -1656,14 +1940,12 @@ export class UsageWebviewProvider {
       I18n.getLocale(),
       I18n.getTimezone(),
     );
-    const codexTotals = (this.codexView?.projects ?? []).reduce(
-      (total, project) => ({
-        input: total.input + project.scope.total.input,
-        output: total.output + project.scope.total.output,
-        cache: total.cache + project.scope.total.cachedInput,
-      }),
-      { input: 0, output: 0, cache: 0 },
-    );
+    const codexAllTime = this.codexView?.allTime.total;
+    const codexTotals = {
+      input: codexAllTime?.input ?? 0,
+      output: codexAllTime?.output ?? 0,
+      cache: codexAllTime?.cachedInput ?? 0,
+    };
     const copy = I18n.t.providers.codex;
     const card = (
       label: string,
@@ -1679,7 +1961,8 @@ export class UsageWebviewProvider {
       '<span><span class="model-stat-label">' + this.escapeHtml(copy.cachedInput) + '</span><strong>' + I18n.formatNumber(cache) + '</strong></span>' +
       '<span><span class="model-stat-label">' + this.escapeHtml(copy.output) + '</span><strong>' + I18n.formatNumber(output) + '</strong></span>' +
       '</div></article>';
-    return '<section class="usage-summary">' +
+    return this.renderCombinedHeatmapPanel() +
+      '<section class="usage-summary">' +
       '<p class="model-details"><strong>' + this.escapeHtml(copy.indexedAllTime) + '</strong> · ' +
       this.escapeHtml(copy.updatedAt) + ': ' + this.escapeHtml(formatters.formatDateTime(updatedAt)) + '</p>' +
       '<div class="summary-grid">' +
@@ -7497,6 +7780,59 @@ export class UsageWebviewProvider {
       .heatmap-svg svg {
         display: block;
       }
+      .combined-heatmap-panel {
+        padding: var(--ccu-space-5);
+        border: 1px solid var(--ccu-border);
+        border-radius: var(--ccu-radius-lg);
+        background: var(--ccu-surface-raised);
+      }
+      .combined-heatmap-panel h2 {
+        margin-top: 0;
+      }
+      .combined-heatmap-controls {
+        display: grid;
+        grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr);
+        gap: var(--ccu-space-3);
+        margin: var(--ccu-space-4) 0 var(--ccu-space-3);
+      }
+      .combined-privacy-toggle {
+        width: fit-content;
+        margin-bottom: var(--ccu-space-2);
+      }
+      .combined-privacy-preview {
+        padding: var(--ccu-space-3);
+        border-left: 3px solid var(--vscode-testing-iconPassed, #2ea043);
+        border-radius: var(--ccu-radius-sm);
+        background: var(--ccu-surface-muted);
+      }
+      .combined-privacy-preview p {
+        margin: 3px 0;
+      }
+      .combined-activity-disclaimer {
+        color: var(--vscode-descriptionForeground);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .combined-markdown-label {
+        display: block;
+        margin: var(--ccu-space-3) 0 var(--ccu-space-1);
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .combined-markdown {
+        width: 100%;
+        min-height: 46px;
+        resize: vertical;
+        box-sizing: border-box;
+        font-family: var(--ccu-data-font);
+      }
+      .combined-heatmap-preview {
+        margin-top: var(--ccu-space-3);
+      }
+      .combined-heatmap-preview svg {
+        width: auto;
+        max-width: none;
+      }
 
       /* Clickable month bars in the all-time composition chart (drill to daily). */
       .hc-col-clickable {
@@ -8354,6 +8690,12 @@ export class UsageWebviewProvider {
         .tabs {
           margin-bottom: var(--ccu-space-4);
         }
+        .combined-heatmap-panel {
+          padding: var(--ccu-space-3);
+        }
+        .combined-heatmap-controls {
+          grid-template-columns: minmax(0, 1fr);
+        }
       }
       @media (prefers-reduced-motion: reduce) {
         *, *::before, *::after {
@@ -8551,6 +8893,7 @@ function restoreUi() {
   restoreChartMetrics();
   initializeChartDrilldowns();
   initializeStatusRegions();
+  restoreCombinedHeatmapConfig();
   restoreScrollPosition();
 }
 function ccuScrollStateKey() {
@@ -8593,6 +8936,7 @@ if (document.readyState === 'loading') {
 // that the original used in this script body).
 const __locale = ${JSON.stringify(I18n.getLocale())};
 const __tz = ${JSON.stringify(I18n.getTimezone())};
+const __combinedHeatmapCopy = ${JSON.stringify(combinedHeatmapUiCopy(I18n.getLocale()))};
 const __dateOpts = (extra) => {
   const opts = Object.assign({}, extra || {});
   if (__tz) opts.timeZone = __tz;
@@ -8643,6 +8987,88 @@ function exportHeatmap() {
 }
 function publishHeatmap() {
   vscode.postMessage({ command: 'publishHeatmap' });
+}
+function combinedHeatmapReadConfig() {
+  var title = document.getElementById('combinedHeatmapTitle');
+  var range = document.getElementById('combinedHeatmapRange');
+  var privacy = document.getElementById('combinedHeatmapPrivacy');
+  return {
+    title: title ? title.value : __combinedHeatmapCopy.defaultTitle,
+    range: range ? range.value : 'year',
+    privacyPreview: privacy ? privacy.checked : true
+  };
+}
+function combinedHeatmapSaveConfig(config) {
+  try {
+    localStorage.setItem('ccu.combinedHeatmap.title', config.title);
+    localStorage.setItem('ccu.combinedHeatmap.range', config.range);
+    localStorage.setItem('ccu.combinedHeatmap.privacyPreview', config.privacyPreview ? 'true' : 'false');
+  } catch (e) {}
+}
+function toggleCombinedHeatmapPrivacy(save) {
+  var config = combinedHeatmapReadConfig();
+  var preview = document.getElementById('combinedHeatmapPrivacyPreview');
+  if (preview) { preview.hidden = !config.privacyPreview; }
+  if (save) { combinedHeatmapSaveConfig(config); }
+}
+function restoreCombinedHeatmapConfig() {
+  var title = document.getElementById('combinedHeatmapTitle');
+  var range = document.getElementById('combinedHeatmapRange');
+  var privacy = document.getElementById('combinedHeatmapPrivacy');
+  if (!title || !range || !privacy) { return; }
+  var changed = false;
+  try {
+    var storedTitle = localStorage.getItem('ccu.combinedHeatmap.title');
+    var storedRange = localStorage.getItem('ccu.combinedHeatmap.range');
+    var storedPrivacy = localStorage.getItem('ccu.combinedHeatmap.privacyPreview');
+    if (storedTitle) { title.value = storedTitle; changed = storedTitle !== title.getAttribute('data-default-value'); }
+    if (storedRange === '30d' || storedRange === '90d' || storedRange === 'year') {
+      range.value = storedRange;
+      changed = changed || storedRange !== range.getAttribute('data-default-value');
+    }
+    if (storedPrivacy === 'false') { privacy.checked = false; }
+  } catch (e) {}
+  toggleCombinedHeatmapPrivacy(false);
+  if (changed) { generateCombinedHeatmapPreview(); }
+}
+function generateCombinedHeatmapPreview() {
+  var config = combinedHeatmapReadConfig();
+  combinedHeatmapSaveConfig(config);
+  var status = document.getElementById('combinedHeatmapStatus');
+  if (status) { status.textContent = __combinedHeatmapCopy.updatePreview + '…'; }
+  vscode.postMessage({ command: 'previewCombinedHeatmap', title: config.title, range: config.range });
+}
+function exportCombinedHeatmap() {
+  var config = combinedHeatmapReadConfig();
+  combinedHeatmapSaveConfig(config);
+  vscode.postMessage({ command: 'exportCombinedHeatmap', title: config.title, range: config.range });
+}
+function copyCombinedHeatmapMarkdown() {
+  var config = combinedHeatmapReadConfig();
+  combinedHeatmapSaveConfig(config);
+  vscode.postMessage({ command: 'copyCombinedHeatmapMarkdown', title: config.title, range: config.range });
+}
+function resetCombinedHeatmapPreferences() {
+  var title = document.getElementById('combinedHeatmapTitle');
+  var range = document.getElementById('combinedHeatmapRange');
+  var privacy = document.getElementById('combinedHeatmapPrivacy');
+  try {
+    localStorage.removeItem('ccu.combinedHeatmap.title');
+    localStorage.removeItem('ccu.combinedHeatmap.range');
+    localStorage.removeItem('ccu.combinedHeatmap.privacyPreview');
+  } catch (e) {}
+  if (title) { title.value = __combinedHeatmapCopy.defaultTitle; }
+  if (range) { range.value = 'year'; }
+  if (privacy) { privacy.checked = true; }
+  toggleCombinedHeatmapPrivacy(false);
+  var status = document.getElementById('combinedHeatmapStatus');
+  if (status) { status.textContent = __combinedHeatmapCopy.resetSharing + '…'; }
+  vscode.postMessage({
+    command: 'previewCombinedHeatmap',
+    title: __combinedHeatmapCopy.defaultTitle,
+    range: 'year'
+  });
+  vscode.postMessage({ command: 'resetCombinedHeatmapPreferences' });
 }
 function refresh() {
   vscode.postMessage({ command: 'refresh' });
@@ -9838,6 +10264,43 @@ window.addEventListener('message', async function(event) {
       prev.innerHTML = message.error
         ? '<p class="table-hint">Could not build the card: ' + message.error + '</p>'
         : (message.svg || '');
+    }
+  }
+
+  if (message.command === 'combinedHeatmapResult') {
+    var combinedPreview = document.getElementById('combinedHeatmapPreview');
+    var combinedMarkdown = document.getElementById('combinedHeatmapMarkdown');
+    var combinedStatus = document.getElementById('combinedHeatmapStatus');
+    if (message.error) {
+      if (combinedStatus) { combinedStatus.textContent = String(message.error); }
+    } else {
+      if (combinedPreview) {
+        if (message.hasData) {
+          combinedPreview.innerHTML = message.svg || '';
+        } else {
+          combinedPreview.textContent = __combinedHeatmapCopy.noData;
+        }
+      }
+      if (combinedMarkdown) { combinedMarkdown.value = message.markdown || ''; }
+      if (combinedStatus) { combinedStatus.textContent = ''; }
+    }
+  }
+
+  if (message.command === 'combinedHeatmapMarkdownCopied') {
+    var copyStatus = document.getElementById('combinedHeatmapStatus');
+    if (copyStatus) {
+      copyStatus.textContent = message.ok
+        ? __combinedHeatmapCopy.copyMarkdown + ' ✓'
+        : String(message.error || 'Could not copy Markdown.');
+    }
+  }
+
+  if (message.command === 'combinedHeatmapPreferencesReset') {
+    var resetStatus = document.getElementById('combinedHeatmapStatus');
+    if (resetStatus) {
+      resetStatus.textContent = message.ok
+        ? __combinedHeatmapCopy.resetComplete
+        : __combinedHeatmapCopy.resetFailed;
     }
   }
 

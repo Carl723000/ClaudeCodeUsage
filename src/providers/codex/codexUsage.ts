@@ -207,7 +207,10 @@ export interface CodexUsageView {
   weeklyValueInputs?: WeeklyValueInputs;
 }
 
-const MAX_DAILY_ROWS = 90;
+// Keep one complete GitHub-style share-card year plus a small boundary margin.
+// The existing table can scroll this bounded view, while Compare reuses it
+// directly instead of rescanning source logs or creating a second cache.
+const MAX_DAILY_ROWS = 370;
 const MAX_RECENT_THREAD_ROWS = 1_000;
 const HIGH_EFFORTS = new Set(['high', 'xhigh', 'max', 'ultra']);
 

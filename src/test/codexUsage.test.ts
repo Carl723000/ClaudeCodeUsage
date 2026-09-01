@@ -894,6 +894,45 @@ test('monthly rows remain chronological across a year boundary', () => {
   ]);
 });
 
+test('daily activity view retains a complete leap-year share window plus boundary margin', () => {
+  const snapshot = snapshotFixture();
+  const file = structuredClone(snapshot.files[0]);
+  const byDay = Object.fromEntries(
+    Array.from({ length: 371 }, (_, offset) => {
+      const day = new Date(NOW);
+      day.setUTCHours(0, 0, 0, 0);
+      day.setUTCDate(day.getUTCDate() - offset);
+      return [day.toISOString().slice(0, 10), {
+        inputTotal: 1,
+        cachedInput: 0,
+        outputTotal: 0,
+        reasoningOutput: 0,
+        sourceTotal: 1,
+      }];
+    }),
+  );
+  file.total = {
+    inputTotal: 371,
+    cachedInput: 0,
+    outputTotal: 0,
+    reasoningOutput: 0,
+    sourceTotal: 371,
+  };
+  file.byDay = byDay;
+  file.byModel = { 'gpt-5.6-sol': { ...file.total } };
+  file.byEffort = { high: { ...file.total } };
+  file.period = undefined;
+  snapshot.files = [file];
+  snapshot.total = { ...file.total };
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.daily.length, 370);
+  assert.equal(view.daily[0].day, '2026-07-20');
+  assert.equal(view.daily[view.daily.length - 1]?.day, '2025-07-16');
+  assert.equal(view.daily.some((row) => row.day === '2025-07-15'), false);
+});
+
 test('behavior exposes patch and tool call proxies without file or command claims', () => {
   const snapshot = snapshotFixture();
   snapshot.files[0].structural = {
