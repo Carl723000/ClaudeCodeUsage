@@ -78,6 +78,17 @@ test('single-provider and empty inputs remain valid instead of producing a blank
       },
     },
   );
+  assert.deepEqual(
+    mergeCombinedDailyUsage([], [{ dateISO: '2026-07-20', processed: 11 }]),
+    {
+      '2026-07-20': {
+        dateISO: '2026-07-20',
+        claudeProcessed: 0,
+        codexProcessed: 11,
+        combinedProcessed: 11,
+      },
+    },
+  );
   assert.deepEqual(mergeCombinedDailyUsage([], []), {});
 });
 
@@ -106,6 +117,30 @@ test('SVG is deterministic and tooltips disclose both provider totals and the co
   assert.match(first, /2026-07-20 · Claude: 1\.2M · Codex: 300K · Combined: 1\.5M processed tokens/);
   assert.match(first, /not productivity, billing, or provider equivalence/);
   assert.match(first, /role="img"/);
+});
+
+test('30d and 90d SVG windows render every date from non-Sunday starts in the correct weekday row', () => {
+  const endDateISO = '2026-07-22'; // Wednesday; 30d starts Tuesday, 90d starts Friday.
+  const thirty = renderCombinedHeatmapSvg({}, { range: '30d', endDateISO });
+  const ninety = renderCombinedHeatmapSvg({}, { range: '90d', endDateISO });
+
+  assert.equal((thirty.match(/processed tokens<\/title>/g) ?? []).length, 30);
+  assert.match(thirty, /<rect x="38" y="91"[^>]*><title>2026-06-23 · Claude: 0 · Codex: 0 · Combined: 0 processed tokens<\/title>/);
+  assert.equal((ninety.match(/processed tokens<\/title>/g) ?? []).length, 90);
+  assert.match(ninety, /<rect x="38" y="136"[^>]*><title>2026-04-24 · Claude: 0 · Codex: 0 · Combined: 0 processed tokens<\/title>/);
+});
+
+test('combined rendering zero-fills a date absent from both providers', () => {
+  const daily = mergeCombinedDailyUsage([], [
+    { dateISO: '2026-06-24', processed: 5 },
+  ]);
+  const svg = renderCombinedHeatmapSvg(daily, {
+    range: '30d',
+    endDateISO: '2026-07-22',
+  });
+
+  assert.match(svg, /2026-06-23 · Claude: 0 · Codex: 0 · Combined: 0 processed tokens/);
+  assert.match(svg, /2026-06-24 · Claude: 0 · Codex: 5 · Combined: 5 processed tokens/);
 });
 
 test('share artifact cannot serialize privacy canaries from extra source fields', () => {
