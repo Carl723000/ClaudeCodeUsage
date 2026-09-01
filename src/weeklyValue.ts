@@ -737,9 +737,8 @@ export function buildWeeklyValueTimeline(
       )
     );
     const observed = totals(seriesRows.filter((row) => row.timestamp <= latest.observedAt));
-    const seriesTotal = totals(seriesRows);
-    const seriesPricingCoverage = seriesTotal.totalTokens > 0
-      ? Math.min(1, seriesTotal.pricedTokens / seriesTotal.totalTokens)
+    const observedPricingCoverage = observed.totalTokens > 0
+      ? Math.min(1, observed.pricedTokens / observed.totalTokens)
       : 0;
     const observationGapMs = Math.max(
       0,
@@ -760,7 +759,7 @@ export function buildWeeklyValueTimeline(
       point.usageAvailable !== false &&
       latest.usedPercent >= MIN_EXTRAPOLATION_PERCENT &&
       observed.equivalentUsd > 0 &&
-      seriesPricingCoverage >= MIN_PRICED_SHARE
+      observedPricingCoverage >= MIN_PRICED_SHARE
     ) {
       fullEquivalentUsd = observed.equivalentUsd / (latest.usedPercent / 100);
       if (!Number.isFinite(fullEquivalentUsd) || fullEquivalentUsd <= 0) {
@@ -785,7 +784,7 @@ export function buildWeeklyValueTimeline(
         ? 'usage-only'
         : observationOverrun || approximateInference
           ? 'low'
-          : confidenceFor(point.current, observationGapMs, point.pricingCoverage),
+          : confidenceFor(point.current, observationGapMs, observedPricingCoverage),
       basis: 'quota-observation',
     };
   }).slice(0, limit);

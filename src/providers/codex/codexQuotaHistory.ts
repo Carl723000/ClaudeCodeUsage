@@ -43,8 +43,12 @@ function isAccountWideCodexLimit(snapshot: ProviderLimitSnapshot): boolean {
   const id = (snapshot.limitId ?? '').trim().toLowerCase();
   const name = (snapshot.limitName ?? '').trim().toLowerCase();
   // Spark has its own rolling allowance and must never be folded into the
-  // account-wide Codex estimate.
-  return id === 'codex' || name === 'codex' || (!id && !name);
+  // account-wide Codex estimate. An explicit ID is authoritative: a generic
+  // display name must not broaden a model-specific allowance.
+  if (id) {
+    return id === 'codex';
+  }
+  return name === 'codex' || !name;
 }
 
 function normalizeObservation(value: unknown): CodexQuotaObservation | undefined {

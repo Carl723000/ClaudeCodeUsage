@@ -15,12 +15,14 @@ function limit(
   usedPercent: number,
   options: {
     limitId?: string;
+    limitName?: string;
     windowMinutes?: number;
   } = {},
 ): ProviderLimitSnapshot {
   return {
     provider: 'codex',
     ...(options.limitId ? { limitId: options.limitId } : {}),
+    ...(options.limitName ? { limitName: options.limitName } : {}),
     observedAt,
     source: 'local-log',
     confidence: 'last-observed',
@@ -56,6 +58,15 @@ test('only account-wide weekly Codex windows become neutral reset evidence', () 
   assert.deepEqual(
     codexQuotaObservationsFromLimit(
       limit(observedAt, resetAt, 42, { limitId: 'codex-spark' }),
+    ),
+    [],
+  );
+  assert.deepEqual(
+    codexQuotaObservationsFromLimit(
+      limit(observedAt, resetAt, 42, {
+        limitId: 'codex-spark',
+        limitName: 'Codex',
+      }),
     ),
     [],
   );

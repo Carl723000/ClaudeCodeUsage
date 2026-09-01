@@ -293,6 +293,37 @@ function addBuckets(
     addTokens(current, tokens);
     target.set(key, current);
   }
+  const attributed = zeroTokens();
+  for (const [, tokens] of entries) {
+    addTokens(attributed, tokens);
+  }
+  const inputTotal = Math.max(0, fallback.inputTotal - attributed.inputTotal);
+  const outputTotal = Math.max(0, fallback.outputTotal - attributed.outputTotal);
+  const residual: ProviderTokenCounts = {
+    inputTotal,
+    cachedInput: Math.min(
+      inputTotal,
+      Math.max(0, (fallback.cachedInput ?? 0) - (attributed.cachedInput ?? 0)),
+    ),
+    outputTotal,
+    reasoningOutput: Math.min(
+      outputTotal,
+      Math.max(
+        0,
+        (fallback.reasoningOutput ?? 0) - (attributed.reasoningOutput ?? 0),
+      ),
+    ),
+  };
+  if (
+    residual.inputTotal > 0 ||
+    (residual.cachedInput ?? 0) > 0 ||
+    residual.outputTotal > 0 ||
+    (residual.reasoningOutput ?? 0) > 0
+  ) {
+    const unknown = target.get('unknown') ?? zeroTokens();
+    addTokens(unknown, residual);
+    target.set('unknown', unknown);
+  }
 }
 
 function bucketRows(
@@ -300,6 +331,14 @@ function bucketRows(
 ): Array<{ key: string; totals: CodexMetricTotals }> {
   return [...buckets.entries()]
     .map(([key, tokens]) => ({ key, totals: metrics(tokens) }))
+    .filter(({ totals }) =>
+      totals.processed > 0 ||
+      totals.fresh > 0 ||
+      totals.input > 0 ||
+      totals.cachedInput > 0 ||
+      totals.output > 0 ||
+      totals.reasoning > 0,
+    )
     .sort(
       (left, right) =>
         right.totals.processed - left.totals.processed ||
@@ -515,10 +554,15 @@ function observedAt(file: CodexFileAggregate): number {
 function sortedBucketKeys(
   buckets: Record<string, ProviderTokenCounts>,
 ): string[] {
-  const rows = Object.entries(buckets);
-  if (rows.length === 0) {
+  const entries = Object.entries(buckets);
+  if (entries.length === 0) {
     return ['unknown'];
   }
+  const rows = entries.filter(([, tokens]) =>
+    processedTokens(tokens) > 0 ||
+    (tokens.cachedInput ?? 0) > 0 ||
+    (tokens.reasoningOutput ?? 0) > 0,
+  );
   return rows
     .sort(
       ([leftKey, left], [rightKey, right]) =>

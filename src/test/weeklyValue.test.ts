@@ -109,6 +109,32 @@ test('tiny utilization and poor price coverage do not manufacture a full allowan
   assert.equal(partialPricing[0].fullEquivalentUsd, null);
 });
 
+test('pricing coverage after the observation cannot qualify an underpriced prefix', () => {
+  const points = buildWeeklyValueTimeline('codex', {
+    observations: [observation({ usedPercent: 50 })],
+    usage: [
+      {
+        timestamp: RESET - 2 * HOUR,
+        equivalentUsd: 1,
+        pricedTokens: 1,
+        totalTokens: 1_000,
+      },
+      {
+        timestamp: RESET - 30 * 60 * 1000,
+        equivalentUsd: 99,
+        pricedTokens: 9_000,
+        totalTokens: 9_000,
+      },
+    ],
+  }, { now: RESET + HOUR });
+
+  assert.ok(points[0].pricingCoverage > 0.8);
+  assert.equal(points[0].utilizationPercent, 50);
+  assert.equal(points[0].fullEquivalentUsd, null);
+  assert.equal(points[0].unusedEquivalentUsd, null);
+  assert.equal(points[0].confidence, 'usage-only');
+});
+
 test('source keys keep overlapping Codex account windows from sharing usage', () => {
   const points = buildWeeklyValueTrend({
     observations: [

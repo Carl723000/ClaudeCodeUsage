@@ -520,6 +520,61 @@ test('provider snapshots promote exact period slices for scoped consumers', asyn
   }
 });
 
+test('a delayed post-reset current poll does not hide cached pre-reset evidence', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-quota-rollover-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const index = duplicateIndex(false);
+    const file = index.files['active-key'];
+    const resetAt = Date.parse('2026-08-31T03:00:00.000Z');
+    file.limits = {
+      codex: {
+        provider: 'codex',
+        limitId: 'codex',
+        observedAt: resetAt + 30 * 60 * 1000,
+        source: 'local-log',
+        confidence: 'last-observed',
+        windows: [{
+          label: 'secondary',
+          usedPercent: 1,
+          windowMinutes: 7 * 24 * 60,
+          resetsAt: resetAt,
+        }],
+      },
+    };
+    index.quotaHistory = [{
+      provider: 'codex',
+      seriesKey: 'codex',
+      observedAt: resetAt - 30 * 60 * 1000,
+      resetAt,
+      usedPercent: 96,
+    }];
+    const provider = new CodexProvider(
+      {
+        enabled: true,
+        codexHome: root,
+        indexPath: 'index',
+        salt: 'salt',
+        timeZone: 'UTC',
+      },
+      () => new FakeClient([{ ...workerResult(index), failedFiles: 0 }]),
+    );
+
+    const refreshed = await provider.refresh();
+    const observations = refreshed.snapshot.weeklyValueInputs?.observations ?? [];
+
+    assert.deepEqual(
+      observations.map((item) => [item.observedAt, item.usedPercent]),
+      [
+        [resetAt + 30 * 60 * 1000, 1],
+        [resetAt - 30 * 60 * 1000, 96],
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('an invalid period sidecar cannot create a false weekly priced estimate', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-period-guard-'));
   try {

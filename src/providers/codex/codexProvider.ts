@@ -205,7 +205,11 @@ function codexWeeklyValueInputs(
   const cachedObservations = weeklyQuotaObservationsFromCodexHistory(
     cachedHistory,
   ).filter((cached) => !currentObservations.some((current) =>
-    Math.abs(current.resetAt - cached.resetAt) <= CODEX_QUOTA_RESET_CLUSTER_MS,
+    Math.abs(current.resetAt - cached.resetAt) <= CODEX_QUOTA_RESET_CLUSTER_MS &&
+    // A delayed line written at/after reset is ineligible for the closed
+    // window. It cannot shadow a useful pre-reset observation retained by the
+    // durable history.
+    current.observedAt < current.resetAt,
   ));
   const observations = [...currentObservations, ...cachedObservations];
 

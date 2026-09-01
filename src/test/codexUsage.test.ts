@@ -841,16 +841,57 @@ test('v2.3.1 acceptance fixture keeps non-negative ranges monotonic and reconcil
     (sum, row) => sum + row.total.processed,
     0,
   );
+  const last30DailyProcessed = view.last30DaysDaily.reduce(
+    (sum, row) => sum + row.total.processed,
+    0,
+  );
+  const last30ModelProcessed = view.last30Days.models.reduce(
+    (sum, row) => sum + row.totals.processed,
+    0,
+  );
+  const last30EffortProcessed = view.last30Days.efforts.reduce(
+    (sum, row) => sum + row.totals.processed,
+    0,
+  );
 
   assert.equal(view.today.total.processed >= 0, true);
   assert.equal(view.today.total.processed <= view.last30Days.total.processed, true);
   assert.equal(view.last30Days.total.processed <= view.allTime.total.processed, true);
   assert.equal(monthProcessed, view.allTime.total.processed);
   assert.equal(allDailyProcessed, view.allTime.total.processed);
+  assert.equal(last30DailyProcessed, view.last30Days.total.processed);
+  assert.equal(last30ModelProcessed, view.last30Days.total.processed);
+  assert.equal(last30EffortProcessed, view.last30Days.total.processed);
   assert.deepEqual(
     view.monthly.map((row) => row.period),
     [...view.monthly.map((row) => row.period)].sort(),
   );
+});
+
+test('monthly rows remain chronological across a year boundary', () => {
+  const snapshot = snapshotFixture();
+  snapshot.files = snapshot.files.slice(0, 2);
+  const days = ['2026-01-01', '2025-12-31'];
+  snapshot.files.forEach((file, index) => {
+    const day = days[index];
+    file.byDay = { [day]: { ...file.total } };
+    file.period = {
+      ...file.period!,
+      days: {
+        [day]: {
+          ...Object.values(file.period!.days)[0],
+          total: { ...file.total },
+        },
+      },
+    };
+  });
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.deepEqual(view.monthly.map((row) => row.period), [
+    '2025-12',
+    '2026-01',
+  ]);
 });
 
 test('behavior exposes patch and tool call proxies without file or command claims', () => {
@@ -984,6 +1025,52 @@ test('missing model and effort values are grouped as unknown', () => {
 
   assert.equal(view.last7Days.models.find((row) => row.key === 'unknown')?.totals.processed, 600);
   assert.equal(view.last7Days.efforts.find((row) => row.key === 'unknown')?.totals.processed, 600);
+});
+
+test('partial effort buckets attribute every residual component to unknown', () => {
+  const snapshot = snapshotFixture();
+  const file = snapshot.files[0];
+  const partial = {
+    inputTotal: 100,
+    cachedInput: 60,
+    outputTotal: 20,
+    reasoningOutput: 10,
+  };
+  file.byEffort = { high: partial };
+  const periodDay = file.period?.days['2026-07-20'];
+  assert.ok(periodDay);
+  periodDay.byEffort = { high: partial };
+
+  const view = buildCodexUsageView(snapshot, NOW);
+  const unknown = view.last7Days.efforts.find((row) => row.key === 'unknown');
+  const effortProcessed = view.last7Days.efforts.reduce(
+    (sum, row) => sum + row.totals.processed,
+    0,
+  );
+
+  assert.equal(unknown?.totals.processed, 480);
+  assert.equal(unknown?.totals.cachedInput, 340);
+  assert.equal(unknown?.totals.reasoning, 50);
+  assert.equal(effortProcessed, view.last7Days.total.processed);
+});
+
+test('zero-value unknown effort buckets stay out of every rendered scope', () => {
+  const snapshot = snapshotFixture();
+  for (const file of snapshot.files) {
+    file.byEffort.unknown = { inputTotal: 0, outputTotal: 0 };
+    for (const day of Object.values(file.period?.days ?? {})) {
+      day.byEffort.unknown = { inputTotal: 0, outputTotal: 0 };
+    }
+  }
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.allTime.efforts.some((row) => row.key === 'unknown'), false);
+  assert.equal(view.last30Days.efforts.some((row) => row.key === 'unknown'), false);
+  assert.equal(
+    view.recentThreads.some((row) => row.efforts.includes('unknown')),
+    false,
+  );
 });
 
 test('incomplete session timestamps never invent a multi-year duration', () => {
