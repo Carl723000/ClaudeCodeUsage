@@ -123,6 +123,8 @@ export interface Translations {
     settings: string;
     settingsTab: string;
     settingsIntro: string;
+    secretMigrationFailed: string;
+    secretMigrationWorkspace: string;
     settingsResetAll: string;
     settingsGroupGeneral: string;
     settingsGroupProviders: string;
@@ -1186,7 +1188,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: 'Settings',
       settingsTab: 'Settings',
       settingsIntro:
-        'Settings live here now. Only language, data directory and API key remain in VS Code Settings (so they sync). Changes apply immediately.',
+        'Settings live here now. Language and data directories remain in VS Code Settings; API keys use VS Code SecretStorage and never sync. Changes apply immediately.',
+      secretMigrationFailed:
+        'Claude Code Usage could not move the saved advice API key into encrypted SecretStorage. The extension stopped before deleting the old value. Fix the legacy setting and reload the window.',
+      secretMigrationWorkspace:
+        'A workspace-specific advice API key cannot be migrated safely into one global SecretStorage entry. Copy it, remove it from workspace settings, reload, then enter it under Dashboard Settings → Advice.',
       settingsResetAll: 'Reset all to defaults',
       settingsGroupGeneral: 'General',
       settingsGroupProviders: 'Providers',
@@ -1435,10 +1441,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> feature produces. It is **not** based on your actual Claude Code\n' +
         '> usage data — nothing was sent to any API to generate this.\n\n' +
         '### To get real, personalised advice based on YOUR usage:\n\n' +
-        '1. Open Settings (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. Search for **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. Paste an OpenAI-compatible API key — DeepSeek works out of the box\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. Run **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. Open the dashboard **Settings → Advice** section\n' +
+        '3. Paste an OpenAI-compatible API key — it is kept in VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. Re-run **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: 'Cost Composition',
       date: 'Date',
@@ -1481,7 +1487,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: "Einstellungen",
       settingsTab: "Einstellungen",
       settingsIntro:
-        "Die Einstellungen sind jetzt hier. Nur Sprache, Datenverzeichnis und API-Schlüssel bleiben in den VS-Code-Einstellungen (damit sie synchronisiert werden). Änderungen wirken sofort.",
+        "Die Einstellungen sind jetzt hier. Sprache und Datenverzeichnisse bleiben in den VS-Code-Einstellungen; API-Schlüssel liegen in VS Code SecretStorage und werden nie synchronisiert. Änderungen wirken sofort.",
+      secretMigrationFailed:
+        'Der gespeicherte API-Schlüssel konnte nicht in den verschlüsselten SecretStorage verschoben werden. Die Erweiterung wurde beendet, bevor der alte Wert gelöscht wurde. Korrigieren Sie die alte Einstellung und laden Sie das Fenster neu.',
+      secretMigrationWorkspace:
+        'Ein arbeitsbereichsspezifischer API-Schlüssel kann nicht sicher in einen globalen SecretStorage-Eintrag migriert werden. Kopieren und entfernen Sie ihn aus den Arbeitsbereichseinstellungen, laden Sie neu und geben Sie ihn unter Dashboard-Einstellungen → Beratung ein.',
       settingsResetAll: "Alle zurücksetzen",
       settingsGroupGeneral: "Allgemein",
       settingsGroupProviders: "Anbieter",
@@ -1731,10 +1741,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> Ihren tatsächlichen Nutzungsdaten — es wurde nichts an eine API\n' +
         '> gesendet, um diesen Text zu generieren.\n\n' +
         '### Für echten, personalisierten Rat basierend auf IHRER Nutzung:\n\n' +
-        '1. Einstellungen öffnen (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. Nach **`claudeCodeUsage.advice.apiKey`** suchen\n' +
-        '3. Einen OpenAI-kompatiblen API-Key einfügen — DeepSeek funktioniert\n' +
-        '   sofort ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. **`Claude Code Usage: Show Usage Details`** ausführen\n' +
+        '2. Im Dashboard **Einstellungen → Beratung** öffnen\n' +
+        '3. Einen OpenAI-kompatiblen API-Key einfügen — er bleibt in VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. **`Claude Code Usage: Get AI Usage Advice`** erneut ausführen',
       costComposition: "Kostenzusammensetzung",
       date: "Datum",
@@ -1779,7 +1789,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: '設定',
       settingsTab: '設定',
       settingsIntro:
-        '設定現在都在這裡。只有語言、資料目錄與 API 金鑰仍留在 VS Code 設定中(以便同步)。變更會立即生效。',
+        '設定現在都在這裡。語言與資料目錄仍使用 VS Code 設定；API 金鑰存於 VS Code SecretStorage，絕不同步。變更會立即生效。',
+      secretMigrationFailed:
+        '無法將已儲存的建議 API 金鑰移入加密 SecretStorage。擴充套件已在刪除舊值前停止。請修正舊設定並重新載入視窗。',
+      secretMigrationWorkspace:
+        '工作區專用 API 金鑰無法安全遷移至單一全域 SecretStorage。請先複製並從工作區設定移除，重新載入後在「儀表板設定 → 建議」輸入。',
       settingsResetAll: '全部還原為預設',
       settingsGroupGeneral: '一般',
       settingsGroupProviders: '供應商',
@@ -2024,10 +2038,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> 它**不是**基於你實際的 Claude Code 用量資料 ——\n' +
         '> 沒有任何資料被送往 API 來產生本內容。\n\n' +
         '### 要取得基於你實際用量的個人化建議:\n\n' +
-        '1. 開啟設定(`Ctrl+,` / `Cmd+,`)\n' +
-        '2. 搜尋 **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. 貼入 OpenAI-相容 API key —— DeepSeek 開箱即用\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. 執行 **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. 開啟儀表板的 **設定 → 建議** 區段\n' +
+        '3. 貼入 OpenAI 相容 API key —— 金鑰只會存於 VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. 重新執行 **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: '成本構成',
       date: '日期',
@@ -2070,7 +2084,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: '设置',
       settingsTab: '设置',
       settingsIntro:
-        '设置现在都在这里。只有语言、数据目录和 API key 仍留在 VS Code 设置中(便于同步)。更改即时生效。',
+        '设置现在都在这里。语言和数据目录仍使用 VS Code 设置；API 密钥存入 VS Code SecretStorage，绝不同步。更改即时生效。',
+      secretMigrationFailed:
+        '无法把已保存的建议 API 密钥迁入加密 SecretStorage。插件已在删除旧值前停止。请修正旧设置并重新加载窗口。',
+      secretMigrationWorkspace:
+        '工作区专用 API 密钥无法安全迁移到单一全局 SecretStorage。请先复制并从工作区设置中移除，重新加载后在“仪表板设置 → 建议”中输入。',
       settingsResetAll: '全部恢复默认',
       settingsGroupGeneral: '常规',
       settingsGroupProviders: '供应商',
@@ -2315,10 +2333,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> 它**不是**基于你实际的 Claude Code 用量数据 ——\n' +
         '> 没有任何数据被发往 API 来生成本内容。\n\n' +
         '### 要获得基于你实际用量的个性化建议:\n\n' +
-        '1. 打开设置(`Ctrl+,` / `Cmd+,`)\n' +
-        '2. 搜索 **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. 填入 OpenAI-兼容 API key —— DeepSeek 开箱即用\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. 运行 **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. 打开仪表板的 **设置 → 建议** 区域\n' +
+        '3. 填入 OpenAI 兼容 API key —— 密钥只存入 VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. 重新运行 **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: '成本构成',
       date: '日期',
@@ -2361,7 +2379,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: '設定',
       settingsTab: '設定',
       settingsIntro:
-        '設定はここにまとまりました。言語・データディレクトリ・API キーのみ VS Code 設定に残ります(同期のため)。変更は即時反映されます。',
+        '設定はここにまとまりました。言語とデータディレクトリは VS Code 設定を使い、API キーは同期されない VS Code SecretStorage に保存されます。変更は即時反映されます。',
+      secretMigrationFailed:
+        '保存済みのアドバイス API キーを暗号化された SecretStorage に移動できませんでした。旧値を削除する前に拡張機能を停止しました。旧設定を修正してウィンドウを再読み込みしてください。',
+      secretMigrationWorkspace:
+        'ワークスペース固有の API キーを単一のグローバル SecretStorage に安全に移行できません。キーをコピーしてワークスペース設定から削除し、再読み込み後に「ダッシュボード設定 → アドバイス」で入力してください。',
       settingsResetAll: 'すべて既定値に戻す',
       settingsGroupGeneral: '一般',
       settingsGroupProviders: 'プロバイダー',
@@ -2611,10 +2633,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> に基づくものでは**ありません** —— この内容を生成するために\n' +
         '> API にデータは送信されていません。\n\n' +
         '### あなたの実際の使用量に基づくパーソナライズされたアドバイスを取得するには:\n\n' +
-        '1. 設定を開く(`Ctrl+,` / `Cmd+,`)\n' +
-        '2. **`claudeCodeUsage.advice.apiKey`** を検索\n' +
-        '3. OpenAI 互換 API キーを貼り付け —— DeepSeek はすぐに使えます\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. **`Claude Code Usage: Show Usage Details`** を実行\n' +
+        '2. ダッシュボードの **設定 → アドバイス** を開く\n' +
+        '3. OpenAI 互換 API キーを貼り付け —— VS Code SecretStorage のみに保存されます\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. **`Claude Code Usage: Get AI Usage Advice`** を再実行',
       costComposition: 'コスト構成',
       date: '日付',
@@ -2657,7 +2679,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: '설정',
       settingsTab: '설정',
       settingsIntro:
-        '설정이 이제 여기로 모였습니다. 언어, 데이터 디렉터리, API 키만 VS Code 설정에 남습니다(동기화를 위해). 변경은 즉시 적용됩니다.',
+        '설정이 이제 여기로 모였습니다. 언어와 데이터 디렉터리는 VS Code 설정을 사용하고, API 키는 동기화되지 않는 VS Code SecretStorage에 저장됩니다. 변경은 즉시 적용됩니다.',
+      secretMigrationFailed:
+        '저장된 조언 API 키를 암호화된 SecretStorage로 옮기지 못했습니다. 이전 값을 삭제하기 전에 확장이 중지되었습니다. 기존 설정을 수정하고 창을 다시 로드하세요.',
+      secretMigrationWorkspace:
+        '작업 영역별 API 키는 하나의 전역 SecretStorage 항목으로 안전하게 이전할 수 없습니다. 키를 복사한 뒤 작업 영역 설정에서 제거하고, 다시 로드한 후 대시보드 설정 → 조언에 입력하세요.',
       settingsResetAll: '모두 기본값으로',
       settingsGroupGeneral: '일반',
       settingsGroupProviders: '공급자',
@@ -2907,10 +2933,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> 기반하지 **않으며**, 이 내용을 생성하기 위해 API에 데이터가\n' +
         '> 전송된 적이 없습니다.\n\n' +
         '### 실제 사용량 기반의 맞춤형 조언을 받으려면:\n\n' +
-        '1. 설정 열기 (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. **`claudeCodeUsage.advice.apiKey`** 검색\n' +
-        '3. OpenAI 호환 API 키 붙여넣기 — DeepSeek 즉시 사용 가능\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. **`Claude Code Usage: Show Usage Details`** 실행\n' +
+        '2. 대시보드의 **설정 → 조언** 섹션 열기\n' +
+        '3. OpenAI 호환 API 키 붙여넣기 — VS Code SecretStorage에만 저장됩니다\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. **`Claude Code Usage: Get AI Usage Advice`** 다시 실행',
       costComposition: '비용 구성',
       date: '날짜',
@@ -2953,7 +2979,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: 'Configurações',
       settingsTab: 'Configurações',
       settingsIntro:
-        'As configurações agora ficam aqui. Apenas idioma, diretório de dados e chave de API permanecem nas Configurações do VS Code (para sincronizar). As alterações são aplicadas imediatamente.',
+        'As configurações agora ficam aqui. Idioma e diretórios de dados continuam nas Configurações do VS Code; chaves de API ficam no VS Code SecretStorage e nunca são sincronizadas. As alterações são aplicadas imediatamente.',
+      secretMigrationFailed:
+        'Não foi possível mover a chave de API de conselho salva para o SecretStorage criptografado. A extensão parou antes de excluir o valor antigo. Corrija a configuração legada e recarregue a janela.',
+      secretMigrationWorkspace:
+        'Uma chave de API específica do espaço de trabalho não pode ser migrada com segurança para uma única entrada global do SecretStorage. Copie-a, remova-a das configurações do espaço de trabalho, recarregue e informe-a em Configurações do painel → Conselho.',
       settingsResetAll: 'Restaurar tudo para os padrões',
       settingsGroupGeneral: 'Geral',
       settingsGroupProviders: 'Provedores',
@@ -3202,10 +3232,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> que o recurso produz. Ele **não** é baseado nos seus dados reais de uso\n' +
         '> do Claude Code — nada foi enviado a nenhuma API para gerar isso.\n\n' +
         '### Para obter um conselho real e personalizado com base no SEU uso:\n\n' +
-        '1. Abra as Configurações (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. Pesquise por **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. Cole uma chave de API compatível com OpenAI — DeepSeek funciona direto\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. Execute **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. Abra **Configurações → Conselho** no painel\n' +
+        '3. Cole uma chave compatível com OpenAI — ela fica apenas no VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. Execute novamente **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: 'Composição de custos',
       date: 'Data',
@@ -3248,7 +3278,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: 'Pengaturan',
       settingsTab: 'Pengaturan',
       settingsIntro:
-        'Pengaturan sekarang ada di sini. Hanya bahasa, direktori data, dan API key yang tetap berada di Pengaturan VS Code (agar dapat disinkronkan). Perubahan langsung diterapkan.',
+        'Pengaturan sekarang ada di sini. Bahasa dan direktori data tetap memakai Pengaturan VS Code; API key disimpan di VS Code SecretStorage dan tidak pernah disinkronkan. Perubahan langsung diterapkan.',
+      secretMigrationFailed:
+        'API key saran yang tersimpan tidak dapat dipindahkan ke SecretStorage terenkripsi. Ekstensi dihentikan sebelum nilai lama dihapus. Perbaiki pengaturan lama lalu muat ulang jendela.',
+      secretMigrationWorkspace:
+        'API key khusus workspace tidak dapat dimigrasikan dengan aman ke satu entri SecretStorage global. Salin lalu hapus dari pengaturan workspace, muat ulang, kemudian masukkan di Pengaturan Dashboard → Saran.',
       settingsResetAll: 'Kembalikan semua ke default',
       settingsGroupGeneral: 'Umum',
       settingsGroupProviders: 'Penyedia',
@@ -3498,10 +3532,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> yang dihasilkan fitur ini. Ini **bukan** berdasarkan data penggunaan\n' +
         '> Claude Code Anda yang sebenarnya — tidak ada yang dikirim ke API mana pun untuk menghasilkan ini.\n\n' +
         '### Untuk mendapatkan saran nyata dan personal berdasarkan penggunaan ANDA:\n\n' +
-        '1. Buka Pengaturan (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. Cari **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. Tempel API key yang kompatibel dengan OpenAI — DeepSeek langsung berfungsi\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. Jalankan **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. Buka bagian **Pengaturan → Saran** di dashboard\n' +
+        '3. Tempel API key yang kompatibel dengan OpenAI — hanya disimpan di VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. Jalankan ulang **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: 'Komposisi Biaya',
       date: 'Tanggal',
@@ -3565,7 +3599,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'enableContentAnalysis': { label: 'Inhaltsanalyse (Content-Registerkarte)', help: 'Deaktivieren, um die CPU-intensive Textprüfung zu überspringen.' },
     'analysis.calibrate': { label: 'Inhaltszahlen kalibrieren', help: 'Skalieren Sie Schätzungen auf die exakten abgerechneten Token-Gesamtzahlen.' },
     'advice.effectiveness.enabled': { label: 'Vorschau zur Wirksamkeit von KI-Empfehlungen aktivieren', help: 'Standardmäßig aus. Zeigt lokale Evidenz, exakte BYOK-Anfragevorschau, Feedback und Vergleiche; gesendet wird nur nach einem separaten Klick.' },
-    'advice.apiKey': { label: 'API-Schlüssel', help: 'Für das api-Backend. Bleibt in den VS Code-Einstellungen.' },
+    'advice.apiKey': { label: 'API-Schlüssel', help: 'Für das api-Backend. Liegt in VS Code SecretStorage, wird nie synchronisiert und nie an das Dashboard gesendet.' },
     'advice.apiFormat': { label: 'API-Format', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API-URL', help: 'Endpunkt für das api-Backend.' },
     'advice.model': { label: 'API-Modell', help: '' },
@@ -3613,7 +3647,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'enableContentAnalysis': { label: '內容分析 (Content 分頁)', help: '停用以跳過 CPU 密集的文字掃描。' },
     'analysis.calibrate': { label: '校準內容數據', help: '將估計值縮放至確切的計費 Token 總數。' },
     'advice.effectiveness.enabled': { label: '啟用 AI 建議有效性預覽', help: '預設關閉。顯示本機證據、精確 BYOK 請求預覽、回饋與比較；只有另行點擊後才會傳送。' },
-    'advice.apiKey': { label: 'API 金鑰', help: '用於 api 後端。保留在 VS Code 設定中。' },
+    'advice.apiKey': { label: 'API 金鑰', help: '用於 api 後端。只存於 VS Code SecretStorage，不同步，也不傳送至儀表板。' },
     'advice.apiFormat': { label: 'API 格式', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API URL', help: 'api 後端的端點。' },
     'advice.model': { label: 'API 模型', help: '' },
@@ -3661,7 +3695,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'enableContentAnalysis': { label: '内容分析 (Content 选项卡)', help: '禁用以跳过 CPU 密集型文本扫描。' },
     'analysis.calibrate': { label: '校准内容数据', help: '将估计值缩放至确切的计费 token 总数。' },
     'advice.effectiveness.enabled': { label: '启用 AI 建议有效性预览', help: '默认关闭。显示本地证据、精确 BYOK 请求预览、反馈与比较；只有另行点击后才会发送。' },
-    'advice.apiKey': { label: 'API 密钥', help: '用于 api 后端。保留在 VS Code 设置中。' },
+    'advice.apiKey': { label: 'API 密钥', help: '用于 api 后端。只存入 VS Code SecretStorage，不同步，也不发送到仪表板。' },
     'advice.apiFormat': { label: 'API 格式', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API URL', help: 'api 后端的端点。' },
     'advice.model': { label: 'API 模型', help: '' },
@@ -3709,7 +3743,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'enableContentAnalysis': { label: 'コンテンツ分析 (Content タブ)', help: 'CPU負荷の高いテキストスキャンをスキップするには無効にします。' },
     'analysis.calibrate': { label: 'コンテンツ数値を調整', help: '推定値を正確な課金トークン総数に合わせて拡大縮小します。' },
     'advice.effectiveness.enabled': { label: 'AI アドバイス有効性プレビューを有効化', help: 'デフォルトは無効です。ローカル根拠、正確な BYOK リクエストプレビュー、フィードバック、比較を表示し、別のクリック後にだけ送信します。' },
-    'advice.apiKey': { label: 'API キー', help: 'api バックエンド用。VS Code 設定に保存されます。' },
+    'advice.apiKey': { label: 'API キー', help: 'api バックエンド用。VS Code SecretStorage のみに保存され、同期もダッシュボードへの送信も行いません。' },
     'advice.apiFormat': { label: 'API 形式', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API URL', help: 'api バックエンドのエンドポイント。' },
     'advice.model': { label: 'API モデル', help: '' },
@@ -3757,7 +3791,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'enableContentAnalysis': { label: '콘텐츠 분석 (Content 탭)', help: 'CPU 사용이 많은 텍스트 검사를 건너뛰려면 비활성화하세요.' },
     'analysis.calibrate': { label: '콘텐츠 수치 보정', help: '예상치를 정확한 청구 토큰 총합에 맞게 조정합니다.' },
     'advice.effectiveness.enabled': { label: 'AI 조언 효과성 미리보기 활성화', help: '기본적으로 꺼져 있습니다. 로컬 근거, 정확한 BYOK 요청 미리보기, 피드백, 비교를 표시하며 별도 클릭 후에만 전송합니다.' },
-    'advice.apiKey': { label: 'API 키', help: 'api 백엔드용. VS Code 설정에 보관됩니다.' },
+    'advice.apiKey': { label: 'API 키', help: 'api 백엔드용. VS Code SecretStorage에만 저장되며 동기화되거나 대시보드로 전송되지 않습니다.' },
     'advice.apiFormat': { label: 'API 형식', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API URL', help: 'api 백엔드의 엔드포인트.' },
     'advice.model': { label: 'API 모델', help: '' },
@@ -3806,7 +3840,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'enableContentAnalysis': { label: 'Análise de conteúdo (aba Content)', help: 'Desative para pular a varredura de texto, que usa muita CPU.' },
     'analysis.calibrate': { label: 'Calibrar números de conteúdo', help: 'Ajusta as estimativas aos totais exatos de tokens cobrados.' },
     'advice.effectiveness.enabled': { label: 'Ativar prévia de eficácia dos conselhos de IA', help: 'Desativado por padrão. Mostra evidências locais, prévia exata da solicitação BYOK, feedback e comparação; só envia após um clique separado.' },
-    'advice.apiKey': { label: 'Chave de API', help: 'Para o backend api. Permanece nas Configurações do VS Code.' },
+    'advice.apiKey': { label: 'Chave de API', help: 'Para o backend api. Fica apenas no VS Code SecretStorage, sem sincronização nem envio ao painel.' },
     'advice.apiFormat': { label: 'Formato da API', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'URL da API', help: 'Endpoint do backend api.' },
     'advice.model': { label: 'Modelo da API', help: '' },
@@ -3854,7 +3888,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'enableContentAnalysis': { label: 'Analisis konten (tab Konten)', help: 'Nonaktifkan untuk melewati pemindaian teks yang berat bagi CPU.' },
     'analysis.calibrate': { label: 'Kalibrasi angka konten', help: 'Skalakan perkiraan ke total token yang benar-benar ditagih.' },
     'advice.effectiveness.enabled': { label: 'Aktifkan pratinjau efektivitas saran AI', help: 'Nonaktif secara default. Menampilkan bukti lokal, pratinjau permintaan BYOK yang persis, umpan balik, dan perbandingan; hanya mengirim setelah klik terpisah.' },
-    'advice.apiKey': { label: 'API key', help: 'Untuk backend api. Tetap berada di Pengaturan VS Code.' },
+    'advice.apiKey': { label: 'API key', help: 'Untuk backend api. Hanya disimpan di VS Code SecretStorage, tidak disinkronkan atau dikirim ke dashboard.' },
     'advice.apiFormat': { label: 'Format API', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'URL API', help: 'Endpoint untuk backend api.' },
     'advice.model': { label: 'Model API', help: '' },

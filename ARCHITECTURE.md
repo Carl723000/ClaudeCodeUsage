@@ -4,6 +4,9 @@
 > semantics. Update it whenever module ownership or provider behavior changes.
 > A faithful Simplified-Chinese companion lives in
 > [`ARCHITECTURE-zh-CN.md`](ARCHITECTURE-zh-CN.md).
+> The normative persistent-data inventory, retention, migration, clearing, and
+> network boundaries live in the bilingual
+> [`v2.3.1 local data contract`](docs/superpowers/specs/2026-09-02-v2.3.1-local-data-contract.md).
 
 ## Product boundary
 
@@ -54,7 +57,7 @@ aggregate sync are deferred to v2.4.x after a separate privacy review.
 | `providers/codex/codexUsage.ts` | Codex calendar-Today/hourly, 7-day, 30-day, monthly, task, and project view-model aggregation with exact-model API-equivalent cost. |
 | `providers/codex/codexInsights.ts` | Deterministic structural usage guidance; no prompt/body inspection. |
 | `codexView.ts` / `codexViewComponents.ts` | Codex localized-copy and default-provider contracts; no HTML renderer, client script, or CSS ownership. |
-| `settings.ts` | Canonical `SETTINGS` catalog and `SettingsStore`; do not scatter direct reads. |
+| `settings.ts` | Canonical `SETTINGS` catalog and `SettingsStore`; ordinary values use configuration/globalState, while BYOK credentials use SecretStorage and never enter Webview snapshots. Do not scatter direct reads. |
 | `statusBar.ts` / `codexStatus.ts` | Provider-specific status presentation and generic Claude quota formatting. |
 | `webview.ts` | Single provider-aware Claude/Codex dashboard shell, shared render functions, shared client behavior, provider tabs, and Compare presentation. |
 | `i18n.ts` | All user-facing copy for all eight UI locales. |

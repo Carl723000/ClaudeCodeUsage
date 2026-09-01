@@ -3,6 +3,8 @@
 > 本文简要说明扩展的 provider 边界、数据流与用量语义。模块职责或
 > provider 行为变化时必须同步更新。英文版见
 > [`ARCHITECTURE.md`](ARCHITECTURE.md)。
+> 持久数据清单、保留、迁移、清除和网络边界的规范来源是双语
+> [`v2.3.1 本地数据契约`](docs/superpowers/specs/2026-09-02-v2.3.1-local-data-contract.zh-CN.md)。
 
 ## 产品边界
 
@@ -46,7 +48,7 @@ Opt-in GitHub 认证和跨设备聚合同步延后到 v2.4.x，届时单独做�
 | `providers/codex/codexUsage.ts` | Codex 自然日 Today/小时、7 天、30 天、月度、task 与项目 view model 聚合，以及精确模型 API 等效成本。 |
 | `providers/codex/codexInsights.ts` | 确定性的结构用量建议，不读 prompt/body。 |
 | `codexView.ts` / `codexViewComponents.ts` | Codex 本地化文案与默认 provider contract；不负责 HTML renderer、client script 或 CSS。 |
-| `settings.ts` | 权威 `SETTINGS` catalog 和 `SettingsStore`；不得散落直接读取。 |
+| `settings.ts` | 权威 `SETTINGS` catalog 和 `SettingsStore`；普通值进入 configuration/globalState，BYOK 凭证只进入 SecretStorage，且绝不进入 Webview snapshot。不得散落直接读取。 |
 | `statusBar.ts` / `codexStatus.ts` | Provider-specific 状态展示和通用 Claude 配额格式化。 |
 | `webview.ts` | Claude/Codex 唯一一套 provider-aware dashboard shell、共享 render function、共享 client 行为、provider tab 与 Compare 展示。 |
 | `i18n.ts` | 八个 UI locale 的全部用户可见文案。 |

@@ -69,11 +69,6 @@
           ],
           "default": "auto",
           "description": "Display language (auto-detection or manual selection). All other settings now live in the dashboard's ⚙ Settings tab (Show Usage Details)."
-        },
-        "claudeCodeUsage.advice.apiKey": {
-          "type": "string",
-          "default": "",
-          "description": "Bring-your-own API key for AI advice and the Usage Optimizer. Requests are sent only after you preview and explicitly send them; Claude Code subscription credentials are never used. Other advice options live in the dashboard's ⚙ Settings tab."
         }
       }
     },

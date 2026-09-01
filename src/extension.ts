@@ -24,7 +24,7 @@ import {
   buildOptimizerSystemPrompt,
 } from './advisor';
 import { ClaudeApiUsageResponse, ContentAnalysis, ExtensionConfig } from './types';
-import { SettingsStore } from './settings';
+import { SettingsSecretMigrationError, SettingsStore } from './settings';
 import { normalizeQuotaWindows } from './quotaWindows';
 import {
   appendWeeklyQuotaObservations,
@@ -229,12 +229,15 @@ export class ClaudeCodeUsageExtension {
   private disposed = false;
   private disposal: Promise<void> | null = null;
 
-  constructor(private context: vscode.ExtensionContext) {
+  constructor(
+    private context: vscode.ExtensionContext,
+    settings?: SettingsStore,
+  ) {
     console.log('Claude Code Usage Extension: Constructor called');
     this.outputChannel = vscode.window.createOutputChannel('Claude Code Usage');
     context.subscriptions.push(this.outputChannel);
     this.statusBar = new StatusBarManager();
-    this.settings = new SettingsStore(context);
+    this.settings = settings ?? new SettingsStore(context);
     const backgroundRestore = restoreBackgroundWorkState(
       context.globalState.get<unknown>(
         ClaudeCodeUsageExtension.CODEX_BACKGROUND_WORK_STATE_KEY,
@@ -831,8 +834,8 @@ export class ClaudeCodeUsageExtension {
   }
 
   private getConfiguration(): ExtensionConfig {
-    // All settings now flow through SettingsStore: the core trio (language,
-    // dataDirectory, advice.apiKey) still lives in VS Code config; the rest in
+    // All settings flow through SettingsStore: language and dataDirectory live
+    // in VS Code config, BYOK secrets live in SecretStorage, and the rest use
     // the dashboard-managed store. Defaults come from the settings catalog.
     const s = this.settings;
     return {
@@ -2924,10 +2927,26 @@ export class ClaudeCodeUsageExtension {
 
 let activeExtension: ClaudeCodeUsageExtension | null = null;
 
-export function activate(context: vscode.ExtensionContext) {
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   console.log('Claude Code Usage extension is now active');
 
-  const extension = new ClaudeCodeUsageExtension(context);
+  const settings = new SettingsStore(context);
+  I18n.setLanguage(settings.get<string>('language') as any);
+  try {
+    await settings.initializeSecrets();
+  } catch (error) {
+    const needsManualWorkspaceMigration =
+      error instanceof SettingsSecretMigrationError &&
+      (error.code === 'legacy-secret-conflict' ||
+        error.code === 'workspace-secret-requires-manual-migration');
+    await vscode.window.showErrorMessage(
+      needsManualWorkspaceMigration
+        ? I18n.t.popup.secretMigrationWorkspace
+        : I18n.t.popup.secretMigrationFailed,
+    );
+    throw error;
+  }
+  const extension = new ClaudeCodeUsageExtension(context, settings);
   activeExtension = extension;
   context.subscriptions.push({
     dispose: () => { void extension.dispose(); }

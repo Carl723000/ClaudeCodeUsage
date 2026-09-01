@@ -1942,9 +1942,9 @@ export class UsageWebviewProvider {
 
   /**
    * The ⚙ Settings tab: every setting, grouped, editable in place. Core
-   * settings (language / dataDirectory / advice.apiKey) still write to VS Code
-   * config; the rest write to the dashboard-managed store. Setting labels/help
-   * are English (technical); group headers + chrome are localised.
+   * settings (language / dataDirectory) still write to VS Code config; secrets
+   * go to SecretStorage and the rest use the dashboard-managed store. Setting
+   * labels/help are English (technical); group headers + chrome are localised.
    */
   private renderSettingsPanel(provider: SettingProvider): string {
     const t = I18n.t.popup;
@@ -2053,6 +2053,9 @@ export class UsageWebviewProvider {
         '" value="' +
         esc(String(it.value)) +
         '"' +
+        (it.secret
+          ? ' autocomplete="new-password" placeholder="' + (it.configured ? '••••••••' : '') + '"'
+          : '') +
         onCh('string') +
         '>';
     }
