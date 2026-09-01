@@ -1566,7 +1566,7 @@ export class UsageWebviewProvider {
       </head>
       <body>
         <div class="container">
-          <div class="loading">
+          <div class="loading" role="status" aria-live="polite">
             <div class="spinner"></div>
             <p>${I18n.t.statusBar.loading}</p>
           </div>
@@ -1588,7 +1588,7 @@ export class UsageWebviewProvider {
       </head>
       <body>
         <div class="container">
-          <div class="error">
+          <div class="error" role="alert">
             <h2>${I18n.t.statusBar.error}</h2>
             <p>${this.error}</p>
             <button onclick="refresh()">${I18n.t.popup.refresh}</button>
@@ -1612,7 +1612,7 @@ export class UsageWebviewProvider {
       </head>
       <body>
         <div class="container">
-          <div class="no-data">
+          <div class="no-data" role="status" aria-live="polite">
             <h2>${I18n.t.statusBar.noData}</h2>
             <p>${I18n.t.popup.noDataMessage}</p>
             <div class="actions">
@@ -1758,18 +1758,35 @@ export class UsageWebviewProvider {
     const workflowsActive = this.currentTab === 'workflows' ? 'active' : '';
     const settingsActive = this.currentTab === 'settings' ? 'active' : '';
 
+    const dashboardTab = (name: string, label: string, active: string): string => {
+      const selected = active === 'active';
+      return '<button id="tab-' + name + '" class="tab ' + active +
+        '" role="tab" data-dashboard-tab="' + name + '" aria-controls="' + name +
+        '" aria-selected="' + selected + '" tabindex="' + (selected ? '0' : '-1') +
+        '" onclick="showTab(\'' + name + '\')">' + this.escapeHtml(label) + '</button>';
+    };
+    const dashboardPanel = (name: string, active: string, content: string): string =>
+      '<div id="' + name + '" class="tab-content ' + active + '" role="tabpanel" ' +
+      'aria-labelledby="tab-' + name + '"' + (active === 'active' ? '' : ' hidden') + '>' +
+      content + '</div>';
+
     // The Content tab is hidden when content analysis is disabled via
     // claudeCodeUsage.enableContentAnalysis (the analyser returned null).
     const contentEnabled = provider === 'codex'
       ? Boolean(this.codexView && this.setting<boolean>('codex.optimization.enabled', true))
       : this.contentAnalysis !== null;
     const contentTabButton = contentEnabled
-      ? '<button id="tab-content" class="tab ' + contentActive +
-        '" onclick="showTab(\'content\')">' + contentTab + '</button>'
+      ? dashboardTab('content', contentTab, contentActive)
       : '';
     const contentTabContent = contentEnabled
-      ? '<div id="content" class="tab-content ' + contentActive + '">' + this.renderContentData(provider) +
-        (provider === 'claude' ? this.renderCacheWarmth() + this.renderInsights() + this.renderCostliestMessages() : '') + '</div>'
+      ? dashboardPanel(
+          'content',
+          contentActive,
+          this.renderContentData(provider) +
+            (provider === 'claude'
+              ? this.renderCacheWarmth() + this.renderInsights() + this.renderCostliestMessages()
+              : ''),
+        )
       : '';
 
     return (
@@ -1812,123 +1829,31 @@ export class UsageWebviewProvider {
       `<div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">` +
       this.renderQuotaBanner(provider) +
       `
-          <div class="tabs">
-            <button id="tab-today" class="tab ` +
-      todayActive +
-      `" onclick="showTab('today')">` +
-      today +
-      `</button>
-            <button id="tab-month" class="tab ` +
-      monthActive +
-      `" onclick="showTab('month')">` +
-      thisMonth +
-      `</button>
-            <button id="tab-all" class="tab ` +
-      allActive +
-      `" onclick="showTab('all')">` +
-      allTime +
-      `</button>
-            <button id="tab-sessions" class="tab ` +
-      sessionsActive +
-      `" onclick="showTab('sessions')">` +
-      sessions +
-      `</button>
-            <button id="tab-projects" class="tab ` +
-      projectsActive +
-      `" onclick="showTab('projects')">` +
-      projects +
-      `</button>
-            ` +
+          <div class="tabs" role="tablist" aria-label="${this.escapeHtml(title)}">
+            ` + dashboardTab('today', today, todayActive) +
+      dashboardTab('month', thisMonth, monthActive) +
+      dashboardTab('all', allTime, allActive) +
+      dashboardTab('sessions', sessions, sessionsActive) +
+      dashboardTab('projects', projects, projectsActive) +
       contentTabButton +
-      `
-            ` +
-      (provider === 'claude' ? `<button id="tab-branches" class="tab ` +
-      branchesActive +
-      `" onclick="showTab('branches')">` +
-      branchesTab +
-      `</button>
-            <button id="tab-workflows" class="tab ` +
-      workflowsActive +
-      `" onclick="showTab('workflows')">` +
-      workflowsTab +
-      `</button>` : '') +
-      `
-            <button id="tab-settings" class="tab ` +
-      settingsActive +
-      `" onclick="showTab('settings')">` +
-      settingsTab +
-      `</button>
+      (provider === 'claude'
+        ? dashboardTab('branches', branchesTab, branchesActive) +
+          dashboardTab('workflows', workflowsTab, workflowsActive)
+        : '') +
+      dashboardTab('settings', settingsTab, settingsActive) + `
           </div>
 
-          <div id="today" class="tab-content ` +
-      todayActive +
-      `">
-            ` +
-      this.renderTodayData(provider) +
-      `
-          </div>
-
-          <div id="month" class="tab-content ` +
-      monthActive +
-      `">
-            ` +
-      this.renderMonthData(provider) +
-      `
-          </div>
-
-          <div id="all" class="tab-content ` +
-      allActive +
-      `">
-            ` +
-      this.renderAllTimeData(provider) +
-      `
-          </div>
-
-          <div id="sessions" class="tab-content ` +
-      sessionsActive +
-      `">
-            ` +
-      this.renderSessionData(provider) +
-      `
-          </div>
-
-          <div id="projects" class="tab-content ` +
-      projectsActive +
-      `">
-            ` +
-      this.renderProjectData(provider) +
-      `
-          </div>
-
-          ` +
+          ` + dashboardPanel('today', todayActive, this.renderTodayData(provider)) +
+      dashboardPanel('month', monthActive, this.renderMonthData(provider)) +
+      dashboardPanel('all', allActive, this.renderAllTimeData(provider)) +
+      dashboardPanel('sessions', sessionsActive, this.renderSessionData(provider)) +
+      dashboardPanel('projects', projectsActive, this.renderProjectData(provider)) +
       contentTabContent +
-      `
-
-          ` +
-      (provider === 'claude' ? `<div id="branches" class="tab-content ` +
-      branchesActive +
-      `">
-            ` +
-      this.renderBranchData() +
-      `
-          </div>
-
-          <div id="workflows" class="tab-content ` +
-      workflowsActive +
-      `">
-            ` +
-      this.renderWorkflowData() +
-      `
-          </div>` : '') +
-      `
-
-          <div id="settings" class="tab-content ` +
-      settingsActive +
-      `">
-            ` +
-      this.renderSettingsPanel(provider) +
-      `
-          </div>
+      (provider === 'claude'
+        ? dashboardPanel('branches', branchesActive, this.renderBranchData()) +
+          dashboardPanel('workflows', workflowsActive, this.renderWorkflowData())
+        : '') +
+      dashboardPanel('settings', settingsActive, this.renderSettingsPanel(provider)) + `
         </div>
         </div>
         <script>` +
@@ -2772,7 +2697,7 @@ export class UsageWebviewProvider {
                 'onclick="toggleCodexHourlyDetail(\'' + day + '\')" aria-expanded="false" ' +
                 'aria-controls="codex-hourly-detail-' + day + '" title="' +
                 this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '">' +
-                '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">' +
+                '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">' +
                 '<path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>' +
                 '</svg></button>'
               : '';
@@ -2860,8 +2785,10 @@ export class UsageWebviewProvider {
                   <td class="number-cell">${this.formatPercent(this.cacheHitRate(data))}</td>
                   <td class="number-cell">${I18n.formatNumber(data.messageCount)}</td>
                   <td class="detail-cell">
-                    <button class="detail-button" onclick="toggleHourlyDetail('${date}')" title="${I18n.t.popup.hourlyBreakdown}">
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <button class="detail-button" onclick="toggleHourlyDetail('${date}')"
+                      aria-expanded="false" aria-controls="hourly-detail-${date}"
+                      title="${this.escapeHtml(I18n.t.popup.hourlyBreakdown)}">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
                         <path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
                       </svg>
                     </button>
@@ -2870,7 +2797,7 @@ export class UsageWebviewProvider {
                 <tr class="hourly-detail-row" data-date="${date}" style="display: none;">
                   <td colspan="9">
                     <div class="hourly-detail-container" id="hourly-detail-${date}">
-                      <div class="loading-indicator">載入中...</div>
+                      <div class="loading-indicator">${this.escapeHtml(I18n.t.statusBar.loading)}</div>
                     </div>
                   </td>
                 </tr>
@@ -3005,8 +2932,10 @@ export class UsageWebviewProvider {
                   <td class="number-cell">${this.formatPercent(this.cacheHitRate(data))}</td>
                   <td class="number-cell">${I18n.formatNumber(data.messageCount)}</td>
                   <td class="detail-cell">
-                    <button class="detail-button" onclick="toggleMonthlyDetail('${date}')" title="顯示每日詳細資料">
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <button class="detail-button" onclick="toggleMonthlyDetail('${date}')"
+                      aria-expanded="false" aria-controls="monthly-detail-${date}"
+                      title="${this.escapeHtml(I18n.t.popup.dailyBreakdown)}">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
                         <path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
                       </svg>
                     </button>
@@ -3015,7 +2944,7 @@ export class UsageWebviewProvider {
                 <tr class="monthly-detail-row" data-date="${date}" style="display: none;">
                   <td colspan="9">
                     <div class="monthly-detail-container" id="monthly-detail-${date}">
-                      <div class="loading-indicator">載入中...</div>
+                      <div class="loading-indicator">${this.escapeHtml(I18n.t.statusBar.loading)}</div>
                     </div>
                   </td>
                 </tr>
@@ -5835,7 +5764,9 @@ export class UsageWebviewProvider {
       // click-to-expand that month's per-day composition (reuses the table's
       // month-detail round-trip).
       const colOpen = provider === 'claude' && it.key
-        ? '<div class="hc-col hc-col-clickable" onclick="toggleMonthlyDetail(\'' + it.key + '\')" title="' +
+        ? '<div class="hc-col hc-col-clickable" data-date="' + this.escapeHtml(it.key) +
+          '" role="button" tabindex="0" aria-expanded="false" aria-controls="monthly-detail-' +
+          this.escapeHtml(it.key) + '" onclick="toggleMonthlyDetail(\'' + it.key + '\')" title="' +
           this.escapeHtml(it.label) + ' — ' + I18n.formatNumber(total) + '">'
         : '<div class="hc-col">';
       bars +=
@@ -5993,7 +5924,10 @@ export class UsageWebviewProvider {
     provider: SettingProvider = 'claude',
   ): string {
     if (sortedData.length === 0) {
-      return '<div class="no-chart-data">No data available</div>';
+      const message = provider === 'codex'
+        ? I18n.t.providers.codex.noDailyData
+        : I18n.t.statusBar.noData;
+      return '<div class="no-chart-data" role="status">' + this.escapeHtml(message) + '</div>';
     }
     if (provider === 'codex') {
       const rows = sortedData as Array<{
@@ -6104,7 +6038,8 @@ export class UsageWebviewProvider {
    */
   private renderCodexHourlyChart(rows: CodexHourlyUsageView[]): string {
     if (rows.length === 0) {
-      return '<div class="no-chart-data">No data available</div>';
+      return '<div class="no-chart-data" role="status">' +
+        this.escapeHtml(I18n.t.providers.codex.noDailyData) + '</div>';
     }
     const maxCost = Math.max(...rows.map((row) => row.apiEquivalent.equivalentUsd), 0);
     const hasPricedCost = rows.some((row) => row.apiEquivalent.pricedTokens > 0);
@@ -6143,7 +6078,8 @@ export class UsageWebviewProvider {
 
   private renderHourlyChart(): string {
     if (this.hourlyDataForToday.length === 0) {
-      return '<div class="no-chart-data">No data available</div>';
+      return '<div class="no-chart-data" role="status">' +
+        this.escapeHtml(I18n.t.statusBar.noData) + '</div>';
     }
 
     const sortedData = [...this.hourlyDataForToday].sort((a, b) => a.hour.localeCompare(b.hour));
@@ -6209,13 +6145,34 @@ export class UsageWebviewProvider {
 
   private getStyles(): string {
     return `
+      :root {
+        color-scheme: light dark;
+        --ccu-space-1: 4px;
+        --ccu-space-2: 8px;
+        --ccu-space-3: 12px;
+        --ccu-space-4: 16px;
+        --ccu-space-5: 20px;
+        --ccu-space-6: 24px;
+        --ccu-radius-control: 4px;
+        --ccu-radius-panel: 8px;
+        --ccu-border: var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
+        /* Description text must retain 4.5:1 in both Light+ and Dark+. Some
+           input/editor-widget surfaces are deliberately more contrasted than
+           ordinary text, so use the editor canvas and let the shared border
+           carry the raised-card hierarchy. */
+        --ccu-surface-raised: var(--vscode-editor-background);
+        --ccu-surface-subtle: var(--vscode-editorWidget-background, var(--vscode-input-background));
+        --ccu-data-font: var(--vscode-editor-font-family, ui-monospace, monospace);
+        --ccu-focus: var(--vscode-focusBorder, #007fd4);
+      }
+
       body {
         font-family: var(--vscode-font-family);
         font-size: var(--vscode-font-size);
         color: var(--vscode-foreground);
         background-color: var(--vscode-editor-background);
         margin: 0;
-        padding: 16px;
+        padding: var(--ccu-space-4);
       }
 
       .container {
@@ -6228,9 +6185,10 @@ export class UsageWebviewProvider {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 16px;
-        border-bottom: 1px solid var(--vscode-panel-border);
-        padding-bottom: 16px;
+        gap: var(--ccu-space-4);
+        margin-bottom: var(--ccu-space-4);
+        border-bottom: 1px solid var(--ccu-border);
+        padding-bottom: var(--ccu-space-4);
       }
 
 
@@ -6241,17 +6199,29 @@ export class UsageWebviewProvider {
 
       .actions {
         display: flex;
-        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: var(--ccu-space-2);
       }
 
       button {
         background: var(--vscode-button-background);
         color: var(--vscode-button-foreground);
         border: none;
-        border-radius: 4px;
-        padding: 8px 12px;
+        border-radius: var(--ccu-radius-control);
+        padding: var(--ccu-space-2) var(--ccu-space-3);
         cursor: pointer;
         font-size: 12px;
+      }
+
+      button:focus-visible,
+      summary:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible,
+      [tabindex="0"]:focus-visible {
+        outline: 2px solid var(--ccu-focus);
+        outline-offset: 2px;
       }
 
       button:hover {
@@ -6685,16 +6655,24 @@ export class UsageWebviewProvider {
 
       .tabs {
         display: flex;
-        margin-bottom: 20px;
-        border-bottom: 1px solid var(--vscode-panel-border);
+        gap: var(--ccu-space-1);
+        max-width: 100%;
+        margin-bottom: var(--ccu-space-5);
+        border-bottom: 1px solid var(--ccu-border);
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: thin;
       }
 
       .tab {
+        flex: 0 0 auto;
         background: transparent;
         border: none;
-        padding: 8px 16px;
+        padding: var(--ccu-space-2) var(--ccu-space-4);
         cursor: pointer;
         border-bottom: 2px solid transparent;
+        white-space: nowrap;
         /* Explicit foreground colour — otherwise the inherited button
            foreground (white) becomes invisible on light themes. (Fixes
            upstream issue #11.) */
@@ -6717,21 +6695,25 @@ export class UsageWebviewProvider {
       }
 
       .usage-summary {
-        margin-bottom: 24px;
+        margin-bottom: var(--ccu-space-6);
       }
 
       .summary-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 12px;
+        gap: var(--ccu-space-3);
       }
 
       .summary-item {
-        text-align: center;
-        padding: 16px;
-        background: var(--vscode-input-background);
-        border-radius: 8px;
-        border: 1px solid var(--vscode-input-border);
+        display: flex;
+        min-height: 68px;
+        flex-direction: column;
+        justify-content: center;
+        text-align: left;
+        padding: var(--ccu-space-3) 14px;
+        background: var(--ccu-surface-raised);
+        border-radius: var(--ccu-radius-panel);
+        border: 1px solid var(--ccu-border);
       }
 
       .summary-item .label {
@@ -6743,6 +6725,8 @@ export class UsageWebviewProvider {
       .summary-item .value {
         font-size: 18px;
         font-weight: bold;
+        font-family: var(--ccu-data-font);
+        font-variant-numeric: tabular-nums;
       }
 
       .summary-item .value.cost {
@@ -6761,14 +6745,14 @@ export class UsageWebviewProvider {
       .model-list {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: var(--ccu-space-3);
       }
 
       .model-item {
-        padding: 12px;
-        background: var(--vscode-input-background);
+        padding: var(--ccu-space-3);
+        background: var(--ccu-surface-raised);
         border-radius: 6px;
-        border: 1px solid var(--vscode-input-border);
+        border: 1px solid var(--ccu-border);
       }
 
       /* <details>/<summary> reset: remove the default triangle, position our own */
@@ -6792,7 +6776,10 @@ export class UsageWebviewProvider {
         display: flex;
         align-items: center;
         gap: 8px;
-        margin-bottom: 8px;
+        margin-bottom: 0;
+      }
+      details.model-item[open] > .model-header {
+        margin-bottom: var(--ccu-space-2);
       }
       /* Model name sits flush against the disclosure triangle on the left;
          the cost is pushed to the far right by margin-left:auto. Avoids the
@@ -6812,6 +6799,8 @@ export class UsageWebviewProvider {
         font-weight: bold;
         color: var(--vscode-charts-green);
         margin-left: auto;
+        font-family: var(--ccu-data-font);
+        font-variant-numeric: tabular-nums;
       }
 
       .model-details {
@@ -6845,16 +6834,16 @@ export class UsageWebviewProvider {
 
       .chart-tabs {
         display: flex;
-        gap: 4px;
-        margin-bottom: 16px;
+        gap: var(--ccu-space-1);
+        margin-bottom: var(--ccu-space-4);
         flex-wrap: wrap;
       }
 
       .chart-tab {
         background: var(--vscode-button-secondaryBackground);
         color: var(--vscode-button-secondaryForeground);
-        border: 1px solid var(--vscode-input-border);
-        border-radius: 4px;
+        border: 1px solid var(--ccu-border);
+        border-radius: var(--ccu-radius-control);
         padding: 6px 12px;
         font-size: 11px;
         cursor: pointer;
@@ -6872,10 +6861,10 @@ export class UsageWebviewProvider {
       }
 
       .chart-container {
-        background: var(--vscode-input-background);
-        border: 1px solid var(--vscode-input-border);
-        border-radius: 8px;
-        padding: 16px;
+        background: var(--ccu-surface-subtle);
+        border: 1px solid var(--ccu-border);
+        border-radius: var(--ccu-radius-panel);
+        padding: var(--ccu-space-4);
         margin-bottom: 20px;
         height: 180px;
         overflow-x: auto;
@@ -7029,7 +7018,8 @@ export class UsageWebviewProvider {
 
       .number-cell {
         text-align: right;
-        font-family: var(--vscode-editor-font-family);
+        font-family: var(--ccu-data-font);
+        font-variant-numeric: tabular-nums;
         /* Keep figures on one line: compact (k/M) numbers fit the panel with no
          * horizontal scroll; full integer numbers overflow so the table (only)
          * scrolls, while the chart above keeps its own independent scroll. */
@@ -7092,6 +7082,9 @@ export class UsageWebviewProvider {
       .loading, .error, .no-data {
         text-align: center;
         padding: 40px 20px;
+        border: 1px dashed var(--ccu-border);
+        border-radius: var(--ccu-radius-panel);
+        background: var(--ccu-surface-raised);
       }
 
       .spinner {
@@ -8051,10 +8044,17 @@ export class UsageWebviewProvider {
         gap: 6px;
         margin: 4px 0 18px;
         padding-bottom: 10px;
-        border-bottom: 1px solid var(--vscode-panel-border);
+        max-width: 100%;
+        border-bottom: 1px solid var(--ccu-border);
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: thin;
       }
       .provider-tab {
-        border: 1px solid var(--vscode-panel-border);
+        flex: 0 0 auto;
+        white-space: nowrap;
+        border: 1px solid var(--ccu-border);
         border-radius: 999px;
         padding: 5px 13px;
         background: transparent;
@@ -8322,6 +8322,47 @@ export class UsageWebviewProvider {
           text-align: left;
         }
       }
+      @media (max-width: 480px) {
+        body {
+          padding: var(--ccu-space-3);
+        }
+        header {
+          align-items: flex-start;
+          gap: var(--ccu-space-3);
+        }
+        h1 {
+          padding-top: 3px;
+          font-size: 18px;
+        }
+        .actions {
+          gap: var(--ccu-space-1);
+        }
+        .actions button {
+          padding: 7px 9px;
+        }
+        .summary-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: var(--ccu-space-2);
+        }
+        .summary-item {
+          min-height: 58px;
+          padding: 10px var(--ccu-space-3);
+        }
+        .summary-item .value {
+          font-size: 17px;
+        }
+        .tabs {
+          margin-bottom: var(--ccu-space-4);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          scroll-behavior: auto !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
+      }
       .sr-only {
         position: absolute;
         width: 1px;
@@ -8508,6 +8549,8 @@ function restoreUi() {
   restoreSessionDetails();
   restoreTableSorts();
   restoreChartMetrics();
+  initializeChartDrilldowns();
+  initializeStatusRegions();
   restoreScrollPosition();
 }
 function ccuScrollStateKey() {
@@ -9065,9 +9108,11 @@ function sortTable(table, key, th, restoring) {
   table.querySelectorAll('th.sortable').forEach(function(h) {
     h.removeAttribute('data-sortdir');
     h.classList.remove('sorted-asc', 'sorted-desc');
+    h.setAttribute('aria-sort', 'none');
   });
   th.setAttribute('data-sortdir', ascending ? 'asc' : 'desc');
   th.classList.add(ascending ? 'sorted-asc' : 'sorted-desc');
+  th.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
 
   units.sort(function(a, b) {
     var va = a.lead.getAttribute('data-sort-' + key);
@@ -9095,8 +9140,16 @@ function sortTable(table, key, th, restoring) {
     ccuWriteUiState('tableSorts', sorts);
   }
 }
+function initializeSortableHeaders(root) {
+  var scope = root || document;
+  scope.querySelectorAll('th.sortable').forEach(function(header) {
+    header.setAttribute('tabindex', '0');
+    if (!header.hasAttribute('aria-sort')) { header.setAttribute('aria-sort', 'none'); }
+  });
+}
 function restoreTableSorts(root) {
   var scope = root || document;
+  initializeSortableHeaders(scope);
   var sorts = ccuReadUiState().tableSorts || {};
   scope.querySelectorAll('table').forEach(function(table) {
     var saved = sorts[ccuElementStateKey(table, 'table')];
@@ -9110,9 +9163,16 @@ function restoreTableSorts(root) {
 
 function showTab(tabName, restoring) {
   try {
-    // Remove active from all tabs and contents
-    document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    // Keep the visual state and the WAI-ARIA tab contract in lockstep.
+    document.querySelectorAll('.tabs [role="tab"]').forEach(function(tab) {
+      tab.classList.remove('active');
+      tab.setAttribute('aria-selected', 'false');
+      tab.setAttribute('tabindex', '-1');
+    });
+    document.querySelectorAll('.tab-content[role="tabpanel"]').forEach(function(content) {
+      content.classList.remove('active');
+      content.hidden = true;
+    });
 
     // Add active to selected tab and content
     const selectedTab = document.getElementById('tab-' + tabName);
@@ -9120,7 +9180,10 @@ function showTab(tabName, restoring) {
 
     if (selectedTab && selectedContent) {
       selectedTab.classList.add('active');
+      selectedTab.setAttribute('aria-selected', 'true');
+      selectedTab.setAttribute('tabindex', '0');
       selectedContent.classList.add('active');
+      selectedContent.hidden = false;
 
       if (!restoring) {
         vscode.postMessage({ command: 'tabChanged', tab: tabName });
@@ -9137,12 +9200,40 @@ function showTab(tabName, restoring) {
   }
 }
 
+// The dashboard views use the same roving-tabindex keyboard contract as the
+// provider selector. A single-line scroll strip keeps the focused destination
+// visible at narrow widths without turning translated labels vertical.
+document.addEventListener('keydown', function(event) {
+  var tab = event.target && event.target.closest
+    ? event.target.closest('.tabs [role="tab"][data-dashboard-tab]')
+    : null;
+  if (!tab || ['ArrowLeft', 'ArrowRight', 'Home', 'End'].indexOf(event.key) === -1) { return; }
+  var tablist = tab.closest('.tabs[role="tablist"]');
+  if (!tablist) { return; }
+  var items = Array.prototype.slice.call(
+    tablist.querySelectorAll('[role="tab"][data-dashboard-tab]'),
+  );
+  var index = items.indexOf(tab);
+  if (index === -1 || items.length === 0) { return; }
+  if (event.key === 'Home') { index = 0; }
+  else if (event.key === 'End') { index = items.length - 1; }
+  else { index = (index + (event.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length; }
+  event.preventDefault();
+  var next = items[index];
+  next.focus();
+  if (next.scrollIntoView) { next.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  showTab(next.getAttribute('data-dashboard-tab'));
+});
+
 function toggleHourlyDetail(date) {
   try {
     const detailRow = document.querySelector('.hourly-detail-row[data-date="' + date + '"]');
     const button = document.querySelector('.daily-row[data-date="' + date + '"] .detail-button');
     const container = document.getElementById('hourly-detail-' + date);
-    const chartBar = document.querySelector('.chart-bar-container[data-date="' + date + '"] .chart-bar');
+    const chartBar = document.querySelector(
+      '.tab-content.active .hc-col[data-date="' + date + '"] .chart-bar.clickable, ' +
+      '.tab-content.active .chart-bar-container[data-date="' + date + '"] .chart-bar.clickable',
+    );
 
     if (detailRow && button && container) {
       const isExpanded = detailRow.style.display !== 'none' && detailRow.style.display !== '';
@@ -9154,6 +9245,7 @@ function toggleHourlyDetail(date) {
         // Show detail for this date
         detailRow.style.display = 'table-row';
         button.classList.add('expanded');
+        setChartDrilldownExpanded('hourly-detail-' + date, true);
 
         // Update chart bar selection state
         if (chartBar) {
@@ -9174,6 +9266,7 @@ function toggleHourlyDetail(date) {
         // Hide detail
         detailRow.style.display = 'none';
         button.classList.remove('expanded');
+        setChartDrilldownExpanded('hourly-detail-' + date, false);
 
         // Update chart bar selection state
         if (chartBar) {
@@ -9225,6 +9318,9 @@ function closeAllCodexHourlyDetails(scope) {
   root.querySelectorAll('[data-codex-last30-daily] .chart-bar.selected').forEach(function(bar) {
     bar.classList.remove('selected');
   });
+  root.querySelectorAll('[aria-controls^="codex-hourly-detail-"]').forEach(function(control) {
+    control.setAttribute('aria-expanded', 'false');
+  });
 }
 
 function setCodexHourlyDetail(date, expanded, restoring) {
@@ -9235,6 +9331,7 @@ function setCodexHourlyDetail(date, expanded, restoring) {
     elements.detailRow.style.display = 'table-row';
     elements.button.classList.add('expanded');
     elements.button.setAttribute('aria-expanded', 'true');
+    setChartDrilldownExpanded('codex-hourly-detail-' + date, true);
     if (elements.chartBar) { elements.chartBar.classList.add('selected'); }
     persistCodexHourlyDetail(elements.detailRow, date);
     if (!restoring) {
@@ -9244,6 +9341,7 @@ function setCodexHourlyDetail(date, expanded, restoring) {
     elements.detailRow.style.display = 'none';
     elements.button.classList.remove('expanded');
     elements.button.setAttribute('aria-expanded', 'false');
+    setChartDrilldownExpanded('codex-hourly-detail-' + date, false);
     if (elements.chartBar) { elements.chartBar.classList.remove('selected'); }
     persistCodexHourlyDetail(elements.detailRow, '');
   }
@@ -9288,10 +9386,14 @@ function closeAllHourlyDetails() {
 
   allButtons.forEach(function(btn) {
     btn.classList.remove('expanded');
+    btn.setAttribute('aria-expanded', 'false');
   });
 
   allChartBars.forEach(function(bar) {
     bar.classList.remove('selected');
+  });
+  document.querySelectorAll('[aria-controls^="hourly-detail-"]').forEach(function(control) {
+    control.setAttribute('aria-expanded', 'false');
   });
 
 }
@@ -9301,7 +9403,10 @@ function toggleMonthlyDetail(monthDate) {
     const detailRow = document.querySelector('.monthly-detail-row[data-date="' + monthDate + '"]');
     const button = document.querySelector('.daily-row[data-date="' + monthDate + '"] .detail-button');
     const container = document.getElementById('monthly-detail-' + monthDate);
-    const chartBar = document.querySelector('.chart-bar-container[data-date="' + monthDate + '"] .chart-bar');
+    const chartBar = document.querySelector(
+      '.tab-content.active .hc-col[data-date="' + monthDate + '"] .chart-bar.clickable, ' +
+      '.tab-content.active .chart-bar-container[data-date="' + monthDate + '"] .chart-bar.clickable',
+    );
 
     if (detailRow && button && container) {
       const isExpanded = detailRow.style.display !== 'none' && detailRow.style.display !== '';
@@ -9313,6 +9418,7 @@ function toggleMonthlyDetail(monthDate) {
         // Show detail for this month
         detailRow.style.display = 'table-row';
         button.classList.add('expanded');
+        setChartDrilldownExpanded('monthly-detail-' + monthDate, true);
 
         // Update chart bar selection state
         if (chartBar) {
@@ -9331,6 +9437,7 @@ function toggleMonthlyDetail(monthDate) {
         // Hide detail
         detailRow.style.display = 'none';
         button.classList.remove('expanded');
+        setChartDrilldownExpanded('monthly-detail-' + monthDate, false);
 
         // Update chart bar selection state
         if (chartBar) {
@@ -9358,10 +9465,14 @@ function closeAllMonthlyDetails() {
 
   allButtons.forEach(function(btn) {
     btn.classList.remove('expanded');
+    btn.setAttribute('aria-expanded', 'false');
   });
 
   allChartBars.forEach(function(bar) {
     bar.classList.remove('selected');
+  });
+  document.querySelectorAll('[aria-controls^="monthly-detail-"]').forEach(function(control) {
+    control.setAttribute('aria-expanded', 'false');
   });
 
 }
@@ -9738,6 +9849,8 @@ window.addEventListener('message', async function(event) {
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
       restoreChartMetrics(container);
+      initializeChartDrilldowns(container);
+      initializeStatusRegions(container);
     }
   }
 
@@ -9749,6 +9862,8 @@ window.addEventListener('message', async function(event) {
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
       restoreChartMetrics(container);
+      initializeChartDrilldowns(container);
+      initializeStatusRegions(container);
     }
   }
 
@@ -9779,11 +9894,25 @@ function saveChartMetric(container, metric) {
   metrics[ccuChartStateKey(container)] = metric;
   ccuWriteUiState('chartMetrics', metrics);
 }
+function syncChartMetricState(container) {
+  var heading = container.querySelector(':scope > h3, :scope > h4, :scope > .section-header h3');
+  container.querySelectorAll(':scope > .chart-tabs').forEach(function(group) {
+    group.setAttribute('role', 'group');
+    if (heading && heading.textContent) { group.setAttribute('aria-label', heading.textContent.trim()); }
+  });
+  container.querySelectorAll('.chart-tab[data-metric]').forEach(function(item) {
+    item.setAttribute('aria-pressed', item.classList.contains('active') ? 'true' : 'false');
+  });
+}
 function applyChartMetric(container, metric, persist) {
   var tab = container.querySelector('.chart-tab[data-metric="' + metric + '"]');
   if (!tab) { return; }
-  container.querySelectorAll('.chart-tab').forEach(function(item) { item.classList.remove('active'); });
+  container.querySelectorAll('.chart-tab').forEach(function(item) {
+    item.classList.remove('active');
+    item.setAttribute('aria-pressed', 'false');
+  });
   tab.classList.add('active');
+  tab.setAttribute('aria-pressed', 'true');
   if (container.classList.contains('hourly-breakdown')) {
     var chartContent = container.querySelector('[id^="hourly-chart-"]');
     if (chartContent) { updateHourlyChart(chartContent.id.replace('hourly-chart-', ''), metric); }
@@ -9801,6 +9930,66 @@ function restoreChartMetrics(root) {
   containers.forEach(function(container) {
     var metric = metrics[ccuChartStateKey(container)];
     if (metric) { applyChartMetric(container, metric, false); }
+    else { syncChartMetricState(container); }
+  });
+}
+
+function chartDrilldownInfo(element) {
+  var holder = element && element.closest
+    ? element.closest('[data-date]')
+    : null;
+  var date = holder ? holder.getAttribute('data-date') : '';
+  if (!date) { return null; }
+  var activeTab = document.querySelector('.tabs [role="tab"][aria-selected="true"]');
+  var kind = activeTab && activeTab.id === 'tab-all'
+    ? 'monthly'
+    : element.closest('[data-codex-last30-daily]')
+      ? 'codex-hourly'
+      : 'hourly';
+  var prefix = kind === 'monthly'
+    ? 'monthly-detail-'
+    : kind === 'codex-hourly'
+      ? 'codex-hourly-detail-'
+      : 'hourly-detail-';
+  return { date: date, kind: kind, controls: prefix + date };
+}
+function setChartDrilldownExpanded(controls, expanded) {
+  document.querySelectorAll('[aria-controls="' + controls + '"]').forEach(function(control) {
+    control.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  });
+}
+function activateChartDrilldown(element) {
+  var info = chartDrilldownInfo(element);
+  if (!info) { return; }
+  if (info.kind === 'monthly') { toggleMonthlyDetail(info.date); }
+  else if (info.kind === 'codex-hourly') { toggleCodexHourlyDetail(info.date); }
+  else { toggleHourlyDetail(info.date); }
+}
+function initializeChartDrilldowns(root) {
+  var scope = root || document;
+  scope.querySelectorAll('.chart-bar.clickable, .hc-col-clickable[data-date]').forEach(function(control) {
+    var info = chartDrilldownInfo(control);
+    if (!info || !document.getElementById(info.controls)) { return; }
+    control.setAttribute('role', 'button');
+    control.setAttribute('tabindex', '0');
+    control.setAttribute('aria-controls', info.controls);
+    var label = control.getAttribute('title') || info.date;
+    control.setAttribute('aria-label', label);
+    var detail = document.getElementById(info.controls);
+    var expanded = detail && detail.closest('tr')
+      ? getComputedStyle(detail.closest('tr')).display !== 'none'
+      : false;
+    control.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  });
+}
+function initializeStatusRegions(root) {
+  var scope = root || document;
+  scope.querySelectorAll('.loading, .no-data, .no-chart-data').forEach(function(region) {
+    region.setAttribute('role', 'status');
+    region.setAttribute('aria-live', 'polite');
+  });
+  scope.querySelectorAll('.error').forEach(function(region) {
+    region.setAttribute('role', 'alert');
   });
 }
 
@@ -9834,28 +10023,29 @@ document.addEventListener('click', function(event) {
   // Handle chart bar clicks - only for clickable charts
   if (event.target.classList.contains('chart-bar') && event.target.classList.contains('clickable')) {
     event.preventDefault();
-    // Daily/monthly charts now use .hc-col; the JS-rendered drill-downs still
-    // use .chart-bar-container — support both.
-    const container = event.target.closest('.hc-col') || event.target.closest('.chart-bar-container');
-    if (container) {
-      const date = container.dataset.date;
-      if (date) {
-        // Determine if this is a monthly chart or daily chart based on current tab
-        const activeTab = document.querySelector('.tab.active');
-        if (activeTab && activeTab.id === 'tab-all') {
-          // This is in the "all time" tab, so it's a monthly chart
-          toggleMonthlyDetail(date);
-        } else {
-          // This is in the "month" tab, so it's a daily chart
-          if (event.target.closest('[data-codex-last30-daily]')) {
-            toggleCodexHourlyDetail(date);
-          } else {
-            toggleHourlyDetail(date);
-          }
-        }
-      }
-    }
+    activateChartDrilldown(event.target);
   }
+});
+
+document.addEventListener('keydown', function(event) {
+  var sortableTh = event.target && event.target.closest
+    ? event.target.closest('th.sortable')
+    : null;
+  if (!sortableTh || (event.key !== 'Enter' && event.key !== ' ')) { return; }
+  var table = sortableTh.closest('table');
+  var key = sortableTh.getAttribute('data-sortkey');
+  if (!table || !key) { return; }
+  event.preventDefault();
+  sortTable(table, key, sortableTh);
+});
+
+document.addEventListener('keydown', function(event) {
+  var control = event.target && event.target.closest
+    ? event.target.closest('.chart-bar.clickable[role="button"], .hc-col-clickable[role="button"]')
+    : null;
+  if (!control || (event.key !== 'Enter' && event.key !== ' ')) { return; }
+  event.preventDefault();
+  activateChartDrilldown(control);
 });
 
 function bindChartTabEvents(container) {
@@ -9956,6 +10146,12 @@ function updateMainChart(metric, container) {
     } else if (date) {
       const dateObj = new Date(date);
       bar.title = dateObj.toLocaleDateString() + ': ' + valueWithHelp;
+    }
+    // Drill-down bars keep their accessible name synchronized with the
+    // currently selected metric; otherwise a keyboard user would continue to
+    // hear the initial cost value after switching to tokens or messages.
+    if (bar.getAttribute('role') === 'button' && bar.title) {
+      bar.setAttribute('aria-label', bar.title);
     }
 
     const barVal = container.querySelector('.hc-barval');
@@ -10201,7 +10397,7 @@ function renderDailyData(dailyData, monthDate) {
 // attributes so the in-place metric switcher (updateMainChart) can rebuild.
 function griddedChart(items, metric, opts) {
   if (!items || items.length === 0) {
-    return '<div class="no-chart-data">No data available</div>';
+    return '<div class="no-chart-data" role="status">${this.escapeHtml(I18n.t.statusBar.noData)}</div>';
   }
   const maxHeight = 120;
   function metricValue(d) {

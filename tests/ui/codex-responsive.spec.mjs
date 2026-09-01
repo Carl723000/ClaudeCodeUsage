@@ -1,4 +1,4 @@
-import { test, expect, openClaude, openCodex } from './support/app.mjs';
+import { test, expect, openClaude, openCodex, openCompare } from './support/app.mjs';
 
 const locales = ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'];
 
@@ -7,6 +7,28 @@ async function pageWidths(page) {
     document: document.documentElement.scrollWidth,
     body: document.body.scrollWidth,
   }));
+}
+
+async function expectPageToFitViewport(page) {
+  const widths = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth,
+  }));
+  expect(widths.document, widths).toBeLessThanOrEqual(widths.viewport);
+  expect(widths.body, widths).toBeLessThanOrEqual(widths.viewport);
+}
+
+async function expectSingleLineNavigation(page, selector) {
+  const layout = await page.locator(selector).evaluateAll((items) => items.map((item) => ({
+    text: item.textContent?.trim() ?? '',
+    whiteSpace: getComputedStyle(item).whiteSpace,
+    clientHeight: item.clientHeight,
+    scrollHeight: item.scrollHeight,
+  })));
+  expect(layout.length).toBeGreaterThan(0);
+  expect(layout.every((item) =>
+    item.whiteSpace === 'nowrap' && item.scrollHeight <= item.clientHeight + 1), layout).toBe(true);
 }
 
 async function expectTableToFit(table) {
@@ -64,17 +86,29 @@ for (const locale of locales) {
   test(`${locale} shared Codex shell fits a 360px viewport`, async ({ page }) => {
     await openCodex(page, { locale, width: 360, height: 800 });
     await expect(page.locator('html')).toHaveAttribute('lang', locale);
-    const codexWidths = await pageWidths(page);
+    await expectPageToFitViewport(page);
+    await expectSingleLineNavigation(page, '.provider-tabs .provider-tab');
+    await expectSingleLineNavigation(page, '.tabs .tab');
 
-    for (const tab of ['month', 'sessions', 'projects', 'content', 'settings']) {
+    for (const tab of ['month', 'all', 'sessions', 'projects', 'content', 'settings']) {
       await page.locator(`#tab-${tab}`).click();
       await expect(page.locator(`#${tab}`)).toBeVisible();
+      await expectPageToFitViewport(page);
     }
 
     await openClaude(page, { locale, width: 360, height: 800 });
-    const claudeWidths = await pageWidths(page);
-    expect(codexWidths.document).toBeLessThanOrEqual(claudeWidths.document);
-    expect(codexWidths.body).toBeLessThanOrEqual(claudeWidths.body);
+    await expectPageToFitViewport(page);
+    await expectSingleLineNavigation(page, '.provider-tabs .provider-tab');
+    await expectSingleLineNavigation(page, '.tabs .tab');
+    for (const tab of ['month', 'all', 'sessions', 'projects', 'branches', 'workflows', 'settings']) {
+      await page.locator(`#tab-${tab}`).click();
+      await expect(page.locator(`#${tab}`)).toBeVisible();
+      await expectPageToFitViewport(page);
+    }
+
+    await openCompare(page, { locale, width: 360, height: 800 });
+    await expectPageToFitViewport(page);
+    await expectSingleLineNavigation(page, '.provider-tabs .provider-tab');
   });
 }
 

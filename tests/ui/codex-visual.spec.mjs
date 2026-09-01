@@ -21,6 +21,180 @@ const REGISTERED_VSCODE_VARIABLES = new Set([
   '--vscode-textCodeBlock-background', '--vscode-textLink-foreground', '--vscode-toolbar-hoverBackground',
 ]);
 
+const SHARED_VISUAL_TOKENS = [
+  '--ccu-space-1',
+  '--ccu-space-2',
+  '--ccu-space-3',
+  '--ccu-space-4',
+  '--ccu-space-5',
+  '--ccu-space-6',
+  '--ccu-radius-control',
+  '--ccu-radius-panel',
+  '--ccu-border',
+  '--ccu-surface-raised',
+  '--ccu-surface-subtle',
+  '--ccu-data-font',
+  '--ccu-focus',
+];
+
+async function computedContract(locator, properties, rectangleProperties = []) {
+  await expect(locator).toBeVisible();
+  return locator.evaluate((element, contract) => {
+    const style = getComputedStyle(element);
+    const rectangle = element.getBoundingClientRect();
+    return {
+      styles: Object.fromEntries(contract.properties.map((property) => [
+        property,
+        style.getPropertyValue(property).trim(),
+      ])),
+      geometry: Object.fromEntries(contract.rectangleProperties.map((property) => [
+        property,
+        Number(rectangle[property].toFixed(3)),
+      ])),
+    };
+  }, { properties, rectangleProperties });
+}
+
+async function summaryCardContract(page) {
+  const card = page.locator('#today .usage-summary .summary-grid .summary-item').first();
+  return {
+    card: await computedContract(card, [
+      'display',
+      'min-height',
+      'flex-direction',
+      'justify-content',
+      'text-align',
+      'padding-top',
+      'padding-right',
+      'padding-bottom',
+      'padding-left',
+      'background-color',
+      'border-top-width',
+      'border-top-style',
+      'border-top-color',
+      'border-radius',
+    ], ['height']),
+    value: await computedContract(card.locator('.value'), [
+      'font-family',
+      'font-size',
+      'font-weight',
+      'font-variant-numeric',
+    ]),
+  };
+}
+
+async function modelSurfaceContract(page) {
+  const surface = page.locator('#today .model-breakdown details.model-item').first();
+  return {
+    surface: await computedContract(surface, [
+      'padding-top',
+      'padding-right',
+      'padding-bottom',
+      'padding-left',
+      'background-color',
+      'border-top-width',
+      'border-top-style',
+      'border-top-color',
+      'border-radius',
+    ], ['width']),
+    summary: await computedContract(surface.locator(':scope > summary'), [
+      'display',
+      'align-items',
+      'gap',
+      'margin-bottom',
+      'cursor',
+    ]),
+    details: await computedContract(surface.locator(':scope > .model-details-stacked'), [
+      'display',
+      'flex-direction',
+      'gap',
+      'margin-top',
+      'font-size',
+      'color',
+    ]),
+  };
+}
+
+async function monthChartContract(page) {
+  await page.locator('#tab-month').click();
+  const panel = page.locator('#month .daily-breakdown:has(> .chart-tabs)').first();
+  const tabs = panel.locator(':scope > .chart-tabs');
+  return {
+    tabs: await computedContract(tabs, [
+      'display',
+      'gap',
+      'margin-bottom',
+      'flex-wrap',
+    ], ['width', 'height']),
+    control: await computedContract(tabs.locator('.chart-tab').first(), [
+      'padding-top',
+      'padding-right',
+      'padding-bottom',
+      'padding-left',
+      'font-size',
+      'border-top-width',
+      'border-top-style',
+      'border-radius',
+    ], ['height']),
+    content: await computedContract(panel.locator(':scope > .chart-content'), [
+      'display',
+      'align-items',
+      'justify-content',
+      'width',
+      'height',
+    ], ['width', 'height']),
+  };
+}
+
+async function keyboardFocusContract(locator) {
+  await locator.focus();
+  // A keyboard activation puts Chromium into :focus-visible modality without
+  // depending on mouse history from selecting the containing dashboard tab.
+  await locator.press('Space');
+  await expect(locator).toBeFocused();
+  return locator.evaluate((element) => {
+    const style = getComputedStyle(element);
+    return {
+      focusVisible: element.matches(':focus-visible'),
+      outlineWidth: style.outlineWidth,
+      outlineStyle: style.outlineStyle,
+      outlineColor: style.outlineColor,
+      outlineOffset: style.outlineOffset,
+    };
+  });
+}
+
+async function responsiveShellContract(page) {
+  const grid = page.locator('#today .usage-summary .summary-grid').first();
+  const card = grid.locator('.summary-item').first();
+  const nav = page.locator('.tabs');
+  const contract = await page.evaluate((tokens) => {
+    const root = getComputedStyle(document.documentElement);
+    return {
+      tokens: Object.fromEntries(tokens.map((token) => [token, root.getPropertyValue(token).trim()])),
+      bodyPadding: getComputedStyle(document.body).padding,
+    };
+  }, SHARED_VISUAL_TOKENS);
+  return {
+    ...contract,
+    grid: await computedContract(grid, ['grid-template-columns', 'gap']),
+    card: await computedContract(card, ['min-height', 'padding', 'border-radius']),
+    value: await computedContract(card.locator('.value'), ['font-size', 'font-family']),
+    navigation: await nav.evaluate((element) => {
+      const style = getComputedStyle(element);
+      const tabStyle = getComputedStyle(element.querySelector('.tab'));
+      return {
+        display: style.display,
+        overflowX: style.overflowX,
+        overflowY: style.overflowY,
+        clientWidth: element.clientWidth,
+        scrollable: element.scrollWidth > element.clientWidth,
+        tabWhiteSpace: tabStyle.whiteSpace,
+      };
+    }),
+  };
+}
+
 test('Codex uses the shared dashboard shell and tab vocabulary', async ({ page }) => {
   await openCodex(page);
 
@@ -124,7 +298,7 @@ test('Codex explains multi-sign-in usage and last-observed limits', async ({ pag
   await expect(limits).toContainText(/Resets:/);
 });
 
-test('Claude and Codex receive the exact same production stylesheet', async ({ page }) => {
+test('Claude and Codex receive the exact same tokenized production stylesheet', async ({ page }) => {
   await openClaude(page);
   const claudeStyles = await page.locator('head style').first().textContent();
 
@@ -132,6 +306,172 @@ test('Claude and Codex receive the exact same production stylesheet', async ({ p
   const codexStyles = await page.locator('head style').first().textContent();
 
   expect(codexStyles).toBe(claudeStyles);
+  for (const token of SHARED_VISUAL_TOKENS) {
+    expect(codexStyles).toContain(`${token}:`);
+  }
+  expect(codexStyles).toContain('@media (max-width: 480px)');
+  expect(codexStyles).toContain('@media (prefers-reduced-motion: reduce)');
+});
+
+test('Claude and Codex summary cards share geometry and data typography', async ({ page }) => {
+  // Metric labels, values, semantics, and card counts intentionally remain
+  // provider-native; this samples one representative card from each shell.
+  await openClaude(page);
+  const claude = await summaryCardContract(page);
+
+  await openCodex(page);
+  const codex = await summaryCardContract(page);
+
+  expect(codex).toEqual(claude);
+  expect(codex.card.styles).toMatchObject({
+    display: 'flex',
+    'min-height': '68px',
+    'flex-direction': 'column',
+    'justify-content': 'center',
+    'text-align': 'left',
+    'padding-top': '12px',
+    'padding-bottom': '12px',
+    'border-top-width': '1px',
+    'border-top-style': 'solid',
+    'border-radius': '8px',
+  });
+  expect(codex.value.styles['font-variant-numeric']).toContain('tabular-nums');
+});
+
+test('Claude and Codex model details share surface and disclosure contracts', async ({ page }) => {
+  // The expanded bodies contain different fields and therefore may have
+  // different heights. Surface width and computed component styles are the
+  // shared contract; row counts and metric equality are deliberately absent.
+  await openClaude(page);
+  const claude = await modelSurfaceContract(page);
+
+  await openCodex(page);
+  const codex = await modelSurfaceContract(page);
+
+  expect(codex).toEqual(claude);
+  expect(codex.surface.styles).toMatchObject({
+    'padding-top': '12px',
+    'padding-right': '12px',
+    'padding-bottom': '12px',
+    'padding-left': '12px',
+    'border-top-width': '1px',
+    'border-top-style': 'solid',
+    'border-radius': '6px',
+  });
+  expect(codex.summary.styles).toMatchObject({
+    display: 'flex',
+    'align-items': 'center',
+    gap: '8px',
+    cursor: 'pointer',
+  });
+  expect(codex.details.styles).toMatchObject({
+    display: 'flex',
+    'flex-direction': 'column',
+    gap: '4px',
+  });
+});
+
+test('Claude and Codex chart controls and content share visual geometry', async ({ page }) => {
+  // Control labels and available metrics are provider-specific. Width is
+  // compared for the shared rows/content, while label-driven button width and
+  // the overall panel height are intentionally outside this contract.
+  await openClaude(page);
+  const claude = await monthChartContract(page);
+
+  await openCodex(page);
+  const codex = await monthChartContract(page);
+
+  expect(codex).toEqual(claude);
+  expect(codex.tabs.styles).toMatchObject({
+    display: 'flex',
+    gap: '4px',
+    'margin-bottom': '16px',
+    'flex-wrap': 'wrap',
+  });
+  expect(codex.control.styles).toMatchObject({
+    'padding-top': '6px',
+    'padding-right': '12px',
+    'padding-bottom': '6px',
+    'padding-left': '12px',
+    'font-size': '11px',
+    'border-top-width': '1px',
+    'border-top-style': 'solid',
+    'border-radius': '4px',
+  });
+  expect(codex.content.styles).toMatchObject({
+    display: 'flex',
+    'align-items': 'end',
+    'justify-content': 'center',
+  });
+});
+
+test('Claude and Codex keyboard controls share the visible focus contract', async ({ page }) => {
+  await openClaude(page);
+  const claudeSummary = await keyboardFocusContract(
+    page.locator('#today .model-breakdown details.model-item > summary').first(),
+  );
+  await page.locator('#tab-month').click();
+  const claudeChart = await keyboardFocusContract(
+    page.locator('#month .daily-breakdown:has(> .chart-tabs) > .chart-tabs .chart-tab').first(),
+  );
+
+  await openCodex(page);
+  await page.locator('#tab-today').click();
+  const codexSummary = await keyboardFocusContract(
+    page.locator('#today .model-breakdown details.model-item > summary').first(),
+  );
+  await page.locator('#tab-month').click();
+  const codexChart = await keyboardFocusContract(
+    page.locator('#month .daily-breakdown:has(> .chart-tabs) > .chart-tabs .chart-tab').first(),
+  );
+
+  expect(codexSummary).toEqual(claudeSummary);
+  expect(codexChart).toEqual(claudeChart);
+  for (const focus of [codexSummary, codexChart]) {
+    expect(focus).toMatchObject({
+      focusVisible: true,
+      outlineWidth: '2px',
+      outlineStyle: 'solid',
+      outlineOffset: '2px',
+    });
+  }
+  expect(codexSummary.outlineColor).toBe(codexChart.outlineColor);
+});
+
+test('Claude and Codex share the 360px responsive component contract', async ({ page }) => {
+  await openClaude(page, { theme: 'dark', width: 360, height: 800 });
+  const claude = await responsiveShellContract(page);
+
+  await openCodex(page, { theme: 'dark', width: 360, height: 800 });
+  const codex = await responsiveShellContract(page);
+
+  expect(codex).toEqual(claude);
+  expect(codex.bodyPadding).toBe('12px');
+  expect(codex.grid.styles).toMatchObject({
+    'grid-template-columns': '164px 164px',
+    gap: '8px',
+  });
+  expect(codex.card.styles).toMatchObject({
+    'min-height': '58px',
+    padding: '10px 12px',
+    'border-radius': '8px',
+  });
+  expect(codex.value.styles['font-size']).toBe('17px');
+  expect(codex.navigation).toMatchObject({
+    display: 'flex',
+    overflowX: 'auto',
+    overflowY: 'hidden',
+    clientWidth: 336,
+    scrollable: true,
+    tabWhiteSpace: 'nowrap',
+  });
+  expect(codex.tokens).toMatchObject({
+    '--ccu-space-2': '8px',
+    '--ccu-space-3': '12px',
+    '--ccu-space-4': '16px',
+    '--ccu-radius-control': '4px',
+    '--ccu-radius-panel': '8px',
+  });
 });
 
 for (const theme of ['light', 'dark']) {
