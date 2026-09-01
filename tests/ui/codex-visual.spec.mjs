@@ -295,8 +295,9 @@ test('weekly allowance value uses the shared all-time chart and exposes uncertai
   await expect(panel).toBeVisible();
   await expect(panel).toContainText('Estimate, not a bill');
   await expect(panel).toContainText('Historical used equivalents come directly from local token logs');
-  await expect(panel).toContainText('When usage cannot be reliably attributed to a single quota observation');
-  await expect(panel).toContainText('no account split or allowance estimate is invented');
+  await expect(panel).toContainText('One coherent unattributed quota window can show a low-confidence total estimate');
+  await expect(panel).toContainText('If epochs overlap or attribution conflicts, only used equivalent is shown');
+  await expect(panel).toContainText('no account split is invented');
   await expect(panel).toContainText('If an official reset falls within a recorded day');
   await expect(panel.locator('tbody')).toContainText('Low · Boundary approx.');
   await expect(panel.locator('.hc-col')).toHaveCount(2);

@@ -15,6 +15,10 @@ import {
 } from '../backgroundWorkState';
 import { ResourceOwnershipRegistry } from '../resourceOwnership';
 import { snapshotFixture } from './codexFixtures';
+import {
+  createEmptyQuotaObservationStore,
+  mergeQuotaCaptures,
+} from '../quotaObservationStore';
 
 type ExtensionModule = typeof import('../extension');
 
@@ -41,10 +45,14 @@ function loadExtensionModule(): ExtensionModule {
   }
 }
 
-const { ClaudeCodeUsageExtension } = loadExtensionModule();
+const {
+  ClaudeCodeUsageExtension,
+  initializeQuotaObservationRuntime,
+} = loadExtensionModule();
 
 function bareExtension(): any {
   const extension = Object.create(ClaudeCodeUsageExtension.prototype) as any;
+  const quotaSalt = 'extension-window-activity-test-salt';
   extension.resourceOwnership = new ResourceOwnershipRegistry();
   extension.codexWatcherLeases = new Map();
   extension.debounceTimerLeases = new Map();
@@ -74,6 +82,22 @@ function bareExtension(): any {
     },
   };
   extension.outputChannel = { appendLine: () => undefined };
+  extension.quotaFingerprintSalt = quotaSalt;
+  extension.quotaObservationStore = createEmptyQuotaObservationStore();
+  extension.quotaObservationRepository = {
+    append: async (captures: any[]) => {
+      extension.quotaObservationStore = mergeQuotaCaptures(
+        extension.quotaObservationStore,
+        captures,
+        { salt: quotaSalt, now: Date.now() },
+      );
+      return extension.quotaObservationStore;
+    },
+  };
+  extension.webviewProvider = {
+    updateQuota: () => undefined,
+    updateWeeklyQuotaHistory: () => undefined,
+  };
   return extension;
 }
 
@@ -1214,6 +1238,9 @@ test('credentials change clears quota failure backoff before refreshing', async 
     calls.push(`refresh:${trigger}`);
     return Promise.resolve();
   };
+  extension.webviewProvider = {
+    updateWeeklyQuotaHistory: () => undefined,
+  };
 
   extension.handleCredentialsChange();
   await Promise.resolve();
@@ -1297,6 +1324,63 @@ test('a quota response from the previous profile is discarded after a switch', a
   assert.equal(extension.cache.usageLimitsLastUpdate.getTime(), 0);
 });
 
+test('a same-path credential rotation cannot persist the stale in-flight quota response', async () => {
+  const extension = bareExtension();
+  let releaseRequest: ((value: unknown) => void) | undefined;
+  const client = {
+    getCredentialsPath: () => '/private/profile/.credentials.json',
+    getLastQuotaIdentitySignal: () => 'stale-continuity-signal',
+    fetchUsageLimits: () => new Promise((resolve) => {
+      releaseRequest = resolve;
+    }),
+  };
+  extension.apiClient = client;
+  extension.claudeProfileGeneration = 0;
+  extension.cache = {
+    usageLimits: null,
+    usageLimitsLastUpdate: new Date(0),
+    usageLimitsBackoffUntil: new Date(0),
+    usageLimitsFailStreak: 0,
+  };
+  extension.isActive = () => false;
+  extension.refreshData = async () => undefined;
+
+  const pending = extension.maybeFetchUsageLimits({ usageLimitTracking: true });
+  extension.handleCredentialsChange();
+  releaseRequest?.({
+    limits: [{
+      kind: 'weekly_all',
+      group: 'weekly',
+      percent: 75,
+      resets_at: '2026-09-07T03:24:00.000Z',
+      scope: null,
+      is_active: true,
+    }],
+  });
+
+  assert.equal(await pending, null);
+  assert.equal(extension.quotaObservationStore.observations.length, 0);
+  assert.equal(extension.cache.usageLimits, null);
+});
+
+test('disabled quota tracking neither calls the provider nor records an observation', async () => {
+  const extension = bareExtension();
+  let fetches = 0;
+  extension.apiClient = {
+    fetchUsageLimits: async () => {
+      fetches += 1;
+      return null;
+    },
+  };
+
+  assert.equal(
+    await extension.maybeFetchUsageLimits({ usageLimitTracking: false }),
+    null,
+  );
+  assert.equal(fetches, 0);
+  assert.equal(extension.quotaObservationStore.observations.length, 0);
+});
+
 test('repeated quota failures use the one-hour backoff cap', async () => {
   const extension = bareExtension();
   const originalNow = Date.now;
@@ -1333,6 +1417,7 @@ test('a successful Claude quota fetch persists sanitized weekly observations per
   const historyUpdates: unknown[] = [];
   extension.apiClient = {
     getCredentialsPath: () => '/private/profile-a/.credentials.json',
+    getLastQuotaIdentitySignal: () => 'safe-local-continuity-signal',
     fetchUsageLimits: async () => ({
       limits: [{
         kind: 'weekly_all',
@@ -1368,16 +1453,140 @@ test('a successful Claude quota fetch persists sanitized weekly observations per
   try {
     const result = await extension.maybeFetchUsageLimits({ usageLimitTracking: true });
     assert.ok(result);
-    const historyWrite = writes.find((write) => write.key.startsWith('ccu.weeklyQuotaHistory.v1.'));
-    assert.ok(historyWrite);
-    const history = historyWrite.value as Array<Record<string, unknown>>;
-    assert.equal(history.length, 1);
-    assert.deepEqual(Object.keys(history[0]).sort(), [
-      'observedAt', 'provider', 'resetAt', 'seriesKey', 'usedPercent',
-    ]);
-    assert.equal(history[0].usedPercent, 40);
+    assert.equal(
+      writes.some((write) => write.key.startsWith('ccu.weeklyQuotaHistory.v1.')),
+      false,
+    );
+    const observations = extension.quotaObservationStore.observations;
+    assert.equal(observations.length, 1);
+    assert.equal(observations[0].provider, 'claude');
+    assert.equal(observations[0].usedFraction, 0.4);
+    assert.equal(observations[0].accountAttribution, 'verified-local-signal');
+    assert.match(observations[0].accountFingerprint, /^acct_[a-f0-9]{32}$/);
+    assert.equal(
+      JSON.stringify(extension.quotaObservationStore).includes('/private/profile-a'),
+      false,
+    );
+    assert.equal(
+      JSON.stringify(extension.quotaObservationStore).includes('safe-local-continuity-signal'),
+      false,
+    );
     assert.equal(historyUpdates.length, 1);
   } finally {
     Date.now = originalNow;
   }
+});
+
+test('legacy quota migration is atomic, private, idempotent, and independent of tracking state', async () => {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ccu-quota-migration-'));
+  const observedAt = Date.now() - 60_000;
+  const resetAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+  const state = new Map<string, unknown>([
+    ['ccu.usageLimits.legacy-profile', {
+      ts: observedAt,
+      data: {
+        limits: [{
+          kind: 'weekly_all',
+          group: 'weekly',
+          percent: 40,
+          resets_at: new Date(resetAt).toISOString(),
+          scope: null,
+          is_active: true,
+        }],
+        unsafeCredentialCanary: 'oauth-token-canary',
+      },
+    }],
+    ['ccu.weeklyQuotaHistory.v1.legacy-profile', [{
+      provider: 'claude',
+      seriesKey: '/private/legacy-profile',
+      observedAt,
+      resetAt,
+      usedPercent: 40,
+    }]],
+  ]);
+  const globalState = {
+    keys: () => [...state.keys()],
+    get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+    update: async (key: string, value: unknown) => {
+      if (value === undefined) state.delete(key);
+      else state.set(key, value);
+    },
+  };
+  const context = {
+    globalState,
+    globalStorageUri: { fsPath: root },
+  } as any;
+  const settings = {
+    get: (key: string) => key === 'dataDirectory'
+      ? path.join(root, 'profile-without-credentials')
+      : key === 'timezone'
+        ? 'UTC'
+        : key === 'usageLimitTracking'
+          ? false
+          : undefined,
+  } as any;
+
+  const first = await initializeQuotaObservationRuntime(context, settings);
+  assert.equal(first.store.observations.length, 1);
+  assert.equal(first.store.observations[0].usedFraction, 0.4);
+  assert.equal(first.store.observations[0].captureReason, 'migration');
+  assert.ok(first.store.observations[0].flags.includes('account-ambiguous'));
+  assert.equal(state.has('ccu.usageLimits.legacy-profile'), false);
+  assert.equal(state.has('ccu.weeklyQuotaHistory.v1.legacy-profile'), false);
+  assert.equal(state.get('ccu.quota.migratedCodexIndex.v2'), true);
+
+  const file = path.join(root, 'quota-observations-v2.json');
+  const persisted = await fs.promises.readFile(file, 'utf8');
+  assert.doesNotMatch(persisted, /oauth-token-canary|private\/legacy-profile/);
+  const second = await initializeQuotaObservationRuntime(context, settings);
+  assert.deepEqual(second.store, first.store);
+});
+
+test('a failed P2 migration write preserves every legacy quota source and retry marker', async () => {
+  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ccu-quota-migration-failure-'));
+  const blockedStorage = path.join(root, 'not-a-directory');
+  await fs.promises.writeFile(blockedStorage, 'fixture', 'utf8');
+  const observedAt = Date.now() - 60_000;
+  const state = new Map<string, unknown>([[
+    'ccu.usageLimits.retryable-profile',
+    {
+      ts: observedAt,
+      data: {
+        limits: [{
+          kind: 'weekly_all',
+          group: 'weekly',
+          percent: 25,
+          resets_at: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+          scope: null,
+          is_active: true,
+        }],
+      },
+    },
+  ]]);
+  const context = {
+    globalState: {
+      keys: () => [...state.keys()],
+      get: <T>(key: string): T | undefined => state.get(key) as T | undefined,
+      update: async (key: string, value: unknown) => {
+        if (value === undefined) state.delete(key);
+        else state.set(key, value);
+      },
+    },
+    globalStorageUri: { fsPath: blockedStorage },
+  } as any;
+  const settings = {
+    get: (key: string) => key === 'timezone' ? 'UTC' : '',
+  } as any;
+
+  await assert.rejects(
+    initializeQuotaObservationRuntime(context, settings),
+    (error: unknown) =>
+      typeof error === 'object' &&
+      error !== null &&
+      'code' in error &&
+      (error as NodeJS.ErrnoException).code === 'EEXIST' &&
+      String((error as NodeJS.ErrnoException).path).endsWith('not-a-directory'),
+  );
+  assert.equal(state.has('ccu.usageLimits.retryable-profile'), true);
+  assert.equal(state.has('ccu.quota.migratedCodexIndex.v2'), false);
 });

@@ -27,10 +27,20 @@ import { ClaudeApiUsageResponse, ContentAnalysis, ExtensionConfig } from './type
 import { SettingsSecretMigrationError, SettingsStore } from './settings';
 import { normalizeQuotaWindows } from './quotaWindows';
 import {
-  appendWeeklyQuotaObservations,
-  claudeWeeklyQuotaObservations,
   WeeklyQuotaObservation,
 } from './weeklyValue';
+import {
+  claudeQuotaCapturesFromUsage,
+  codexQuotaCapturesFromWeeklyObservations,
+  createEmptyQuotaObservationStore,
+  fingerprintForStableIdentity,
+  mergeQuotaCaptures,
+  QUOTA_OBSERVATION_FILE,
+  QuotaCapture,
+  QuotaObservationRepository,
+  QuotaObservationStoreV2,
+  quotaStoreWeeklyObservations,
+} from './quotaObservationStore';
 import {
   diffUsageManifests,
   scanUsageManifest,
@@ -58,7 +68,11 @@ import {
   CodexProvider,
   CodexProviderSnapshot,
 } from './providers/codex/codexProvider';
-import { CodexIndexProgress } from './providers/codex/codexIndex';
+import {
+  CodexIndexProgress,
+  loadCodexIndex,
+} from './providers/codex/codexIndex';
+import { weeklyQuotaObservationsFromCodexHistory } from './providers/codex/codexQuotaHistory';
 import { resolveCodexHome } from './providers/codex/codexManifest';
 import { buildCodexUsageView, CodexUsageView } from './providers/codex/codexUsage';
 import {
@@ -113,6 +127,171 @@ interface ActiveNetworkOperation {
   readonly lease: ResourceLease;
   /** Resolves only after the request promise has reached its own terminal path. */
   readonly settled: Promise<void>;
+}
+
+interface QuotaObservationRuntime {
+  repository: QuotaObservationRepository;
+  store: QuotaObservationStoreV2;
+  salt: string;
+}
+
+const QUOTA_FINGERPRINT_SALT_KEY = 'ccu.quota.fingerprintSalt.v1';
+const QUOTA_P5_MIGRATION_KEY = 'ccu.quota.migratedCodexIndex.v2';
+const LEGACY_QUOTA_PREFIX = 'ccu.usageLimits.';
+const LEGACY_WEEKLY_PREFIX = 'ccu.weeklyQuotaHistory.v1.';
+
+function legacyProfileSuffix(credentialsPath: string): string {
+  return createHash('sha256').update(credentialsPath).digest('hex').slice(0, 16);
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function legacyWeeklyCaptures(
+  value: unknown,
+  identitySignal: string,
+): QuotaCapture[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((entry) => {
+    const item = objectRecord(entry);
+    if (
+      !item ||
+      item.provider !== 'claude' ||
+      typeof item.observedAt !== 'number' ||
+      !Number.isFinite(item.observedAt) ||
+      typeof item.resetAt !== 'number' ||
+      !Number.isFinite(item.resetAt) ||
+      typeof item.usedPercent !== 'number' ||
+      !Number.isFinite(item.usedPercent)
+    ) return [];
+    return [{
+      provider: 'claude' as const,
+      stableIdentitySignal: identitySignal,
+      accountAttribution: 'profile-continuity' as const,
+      observedAt: item.observedAt,
+      periodType: 'seven-day' as const,
+      usedFraction: Math.max(0, Math.min(1, item.usedPercent / 100)),
+      resetAt: item.resetAt,
+      source: 'claude-official-api' as const,
+      confidence: 'low' as const,
+      captureReason: 'migration' as const,
+      flags: ['account-ambiguous' as const],
+    }];
+  });
+}
+
+/** Load and transactionally migrate quota facts before any provider refresh
+ * starts. Legacy values are removed only after the schema-2 file is durable. */
+export async function initializeQuotaObservationRuntime(
+  context: vscode.ExtensionContext,
+  settings: SettingsStore,
+): Promise<QuotaObservationRuntime> {
+  let salt = context.globalState.get<string>(QUOTA_FINGERPRINT_SALT_KEY);
+  if (!salt) {
+    salt = randomBytes(32).toString('hex');
+    await context.globalState.update(QUOTA_FINGERPRINT_SALT_KEY, salt);
+  }
+  const repository = new QuotaObservationRepository(
+    path.join(context.globalStorageUri.fsPath, QUOTA_OBSERVATION_FILE),
+    salt,
+  );
+  let store = await repository.load();
+  const migrationCaptures: QuotaCapture[] = [];
+  const removableLegacyKeys: string[] = [];
+  let codexLegacyMigrationReady = context.globalState.get<boolean>(
+    QUOTA_P5_MIGRATION_KEY,
+  ) === true;
+  const profileClient = new ClaudeApiClient(
+    null,
+    settings.get<string>('dataDirectory'),
+    salt,
+  );
+  const currentCredentialsPath = profileClient.getCredentialsPath();
+  const currentSuffix = legacyProfileSuffix(currentCredentialsPath);
+  const keys = typeof context.globalState.keys === 'function'
+    ? context.globalState.keys()
+    : [];
+  for (const key of keys) {
+    if (key.startsWith(LEGACY_QUOTA_PREFIX)) {
+      const suffix = key.slice(LEGACY_QUOTA_PREFIX.length);
+      const saved = objectRecord(context.globalState.get<unknown>(key));
+      const data = saved ? saved.data as ClaudeApiUsageResponse | undefined : undefined;
+      const ts = saved?.ts;
+      if (data && typeof ts === 'number' && Number.isFinite(ts) && ts > 0) {
+        const identitySignal = suffix === currentSuffix
+          ? `profile-path-v1|${currentCredentialsPath}`
+          : `legacy-profile-v1|${suffix}`;
+        const additions = claudeQuotaCapturesFromUsage(
+          data,
+          identitySignal,
+          'profile-continuity',
+          ts,
+          'migration',
+        );
+        if (additions.length > 0) {
+          migrationCaptures.push(...additions.map((item) => ({
+            ...item,
+            confidence: 'low' as const,
+            flags: [...(item.flags ?? []), 'account-ambiguous' as const],
+          })));
+          removableLegacyKeys.push(key);
+        }
+      }
+      continue;
+    }
+    if (key.startsWith(LEGACY_WEEKLY_PREFIX)) {
+      const suffix = key.slice(LEGACY_WEEKLY_PREFIX.length);
+      const identitySignal = suffix === currentSuffix
+        ? `profile-path-v1|${currentCredentialsPath}`
+        : `legacy-profile-v1|${suffix}`;
+      const additions = legacyWeeklyCaptures(
+        context.globalState.get<unknown>(key),
+        identitySignal,
+      );
+      if (additions.length > 0) {
+        migrationCaptures.push(...additions);
+        removableLegacyKeys.push(key);
+      }
+    }
+  }
+
+  if (!codexLegacyMigrationReady) {
+    try {
+      const index = await loadCodexIndex(
+        path.join(context.globalStorageUri.fsPath, 'codex-index-v1.json'),
+        resolveTimeZone(settings.get<string>('timezone')),
+      );
+      const legacyHistory = [
+        ...(index.quotaHistory ?? []),
+        ...Object.values(index.files).flatMap((file) => file.quotaHistory ?? []),
+      ];
+      migrationCaptures.push(...codexQuotaCapturesFromWeeklyObservations(
+        weeklyQuotaObservationsFromCodexHistory(legacyHistory),
+        'migration',
+      ));
+      codexLegacyMigrationReady = true;
+      // Set only after the P2 append below succeeds.
+    } catch {
+      // A corrupt/absent P1 cannot block activation or destroy its only copy.
+    }
+  }
+
+  if (migrationCaptures.length > 0) {
+    store = await repository.append(migrationCaptures);
+  }
+  for (const key of removableLegacyKeys) {
+    await context.globalState.update(key, undefined);
+  }
+  if (
+    codexLegacyMigrationReady &&
+    !context.globalState.get<boolean>(QUOTA_P5_MIGRATION_KEY)
+  ) {
+    await context.globalState.update(QUOTA_P5_MIGRATION_KEY, true);
+  }
+  return { repository, store, salt };
 }
 
 // Full-version entries only: an installed patch must never inherit stale notes
@@ -195,6 +374,10 @@ export class ClaudeCodeUsageExtension {
   private quotaColdRetryTimerLease: ResourceLease | undefined;
   private claudeProfileGeneration: number = 0;
   private claudeWeeklyQuotaHistory: WeeklyQuotaObservation[] = [];
+  private readonly quotaObservationRepository: QuotaObservationRepository;
+  private quotaObservationStore: QuotaObservationStoreV2;
+  private readonly quotaFingerprintSalt: string;
+  private activeClaudeQuotaFingerprint: string | undefined;
   private codexProvider: CodexProvider;
   private readonly codexSalt: string;
   private codexView: CodexUsageView | null = null;
@@ -232,6 +415,7 @@ export class ClaudeCodeUsageExtension {
   constructor(
     private context: vscode.ExtensionContext,
     settings?: SettingsStore,
+    quotaRuntime?: QuotaObservationRuntime,
   ) {
     console.log('Claude Code Usage Extension: Constructor called');
     this.outputChannel = vscode.window.createOutputChannel('Claude Code Usage');
@@ -263,9 +447,33 @@ export class ClaudeCodeUsageExtension {
       void this.saveCodexBackgroundState().catch(() => undefined);
     }
     this.webviewProvider = new UsageWebviewProvider(context);
+    const existingQuotaSalt = context.globalState.get<string>(
+      'ccu.quota.fingerprintSalt.v1',
+    );
+    this.quotaFingerprintSalt = quotaRuntime?.salt ??
+      existingQuotaSalt ?? randomBytes(32).toString('hex');
+    if (!existingQuotaSalt && !quotaRuntime) {
+      void context.globalState.update(
+        'ccu.quota.fingerprintSalt.v1',
+        this.quotaFingerprintSalt,
+      );
+    }
+    this.quotaObservationRepository = quotaRuntime?.repository ??
+      new QuotaObservationRepository(
+        path.join(context.globalStorageUri.fsPath, QUOTA_OBSERVATION_FILE),
+        this.quotaFingerprintSalt,
+      );
+    this.quotaObservationStore = quotaRuntime?.store ??
+      createEmptyQuotaObservationStore();
     this.apiClient = new ClaudeApiClient(
       this.outputChannel,
       this.settings.get<string>('dataDirectory'),
+      this.quotaFingerprintSalt,
+    );
+    this.activeClaudeQuotaFingerprint = fingerprintForStableIdentity(
+      this.quotaFingerprintSalt,
+      'claude',
+      this.claudeProfileContinuitySignal(),
     );
     const existingCodexSalt = context.globalState.get<string>('ccu.codex.machineSalt');
     this.codexSalt = existingCodexSalt ?? randomBytes(32).toString('hex');
@@ -356,7 +564,7 @@ export class ClaudeCodeUsageExtension {
 
     this.setupCommands();
     this.loadConfiguration();
-    this.loadPersistedQuota();
+    this.refreshQuotaObservationViews();
     if (this.windowActivity.focused) {
       this.startAutoRefresh();
       const startupGeneration = this.configurationGeneration;
@@ -1729,9 +1937,36 @@ export class ClaudeCodeUsageExtension {
 
   private applyCodexSnapshot(snapshot: CodexProviderSnapshot): void {
     this.codexView = buildCodexUsageView(snapshot);
+    const capturedObservations = snapshot.weeklyValueInputs?.observations ?? [];
+    const capturedQuotaFacts = codexQuotaCapturesFromWeeklyObservations(
+      capturedObservations,
+    );
+    const previewStore = capturedQuotaFacts.length > 0
+      ? mergeQuotaCaptures(this.quotaObservationStore, capturedQuotaFacts, {
+          salt: this.quotaFingerprintSalt,
+          now: capturedQuotaFacts.reduce(
+            (latest, item) => Math.max(latest, item.observedAt),
+            Date.now(),
+          ),
+        })
+      : this.quotaObservationStore;
+    const storedCodexObservations = quotaStoreWeeklyObservations(
+      previewStore,
+      'codex',
+    );
+    if (storedCodexObservations.length > 0 && this.codexView.weeklyValueInputs) {
+      this.codexView.weeklyValueInputs = {
+        ...this.codexView.weeklyValueInputs,
+        observations: storedCodexObservations,
+      };
+    }
     this.codexInsights = buildScopedCodexInsights(this.codexView);
     this.codexAvailable = true;
     this.codexHasData = snapshot.coverage.totalFiles > 0;
+    void this.recordCodexQuotaObservations(capturedObservations).catch(() => {
+      // P1 remains readable when P2 is temporarily unavailable. The next
+      // refresh retries the exact idempotent observation set.
+    });
   }
 
   /** Adopt the first atomic checkpoint during a brand-new cold index. */
@@ -1901,7 +2136,11 @@ export class ClaudeCodeUsageExtension {
    * A profile switch invalidates every in-memory quota/backoff value because it
    * belongs to a different account. */
   private selectClaudeProfile(dataDirectory?: string | null): void {
-    const nextClient = new ClaudeApiClient(this.outputChannel, dataDirectory);
+    const nextClient = new ClaudeApiClient(
+      this.outputChannel,
+      dataDirectory,
+      this.quotaFingerprintSalt,
+    );
     if (nextClient.getCredentialsPath() === this.apiClient.getCredentialsPath()) {
       return;
     }
@@ -1917,8 +2156,13 @@ export class ClaudeCodeUsageExtension {
     this.statusBar.updateQuota(null);
     this.webviewProvider.updateQuota(null);
     this.claudeWeeklyQuotaHistory = [];
+    this.activeClaudeQuotaFingerprint = fingerprintForStableIdentity(
+      this.quotaFingerprintSalt,
+      'claude',
+      this.claudeProfileContinuitySignal(),
+    );
     this.webviewProvider.updateWeeklyQuotaHistory([]);
-    this.loadPersistedQuota();
+    this.refreshQuotaObservationViews();
   }
 
   /**
@@ -2214,6 +2458,10 @@ export class ClaudeCodeUsageExtension {
     this.cache.usageLimitsLastUpdate = new Date(0);
     this.cache.usageLimitsFailStreak = 0;
     this.cache.usageLimitsBackoffUntil = new Date(0);
+    this.claudeProfileGeneration += 1;
+    this.activeClaudeQuotaFingerprint = undefined;
+    this.claudeWeeklyQuotaHistory = [];
+    this.webviewProvider.updateWeeklyQuotaHistory([]);
     void this.refreshData(false, 'credentials');
   }
 
@@ -2410,81 +2658,73 @@ export class ClaudeCodeUsageExtension {
     tick();
   }
 
-  /** Fetch real usage limits via OAuth, cached for 2 minutes. */
-  // Persist the last-known quota across reloads/restarts.
-  private static readonly QUOTA_STATE_KEY = 'ccu.usageLimits';
-  private static readonly WEEKLY_QUOTA_STATE_KEY = 'ccu.weeklyQuotaHistory.v1';
-
-  private quotaProfileHash(): string {
-    return createHash('sha256')
-      .update(this.apiClient.getCredentialsPath())
-      .digest('hex')
-      .slice(0, 16);
+  /** Fetch real usage limits via OAuth, cached in memory for at most two
+   * minutes. Durable history contains only schema-2 normalized observations;
+   * the raw OAuth response is never retained by the extension. */
+  private claudeProfileContinuitySignal(): string {
+    return `profile-path-v1|${this.apiClient.getCredentialsPath()}`;
   }
 
-  private quotaStateKey(): string {
-    return `${ClaudeCodeUsageExtension.QUOTA_STATE_KEY}.${this.quotaProfileHash()}`;
-  }
-
-  private weeklyQuotaStateKey(): string {
-    return `${ClaudeCodeUsageExtension.WEEKLY_QUOTA_STATE_KEY}.${this.quotaProfileHash()}`;
-  }
-
-  private loadPersistedQuota(): void {
-    if (!this.getConfiguration().usageLimitTracking) {
-      return;
-    }
-    try {
-      const storedHistory = this.context.globalState.get<WeeklyQuotaObservation[]>(
-        this.weeklyQuotaStateKey(),
-      ) ?? [];
-      const saved = this.context.globalState.get<{ data: ClaudeApiUsageResponse; ts: number }>(
-        this.quotaStateKey()
-      );
-      const savedObservation = saved?.data
-        ? claudeWeeklyQuotaObservations(
-            saved.data,
-            this.quotaProfileHash(),
-            saved.ts || 0,
-          )
-        : [];
-      this.claudeWeeklyQuotaHistory = appendWeeklyQuotaObservations(
-        [],
-        [...storedHistory, ...savedObservation],
-      );
-      this.webviewProvider.updateWeeklyQuotaHistory(this.claudeWeeklyQuotaHistory);
-      if (saved && saved.data) {
-        this.cache.usageLimits = saved.data;
-        this.cache.usageLimitsLastUpdate = new Date(saved.ts || 0);
-        this.statusBar.updateQuota(saved.data);
-        this.webviewProvider.updateQuota(saved.data);
-      }
-    } catch {
-      /* ignore corrupt persisted state */
+  private refreshQuotaObservationViews(): void {
+    this.claudeWeeklyQuotaHistory = this.activeClaudeQuotaFingerprint
+      ? quotaStoreWeeklyObservations(
+          this.quotaObservationStore,
+          'claude',
+          this.activeClaudeQuotaFingerprint,
+        )
+      : [];
+    this.webviewProvider.updateWeeklyQuotaHistory(this.claudeWeeklyQuotaHistory);
+    if (this.codexView?.weeklyValueInputs) {
+      this.codexView.weeklyValueInputs = {
+        ...this.codexView.weeklyValueInputs,
+        observations: quotaStoreWeeklyObservations(
+          this.quotaObservationStore,
+          'codex',
+        ),
+      };
     }
   }
 
-  private recordClaudeWeeklyQuota(
+  private async recordClaudeQuotaObservation(
     usage: ClaudeApiUsageResponse,
     observedAt: number,
-  ): void {
-    const additions = claudeWeeklyQuotaObservations(
+  ): Promise<void> {
+    const verifiedSignal = this.apiClient.getLastQuotaIdentitySignal();
+    const identitySignal = verifiedSignal ?? this.claudeProfileContinuitySignal();
+    const accountAttribution = verifiedSignal
+      ? 'verified-local-signal' as const
+      : 'profile-continuity' as const;
+    const additions = claudeQuotaCapturesFromUsage(
       usage,
-      this.quotaProfileHash(),
+      identitySignal,
+      accountAttribution,
       observedAt,
     );
-    if (additions.length === 0) {
-      return;
-    }
-    this.claudeWeeklyQuotaHistory = appendWeeklyQuotaObservations(
-      this.claudeWeeklyQuotaHistory,
+    if (additions.length === 0) return;
+    this.quotaObservationStore = await this.quotaObservationRepository.append(
       additions,
     );
-    this.webviewProvider.updateWeeklyQuotaHistory(this.claudeWeeklyQuotaHistory);
-    void this.context.globalState.update(
-      this.weeklyQuotaStateKey(),
-      this.claudeWeeklyQuotaHistory,
+    this.activeClaudeQuotaFingerprint = fingerprintForStableIdentity(
+      this.quotaFingerprintSalt,
+      'claude',
+      identitySignal,
     );
+    this.refreshQuotaObservationViews();
+  }
+
+  private async recordCodexQuotaObservations(
+    observations: readonly WeeklyQuotaObservation[],
+  ): Promise<void> {
+    const additions = codexQuotaCapturesFromWeeklyObservations(observations);
+    if (additions.length === 0) {
+      this.refreshQuotaObservationViews();
+      return;
+    }
+    this.quotaObservationStore = await this.quotaObservationRepository.append(
+      additions,
+    );
+    this.refreshQuotaObservationViews();
+    if (!this.disposed) this.syncProviderUi();
   }
 
   private async maybeFetchUsageLimits(config: ExtensionConfig): Promise<ClaudeApiUsageResponse | null> {
@@ -2572,12 +2812,7 @@ export class ClaudeCodeUsageExtension {
       // expired-window bypass so a just-rolled window can't trigger an immediate
       // refetch.
       this.cache.usageLimitsBackoffUntil = new Date(Date.now() + 30000);
-      // Write through to disk so the next startup/reload has it instantly.
-      void this.context.globalState.update(
-        this.quotaStateKey(),
-        { data: fetched, ts: observedAt }
-      );
-      this.recordClaudeWeeklyQuota(fetched, observedAt);
+      await this.recordClaudeQuotaObservation(fetched, observedAt);
       return fetched;
     }
     // Failed (usually a 429 or invalid/expired credentials). Exponentially back
@@ -2946,7 +3181,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
     throw error;
   }
-  const extension = new ClaudeCodeUsageExtension(context, settings);
+  const quotaRuntime = await initializeQuotaObservationRuntime(context, settings);
+  const extension = new ClaudeCodeUsageExtension(
+    context,
+    settings,
+    quotaRuntime,
+  );
   activeExtension = extension;
   context.subscriptions.push({
     dispose: () => { void extension.dispose(); }

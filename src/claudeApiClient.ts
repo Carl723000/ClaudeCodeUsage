@@ -1,4 +1,5 @@
 import { execFileSync } from 'child_process';
+import { createHmac } from 'node:crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -11,6 +12,15 @@ export interface ResolvedClaudeProfile {
   credentialsPath: string;
   source: 'explicit' | 'environment' | 'default';
   allowKeychainFallback: boolean;
+}
+
+export function claudeQuotaIdentitySignal(
+  machineSalt: string,
+  refreshToken: string,
+): string {
+  return createHmac('sha256', machineSalt)
+    .update(`claude-quota-account-v1|${refreshToken}`)
+    .digest('hex');
 }
 
 function isDirectory(candidate: string): boolean {
@@ -85,10 +95,12 @@ export class ClaudeApiClient {
   // Once curl has succeeded after fetch failed, remember so we don't keep
   // paying the cost of a doomed fetch attempt on every refresh.
   private preferCurl: boolean = false;
+  private lastQuotaIdentitySignal: string | null = null;
 
   constructor(
     out: vscode.OutputChannel | null = null,
     dataDirectory?: string | null,
+    private readonly quotaIdentitySalt?: string,
   ) {
     const profile = resolveClaudeProfile(dataDirectory);
     this.credentialsPath = profile.credentialsPath;
@@ -132,6 +144,13 @@ export class ClaudeApiClient {
    * watch); that case still updates on the next quota refresh tick. */
   getCredentialsPath(): string {
     return this.credentialsPath;
+  }
+
+  /** Machine-local one-way continuity signal for the exact credentials used
+   * by the last successful quota request. No token or account identifier is
+   * returned to the extension host. */
+  getLastQuotaIdentitySignal(): string | null {
+    return this.lastQuotaIdentitySignal;
   }
 
   private loadCredentialsFromKeychain(): ClaudeCredentials | null {
@@ -325,7 +344,7 @@ export class ClaudeApiClient {
     }
 
     try {
-      const credentials = await this.getValidCredentials(signal);
+      let credentials = await this.getValidCredentials(signal);
       if (!credentials) {
         return null;
       }
@@ -351,6 +370,7 @@ export class ClaudeApiClient {
         this.log('401: forcing token refresh and retrying once');
         try {
           const refreshed = await this.refreshAccessToken(credentials, signal);
+          credentials = refreshed;
           response = await this.callUsageApi(
             refreshed.claudeAiOauth.accessToken,
             signal,
@@ -366,6 +386,12 @@ export class ClaudeApiClient {
         return null;
       }
       const data = JSON.parse(response.body) as ClaudeApiUsageResponse;
+      this.lastQuotaIdentitySignal = this.quotaIdentitySalt
+        ? claudeQuotaIdentitySignal(
+            this.quotaIdentitySalt,
+            credentials.claudeAiOauth.refreshToken,
+          )
+        : null;
       this.log(`usage: ok — 5h=${data.five_hour?.utilization ?? 'n/a'}%, wk=${data.seven_day?.utilization ?? 'n/a'}%`);
       return data;
     } catch (e) {
