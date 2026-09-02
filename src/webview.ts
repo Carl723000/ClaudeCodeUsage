@@ -120,7 +120,7 @@ import {
   UsageData,
   WorkflowUsage,
 } from './types';
-import { dayKeyInZone, resolveTimeZone } from './dateKeys';
+import { dayKeyInZone, resolveTimeZone, rollingDayKeysFromDayKey } from './dateKeys';
 import {
   LocalDataAction,
   LocalDataActionResult,
@@ -623,6 +623,10 @@ export class UsageWebviewProvider {
   private codexProgress: CodexRenderProgress | null = null;
   private providerSelectionInitialized = false;
   private hourlyDataCache: Map<string, { hour: string; data: UsageData }[]> = new Map();
+  private configuredDateTimeFormatter?: {
+    configuredTimeZone: string;
+    formatter: Intl.DateTimeFormat;
+  };
   private allRecords: any[] = [];
   private sessionBreakdown: SessionUsage[] = [];
   private projectBreakdown: ProjectGroup[] = [];
@@ -4329,7 +4333,7 @@ export class UsageWebviewProvider {
           '<span data-session-detail-item><span class="model-stat-label">' + this.escapeHtml(label) +
           '</span><strong title="' + this.escapeHtml(value) + '">' + this.escapeHtml(value) + '</strong></span>';
         const mainRow = '<tr class="sort-row" data-session-row data-sort-time="' + session.observedAt + '" ' +
-          'data-day-key="' + this.escapeHtml(dayKeyInZone(new Date(session.observedAt), I18n.getTimezone())) + '" ' +
+          'data-day-key="' + this.escapeHtml(this.configuredDateTimeParts(new Date(session.observedAt)).dayKey) + '" ' +
           'data-sort-session="' + this.escapeHtml(title.toLowerCase()) + '" ' +
           'data-sort-project="' + this.escapeHtml(project.toLowerCase()) + '" ' +
           'data-sort-role="' + this.escapeHtml(session.role) + '" ' +
@@ -4445,7 +4449,7 @@ export class UsageWebviewProvider {
       rows +=
         '<tr class="sort-row' + (foreign ? ' session-foreign' : '') + '"' +
         ' data-sort-time="' + s.startTime.getTime() + '"' +
-        ' data-day-key="' + this.escapeHtml(dayKeyInZone(s.startTime, I18n.getTimezone())) + '"' +
+        ' data-day-key="' + this.escapeHtml(this.configuredDateTimeParts(s.startTime).dayKey) + '"' +
         ' data-models="' + this.escapeHtml(rowModels.join('|').toLowerCase()) + '"' +
         ' data-sort-session="' + this.escapeHtml(fullName.toLowerCase()) + '"' +
         ' data-sort-project="' + this.escapeHtml((s.projectName || '').toLowerCase()) + '"' +
@@ -4567,28 +4571,57 @@ export class UsageWebviewProvider {
   }
 
   /** Reading-friendly date/time: "Today HH:MM", "Yesterday HH:MM", "MM-DD HH:MM" or "YYYY-MM-DD". */
-  private formatDateTime(date: Date): string {
+  private formatDateTime(date: Date, now: Date = new Date()): string {
     if (!date || isNaN(date.getTime()) || date.getTime() === 0) {
       return '-';
     }
-    const now = new Date();
-    const pad = (n: number): string => String(n).padStart(2, '0');
-    const hm = pad(date.getHours()) + ':' + pad(date.getMinutes());
-    const sameDay = (a: Date, b: Date): boolean =>
-      a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
+    const { dayKey, hm } = this.configuredDateTimeParts(date);
+    const todayKey = this.configuredDateTimeParts(now).dayKey;
+    const [yesterdayKey] = rollingDayKeysFromDayKey(todayKey, 2);
 
-    if (sameDay(date, now)) {
+    if (dayKey === todayKey) {
       return I18n.t.popup.today + ' ' + hm;
     }
-    if (sameDay(date, yesterday)) {
+    if (dayKey === yesterdayKey) {
       return I18n.t.popup.yesterday + ' ' + hm;
     }
-    if (date.getFullYear() === now.getFullYear()) {
-      return pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + hm;
+    if (dayKey.slice(0, 4) === todayKey.slice(0, 4)) {
+      return dayKey.slice(5) + ' ' + hm;
     }
-    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+    return dayKey;
+  }
+
+  private configuredDateTimeParts(date: Date): { dayKey: string; hm: string } {
+    if (!date || isNaN(date.getTime())) {
+      return { dayKey: '', hm: '' };
+    }
+    const configuredTimeZone = I18n.getTimezone();
+    if (!this.configuredDateTimeFormatter ||
+        this.configuredDateTimeFormatter.configuredTimeZone !== configuredTimeZone) {
+      this.configuredDateTimeFormatter = {
+        configuredTimeZone,
+        formatter: new Intl.DateTimeFormat('en-CA', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hourCycle: 'h23',
+          timeZone: resolveTimeZone(configuredTimeZone),
+        }),
+      };
+    }
+    const parts = this.configuredDateTimeFormatter.formatter.formatToParts(date);
+    const value = (type: string): string => parts.find((part) => part.type === type)?.value ?? '';
+    const year = value('year');
+    const month = value('month');
+    const day = value('day');
+    const hour = value('hour');
+    const minute = value('minute');
+    return {
+      dayKey: year && month && day ? `${year}-${month}-${day}` : '',
+      hm: hour && minute ? `${hour}:${minute}` : '',
+    };
   }
 
   /** USD per-1M-token rate, trimmed of trailing zeros for compact display. */

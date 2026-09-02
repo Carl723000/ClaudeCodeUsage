@@ -107,6 +107,8 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   plus Usage tracking and AI-advice 7-day/30-day attribution, use exact
   civil-date windows instead of fixed millisecond cutoffs. Claude and Codex
   session range filters now follow those same Today/7-day/30-day date keys.
+  Claude session, project, branch, and workflow timestamps also use the
+  configured timezone for their clock and Today/Yesterday/year labels.
   Activity near UTC boundaries is no longer omitted or pulled from an adjacent
   local day.
 - **Complete Share studio localization** — the active Compare sharing workspace
