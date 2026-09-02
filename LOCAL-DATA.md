@@ -66,11 +66,12 @@ broader access.
 
 ## Clear and migration behavior
 
-The Data settings expose separate controls to rebuild the Codex derived index,
-clear quota history, clear advice data, reset UI or sharing preferences, and
-remove the BYOK secret. “Clear all extension-derived data” first lists its
-targets. None of these controls deletes Claude or Codex source logs or
-provider-owned credentials.
+Separate Command Palette actions rebuild the Codex derived index, clear quota
+history, clear advice data, reset UI or sharing preferences, and remove the BYOK
+secret. “Clear all extension-derived data” first lists its targets. These
+maintenance actions stay out of the dashboard Settings tab so it remains
+concise. None of them deletes Claude or Codex source logs or provider-owned
+credentials.
 
 Clearing all quota history atomically replaces the quota store with one valid
 empty schema-2 document and removes only its exact quarantine/interrupted-write

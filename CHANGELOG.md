@@ -102,6 +102,11 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   polling, credentials, or a second scanner.
 
 ### Fixed
+- **Complete Share studio localization** — the active Compare sharing workspace
+  now carries complete German, Japanese, Korean, Brazilian Portuguese, and
+  Indonesian copy instead of silently falling back to English. A repository
+  coverage guard keeps all eight supported locales aligned when copy fields
+  change.
 - **Hardened Codex thread-title path redaction** — runtime titles now mask POSIX
   absolute paths even when a path is attached directly to a colon or other
   punctuation (for example, `3:/Users/name`), preventing local usernames and

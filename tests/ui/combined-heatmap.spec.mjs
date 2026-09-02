@@ -185,20 +185,21 @@ for (const theme of ['light', 'dark']) {
   });
 }
 
-test('intensity mapping labels are localized in every supported locale', async ({ page }) => {
-  const labels = {
-    en: 'Intensity scale',
-    'de-DE': 'Intensitätsskala',
-    'zh-TW': '色階映射',
-    'zh-CN': '色阶映射',
-    ja: '強度スケール',
-    ko: '강도 스케일',
-    'pt-BR': 'Escala de intensidade',
-    id: 'Skala intensitas',
+test('Share studio copy is localized in every supported locale', async ({ page }) => {
+  const expected = {
+    en: ['Intensity scale', 'Combined activity heatmap and share card'],
+    'de-DE': ['Intensitätsskala', 'Kombinierte Aktivitäts-Heatmap und Freigabekarte'],
+    'zh-TW': ['色階映射', '綜合活動熱力圖與分享卡'],
+    'zh-CN': ['色阶映射', '综合活动热力图与分享卡'],
+    ja: ['強度スケール', '統合アクティビティヒートマップと共有カード'],
+    ko: ['강도 스케일', '통합 활동 히트맵과 공유 카드'],
+    'pt-BR': ['Escala de intensidade', 'Mapa de calor de atividade combinado e cartão de compartilhamento'],
+    id: ['Skala intensitas', 'Heatmap aktivitas gabungan dan kartu berbagi'],
   };
-  for (const [locale, label] of Object.entries(labels)) {
+  for (const [locale, [intensityLabel, heading]] of Object.entries(expected)) {
     await openCompare(page, { fixture: 'combined-heatmap', locale });
-    await expect(page.getByLabel(label)).toHaveValue('quantile');
+    await expect(page.getByLabel(intensityLabel)).toHaveValue('quantile');
+    await expect(page.getByRole('heading', { name: heading })).toBeVisible();
   }
 });
 
