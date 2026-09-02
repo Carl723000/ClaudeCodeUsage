@@ -85,6 +85,34 @@ test('session range and model filters survive a full reload', async ({ page }) =
   await expect(page.locator('#sessions .sess-model-select')).toHaveValue('gpt-5.6-sol');
 });
 
+test('session range filters use configured-zone civil days and survive reload', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-07-20T20:00:00.000Z'));
+  await openClaude(page, {
+    fixture: 'session-timezone-boundaries',
+    timeZone: 'Pacific/Honolulu',
+  });
+  await page.locator('#tab-sessions').click();
+
+  const row = (title) => page.locator('#sessions tr.sort-row', { hasText: title });
+  await page.locator('#sessions .sess-filter-btn[data-range="today"]').click();
+  await expect(row('Honolulu today')).toBeVisible();
+  await expect(row('Honolulu yesterday')).toBeHidden();
+
+  await page.locator('#sessions .sess-filter-btn[data-range="7"]').click();
+  await expect(row('Seven-day boundary inside')).toBeVisible();
+  await expect(row('Seven-day boundary outside')).toBeHidden();
+
+  await page.locator('#sessions .sess-filter-btn[data-range="30"]').click();
+  await expect(row('Thirty-day boundary inside')).toBeVisible();
+  await expect(row('Thirty-day boundary outside')).toBeHidden();
+
+  await page.reload();
+
+  await expect(page.locator('#sessions .sess-filter-btn[data-range="30"]')).toHaveClass(/active/);
+  await expect(row('Thirty-day boundary inside')).toBeVisible();
+  await expect(row('Thirty-day boundary outside')).toBeHidden();
+});
+
 test('persisted details survive a full reload', async ({ page }) => {
   await openClaude(page, { fixture: 'persisted-details' });
   const details = page.locator('details[data-persist]').first();

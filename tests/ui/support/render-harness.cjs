@@ -262,6 +262,25 @@ function addClaudeData(provider, { fixture = 'default', enableContent = false } 
         },
       }]
     : combinedHeatmapRecords;
+  const sessionBreakdown = fixture === 'session-timezone-boundaries'
+    ? [
+        ['honolulu-today', 'Honolulu today', '2026-07-20T10:00:00.000Z'],
+        ['honolulu-yesterday', 'Honolulu yesterday', '2026-07-19T10:00:00.000Z'],
+        ['week-inside', 'Seven-day boundary inside', '2026-07-14T10:00:00.000Z'],
+        ['week-outside', 'Seven-day boundary outside', '2026-07-14T08:00:00.000Z'],
+        ['month-inside', 'Thirty-day boundary inside', '2026-06-21T10:00:00.000Z'],
+        ['month-outside', 'Thirty-day boundary outside', '2026-06-21T08:00:00.000Z'],
+      ].map(([sessionId, title, timestamp]) => ({
+        sessionId,
+        title,
+        projectName: 'Timezone fixture',
+        projectPath: '/tmp/timezone-fixture',
+        startTime: new Date(timestamp),
+        endTime: new Date(Date.parse(timestamp) + 30 * 60_000),
+        data: claudeUsage(),
+        peakContextTokens: 180_000,
+      }))
+    : [];
   provider.updateData(
     { ...today, sessionStart: new Date(now.getTime() - 3_600_000), sessionEnd: now },
     today,
@@ -282,7 +301,7 @@ function addClaudeData(provider, { fixture = 'default', enableContent = false } 
     undefined,
     undefined,
     weeklyRecords,
-    [],
+    sessionBreakdown,
     [],
     enableContent
       ? {
@@ -374,9 +393,10 @@ exports.renderHarness = async function renderHarness({
   weeklyValue = true,
   shareStudio = true,
   adviceFeedback = 'none',
+  timeZone = 'Asia/Hong_Kong',
 } = {}) {
   I18n.setLanguage(locale);
-  I18n.setTimezone('Asia/Hong_Kong');
+  I18n.setTimezone(timeZone);
   vscodeHost.window.activeColorTheme.kind = theme === 'dark' ? 2 : 1;
   const originalNow = Date.now;
   try {

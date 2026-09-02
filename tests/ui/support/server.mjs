@@ -42,9 +42,14 @@ const server = createServer(async (request, response) => {
       'advice-effectiveness-disabled',
       'advice-optimizer',
       'combined-heatmap',
+      'session-timezone-boundaries',
     ].includes(requestedFixture)
       ? requestedFixture
       : 'default';
+    const requestedTimeZone = url.searchParams.get('timeZone') ?? 'Asia/Hong_Kong';
+    const timeZone = ['Asia/Hong_Kong', 'Asia/Tokyo', 'Pacific/Honolulu'].includes(requestedTimeZone)
+      ? requestedTimeZone
+      : 'Asia/Hong_Kong';
     const autoRefresh = url.searchParams.get('autoRefresh') === 'true';
     const weeklyValue = url.searchParams.get('weeklyValue') !== 'false';
     const shareStudio = url.searchParams.get('shareStudio') !== 'false';
@@ -62,6 +67,7 @@ const server = createServer(async (request, response) => {
       weeklyValue,
       shareStudio,
       adviceFeedback,
+      timeZone,
     });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',

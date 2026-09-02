@@ -120,7 +120,7 @@ import {
   UsageData,
   WorkflowUsage,
 } from './types';
-import { dayKeyInZone } from './dateKeys';
+import { dayKeyInZone, resolveTimeZone } from './dateKeys';
 import {
   LocalDataAction,
   LocalDataActionResult,
@@ -4329,6 +4329,7 @@ export class UsageWebviewProvider {
           '<span data-session-detail-item><span class="model-stat-label">' + this.escapeHtml(label) +
           '</span><strong title="' + this.escapeHtml(value) + '">' + this.escapeHtml(value) + '</strong></span>';
         const mainRow = '<tr class="sort-row" data-session-row data-sort-time="' + session.observedAt + '" ' +
+          'data-day-key="' + this.escapeHtml(dayKeyInZone(new Date(session.observedAt), I18n.getTimezone())) + '" ' +
           'data-sort-session="' + this.escapeHtml(title.toLowerCase()) + '" ' +
           'data-sort-project="' + this.escapeHtml(project.toLowerCase()) + '" ' +
           'data-sort-role="' + this.escapeHtml(session.role) + '" ' +
@@ -4444,6 +4445,7 @@ export class UsageWebviewProvider {
       rows +=
         '<tr class="sort-row' + (foreign ? ' session-foreign' : '') + '"' +
         ' data-sort-time="' + s.startTime.getTime() + '"' +
+        ' data-day-key="' + this.escapeHtml(dayKeyInZone(s.startTime, I18n.getTimezone())) + '"' +
         ' data-models="' + this.escapeHtml(rowModels.join('|').toLowerCase()) + '"' +
         ' data-sort-session="' + this.escapeHtml(fullName.toLowerCase()) + '"' +
         ' data-sort-project="' + this.escapeHtml((s.projectName || '').toLowerCase()) + '"' +
@@ -9885,7 +9887,7 @@ if (document.readyState === 'loading') {
 // user's UI language and configured timezone (instead of the hardcoded zh-TW
 // that the original used in this script body).
 const __locale = ${JSON.stringify(I18n.getLocale())};
-const __tz = ${JSON.stringify(I18n.getTimezone())};
+const __tz = ${JSON.stringify(resolveTimeZone(I18n.getTimezone()))};
 const __combinedHeatmapCopy = ${JSON.stringify(combinedHeatmapUiCopy(I18n.getLocale()))};
 const __localDataCopy = ${JSON.stringify(localDataUiCopy(I18n.getLocale()))};
 const __dateOpts = (extra) => {
@@ -9893,6 +9895,38 @@ const __dateOpts = (extra) => {
   if (__tz) opts.timeZone = __tz;
   return opts;
 };
+const __dayKeyFormatter = new Intl.DateTimeFormat('en-CA', __dateOpts({
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+}));
+function ccuDayKey(value) {
+  var date = new Date(value);
+  if (isNaN(date.getTime())) { return ''; }
+  var parts = __dayKeyFormatter.formatToParts(date);
+  var year = '';
+  var month = '';
+  var day = '';
+  parts.forEach(function(part) {
+    if (part.type === 'year') { year = part.value; }
+    if (part.type === 'month') { month = part.value; }
+    if (part.type === 'day') { day = part.value; }
+  });
+  return year && month && day ? year + '-' + month + '-' + day : '';
+}
+function ccuRollingDaySet(count) {
+  var endKey = ccuDayKey(Date.now());
+  var match = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(endKey);
+  var days = new Set();
+  if (!match || count <= 0) { return days; }
+  var end = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  for (var offset = 0; offset < count; offset++) {
+    var cursor = new Date(end.getTime());
+    cursor.setUTCDate(cursor.getUTCDate() - offset);
+    days.add(cursor.toISOString().slice(0, 10));
+  }
+  return days;
+}
 
 // Define basic functions
 function showProvider(provider, tab) {
@@ -10531,14 +10565,12 @@ function applySessionFilters() {
   var list = document.getElementById('sessionList');
   if (!list) { return; }
   var st = ccuSessState();
-  var now = Date.now();
-  var threshold = st.range === 'today' ? new Date().setHours(0, 0, 0, 0)
-    : st.range === '7' ? now - 7 * 86400000
-    : st.range === '30' ? now - 30 * 86400000
-    : 0;
+  var dayCount = st.range === 'today' ? 1 : st.range === '7' ? 7 : st.range === '30' ? 30 : 0;
+  var allowedDays = dayCount > 0 ? ccuRollingDaySet(dayCount) : null;
   list.querySelectorAll('tr.sort-row').forEach(function(tr) {
     var okProject = st.project === 'all' || !tr.classList.contains('session-foreign');
-    var okTime = st.range === 'all' || Number(tr.getAttribute('data-sort-time')) >= threshold;
+    var rowDay = tr.getAttribute('data-day-key') || ccuDayKey(Number(tr.getAttribute('data-sort-time')));
+    var okTime = !allowedDays || allowedDays.has(rowDay);
     var okModel = st.model === 'all' || (tr.getAttribute('data-models') || '').split('|').indexOf(st.model) !== -1;
     var visible = okProject && okTime && okModel;
     tr.style.display = visible ? '' : 'none';
