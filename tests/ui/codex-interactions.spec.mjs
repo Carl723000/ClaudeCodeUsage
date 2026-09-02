@@ -186,6 +186,66 @@ test('materialized Codex hourly detail sends no host message and survives a full
   ))).toEqual([]);
 });
 
+test('Claude daily chart drill-down survives a full webview reload', async ({ page }) => {
+  await openClaude(page);
+  await page.locator('#tab-month').click();
+
+  const day = '2026-07-19';
+  const chartBar = page.locator(
+    `#month #dailyChart .hc-col[data-date="${day}"] .chart-bar.clickable`,
+  );
+  const detail = page.locator(`#month .hourly-detail-row[data-date="${day}"]`);
+
+  await chartBar.click();
+  await expect(detail).toBeVisible();
+  await expect(chartBar).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+    return state.claudeDrilldownDetails?.['claude:month:hourly'];
+  })).toBe(day);
+
+  await page.reload({ waitUntil: 'load' });
+
+  await expect(page.locator('#tab-month')).toHaveClass(/active/);
+  await expect(page.locator(`#month .hourly-detail-row[data-date="${day}"]`)).toBeVisible();
+  await expect(page.locator(
+    `#month #dailyChart .hc-col[data-date="${day}"] .chart-bar.clickable`,
+  )).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
+    (message) => message.command === 'getHourlyData',
+  ))).toEqual({ command: 'getHourlyData', date: day });
+});
+
+test('Claude monthly chart drill-down survives a full webview reload', async ({ page }) => {
+  await openClaude(page);
+  await page.locator('#tab-all').click();
+
+  const month = '2026-07';
+  const chartBar = page.locator(
+    `#all #allTimeChart .hc-col[data-date="${month}"] .chart-bar.clickable`,
+  );
+  const detail = page.locator(`#all .monthly-detail-row[data-date="${month}"]`);
+
+  await chartBar.click();
+  await expect(detail).toBeVisible();
+  await expect(chartBar).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+    return state.claudeDrilldownDetails?.['claude:all:monthly'];
+  })).toBe(month);
+
+  await page.reload({ waitUntil: 'load' });
+
+  await expect(page.locator('#tab-all')).toHaveClass(/active/);
+  await expect(page.locator(`#all .monthly-detail-row[data-date="${month}"]`)).toBeVisible();
+  await expect(page.locator(
+    `#all #allTimeChart .hc-col[data-date="${month}"] .chart-bar.clickable`,
+  )).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
+    (message) => message.command === 'getDailyData',
+  ))).toEqual({ command: 'getDailyData', month });
+});
+
 test('a covered Codex date with no hourly token rows expands to an explicit empty state', async ({ page }) => {
   await openCodex(page, { fixture: 'covered-day-without-hourly-rows' });
   await page.locator('#tab-month').click();

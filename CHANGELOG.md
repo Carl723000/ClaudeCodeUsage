@@ -106,6 +106,11 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   absolute paths even when a path is attached directly to a colon or other
   punctuation (for example, `3:/Users/name`), preventing local usernames and
   filesystem locations from reaching dashboard text or screenshots.
+- **Claude chart drill-down reload parity** — expanded day-to-hour and
+  month-to-day rows now survive a Webview reload, re-request their lazy detail
+  data, and retain selected/ARIA state. Chart controls derive their drill-down
+  kind from their own tab instead of whichever tab happened to be active while
+  the page initialized; an intentional tab switch still clears expansions.
 - **Claude rolling-range regression** — Claude's middle dashboard tab now uses
   Today plus the preceding 29 configured-zone calendar dates instead of the
   current calendar month. The monthly-cost status-bar option remains a calendar

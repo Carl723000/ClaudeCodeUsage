@@ -9612,6 +9612,7 @@ function clearPersistedDetails() {
   try {
     var st = ccuReadUiState();
     st.openDetails = [];
+    st.claudeDrilldownDetails = {};
     st.codexHourlyDetails = {};
     vscode.setState(st);
   } catch (e) {}
@@ -9635,6 +9636,7 @@ function restoreUi() {
   restoreActiveTab();
   restoreSessionFilter();
   restorePersistedDetails();
+  restoreClaudeDrilldownDetails();
   restoreCodexHourlyDetails();
   restoreAdviceEffectivenessState();
   restoreSessionDetails();
@@ -10600,7 +10602,38 @@ document.addEventListener('keydown', function(event) {
   showTab(next.getAttribute('data-dashboard-tab'));
 });
 
-function toggleHourlyDetail(date) {
+function claudeDrilldownStateKey(detailRow, kind) {
+  const tab = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : null;
+  return 'claude:' + (tab ? tab.id : kind) + ':' + kind;
+}
+
+function persistClaudeDrilldown(detailRow, kind, date) {
+  if (!detailRow) { return; }
+  const details = ccuReadUiState().claudeDrilldownDetails || {};
+  const key = claudeDrilldownStateKey(detailRow, kind);
+  if (date) { details[key] = date; } else { delete details[key]; }
+  ccuWriteUiState('claudeDrilldownDetails', details);
+}
+
+function restoreClaudeDrilldownDetails() {
+  try {
+    const saved = ccuReadUiState().claudeDrilldownDetails || {};
+    document.querySelectorAll('.hourly-detail-row:not([data-codex-hourly-detail-row])').forEach(function(row) {
+      const date = row.getAttribute('data-date');
+      if (date && saved[claudeDrilldownStateKey(row, 'hourly')] === date) {
+        toggleHourlyDetail(date, true);
+      }
+    });
+    document.querySelectorAll('.monthly-detail-row').forEach(function(row) {
+      const date = row.getAttribute('data-date');
+      if (date && saved[claudeDrilldownStateKey(row, 'monthly')] === date) {
+        toggleMonthlyDetail(date, true);
+      }
+    });
+  } catch (e) {}
+}
+
+function toggleHourlyDetail(date, restoring) {
   try {
     const detailRow = document.querySelector('.hourly-detail-row[data-date="' + date + '"]');
     const button = document.querySelector('.daily-row[data-date="' + date + '"] .detail-button');
@@ -10626,6 +10659,7 @@ function toggleHourlyDetail(date) {
         if (chartBar) {
           chartBar.classList.add('selected');
         }
+        persistClaudeDrilldown(detailRow, 'hourly', date);
 
         // Request hourly data if not loaded
         if (!container.dataset.loaded) {
@@ -10636,7 +10670,9 @@ function toggleHourlyDetail(date) {
         // Scroll the newly-revealed detail into view — clicking a bar at the
         // top of the tab otherwise expands a detail far down the table that
         // the user never notices.
-        try { detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        if (!restoring) {
+          try { detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        }
       } else {
         // Hide detail
         detailRow.style.display = 'none';
@@ -10647,6 +10683,7 @@ function toggleHourlyDetail(date) {
         if (chartBar) {
           chartBar.classList.remove('selected');
         }
+        persistClaudeDrilldown(detailRow, 'hourly', '');
       }
 
     } else {
@@ -10773,7 +10810,7 @@ function closeAllHourlyDetails() {
 
 }
 
-function toggleMonthlyDetail(monthDate) {
+function toggleMonthlyDetail(monthDate, restoring) {
   try {
     const detailRow = document.querySelector('.monthly-detail-row[data-date="' + monthDate + '"]');
     const button = document.querySelector('.daily-row[data-date="' + monthDate + '"] .detail-button');
@@ -10799,6 +10836,7 @@ function toggleMonthlyDetail(monthDate) {
         if (chartBar) {
           chartBar.classList.add('selected');
         }
+        persistClaudeDrilldown(detailRow, 'monthly', monthDate);
 
         // Request monthly data if not loaded
         if (!container.dataset.loaded) {
@@ -10807,7 +10845,9 @@ function toggleMonthlyDetail(monthDate) {
         }
 
         // Scroll the newly-revealed detail into view (see toggleHourlyDetail).
-        try { detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        if (!restoring) {
+          try { detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        }
       } else {
         // Hide detail
         detailRow.style.display = 'none';
@@ -10818,6 +10858,7 @@ function toggleMonthlyDetail(monthDate) {
         if (chartBar) {
           chartBar.classList.remove('selected');
         }
+        persistClaudeDrilldown(detailRow, 'monthly', '');
       }
 
     } else {
@@ -11401,8 +11442,8 @@ function chartDrilldownInfo(element) {
     : null;
   var date = holder ? holder.getAttribute('data-date') : '';
   if (!date) { return null; }
-  var activeTab = document.querySelector('.tabs [role="tab"][aria-selected="true"]');
-  var kind = activeTab && activeTab.id === 'tab-all'
+  var containingTab = element && element.closest ? element.closest('.tab-content') : null;
+  var kind = containingTab && containingTab.id === 'all'
     ? 'monthly'
     : element.closest('[data-codex-last30-daily]')
       ? 'codex-hourly'
