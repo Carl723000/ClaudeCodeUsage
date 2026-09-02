@@ -479,12 +479,25 @@ function annotateBoundaries(
     const inferred = previous
       ? persistedBoundaryEvidence(previous, item, usageDropThreshold)
       : null;
+    // Older v2 stores marked every anonymous Codex epoch transition as
+    // account-ambiguous, including an otherwise coherent provider reset. A
+    // reset boundary keeps the epochs isolated already, so carrying that
+    // synthetic flag forward would suppress the low-confidence per-window
+    // allowance estimate forever after migration.
+    const retainedFlags = item.flags.filter((flag) =>
+      flag !== 'account-ambiguous' ||
+      !previous ||
+      previous.accountFingerprint === item.accountFingerprint ||
+      inferred === null,
+    );
     const normalized = {
       ...item,
       captureReason: inferred ?? item.captureReason,
       flags: orderedUniqueFlags([
-        ...item.flags,
-        ...(previous && previous.accountFingerprint !== item.accountFingerprint
+        ...retainedFlags,
+        ...(previous &&
+          previous.accountFingerprint !== item.accountFingerprint &&
+          inferred === null
           ? ['account-ambiguous' as const]
           : []),
       ]),
@@ -558,7 +571,8 @@ export function mergeQuotaCaptures(
       usageDropThreshold,
     );
     const captureWithBoundaryFlags = boundaryPrevious &&
-      boundaryPrevious.accountFingerprint !== stableFingerprint
+      boundaryPrevious.accountFingerprint !== stableFingerprint &&
+      boundary === null
       ? {
           ...capture,
           flags: orderedUniqueFlags([

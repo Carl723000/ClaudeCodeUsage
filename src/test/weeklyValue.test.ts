@@ -721,6 +721,42 @@ test('one unattributed Codex window may show a low-confidence total but never an
   assert.equal(points[0].confidence, 'low');
 });
 
+test('a current unattributed Codex window after a completed reset still estimates its total', () => {
+  const currentReset = RESET + 7 * DAY;
+  const now = currentReset - HOUR;
+  const points = buildWeeklyValueTimeline('codex', {
+    observations: [
+      observation({
+        seriesKey: 'codex-epoch-1',
+        windowId: 'completed-window',
+        accountAttribution: 'unattributed',
+        observedAt: RESET - HOUR,
+        resetAt: RESET,
+        usedPercent: 84,
+      }),
+      observation({
+        seriesKey: 'codex-epoch-2',
+        windowId: 'current-window',
+        accountAttribution: 'unattributed',
+        observedAt: now - HOUR,
+        resetAt: currentReset,
+        usedPercent: 74,
+      }),
+    ],
+    usage: [
+      usage(40, RESET - 2 * HOUR),
+      usage(74, now - 2 * HOUR),
+    ],
+  }, { now });
+
+  const current = points.find((point) => point.current);
+  assert.equal(current?.usedEquivalentUsd, 74);
+  assert.equal(current?.utilizationPercent, 74);
+  assert.equal(current?.fullEquivalentUsd, 100);
+  assert.equal(current?.unusedEquivalentUsd, null);
+  assert.equal(current?.confidence, 'low');
+});
+
 test('overlapping unattributed Codex epochs never share usage for an allowance estimate', () => {
   const points = buildWeeklyValueTimeline('codex', {
     observations: [

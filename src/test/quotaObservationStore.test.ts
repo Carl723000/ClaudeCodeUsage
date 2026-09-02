@@ -145,7 +145,7 @@ test('resetAt changes retain consecutive and same-day reset events', () => {
   assert.equal(new Set(store.observations.map((item) => item.accountFingerprint)).size, 1);
 });
 
-test('unattributed reset epochs expose boundary evidence without merging account epochs', () => {
+test('unattributed reset epochs expose boundary evidence without merging or inventing account ambiguity', () => {
   const store = mergeQuotaCaptures(createEmptyQuotaObservationStore(), [
     capture({
       observedAt: NOW - HOUR,
@@ -163,11 +163,48 @@ test('unattributed reset epochs expose boundary evidence without merging account
 
   assert.equal(new Set(store.observations.map((item) => item.accountFingerprint)).size, 2);
   assert.equal(new Set(store.observations.map((item) => item.windowId)).size, 2);
-  assert.ok(store.observations[1].flags.includes('account-ambiguous'));
+  assert.equal(store.observations[1].flags.includes('account-ambiguous'), false);
   const events = deriveQuotaResetEvents(store);
   assert.equal(events.length, 1);
   assert.equal(events[0].evidence, 'reset-at-change');
   assert.notEqual(events[0].previousAccountFingerprint, events[0].nextAccountFingerprint);
+});
+
+test('a legacy synthetic account-ambiguous flag is removed across a coherent reset boundary', () => {
+  const first = mergeQuotaCaptures(createEmptyQuotaObservationStore(), [capture({
+    observedAt: NOW - HOUR,
+    resetAt: NOW + HOUR,
+    usedFraction: 0.91,
+    unattributedEpochSignal: 'legacy-first-window',
+  })], { salt: SALT, now: NOW });
+  const legacy = mergeQuotaCaptures(first, [capture({
+    observedAt: NOW,
+    resetAt: NOW + 8 * HOUR,
+    usedFraction: 0.04,
+    unattributedEpochSignal: 'legacy-second-window',
+    flags: ['account-ambiguous'],
+  })], { salt: SALT, now: NOW });
+
+  assert.equal(legacy.observations[1].captureReason, 'reset-at-change');
+  assert.equal(legacy.observations[1].flags.includes('account-ambiguous'), false);
+});
+
+test('an unattributed epoch change without reset evidence remains account ambiguous', () => {
+  const store = mergeQuotaCaptures(createEmptyQuotaObservationStore(), [
+    capture({
+      observedAt: NOW - HOUR,
+      usedFraction: 0.2,
+      unattributedEpochSignal: 'first-unattributed-epoch',
+    }),
+    capture({
+      observedAt: NOW,
+      usedFraction: 0.3,
+      unattributedEpochSignal: 'second-unattributed-epoch',
+    }),
+  ], { salt: SALT, now: NOW });
+
+  assert.equal(store.observations[1].captureReason, 'refresh');
+  assert.ok(store.observations[1].flags.includes('account-ambiguous'));
 });
 
 test('small percentage rollback is noise but a significant rollback creates a new window', () => {
