@@ -48,7 +48,7 @@ Semua diambil dari VSIX v2.3.1 terpasang yang sama dengan data sintetis, tanpa a
 
 ## Yang baru di v2.3.1
 
-- 30 hari terakhir berarti hari ini dan 29 tanggal sebelumnya dalam zona waktu konfigurasi. Total dapat direkonsiliasi, refresh berulang stabil, dan bulan tampil dari lama ke baru. Ringkasan Workflows Claude memakai rentang bergulir yang sama dan memasukkan setiap eksekusi berdasarkan tanggal mulai di zona waktu konfigurasi.
+- 30 hari terakhir berarti hari ini dan 29 tanggal sebelumnya dalam zona waktu konfigurasi. Total dapat direkonsiliasi, refresh berulang stabil, dan bulan tampil dari lama ke baru. Ringkasan Workflows Claude memakai rentang bergulir yang sama dan memasukkan setiap eksekusi berdasarkan tanggal mulai di zona waktu konfigurasi. Saat metrik grafik diganti atau label drill-down dirender, kunci penggunaan harian/bulanan tidak lagi mundur sehari atau sebulan akibat zona waktu host.
 - Reasoning effort terstruktur tidak ditebak dari nama model. `unknown` bukan nol dijelaskan; nilai nol disembunyikan.
 - Pengamatan kuota anonim yang terbatas mempertahankan reset tidak teratur dan pada hari yang sama. Fraksi valid dalam satu jendela menghasilkan estimasi total dan sisa daya tahan langganan, termasuk periode berjalan. Bukti perkiraan atau tanpa atribusi diberi keyakinan rendah. Jika series kuota Codex lokal tumpang tindih, periode berjalan memakai pengamatan nyata terbaru untuk estimasi gabungan berkeyakinan rendah; periode selesai yang atribusinya ambigu tetap hanya menampilkan nilai terpakai.
 - Perbandingan menampilkan heatmap aktivitas gabungan Claude + Codex dari agregat harian yang sudah ada dan tetap berfungsi dengan satu penyedia.

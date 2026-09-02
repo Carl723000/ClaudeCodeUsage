@@ -9930,6 +9930,27 @@ const __dateOpts = (extra) => {
   if (__tz) opts.timeZone = __tz;
   return opts;
 };
+// Usage date keys have already been bucketed in the configured timezone. Parse
+// their components and format a UTC-noon sentinel so neither the configured
+// zone nor the Webview host zone can roll a day/month label backwards.
+function ccuFormatUsageDateKey(value, extra, monthly) {
+  var raw = String(value || '');
+  var match = /^(\\d{4})-(\\d{2})(?:-(\\d{2}))?$/.exec(raw);
+  if (!match) { return raw; }
+  var year = Number(match[1]);
+  var month = Number(match[2]);
+  var day = Number(match[3] || 1);
+  var date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return raw;
+  }
+  var isMonthly = monthly === true || !match[3];
+  var options = isMonthly
+    ? { year: 'numeric', month: 'long' }
+    : Object.assign({}, extra || {});
+  options.timeZone = 'UTC';
+  return date.toLocaleDateString(__locale, options);
+}
 const __dayKeyFormatter = new Intl.DateTimeFormat('en-CA', __dateOpts({
   year: 'numeric',
   month: '2-digit',
@@ -11910,8 +11931,7 @@ function updateMainChart(metric, container) {
       // Hourly chart: tooltip shows the value only (the hour is on the x-axis).
       bar.title = valueWithHelp;
     } else if (date) {
-      const dateObj = new Date(date);
-      bar.title = dateObj.toLocaleDateString() + ': ' + valueWithHelp;
+      bar.title = ccuFormatUsageDateKey(date) + ': ' + valueWithHelp;
     }
     // Drill-down bars keep their accessible name synchronized with the
     // currently selected metric; otherwise a keyboard user would continue to
@@ -12044,7 +12064,7 @@ function renderHourlyData(hourlyData, date) {
   }
 
   let html = '<div class="hourly-breakdown">';
-  html += '<h4>' + new Date(date).toLocaleDateString(__locale, __dateOpts()) + ' ${I18n.t.popup.hourlyBreakdown}</h4>';
+  html += '<h4>' + ccuFormatUsageDateKey(date) + ' ${I18n.t.popup.hourlyBreakdown}</h4>';
 
   html += '<div class="chart-tabs">';
   html += '<button class="chart-tab active" data-metric="cost">${I18n.t.popup.cost}</button>';
@@ -12097,7 +12117,7 @@ function renderDailyData(dailyData, monthDate) {
   }
 
   let html = '<div class="daily-breakdown">';
-  html += '<h4>' + new Date(monthDate).toLocaleDateString(__locale, __dateOpts({ year: 'numeric', month: 'long' })) + ' ${I18n.t.popup.dailyBreakdown}</h4>';
+  html += '<h4>' + ccuFormatUsageDateKey(monthDate, null, true) + ' ${I18n.t.popup.dailyBreakdown}</h4>';
 
   html += '<div class="chart-tabs">';
   html += '<button class="chart-tab active" data-metric="cost">${I18n.t.popup.cost}</button>';
@@ -12117,7 +12137,7 @@ function renderDailyData(dailyData, monthDate) {
   // monthly composition the user clicked).
   html += compositionHtml(dailyData.map(function(item) {
     return {
-      label: new Date(item.date).toLocaleDateString(__locale, __dateOpts({ month: 'numeric', day: 'numeric' })),
+      label: ccuFormatUsageDateKey(item.date, { month: 'numeric', day: 'numeric' }),
       data: item.data
     };
   }));
@@ -12134,8 +12154,7 @@ function renderDailyData(dailyData, monthDate) {
   html += '</tr></thead><tbody>';
 
   dailyData.forEach(function(item) {
-    const dateObj = new Date(item.date);
-    const formattedDate = dateObj.toLocaleDateString(__locale, __dateOpts({ month: 'numeric', day: 'numeric' }));
+    const formattedDate = ccuFormatUsageDateKey(item.date, { month: 'numeric', day: 'numeric' });
 
     html += '<tr>';
     html += '<td class="date-cell">' + formattedDate + '</td>';

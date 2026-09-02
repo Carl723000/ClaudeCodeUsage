@@ -16,7 +16,7 @@ export function formatUsageDate(
   // itself in UTC so negative offsets cannot roll it into the previous day or
   // month (#54), and use an explicit monthly flag so July 1 remains a day.
   const [year, month, day] = dateString.split('-').map(Number);
-  const date = new Date(Date.UTC(year, month - 1, day, 12));
+  const date = new Date(Date.UTC(year, month - 1, monthly ? 1 : day, 12));
   const options: Intl.DateTimeFormatOptions = monthly
     ? { year: 'numeric', month: 'long' }
     : dailyOptions;
