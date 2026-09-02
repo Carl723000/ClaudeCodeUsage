@@ -405,6 +405,70 @@ test('configured timezone rebuckets Claude Today and hours from the in-memory in
   }
 });
 
+test('nested Claude subagent logs feed Today and rolling 30 days exactly once', async () => {
+  const previousTimeZone = I18n.getTimezone();
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-claude-subagent-index-'));
+  roots.push(root);
+  const project = path.join(root, 'projects', '-fixture-subagent');
+  const subagents = path.join(project, 'session-root', 'subagents');
+  await mkdir(subagents, { recursive: true });
+  await writeFile(
+    path.join(project, 'session-root.jsonl'),
+    `${usageLine('root', 10, 2, { timestamp: '2026-08-21T08:00:00.000Z' })}\n`,
+    'utf8',
+  );
+  const subagentFile = path.join(subagents, 'agent-review.jsonl');
+  await writeFile(
+    subagentFile,
+    `${usageLine('subagent', 20, 4, { timestamp: '2026-08-21T09:00:00.000Z' })}\n`,
+    'utf8',
+  );
+
+  try {
+    I18n.setTimezone('UTC');
+    const cold = await updateClaudeUsageIndex(createClaudeUsageIndex(), root, {
+      analyzeContent: false,
+    });
+    const first = claudeUsageDashboardSnapshot(cold.index, {
+      now: new Date('2026-08-21T12:00:00.000Z'),
+    });
+
+    assert.equal(cold.diagnostics.bodyReads, 2);
+    assert.equal(cold.records.filter((record) => record._agentId === 'agent-review').length, 1);
+    assert.equal(first.today.totalInputTokens, 30);
+    assert.equal(first.last30Days.totalInputTokens, 30);
+    assert.equal(first.allTime.totalInputTokens, 30);
+    assert.equal(first.sessions.reduce((sum, session) => sum + session.data.totalInputTokens, 0), 30);
+
+    const unchanged = await updateClaudeUsageIndex(cold.index, root, {
+      analyzeContent: false,
+    });
+    const unchangedSnapshot = claudeUsageDashboardSnapshot(unchanged.index, {
+      now: new Date('2026-08-21T12:00:00.000Z'),
+    });
+    assert.equal(unchanged.diagnostics.bodyReads, 0);
+    assert.equal(unchangedSnapshot.today.totalInputTokens, 30);
+
+    await appendFile(
+      subagentFile,
+      `${usageLine('subagent-tail', 7, 1, { timestamp: '2026-08-21T10:00:00.000Z' })}\n`,
+      'utf8',
+    );
+    const appended = await updateClaudeUsageIndex(unchanged.index, root, {
+      analyzeContent: false,
+    });
+    const appendedSnapshot = claudeUsageDashboardSnapshot(appended.index, {
+      now: new Date('2026-08-21T12:00:00.000Z'),
+    });
+    assert.equal(appended.diagnostics.bodyReads, 1);
+    assert.equal(appendedSnapshot.today.totalInputTokens, 37);
+    assert.equal(appendedSnapshot.last30Days.totalInputTokens, 37);
+    assert.equal(appendedSnapshot.allTime.totalInputTokens, 37);
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
 test('hourly materialization is limited to the recent 30-day window while day and month stay all-time', async () => {
   const previousTimeZone = I18n.getTimezone();
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-claude-hour-window-'));

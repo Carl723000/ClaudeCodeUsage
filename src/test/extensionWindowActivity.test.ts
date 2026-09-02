@@ -1157,6 +1157,63 @@ test('Claude watcher is not created after disposal or a stale settings generatio
   }
 });
 
+test('Claude recursive watcher forwards nested subagent JSONL writes to a watch refresh', async () => {
+  const extension = bareExtension();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-watch-subagent-'));
+  fs.mkdirSync(path.join(root, 'projects'));
+  const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
+  const originalWatch = fs.watch;
+  let listener: ((eventType: string, filename: string | Buffer | null) => void) | undefined;
+  let watcherClosed = 0;
+  const refreshes: Array<{ forceReload: boolean; trigger: string }> = [];
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.watchDebounce = {
+    clear: () => undefined,
+    push: (_delay: number, callback: () => void) => callback(),
+  };
+  extension.fileWatcher = undefined;
+  extension.fileWatcherLease = undefined;
+  extension.watchedDir = null;
+  extension.getConfiguration = () => ({
+    fileWatchSeconds: 1,
+    dataDirectory: '',
+  });
+  extension.refreshData = async (forceReload: boolean, trigger: string) => {
+    refreshes.push({ forceReload, trigger });
+  };
+  (ClaudeDataLoader as any).findClaudeDataDirectory = async () => root;
+  (fs as any).watch = (
+    directory: string,
+    options: { recursive?: boolean },
+    callback: (eventType: string, filename: string | Buffer | null) => void,
+  ) => {
+    assert.equal(directory, path.join(root, 'projects'));
+    assert.equal(options.recursive, true);
+    listener = callback;
+    return { close: () => { watcherClosed += 1; } };
+  };
+
+  try {
+    await extension.startFileWatching();
+    assert.ok(listener);
+    listener('change', path.join('-fixture', 'session-root', 'subagents', 'agent-review.jsonl'));
+    await Promise.resolve();
+    assert.deepEqual(refreshes, [{ forceReload: false, trigger: 'watch' }]);
+
+    listener('change', path.join('-fixture', 'session-root', 'subagents', 'agent-review.meta.json'));
+    await Promise.resolve();
+    assert.equal(refreshes.length, 1, 'non-JSONL metadata must not schedule a usage refresh');
+  } finally {
+    extension.stopFileWatching();
+    (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
+    (fs as any).watch = originalWatch;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+  await Promise.resolve();
+  await Promise.resolve();
+  assert.equal(watcherClosed, 1);
+});
+
 test('rapid settings changes wait for every provider retirement and only latest generation restarts', async () => {
   const extension = bareExtension();
   let finishFirst!: () => void;
