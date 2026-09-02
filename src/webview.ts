@@ -8464,8 +8464,9 @@ export class UsageWebviewProvider {
         background: var(--vscode-editor-background);
       }
       .combined-heatmap-preview svg {
-        width: auto;
-        max-width: none;
+        width: 100%;
+        max-width: 843px;
+        height: auto;
         border-radius: 12px;
         box-shadow: 0 8px 26px rgba(24, 16, 36, 0.18);
       }
@@ -9270,6 +9271,10 @@ export class UsageWebviewProvider {
         }
         .combined-config-card {
           order: -1;
+        }
+        .combined-heatmap-preview svg {
+          width: auto;
+          max-width: none;
         }
         .action-card-head {
           align-items: flex-start;

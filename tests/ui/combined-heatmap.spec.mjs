@@ -30,6 +30,26 @@ test('Compare opens with the combined Claude + Codex heatmap and privacy-bounded
   )).toBe(true);
   await expect(page.locator('#combinedHeatmapPrivacyPreview')).toContainText('accounts, projects, thread titles, local paths, and log content');
   await expect(panel).toContainText('not productivity, subscription billing, or provider capability equivalence');
+  const desktopPreviewGeometry = await page.locator('.combined-heatmap-preview').evaluate((preview) => {
+    const svg = preview.querySelector('svg');
+    const more = [...preview.querySelectorAll('text')].find((element) => element.textContent === 'More');
+    if (!svg || !more) {
+      return null;
+    }
+    const previewRect = preview.getBoundingClientRect();
+    const svgRect = svg.getBoundingClientRect();
+    const moreRect = more.getBoundingClientRect();
+    return {
+      previewRight: previewRect.right,
+      svgRight: svgRect.right,
+      moreRight: moreRect.right,
+      overflow: preview.scrollWidth - preview.clientWidth,
+    };
+  });
+  expect(desktopPreviewGeometry).not.toBeNull();
+  expect(desktopPreviewGeometry.overflow).toBeLessThanOrEqual(1);
+  expect(desktopPreviewGeometry.svgRight).toBeLessThanOrEqual(desktopPreviewGeometry.previewRight);
+  expect(desktopPreviewGeometry.moreRight).toBeLessThanOrEqual(desktopPreviewGeometry.previewRight);
 });
 
 test('combined share preferences stay local and every export action is explicit', async ({ page }) => {
