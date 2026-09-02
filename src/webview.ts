@@ -3818,7 +3818,9 @@ export class UsageWebviewProvider {
       const daily = ClaudeDataLoader.getDailyUsageMap(this.allRecords, I18n.getTimezone());
       heatmapPanel =
         '<div class="heatmap-panel"><h3>Token heatmap</h3>' +
-        '<div class="heatmap-svg">' + renderHeatmapSvg(daily) + '</div>' +
+        '<div class="heatmap-svg">' + renderHeatmapSvg(daily, {
+          endDateISO: dayKeyInZone(new Date(), I18n.getTimezone()),
+        }) + '</div>' +
         '<div class="share-actions">' +
         '<button class="btn-secondary btn-small" onclick="exportHeatmap()">Export as SVG…</button>' +
         '<button class="btn-secondary btn-small" onclick="publishHeatmap()">Publish to GitHub…</button>' +

@@ -102,6 +102,11 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   polling, credentials, or a second scanner.
 
 ### Fixed
+- **Configured-zone share ranges** — the Claude provider heatmap now ends on
+  today in the configured timezone, and Share Card 7-day, 30-day, and yearly
+  scopes use exact civil-date windows instead of fixed millisecond cutoffs.
+  Activity near UTC boundaries is no longer omitted or pulled from an adjacent
+  local day.
 - **Complete Share studio localization** — the active Compare sharing workspace
   now carries complete German, Japanese, Korean, Brazilian Portuguese, and
   Indonesian copy instead of silently falling back to English. A repository

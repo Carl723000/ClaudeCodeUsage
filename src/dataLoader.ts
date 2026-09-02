@@ -11,6 +11,7 @@ import {
   formatHourLabel,
   hourKeyInZone,
   monthKeyInZone,
+  rollingDayKeysFromDayKey,
 } from './dateKeys';
 import { I18n } from './i18n';
 import { DayUsage } from './heatmap';
@@ -2149,7 +2150,8 @@ export class ClaudeDataLoader {
   static buildShareInput(
     records: ClaudeUsageRecord[],
     range: ShareRange,
-    scope: string = 'all'
+    scope: string = 'all',
+    now: Date = new Date(),
   ): ShareInput {
     const tz = I18n.getTimezone();
 
@@ -2168,22 +2170,17 @@ export class ClaudeDataLoader {
     // Range filter.
     let inRange: ClaudeUsageRecord[];
     if (range === 'today') {
-      const todayKey = dayKeyInZone(new Date(), tz);
+      const todayKey = dayKeyInZone(now, tz);
       inRange = scoped.filter((r) => dayKeyInZone(new Date(r.timestamp), tz) === todayKey);
-    } else if (range === 'week') {
-      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      inRange = scoped.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
-    } else if (range === 'last30') {
-      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      inRange = scoped.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
-    } else if (range === 'year') {
-      const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
-      inRange = scoped.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
+    } else if (range === 'week' || range === 'last30' || range === 'year') {
+      const dayCount = range === 'week' ? 7 : range === 'last30' ? 30 : 365;
+      const dayKeys = new Set(rollingDayKeysFromDayKey(dayKeyInZone(now, tz), dayCount));
+      inRange = scoped.filter((r) => dayKeys.has(dayKeyInZone(new Date(r.timestamp), tz)));
     } else if (range.startsWith('month:')) {
       const monthKey = range.slice('month:'.length); // 'YYYY-MM'
       inRange = scoped.filter((r) => monthKeyInZone(new Date(r.timestamp), tz) === monthKey);
     } else {
-      const monthKey = monthKeyInZone(new Date(), tz);
+      const monthKey = monthKeyInZone(now, tz);
       inRange = scoped.filter((r) => monthKeyInZone(new Date(r.timestamp), tz) === monthKey);
     }
 

@@ -1,5 +1,7 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { buildContributionGrid, renderHeatmapSvg, CLAUDE_ORANGE_SCALE } from '../heatmapSvg';
 import { DayUsage } from '../heatmap';
 
@@ -11,6 +13,21 @@ function fillForDate(svg: string, dateISO: string): string | undefined {
   ));
   return match?.[1];
 }
+
+test('the in-dashboard heatmap anchors its end date in the configured timezone', () => {
+  const webviewSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'src', 'webview.ts'),
+    'utf8',
+  );
+  const start = webviewSource.indexOf("if (this.setting<boolean>('showHeatmap', false)");
+  const end = webviewSource.indexOf('const dailyBreakdown =', start);
+  assert.ok(start >= 0 && end > start, 'the live provider heatmap panel must remain discoverable');
+  const panel = webviewSource.slice(start, end);
+  assert.match(
+    panel,
+    /renderHeatmapSvg\(daily,\s*\{\s*endDateISO:\s*dayKeyInZone\(new Date\(\),\s*I18n\.getTimezone\(\)\),?\s*\}\)/,
+  );
+});
 
 test('grid holds only days in [start, end], and totals them', () => {
   const daily: Record<string, DayUsage> = { '2026-01-05': day(10), '2026-01-10': day(20) };

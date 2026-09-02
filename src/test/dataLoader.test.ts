@@ -86,6 +86,48 @@ test('day attribution uses the configured timezone instead of the host timezone'
   }
 });
 
+test('share-card rolling ranges use configured-zone civil days', () => {
+  const previousTimeZone = I18n.getTimezone();
+  const fixedNow = new Date('2026-07-08T04:00:00.000Z');
+  const shareRecord = (
+    timestamp: string,
+    inputTokens: number,
+    id: string,
+  ): ClaudeUsageRecord => ({
+    timestamp,
+    requestId: `request-${id}`,
+    message: {
+      id: `message-${id}`,
+      model: 'claude-sonnet-4-5',
+      usage: { input_tokens: inputTokens, output_tokens: 0 },
+    },
+  });
+  const cases = [
+    { range: 'week', outside: '2026-07-01T06:00:00.000Z', inside: '2026-07-01T12:00:00.000Z' },
+    { range: 'last30', outside: '2026-06-08T06:00:00.000Z', inside: '2026-06-08T12:00:00.000Z' },
+    { range: 'year', outside: '2025-07-08T06:00:00.000Z', inside: '2025-07-08T12:00:00.000Z' },
+  ] as const;
+
+  try {
+    I18n.setTimezone('Pacific/Honolulu');
+    for (const { range, outside, inside } of cases) {
+      const input = ClaudeDataLoader.buildShareInput(
+        [
+          shareRecord(outside, 500, `${range}-outside`),
+          shareRecord(inside, 1_000, `${range}-inside`),
+        ],
+        range,
+        'all',
+        fixedNow,
+      );
+      assert.equal(input.rangeData.totalInputTokens, 1_000, range);
+      assert.deepEqual(input.dailyDates, [inside.slice(0, 10)], range);
+    }
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
 test('an injected manifest is authoritative and returns anonymous load counters', async () => {
   const manifestRoot = await mkdtemp(path.join(os.tmpdir(), 'ccu-loader-manifest-'));
   const emptyArgumentRoot = await mkdtemp(path.join(os.tmpdir(), 'ccu-loader-empty-'));
