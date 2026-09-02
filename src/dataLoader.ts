@@ -2537,10 +2537,11 @@ export class ClaudeDataLoader {
   ): UsageAttribution {
     const timeZone = I18n.getTimezone();
     const configuredToday = dayKeyInZone(now, timeZone);
-    const minTs =
-      scope.kind === 'week' ? now.getTime() - 7 * 24 * 60 * 60 * 1000
-      : scope.kind === 'month' ? now.getTime() - 30 * 24 * 60 * 60 * 1000
-      : 0;
+    const scopeDayKeys =
+      scope.kind === 'day' ? new Set([configuredToday])
+      : scope.kind === 'week' ? new Set(rollingDayKeysFromDayKey(configuredToday, 7))
+      : scope.kind === 'month' ? new Set(rollingDayKeysFromDayKey(configuredToday, 30))
+      : undefined;
     const normScope = scope.projectPath ? this.normalizePath(scope.projectPath) : '';
 
     const scoped = records.filter((r) => {
@@ -2557,9 +2558,7 @@ export class ClaudeDataLoader {
       if (isNaN(t)) {
         return false;
       }
-      return scope.kind === 'day'
-        ? dayKeyInZone(new Date(t), timeZone) === configuredToday
-        : t >= minTs;
+      return scopeDayKeys?.has(dayKeyInZone(new Date(t), timeZone)) ?? true;
     });
 
     // Skill / plugin activation points. A skill's usage share is the weight
@@ -2581,11 +2580,12 @@ export class ClaudeDataLoader {
         const sessionIds = new Set(scoped.map((r) => r._sessionId));
         uses = uses.filter((u) => sessionIds.has(u.sessionId));
       } else {
-        // "YYYY-MM-DD" compares correctly as a string.
-        const minDay = scope.kind === 'day'
-          ? configuredToday
-          : localDayKey(new Date(minTs).toISOString());
-        uses = uses.filter((u) => u.day >= minDay);
+        uses = uses.filter((u) => {
+          const currentZoneDay = u.ts > 0 && Number.isFinite(u.ts)
+            ? dayKeyInZone(new Date(u.ts), timeZone)
+            : u.day;
+          return scopeDayKeys?.has(currentZoneDay) === true;
+        });
       }
       // key → session → earliest invocation ts (skills and plugins separately)
       const skillEarliest: Record<string, Record<string, number>> = {};

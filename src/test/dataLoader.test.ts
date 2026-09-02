@@ -7,7 +7,7 @@ import * as path from 'node:path';
 import { scanUsageManifest } from '../claudeUsageFiles';
 import { ClaudeDataLoader } from '../dataLoader';
 import { I18n } from '../i18n';
-import { ClaudeUsageRecord } from '../types';
+import { ClaudeUsageRecord, ContentAnalysis } from '../types';
 
 const tempRoots: string[] = [];
 
@@ -81,6 +81,180 @@ test('day attribution uses the configured timezone instead of the host timezone'
     assert.deepEqual(attribution.models.map(({ key, count }) => ({ key, count })), [
       { key: 'claude-sonnet-4-5', count: 1 },
     ]);
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
+function assertRollingAttributionUsesCivilDays(
+  kind: 'week' | 'month',
+  cases: ReadonlyArray<{
+    timeZone: string;
+    now: string;
+    outside: string;
+    outsideDay: string;
+    inside: string;
+    insideDay: string;
+  }>,
+): void {
+  const previousTimeZone = I18n.getTimezone();
+  const attributionRecord = (
+    timestamp: string,
+    inputTokens: number,
+    sessionId: string,
+  ): ClaudeUsageRecord => ({
+    timestamp,
+    _sessionId: sessionId,
+    message: {
+      model: 'claude-sonnet-4-5',
+      usage: { input_tokens: inputTokens, output_tokens: 10 },
+    },
+  });
+
+  try {
+    for (const sample of cases) {
+      I18n.setTimezone(sample.timeZone);
+      const analysis: ContentAnalysis = {
+        categories: [],
+        toolResultBreakdown: [],
+        totalEstimatedTokens: 0,
+        recentPrompts: [],
+        thinkingBySession: {},
+        thinkingByDay: {},
+        skillUses: [
+          {
+            name: 'outside-skill',
+            sessionId: 'outside',
+            day: sample.outsideDay,
+            ts: Date.parse(sample.outside),
+            estTokens: 50,
+          },
+          {
+            name: 'inside-skill',
+            sessionId: 'inside',
+            day: sample.insideDay,
+            ts: Date.parse(sample.inside),
+            estTokens: 100,
+          },
+        ],
+      };
+      const attribution = ClaudeDataLoader.getUsageAttribution(
+        [
+          attributionRecord(sample.outside, 500, 'outside'),
+          attributionRecord(sample.inside, 1_000, 'inside'),
+        ],
+        analysis,
+        { kind },
+        new Date(sample.now),
+      );
+
+      assert.equal(attribution.totalTokens, 1_010, sample.timeZone);
+      assert.deepEqual(attribution.skills.map(({ key }) => key), ['inside-skill'], sample.timeZone);
+    }
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+}
+
+test('week attribution uses seven configured-zone civil days', () => {
+  assertRollingAttributionUsesCivilDays('week', [
+    {
+      timeZone: 'Asia/Tokyo',
+      now: '2026-07-21T23:30:00.000Z',
+      outside: '2026-07-15T05:00:00.000Z',
+      outsideDay: '2026-07-15',
+      inside: '2026-07-15T15:30:00.000Z',
+      insideDay: '2026-07-16',
+    },
+    {
+      timeZone: 'Pacific/Honolulu',
+      now: '2026-07-21T05:00:00.000Z',
+      outside: '2026-07-14T07:00:00.000Z',
+      outsideDay: '2026-07-13',
+      inside: '2026-07-14T12:00:00.000Z',
+      insideDay: '2026-07-14',
+    },
+  ]);
+});
+
+test('month attribution uses thirty configured-zone civil days', () => {
+  assertRollingAttributionUsesCivilDays('month', [
+    {
+      timeZone: 'Asia/Tokyo',
+      now: '2026-07-21T23:30:00.000Z',
+      outside: '2026-06-22T05:00:00.000Z',
+      outsideDay: '2026-06-22',
+      inside: '2026-06-22T15:30:00.000Z',
+      insideDay: '2026-06-23',
+    },
+    {
+      timeZone: 'Pacific/Honolulu',
+      now: '2026-07-21T05:00:00.000Z',
+      outside: '2026-06-21T07:00:00.000Z',
+      outsideDay: '2026-06-20',
+      inside: '2026-06-21T12:00:00.000Z',
+      insideDay: '2026-06-21',
+    },
+  ]);
+});
+
+test('rolling attribution rebuckets cached skill-use timestamps after a timezone change', () => {
+  const previousTimeZone = I18n.getTimezone();
+  const outside = '2026-07-15T05:00:00.000Z';
+  const inside = '2026-07-15T15:30:00.000Z';
+  const analysis: ContentAnalysis = {
+    categories: [],
+    toolResultBreakdown: [],
+    totalEstimatedTokens: 0,
+    recentPrompts: [],
+    thinkingBySession: {},
+    thinkingByDay: {},
+    skillUses: [
+      {
+        name: 'outside-skill',
+        sessionId: 'outside',
+        day: '2026-07-16',
+        ts: Date.parse(outside),
+        estTokens: 50,
+      },
+      {
+        name: 'inside-skill',
+        sessionId: 'inside',
+        day: '2026-07-15',
+        ts: Date.parse(inside),
+        estTokens: 100,
+      },
+    ],
+  };
+
+  try {
+    I18n.setTimezone('Asia/Tokyo');
+    const attribution = ClaudeDataLoader.getUsageAttribution(
+      [
+        {
+          timestamp: outside,
+          _sessionId: 'outside',
+          message: {
+            model: 'claude-sonnet-4-5',
+            usage: { input_tokens: 500, output_tokens: 10 },
+          },
+        },
+        {
+          timestamp: inside,
+          _sessionId: 'inside',
+          message: {
+            model: 'claude-sonnet-4-5',
+            usage: { input_tokens: 1_000, output_tokens: 10 },
+          },
+        },
+      ],
+      analysis,
+      { kind: 'week' },
+      new Date('2026-07-21T23:30:00.000Z'),
+    );
+
+    assert.equal(attribution.totalTokens, 1_010);
+    assert.deepEqual(attribution.skills.map(({ key }) => key), ['inside-skill']);
   } finally {
     I18n.setTimezone(previousTimeZone);
   }

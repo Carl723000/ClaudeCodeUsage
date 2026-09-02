@@ -194,7 +194,7 @@ export interface ThinkingShare {
 export interface SkillUse {
   name: string;
   sessionId: string;
-  day: string; // local "YYYY-MM-DD"
+  day: string; // configured-zone "YYYY-MM-DD" captured when parsed; rebucket ts after zone changes
   ts: number; // epoch ms of the invocation (0 when unparsable)
   estTokens: number;
 }
