@@ -9,6 +9,7 @@ import {
   createClosedAdviceLocalState,
   snoozeAdviceRecommendation,
 } from '../adviceEffectiveness/versionedPersistence';
+import { I18n } from '../i18n';
 
 class ControlledStorage implements AdviceLocalStateStorage {
   public value: AdviceLocalState | undefined;
@@ -217,6 +218,53 @@ test('optimizer feedback uses the same retractable local ledger and rendered con
   provider.adviceLocalState = durable;
   const reloadedHtml = provider.renderOptimizerCard();
   assert.match(reloadedHtml, /data-snooze-mode="resume"/);
+});
+
+test('optimizer snooze date uses the configured timezone instead of the host timezone', async () => {
+  const previousLanguage = I18n.getCurrentLanguage();
+  const previousTimezone = I18n.getTimezone();
+  const previousHostTimezone = process.env.TZ;
+  try {
+    process.env.TZ = 'UTC';
+    I18n.setLanguage('en');
+    I18n.setTimezone('Pacific/Honolulu');
+    const snoozedUntilEpochMs = Date.parse('2099-01-01T00:30:00.000Z');
+    const durable = createClosedAdviceLocalState();
+    durable.suppression = [{
+      provider: 'optimizer',
+      surface: 'optimizer',
+      recommendationId: 'recommendation-optimizer-result-v1',
+      updatedAtEpochMs: snoozedUntilEpochMs - 60_000,
+      snoozedUntilEpochMs,
+    }];
+    const provider = await createProvider({
+      get: <T>() => durable as T,
+      update: async () => undefined,
+    });
+    provider.settings = { get: (key: string) => key === 'advice.optimizer.enabled' };
+    provider.adviceLocalState = durable;
+    provider.optimizerState = {
+      draft: 'host-only draft',
+      resolve: false,
+      distil: false,
+      aesthetic: false,
+      prompt: 'Paste-ready result',
+      settings: 'Effort: high',
+      adviceId: 'advice-optimizer-timezone-test',
+    };
+
+    const html = provider.renderOptimizerCard();
+    assert.match(html, /Snoozed until 12\/31\/2098/);
+    assert.doesNotMatch(html, /Snoozed until 1\/1\/2099/);
+  } finally {
+    I18n.setLanguage(previousLanguage);
+    I18n.setTimezone(previousTimezone);
+    if (previousHostTimezone === undefined) {
+      delete process.env.TZ;
+    } else {
+      process.env.TZ = previousHostTimezone;
+    }
+  }
 });
 
 test('snoozed advice leaves a closed, on-demand resume control instead of the default recommendation summary', async () => {

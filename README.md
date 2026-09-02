@@ -145,7 +145,8 @@ same full-request preview and separate explicit Send action as AI advice.
   monthly charts/tables run oldest-first. Claude's Workflows summary uses that
   same rolling range and assigns each run by its configured-zone start date.
   Chart metric switches and drill-down labels render daily/monthly usage keys
-  without host-timezone rollback.
+  without host-timezone rollback; Advice and Optimizer snooze dates also use
+  the configured timezone and UI locale.
 - **Truthful effort attribution** — legacy and current structured effort fields
   normalize without guessing from model names. A non-zero `unknown` bucket is
   explained; a zero bucket is not rendered.

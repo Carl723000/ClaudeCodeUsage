@@ -106,6 +106,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   longer roll back a day or month when a chart metric changes or a drill-down
   renders in a Webview host/configured timezone west of UTC. Bare monthly keys
   also render as the intended month instead of `Invalid Date`.
+- **Configured-zone advice snooze dates** — Advice and Optimizer now format a
+  snooze expiry with the selected UI locale and configured timezone instead of
+  whichever timezone happens to host the Extension process.
 - **Configured-zone rolling ranges** — the Claude provider heatmap now ends on
   today in the configured timezone. Share Card 7-day, 30-day, and yearly scopes,
   plus Usage tracking and AI-advice 7-day/30-day attribution, use exact

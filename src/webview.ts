@@ -4570,6 +4570,14 @@ export class UsageWebviewProvider {
     );
   }
 
+  private formatAdviceSnoozeDate(value: number): string {
+    const date = new Date(value);
+    if (isNaN(date.getTime())) {
+      return '';
+    }
+    return date.toLocaleDateString(I18n.getLocale(), I18n.dateFormatOptions());
+  }
+
   /** Reading-friendly date/time: "Today HH:MM", "Yesterday HH:MM", "MM-DD HH:MM" or "YYYY-MM-DD". */
   private formatDateTime(date: Date, now: Date = new Date()): string {
     if (!date || isNaN(date.getTime()) || date.getTime() === 0) {
@@ -5851,7 +5859,7 @@ export class UsageWebviewProvider {
         '</div>' +
         '<p class="advice-local-note">' + html(t.feedbackLocalOnly) + '</p>' +
         (snoozedUntil
-          ? '<p class="advice-local-note">' + html(t.snoozedUntil.replace('{date}', new Date(snoozedUntil).toLocaleDateString())) + '</p>'
+          ? '<p class="advice-local-note">' + html(t.snoozedUntil.replace('{date}', this.formatAdviceSnoozeDate(snoozedUntil))) + '</p>'
           : '') +
         '<p class="advice-inline-status" data-advice-feedback-status="' + provider + '"' +
         ' data-advice-id="' + html(state.contract.adviceId) + '"' +
@@ -5930,7 +5938,7 @@ export class UsageWebviewProvider {
           return '<details class="advice-recommendation-snoozed" data-advice-recommendation="' +
             html(recommendation.id) + '"><summary>' + html(t.snoozedUntil.replace(
               '{date}',
-              until ? new Date(until).toLocaleDateString() : '',
+              until ? this.formatAdviceSnoozeDate(until) : '',
             )) + '</summary>' + feedbackFor(recommendation, true) + '</details>';
         }).join('')
       : state && suppressedRecommendations.length > 0
@@ -5944,7 +5952,7 @@ export class UsageWebviewProvider {
             return '<details class="advice-recommendation-snoozed" data-advice-recommendation="' +
               html(recommendation.id) + '"><summary>' + html(t.snoozedUntil.replace(
                 '{date}',
-                until ? new Date(until).toLocaleDateString() : '',
+                until ? this.formatAdviceSnoozeDate(until) : '',
               )) + '</summary>' + feedbackFor(recommendation, true) + '</details>';
           }).join('')
       : '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
@@ -6126,7 +6134,7 @@ export class UsageWebviewProvider {
       this.escapeHtml(optimizerSnoozedUntil ? ai.resume : ai.snooze) + '</button>' +
       '</div><p class="advice-local-note">' + this.escapeHtml(ai.feedbackLocalOnly) + '</p>' +
       (optimizerSnoozedUntil
-        ? '<p class="advice-local-note">' + this.escapeHtml(ai.snoozedUntil.replace('{date}', new Date(optimizerSnoozedUntil).toLocaleDateString())) + '</p>'
+        ? '<p class="advice-local-note">' + this.escapeHtml(ai.snoozedUntil.replace('{date}', this.formatAdviceSnoozeDate(optimizerSnoozedUntil))) + '</p>'
         : '') +
       '<p class="advice-inline-status" data-advice-feedback-status="optimizer"' +
       ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '"' +
@@ -6136,7 +6144,7 @@ export class UsageWebviewProvider {
       ? '<div class="advice-recommendation-snoozed" role="status">' +
         '<p class="advice-local-note">' + this.escapeHtml(ai.snoozedUntil.replace(
           '{date}',
-          new Date(optimizerSnoozedUntil).toLocaleDateString(),
+          this.formatAdviceSnoozeDate(optimizerSnoozedUntil),
         )) + '</p>' +
         '<button type="button" class="advice-feedback-button" data-advice-action="snooze" data-provider="optimizer"' +
         ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '" data-recommendation-id="' +
