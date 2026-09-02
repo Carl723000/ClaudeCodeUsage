@@ -9,10 +9,13 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ### Added
 - **Combined activity heatmap and private sharing** — Compare now leads with a
   Claude + Codex calendar heatmap built from the existing provider daily
-  aggregates. It exports deterministic local SVG, a privacy-safe share card,
-  and a copyable Markdown snippet with configurable title, 30/90-day or yearly
-  range, and an explicit privacy preview. Claude-only and Codex-only histories
-  remain useful; no second log scan or statistics cache is introduced.
+  aggregates. Its preview-first share studio exports deterministic local SVG, a
+  privacy-safe card, and a copyable Markdown snippet with configurable title,
+  30/90-day or yearly range, and an explicit privacy preview. The default
+  Academic Violet ramp follows the project-profile visual reference, quantile
+  bands keep isolated peaks from flattening ordinary days, and four curated or
+  one custom accent palette can be selected locally. Claude-only and Codex-only
+  histories remain useful; no second log scan or statistics cache is introduced.
 - **Durable quota observation history** — versioned, atomically written,
   bounded observations keep provider, machine-local anonymous account epoch,
   observation/reset time, used/remaining fraction, window identity, source,
@@ -22,7 +25,11 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   coherent window contributes `priced used equivalent / used fraction`; robust
   aggregation weights price/log coverage, boundary quality, attribution, and
   recency. Total estimates never fall below confirmed usage, unused estimates
-  never go negative, and ambiguous multi-account evidence stays used-only.
+  never go negative, and a coherent current or completed window exposes both as
+  a subscription-durability estimate. If later logs overrun a stale observation,
+  the full value remains a low-confidence lower bound while unused is withheld
+  instead of showing a false zero. Unattributed or approximate windows are
+  labelled low confidence; genuinely overlapping quota series stay used-only.
 - **Evidence-backed advice loop** — the default-off feature keeps local
   observations, evidence, recommendations, actions, local helpful/not-helpful/
   applied feedback, and guarded comparable-task results in one surface. When
@@ -49,7 +56,8 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Shared dashboard system** — Claude and Codex now reuse the same density,
   headings, disclosure controls, chart/table framing, empty states, focus
   treatment, responsive navigation, and light/dark design tokens while keeping
-  provider-specific metric labels and meanings.
+  provider-specific metric labels and meanings. Dashboard figures use the VS
+  Code UI font again; monospace remains limited to code and copyable snippets.
 - **Chronological month views** — Codex monthly charts and tables render
   oldest-first in every range.
 - **System-reminder prompt filtering remains intentional** — framework reminder

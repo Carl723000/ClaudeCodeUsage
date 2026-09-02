@@ -5,6 +5,13 @@ import { DayUsage } from '../heatmap';
 
 const day = (tokens: number): DayUsage => ({ tokens, cost: tokens / 1000, sessions: 1 });
 
+function fillForDate(svg: string, dateISO: string): string | undefined {
+  const match = svg.match(new RegExp(
+    `<rect[^>]*fill="([^"]+)"[^>]*><title>${dateISO}</title></rect>`,
+  ));
+  return match?.[1];
+}
+
 test('grid holds only days in [start, end], and totals them', () => {
   const daily: Record<string, DayUsage> = { '2026-01-05': day(10), '2026-01-10': day(20) };
   const g = buildContributionGrid(daily, '2026-01-01', '2026-01-20', 'tokens');
@@ -64,4 +71,105 @@ test('has legend, watermark and the orange ramp; no crash on empty data', () => 
   assert.ok(svg.includes('Less') && svg.includes('More'));
   assert.ok(svg.includes('Made with Claude Code Usage'));
   assert.ok(svg.includes(CLAUDE_ORANGE_SCALE[0]));
+});
+
+test('short custom ramps keep a valid watermark and matching legend', () => {
+  const svg = renderHeatmapSvg(
+    { '2026-06-20': day(10) },
+    { endDateISO: '2026-07-01', scale: ['#f5f3ff', '#4f2f87'] },
+  );
+
+  assert.ok(svg.includes('fill="#4f2f87"'));
+  assert.equal((svg.match(/fill="#f5f3ff"/g) ?? []).length > 0, true);
+  assert.equal(svg.includes('fill="undefined"'), false);
+});
+
+test('quantile mode keeps a large ordinary-day tie light and an isolated peak dark', () => {
+  const daily: Record<string, DayUsage> = {};
+  const start = new Date('2026-01-01T00:00:00Z');
+  for (let index = 0; index < 100; index++) {
+    const date = new Date(start);
+    date.setUTCDate(date.getUTCDate() + index);
+    daily[date.toISOString().slice(0, 10)] = day(index === 99 ? 10 : 1);
+  }
+  const scale = ['#eeeeee', '#dddddd', '#bbbbbb', '#999999', '#777777', '#333333'];
+  const svg = renderHeatmapSvg(daily, {
+    startDateISO: '2026-01-01',
+    endDateISO: '2026-04-10',
+    scale,
+    intensityMode: 'quantile',
+    tooltip: (dateISO) => dateISO,
+  });
+
+  assert.equal(fillForDate(svg, '2026-01-01'), scale[1]);
+  assert.equal(fillForDate(svg, '2026-04-09'), scale[1]);
+  assert.equal(fillForDate(svg, '2026-04-10'), scale[5]);
+});
+
+test('quantile mode always reaches the top band for sparse and maximum-tied data', () => {
+  const scale = ['#eeeeee', '#dddddd', '#bbbbbb', '#999999', '#777777', '#333333'];
+  const svg = renderHeatmapSvg({
+    '2026-06-01': day(1),
+    '2026-06-02': day(2),
+    '2026-06-03': day(4),
+    '2026-06-04': day(4),
+  }, {
+    startDateISO: '2026-06-01',
+    endDateISO: '2026-06-04',
+    scale,
+    intensityMode: 'quantile',
+    tooltip: (dateISO) => dateISO,
+  });
+
+  assert.equal(fillForDate(svg, '2026-06-01'), scale[1]);
+  assert.equal(fillForDate(svg, '2026-06-03'), scale[5]);
+  assert.equal(fillForDate(svg, '2026-06-04'), scale[5]);
+});
+
+test('short-range legends stay inside a min-width share card', () => {
+  const svg = renderHeatmapSvg({}, {
+    startDateISO: '2026-06-23',
+    endDateISO: '2026-07-22',
+    scale: ['#ebedf0', '#eee8f8', '#d8c9f1', '#bca5e6', '#8668c7', '#4f2f87'],
+    minWidth: 720,
+  });
+
+  assert.doesNotMatch(svg, /<(?:text|rect) x="-/);
+  assert.match(svg, /<text x="\d+"[^>]*>Less<\/text>/);
+  assert.match(svg, /<text x="\d+"[^>]*>More<\/text>/);
+});
+
+test('the default linear renderer preserves the original four active buckets', () => {
+  const daily: Record<string, DayUsage> = {
+    '2026-06-01': day(1),
+    '2026-06-02': day(25),
+    '2026-06-03': day(50),
+    '2026-06-04': day(75),
+    '2026-06-05': day(100),
+  };
+  const svg = renderHeatmapSvg(daily, {
+    startDateISO: '2026-06-01',
+    endDateISO: '2026-06-05',
+    tooltip: (dateISO) => dateISO,
+  });
+
+  assert.equal(fillForDate(svg, '2026-06-01'), CLAUDE_ORANGE_SCALE[1]);
+  assert.equal(fillForDate(svg, '2026-06-02'), CLAUDE_ORANGE_SCALE[1]);
+  assert.equal(fillForDate(svg, '2026-06-03'), CLAUDE_ORANGE_SCALE[2]);
+  assert.equal(fillForDate(svg, '2026-06-04'), CLAUDE_ORANGE_SCALE[3]);
+  assert.equal(fillForDate(svg, '2026-06-05'), CLAUDE_ORANGE_SCALE[4]);
+});
+
+test('renderer sanitizes caller-supplied SVG colors at the shared boundary', () => {
+  const svg = renderHeatmapSvg(
+    { '2026-06-20': day(10) },
+    {
+      endDateISO: '2026-07-01',
+      scale: ['#eeeeee', 'url(javascript:alert(1))'],
+      background: 'url(javascript:alert(2))',
+      accentColor: '" onload="alert(3)',
+    },
+  );
+
+  assert.doesNotMatch(svg, /javascript|onload|url\(/i);
 });

@@ -7,10 +7,22 @@ test('Compare opens with the combined Claude + Codex heatmap and privacy-bounded
   const panel = page.locator('.combined-heatmap-panel');
   await expect(panel).toBeVisible();
   await expect(panel.getByRole('heading', { name: 'Combined activity heatmap and share card' })).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Live preview' })).toBeVisible();
   await expect(page.locator('#combinedHeatmapPreview svg')).toHaveAttribute('role', 'img');
-  await expect(page.locator('#combinedHeatmapMarkdown')).toHaveValue(
+  await expect(page.getByRole('radio', { name: 'Academic Violet' })).toBeChecked();
+  const markdown = page.locator('#combinedHeatmapMarkdown');
+  await expect(markdown).toHaveAttribute('aria-label', 'README / Markdown snippet');
+  await expect(markdown).toHaveValue(
     /^!\[Claude \+ Codex local activity\]\(claude-codex-activity-year-\d{4}-\d{2}-\d{2}\.svg\)$/,
   );
+  await page.locator('.combined-output-panel summary').click();
+  await expect(markdown).toBeVisible();
+  const fonts = await markdown.evaluate((element) => ({
+    markdown: getComputedStyle(element).fontFamily,
+    body: getComputedStyle(document.body).fontFamily,
+  }));
+  expect(fonts.markdown).toContain('monospace');
+  expect(fonts.markdown).not.toBe(fonts.body);
 
   const tooltips = await page.locator('#combinedHeatmapPreview svg rect title').allTextContents();
   expect(tooltips.some((value) =>
@@ -28,6 +40,8 @@ test('combined share preferences stay local and every export action is explicit'
 
   await page.locator('#combinedHeatmapTitle').fill('My local activity');
   await page.locator('#combinedHeatmapRange').selectOption('30d');
+  await page.getByRole('radio', { name: 'Custom' }).check();
+  await page.locator('#combinedHeatmapCustomAccent').fill('#0f766e');
   await page.locator('#combinedHeatmapPrivacy').uncheck();
   await expect(page.locator('#combinedHeatmapPrivacyPreview')).toBeHidden();
   await page.getByRole('button', { name: 'Update preview' }).click();
@@ -38,34 +52,44 @@ test('combined share preferences stay local and every export action is explicit'
     title: localStorage.getItem('ccu.combinedHeatmap.title'),
     range: localStorage.getItem('ccu.combinedHeatmap.range'),
     privacy: localStorage.getItem('ccu.combinedHeatmap.privacyPreview'),
+    palette: localStorage.getItem('ccu.combinedHeatmap.palette'),
+    customAccent: localStorage.getItem('ccu.combinedHeatmap.customAccent'),
     messages: window.__ccuPostedMessages.filter(
       (message) => message.command !== 'localDataClientReady',
     ),
   }));
-  expect(state).toMatchObject({ title: 'My local activity', range: '30d', privacy: 'false' });
+  expect(state).toMatchObject({
+    title: 'My local activity', range: '30d', privacy: 'false',
+    palette: 'custom', customAccent: '#0f766e',
+  });
   expect(state.messages).toEqual([
-    { command: 'previewCombinedHeatmap', title: 'My local activity', range: '30d' },
-    { command: 'exportCombinedHeatmap', title: 'My local activity', range: '30d' },
-    { command: 'copyCombinedHeatmapMarkdown', title: 'My local activity', range: '30d' },
+    { command: 'previewCombinedHeatmap', title: 'My local activity', range: '30d', palette: 'custom', customAccent: '#0f766e' },
+    { command: 'exportCombinedHeatmap', title: 'My local activity', range: '30d', palette: 'custom', customAccent: '#0f766e' },
+    { command: 'copyCombinedHeatmapMarkdown', title: 'My local activity', range: '30d', palette: 'custom', customAccent: '#0f766e' },
   ]);
   expect(state.messages.some((message) => /publish/i.test(message.command))).toBe(false);
 
   await page.getByRole('button', { name: 'Reset sharing preferences' }).click();
   await expect(page.locator('#combinedHeatmapTitle')).toHaveValue('Claude + Codex local activity');
   await expect(page.locator('#combinedHeatmapRange')).toHaveValue('year');
+  await expect(page.getByRole('radio', { name: 'Academic Violet' })).toBeChecked();
   await expect(page.locator('#combinedHeatmapPrivacy')).toBeChecked();
   const reset = await page.evaluate(() => ({
     title: localStorage.getItem('ccu.combinedHeatmap.title'),
     range: localStorage.getItem('ccu.combinedHeatmap.range'),
     privacy: localStorage.getItem('ccu.combinedHeatmap.privacyPreview'),
+    palette: localStorage.getItem('ccu.combinedHeatmap.palette'),
+    customAccent: localStorage.getItem('ccu.combinedHeatmap.customAccent'),
     messages: window.__ccuPostedMessages.slice(-2),
   }));
   expect(reset).toEqual({
     title: null,
     range: null,
     privacy: null,
+    palette: null,
+    customAccent: null,
     messages: [
-      { command: 'previewCombinedHeatmap', title: 'Claude + Codex local activity', range: 'year' },
+      { command: 'previewCombinedHeatmap', title: 'Claude + Codex local activity', range: 'year', palette: 'academicViolet', customAccent: '#4f2f87' },
       { command: 'resetCombinedHeatmapPreferences' },
     ],
   });
@@ -76,11 +100,19 @@ for (const theme of ['light', 'dark']) {
     await openCompare(page, { fixture: 'combined-heatmap', locale: 'zh-CN', theme });
     await expect(page.getByLabel('分享标题')).toBeVisible();
     await expect(page.getByLabel('时间范围')).toBeVisible();
+    await expect(page.getByRole('group', { name: '热力图配色' })).toBeVisible();
     await expect(page.getByLabel('显示隐私预览')).toBeChecked();
+    await page.locator('.combined-output-panel').evaluate((element) => { element.open = true; });
+    await expect(page.getByLabel('README / Markdown 引用片段')).toBeVisible();
     const results = await new AxeBuilder({ page })
       .include('.combined-heatmap-panel')
+      // Chromium/axe cannot resolve overlapping SVG primitives reliably.
+      // Export-card text/background pairs have deterministic contrast tests
+      // in combinedHeatmap.test.ts; Axe owns the surrounding HTML controls.
+      .exclude('#combinedHeatmapPreview svg')
       .analyze();
     expect(results.violations).toEqual([]);
+    expect(results.incomplete.filter((item) => item.id === 'color-contrast')).toEqual([]);
   });
 }
 

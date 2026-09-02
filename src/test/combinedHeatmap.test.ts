@@ -9,7 +9,28 @@ import {
   sanitizeCombinedHeatmapTitle,
   selectCombinedHeatmapWindow,
 } from '../combinedHeatmap';
-import { renderCombinedHeatmapSvg } from '../combinedHeatmapSvg';
+import {
+  ACADEMIC_VIOLET_SCALE,
+  customCombinedHeatmapScale,
+  normalizeCombinedHeatmapAccent,
+  normalizeCombinedHeatmapPalette,
+  renderCombinedHeatmapSvg,
+} from '../combinedHeatmapSvg';
+
+function relativeLuminance(hex: string): number {
+  const channels = [1, 3, 5].map((start) => {
+    const value = Number.parseInt(hex.slice(start, start + 2), 16) / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * channels[0] + 0.7152 * channels[1] + 0.0722 * channels[2];
+}
+
+function contrastRatio(foreground: string, background: string): number {
+  const foregroundLuminance = relativeLuminance(foreground);
+  const backgroundLuminance = relativeLuminance(background);
+  return (Math.max(foregroundLuminance, backgroundLuminance) + 0.05) /
+    (Math.min(foregroundLuminance, backgroundLuminance) + 0.05);
+}
 
 test('provider mappings preserve the processed-token formulas without double counting', () => {
   const claude = claudeDailyPointsFromUsage({
@@ -106,6 +127,9 @@ test('range boundaries use inclusive configured-timezone date keys', () => {
 });
 
 test('SVG is deterministic and tooltips disclose both provider totals and the combined total', () => {
+  assert.deepEqual(ACADEMIC_VIOLET_SCALE, [
+    '#ebedf0', '#eee8f8', '#d8c9f1', '#bca5e6', '#8668c7', '#4f2f87',
+  ]);
   const daily = mergeCombinedDailyUsage(
     [{ dateISO: '2026-07-20', processed: 1_200_000 }],
     [{ dateISO: '2026-07-20', processed: 300_000 }],
@@ -117,6 +141,53 @@ test('SVG is deterministic and tooltips disclose both provider totals and the co
   assert.match(first, /2026-07-20 · Claude: 1\.2M · Codex: 300K · Combined: 1\.5M processed tokens/);
   assert.match(first, /not productivity, billing, or provider equivalence/);
   assert.match(first, /role="img"/);
+  assert.ok(contrastRatio('#2f2142', '#fcfaff') >= 4.5);
+  assert.ok(contrastRatio('#685a77', '#fcfaff') >= 4.5);
+  assert.match(first, new RegExp(ACADEMIC_VIOLET_SCALE[ACADEMIC_VIOLET_SCALE.length - 1], 'i'));
+  assert.doesNotMatch(first, /#1d4ed8/i);
+  const orderedRamp = ACADEMIC_VIOLET_SCALE
+    .map((color) => `fill="${color}"`)
+    .join('[\\s\\S]*');
+  assert.match(first, new RegExp(orderedRamp, 'i'));
+});
+
+test('combined heatmap supports curated and sanitized custom colour ramps', () => {
+  const daily = mergeCombinedDailyUsage(
+    [{ dateISO: '2026-07-20', processed: 100 }],
+    [{ dateISO: '2026-07-20', processed: 50 }],
+  );
+  const custom = customCombinedHeatmapScale('#0f766e');
+  assert.equal(custom.length, 6);
+  assert.equal(custom[custom.length - 1], '#0f766e');
+
+  const svg = renderCombinedHeatmapSvg(daily, {
+    range: '30d',
+    endDateISO: '2026-07-20',
+    palette: 'custom',
+    customAccent: '#0F766E',
+  });
+  assert.match(svg, /#0f766e/i);
+
+  const invalid = renderCombinedHeatmapSvg(daily, {
+    range: '30d',
+    endDateISO: '2026-07-20',
+    palette: 'custom',
+    customAccent: 'url(javascript:alert(1))',
+  });
+  assert.doesNotMatch(invalid, /javascript|url\(/i);
+  assert.match(invalid, new RegExp(ACADEMIC_VIOLET_SCALE[ACADEMIC_VIOLET_SCALE.length - 1], 'i'));
+
+  assert.equal(normalizeCombinedHeatmapPalette('unexpected'), 'academicViolet');
+  assert.equal(normalizeCombinedHeatmapAccent('#fff'), '#4f2f87');
+  assert.equal(normalizeCombinedHeatmapAccent(' #0F766E '), '#0f766e');
+  const nearWhite = customCombinedHeatmapScale('#ffffff');
+  assert.notEqual(nearWhite[nearWhite.length - 1], '#ffffff');
+  for (let index = 1; index < nearWhite.length; index++) {
+    assert.ok(
+      relativeLuminance(nearWhite[index]) < relativeLuminance(nearWhite[index - 1]),
+      `${nearWhite[index]} should be darker than ${nearWhite[index - 1]}`,
+    );
+  }
 });
 
 test('30d and 90d SVG windows render every date from non-Sunday starts in the correct weekday row', () => {

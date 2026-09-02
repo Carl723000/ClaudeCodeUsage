@@ -22,7 +22,11 @@ import {
   sanitizeCombinedHeatmapTitle,
   selectCombinedHeatmapWindow,
 } from './combinedHeatmap';
-import { renderCombinedHeatmapSvg } from './combinedHeatmapSvg';
+import {
+  normalizeCombinedHeatmapAccent,
+  normalizeCombinedHeatmapPalette,
+  renderCombinedHeatmapSvg,
+} from './combinedHeatmapSvg';
 import { DEFAULT_SECTIONS, ShareSections, buildShareCardData, shareCardFilename } from './shareCard';
 import { renderShareCardSvg, ShareCardTheme } from './shareCardSvg';
 import { parseConversation } from './conversationLog';
@@ -225,14 +229,25 @@ function localDataUiCopy(locale: string): LocalDataUiCopy {
 }
 
 interface CombinedHeatmapUiCopy {
+  eyebrow: string;
   panelTitle: string;
   description: string;
+  previewLabel: string;
+  privateBadge: string;
+  settingsLabel: string;
   defaultTitle: string;
   titleLabel: string;
   rangeLabel: string;
   last30: string;
   last90: string;
   year: string;
+  paletteLabel: string;
+  academicViolet: string;
+  claudeOrange: string;
+  codexBlue: string;
+  githubGreen: string;
+  customPalette: string;
+  customAccent: string;
   privacyToggle: string;
   privacyIncludes: string;
   privacyExcludes: string;
@@ -253,14 +268,25 @@ interface CombinedHeatmapUiCopy {
 function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
   if (locale === 'zh-CN') {
     return {
+      eyebrow: '分享工作台',
       panelTitle: '综合活动热力图与分享卡',
       description: '按本地自然日合并 Claude 与 Codex 的已处理 Token 活动量；默认强度不是成本。',
+      previewLabel: '实时预览',
+      privateBadge: '仅含隐私安全的日汇总',
+      settingsLabel: '卡片设置',
       defaultTitle: 'Claude + Codex 本地活动',
       titleLabel: '分享标题',
       rangeLabel: '时间范围',
       last30: '最近 30 天',
       last90: '最近 90 天',
       year: '最近一年',
+      paletteLabel: '热力图配色',
+      academicViolet: '学术紫',
+      claudeOrange: 'Claude 橙',
+      codexBlue: 'Codex 蓝',
+      githubGreen: 'GitHub 绿',
+      customPalette: '自定义',
+      customAccent: '自定义主色',
       privacyToggle: '显示隐私预览',
       privacyIncludes: '导出包含：自定义标题、日期范围，以及 Claude、Codex 和综合的每日已处理 Token 汇总。',
       privacyExcludes: '明确排除：账号、项目、线程标题、本地路径和日志内容。',
@@ -280,14 +306,25 @@ function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
   }
   if (locale === 'zh-TW') {
     return {
+      eyebrow: '分享工作台',
       panelTitle: '綜合活動熱力圖與分享卡',
       description: '依本機自然日合併 Claude 與 Codex 的已處理 Token 活動量；預設強度不是成本。',
+      previewLabel: '即時預覽',
+      privateBadge: '僅含隱私安全的每日彙總',
+      settingsLabel: '卡片設定',
       defaultTitle: 'Claude + Codex 本機活動',
       titleLabel: '分享標題',
       rangeLabel: '時間範圍',
       last30: '最近 30 天',
       last90: '最近 90 天',
       year: '最近一年',
+      paletteLabel: '熱力圖配色',
+      academicViolet: '學術紫',
+      claudeOrange: 'Claude 橙',
+      codexBlue: 'Codex 藍',
+      githubGreen: 'GitHub 綠',
+      customPalette: '自訂',
+      customAccent: '自訂主色',
       privacyToggle: '顯示隱私預覽',
       privacyIncludes: '匯出包含：自訂標題、日期範圍，以及 Claude、Codex 和綜合的每日已處理 Token 彙總。',
       privacyExcludes: '明確排除：帳號、專案、執行緒標題、本機路徑和記錄內容。',
@@ -306,14 +343,25 @@ function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
     };
   }
   return {
+    eyebrow: 'Share studio',
     panelTitle: 'Combined activity heatmap and share card',
     description: 'Combines Claude and Codex processed-token activity by local calendar day. Cost is not the default intensity.',
+    previewLabel: 'Live preview',
+    privateBadge: 'Privacy-safe daily aggregates only',
+    settingsLabel: 'Card settings',
     defaultTitle: 'Claude + Codex local activity',
     titleLabel: 'Share title',
     rangeLabel: 'Date range',
     last30: 'Last 30 days',
     last90: 'Last 90 days',
     year: 'Last year',
+    paletteLabel: 'Heatmap colors',
+    academicViolet: 'Academic Violet',
+    claudeOrange: 'Claude Orange',
+    codexBlue: 'Codex Blue',
+    githubGreen: 'GitHub Green',
+    customPalette: 'Custom',
+    customAccent: 'Custom accent',
     privacyToggle: 'Show privacy preview',
     privacyIncludes: 'Export includes: the custom title, date range, and daily aggregate Claude, Codex, and combined processed-token totals.',
     privacyExcludes: 'Explicitly excluded: accounts, projects, thread titles, local paths, and log content.',
@@ -1435,7 +1483,12 @@ export class UsageWebviewProvider {
             break;
           }
           try {
-            const artifact = this.buildCombinedHeatmapArtifact(message.range, message.title);
+            const artifact = this.buildCombinedHeatmapArtifact(
+              message.range,
+              message.title,
+              message.palette,
+              message.customAccent,
+            );
             this.panel.webview.postMessage({
               command: 'combinedHeatmapResult',
               svg: artifact.svg,
@@ -1455,7 +1508,12 @@ export class UsageWebviewProvider {
           const copy = combinedHeatmapUiCopy(I18n.getLocale());
           let artifact: ReturnType<UsageWebviewProvider['buildCombinedHeatmapArtifact']>;
           try {
-            artifact = this.buildCombinedHeatmapArtifact(message.range, message.title);
+            artifact = this.buildCombinedHeatmapArtifact(
+              message.range,
+              message.title,
+              message.palette,
+              message.customAccent,
+            );
           } catch (error) {
             vscode.window.showErrorMessage(`Combined heatmap export failed: ${error instanceof Error ? error.message : String(error)}`);
             break;
@@ -1482,7 +1540,12 @@ export class UsageWebviewProvider {
         }
         case 'copyCombinedHeatmapMarkdown': {
           try {
-            const artifact = this.buildCombinedHeatmapArtifact(message.range, message.title);
+            const artifact = this.buildCombinedHeatmapArtifact(
+              message.range,
+              message.title,
+              message.palette,
+              message.customAccent,
+            );
             await vscode.env.clipboard.writeText(artifact.markdown);
             this.panel?.webview.postMessage({ command: 'combinedHeatmapMarkdownCopied', ok: true });
           } catch (error) {
@@ -2125,7 +2188,12 @@ export class UsageWebviewProvider {
     return html + '</nav>';
   }
 
-  private buildCombinedHeatmapArtifact(rangeInput: unknown, titleInput: unknown): {
+  private buildCombinedHeatmapArtifact(
+    rangeInput: unknown,
+    titleInput: unknown,
+    paletteInput: unknown = 'academicViolet',
+    customAccentInput: unknown = '#4f2f87',
+  ): {
     range: CombinedHeatmapRange;
     title: string;
     endDateISO: string;
@@ -2137,6 +2205,8 @@ export class UsageWebviewProvider {
     const copy = combinedHeatmapUiCopy(I18n.getLocale());
     const range = normalizeCombinedHeatmapRange(rangeInput);
     const title = sanitizeCombinedHeatmapTitle(titleInput, copy.defaultTitle);
+    const palette = normalizeCombinedHeatmapPalette(paletteInput);
+    const customAccent = normalizeCombinedHeatmapAccent(customAccentInput);
     const timeZone = I18n.getTimezone();
     const endDateISO = dayKeyInZone(new Date(), timeZone);
     if (!endDateISO) {
@@ -2159,6 +2229,8 @@ export class UsageWebviewProvider {
         range,
         endDateISO,
         title,
+        palette,
+        customAccent,
         labels: {
           combined: copy.combinedLabel,
           processedTokens: copy.processedTokensLabel,
@@ -2175,37 +2247,65 @@ export class UsageWebviewProvider {
     const preview = artifact.hasData
       ? artifact.svg
       : '<p class="table-hint">' + this.escapeHtml(copy.noData) + '</p>';
+    const paletteChoice = (
+      value: string,
+      label: string,
+      colors: string[],
+      checked = false,
+    ): string => '<label class="combined-palette-choice">' +
+      '<input type="radio" name="combinedHeatmapPalette" value="' + value + '"' + (checked ? ' checked' : '') +
+      ' onchange="toggleCombinedCustomAccent()">' +
+      '<span class="combined-palette-swatch" aria-hidden="true">' +
+      colors.map((color) => '<i style="background:' + color + '"></i>').join('') + '</span>' +
+      '<span>' + this.escapeHtml(label) + '</span></label>';
+    const palettes =
+      paletteChoice('academicViolet', copy.academicViolet, ['#eee8f8', '#bca5e6', '#8668c7', '#4f2f87'], true) +
+      paletteChoice('claudeOrange', copy.claudeOrange, ['#fff1e8', '#fadcc9', '#e07d4f', '#c85a2b']) +
+      paletteChoice('codexBlue', copy.codexBlue, ['#eff6ff', '#93c5fd', '#3b82f6', '#1d4ed8']) +
+      paletteChoice('githubGreen', copy.githubGreen, ['#dafbe1', '#6fdd8b', '#2da44e', '#116329']) +
+      paletteChoice('custom', copy.customPalette, ['#eee8f8', '#bca5e6', '#8668c7', '#4f2f87']);
     return '<section class="heatmap-panel combined-heatmap-panel" aria-labelledby="combinedHeatmapHeading">' +
+      '<header class="combined-share-header"><div>' +
+      '<span class="combined-share-eyebrow">' + this.escapeHtml(copy.eyebrow) + '</span>' +
       '<h2 id="combinedHeatmapHeading">' + this.escapeHtml(copy.panelTitle) + '</h2>' +
-      '<p class="model-details">' + this.escapeHtml(copy.description) + '</p>' +
+      '<p>' + this.escapeHtml(copy.description) + '</p></div>' +
+      '<span class="combined-private-badge">◆ ' + this.escapeHtml(copy.privateBadge) + '</span></header>' +
+      '<div class="combined-share-layout">' +
+      '<div class="combined-preview-column">' +
+      '<div class="combined-preview-toolbar"><strong>' + this.escapeHtml(copy.previewLabel) + '</strong>' +
+      '<span id="combinedHeatmapStatus" role="status" aria-live="polite"></span></div>' +
+      '<div id="combinedHeatmapPreview" class="heatmap-svg combined-heatmap-preview" role="region" tabindex="0" aria-label="' + this.escapeHtml(copy.previewLabel) + '">' + preview + '</div>' +
+      '<p class="combined-activity-disclaimer">' + this.escapeHtml(copy.activityDisclaimer) + '</p>' +
+      '</div>' +
+      '<aside class="combined-config-card" aria-label="' + this.escapeHtml(copy.settingsLabel) + '">' +
+      '<h3>' + this.escapeHtml(copy.settingsLabel) + '</h3>' +
       '<div class="combined-heatmap-controls">' +
       '<label class="sc-field" for="combinedHeatmapTitle"><span>' + this.escapeHtml(copy.titleLabel) + '</span>' +
-      '<input id="combinedHeatmapTitle" maxlength="80" value="' + this.escapeHtml(artifact.title) + '" data-default-value="' + this.escapeHtml(artifact.title) + '"></label>' +
+      '<input type="text" id="combinedHeatmapTitle" maxlength="80" value="' + this.escapeHtml(artifact.title) + '" data-default-value="' + this.escapeHtml(artifact.title) + '"></label>' +
       '<label class="sc-field" for="combinedHeatmapRange"><span>' + this.escapeHtml(copy.rangeLabel) + '</span>' +
       '<select id="combinedHeatmapRange" data-default-value="year">' +
       '<option value="30d">' + this.escapeHtml(copy.last30) + '</option>' +
       '<option value="90d">' + this.escapeHtml(copy.last90) + '</option>' +
       '<option value="year" selected>' + this.escapeHtml(copy.year) + '</option>' +
-      '</select></label>' +
-      '</div>' +
+      '</select></label></div>' +
+      '<fieldset class="combined-palette-fieldset"><legend>' + this.escapeHtml(copy.paletteLabel) + '</legend>' +
+      '<div class="combined-palette-options">' + palettes + '</div>' +
+      '<label class="combined-custom-accent" for="combinedHeatmapCustomAccent"><span>' + this.escapeHtml(copy.customAccent) + '</span>' +
+      '<input type="color" id="combinedHeatmapCustomAccent" value="#4f2f87" disabled></label></fieldset>' +
       '<label class="sc-check combined-privacy-toggle"><input type="checkbox" id="combinedHeatmapPrivacy" checked onchange="toggleCombinedHeatmapPrivacy(true)"> ' +
       this.escapeHtml(copy.privacyToggle) + '</label>' +
       '<div id="combinedHeatmapPrivacyPreview" class="combined-privacy-preview" role="note">' +
       '<p>✓ ' + this.escapeHtml(copy.privacyIncludes) + '</p>' +
-      '<p>✓ ' + this.escapeHtml(copy.privacyExcludes) + '</p>' +
-      '</div>' +
-      '<p class="combined-activity-disclaimer">' + this.escapeHtml(copy.activityDisclaimer) + '</p>' +
-      '<div class="share-actions">' +
-      '<button class="btn-secondary btn-small" onclick="generateCombinedHeatmapPreview()">' + this.escapeHtml(copy.updatePreview) + '</button>' +
+      '<p>✓ ' + this.escapeHtml(copy.privacyExcludes) + '</p></div>' +
+      '<div class="share-actions combined-share-actions">' +
+      '<button class="btn-primary btn-small" onclick="generateCombinedHeatmapPreview()">' + this.escapeHtml(copy.updatePreview) + '</button>' +
       '<button class="btn-secondary btn-small" onclick="exportCombinedHeatmap()">' + this.escapeHtml(copy.exportSvg) + '</button>' +
       '<button class="btn-secondary btn-small" onclick="copyCombinedHeatmapMarkdown()">' + this.escapeHtml(copy.copyMarkdown) + '</button>' +
-      '<button class="btn-secondary btn-small" onclick="resetCombinedHeatmapPreferences()">' + this.escapeHtml(copy.resetSharing) + '</button>' +
-      '</div>' +
-      '<label class="combined-markdown-label" for="combinedHeatmapMarkdown">' + this.escapeHtml(copy.markdownLabel) + '</label>' +
-      '<textarea id="combinedHeatmapMarkdown" class="combined-markdown" rows="2" readonly>' + this.escapeHtml(artifact.markdown) + '</textarea>' +
-      '<div id="combinedHeatmapStatus" class="table-hint" role="status" aria-live="polite"></div>' +
-      '<div id="combinedHeatmapPreview" class="heatmap-svg combined-heatmap-preview">' + preview + '</div>' +
-      '</section>';
+      '<button class="btn-secondary btn-small" onclick="resetCombinedHeatmapPreferences()">' + this.escapeHtml(copy.resetSharing) + '</button></div>' +
+      '</aside></div>' +
+      '<details class="combined-output-panel"><summary>' + this.escapeHtml(copy.markdownLabel) + '</summary>' +
+      '<textarea id="combinedHeatmapMarkdown" class="combined-markdown" rows="2" readonly aria-label="' + this.escapeHtml(copy.markdownLabel) + '">' + this.escapeHtml(artifact.markdown) + '</textarea>' +
+      '</details></section>';
   }
 
   private renderCodexCompare(): string {
@@ -6749,6 +6849,7 @@ export class UsageWebviewProvider {
         --ccu-space-6: 24px;
         --ccu-radius-control: 4px;
         --ccu-radius-panel: 8px;
+        --ccu-radius-lg: 12px;
         --ccu-border: var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
         /* Description text must retain 4.5:1 in both Light+ and Dark+. Some
            input/editor-widget surfaces are deliberately more contrasted than
@@ -6756,7 +6857,11 @@ export class UsageWebviewProvider {
            carry the raised-card hierarchy. */
         --ccu-surface-raised: var(--vscode-editor-background);
         --ccu-surface-subtle: var(--vscode-editorWidget-background, var(--vscode-input-background));
-        --ccu-data-font: var(--vscode-editor-font-family, ui-monospace, monospace);
+        --ccu-surface-muted: var(--vscode-editorWidget-background, var(--vscode-input-background));
+        /* Dashboard figures follow VS Code's UI typography. The prior editor
+           monospace override made dense cards and tables feel visually foreign;
+           true code/Markdown fields opt into the editor font directly. */
+        --ccu-data-font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
         --ccu-focus: var(--vscode-focusBorder, #007fd4);
       }
 
@@ -8130,57 +8235,239 @@ export class UsageWebviewProvider {
         display: block;
       }
       .combined-heatmap-panel {
+        position: relative;
+        overflow: hidden;
         padding: var(--ccu-space-5);
         border: 1px solid var(--ccu-border);
+        border-left: 4px solid var(--vscode-charts-purple, #4f2f87);
         border-radius: var(--ccu-radius-lg);
         background: var(--ccu-surface-raised);
       }
-      .combined-heatmap-panel h2 {
-        margin-top: 0;
+      .combined-share-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--ccu-space-4);
+        margin-bottom: var(--ccu-space-5);
+      }
+      .combined-share-header h2 {
+        margin: 3px 0 5px;
+      }
+      .combined-share-header p {
+        max-width: 760px;
+        margin: 0;
+        color: var(--vscode-descriptionForeground);
+        line-height: 1.5;
+      }
+      .combined-share-eyebrow {
+        color: var(--vscode-charts-purple, #8668c7);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .combined-private-badge {
+        flex: 0 0 auto;
+        padding: 5px 9px;
+        border: 1px solid var(--ccu-border);
+        border-radius: 999px;
+        background: var(--ccu-surface-subtle);
+        color: var(--vscode-foreground);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+      .combined-share-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) minmax(290px, 0.85fr);
+        gap: var(--ccu-space-4);
+        align-items: start;
+      }
+      .combined-preview-column,
+      .combined-config-card {
+        min-width: 0;
+      }
+      .combined-preview-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 24px;
+        margin-bottom: var(--ccu-space-2);
+        color: var(--vscode-descriptionForeground);
+        font-size: 11px;
+      }
+      .combined-preview-toolbar strong {
+        color: var(--vscode-foreground);
+        font-size: 12px;
+      }
+      .combined-config-card {
+        padding: var(--ccu-space-4);
+        border: 1px solid var(--ccu-border);
+        border-radius: var(--ccu-radius-panel);
+        background: var(--ccu-surface-subtle);
+      }
+      .combined-config-card h3 {
+        margin: 0 0 var(--ccu-space-3);
+        font-size: 13px;
+      }
+      .combined-config-card .sc-field > span {
+        color: var(--vscode-foreground);
       }
       .combined-heatmap-controls {
         display: grid;
-        grid-template-columns: minmax(220px, 2fr) minmax(160px, 1fr);
+        grid-template-columns: minmax(0, 1fr);
         gap: var(--ccu-space-3);
-        margin: var(--ccu-space-4) 0 var(--ccu-space-3);
+        margin-bottom: var(--ccu-space-4);
+      }
+      .combined-heatmap-controls .sc-field input,
+      .combined-heatmap-controls .sc-field select {
+        box-sizing: border-box;
+        width: 100%;
+        min-height: 30px;
+        padding: 5px 8px;
+        border: 1px solid var(--vscode-input-border, var(--ccu-border));
+        border-radius: var(--ccu-radius-control);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground, var(--vscode-foreground));
+        font-family: var(--vscode-font-family);
+      }
+      .combined-palette-fieldset {
+        min-width: 0;
+        margin: 0 0 var(--ccu-space-4);
+        padding: var(--ccu-space-3) 0 0;
+        border: 0;
+        border-top: 1px solid var(--ccu-border);
+      }
+      .combined-palette-fieldset legend {
+        padding: 0 6px 0 0;
+        color: var(--vscode-foreground);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .combined-palette-options {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+      .combined-palette-choice {
+        display: grid;
+        grid-template-columns: 14px minmax(42px, 1fr);
+        gap: 4px 6px;
+        align-items: center;
+        padding: 7px;
+        border: 1px solid var(--ccu-border);
+        border-radius: 6px;
+        background: var(--ccu-surface-raised);
+        cursor: pointer;
+        font-size: 10px;
+      }
+      .combined-palette-choice:has(input:checked) {
+        border-color: var(--vscode-focusBorder);
+        box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+      }
+      .combined-palette-choice input {
+        grid-column: 1;
+        grid-row: 1;
+        margin: 0;
+      }
+      .combined-palette-swatch {
+        grid-column: 2;
+        grid-row: 2;
+        display: flex;
+        height: 7px;
+        overflow: hidden;
+        border-radius: 999px;
+      }
+      .combined-palette-choice > span:last-child {
+        grid-column: 2;
+        grid-row: 1;
+        min-width: 0;
+        line-height: 1.25;
+      }
+      .combined-palette-swatch i {
+        flex: 1 1 0;
+      }
+      .combined-custom-accent {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--ccu-space-2);
+        margin-top: var(--ccu-space-2);
+        color: var(--vscode-foreground);
+        font-size: 11px;
+      }
+      .combined-custom-accent input {
+        width: 42px;
+        height: 26px;
+        padding: 2px;
+        border: 1px solid var(--ccu-border);
+        border-radius: 5px;
+        background: var(--vscode-input-background);
       }
       .combined-privacy-toggle {
         width: fit-content;
         margin-bottom: var(--ccu-space-2);
       }
       .combined-privacy-preview {
-        padding: var(--ccu-space-3);
+        padding: var(--ccu-space-2) var(--ccu-space-3);
         border-left: 3px solid var(--vscode-testing-iconPassed, #2ea043);
-        border-radius: var(--ccu-radius-sm);
+        border-radius: var(--ccu-radius-control);
         background: var(--ccu-surface-muted);
+        color: var(--vscode-foreground);
+        font-size: 10px;
+        line-height: 1.4;
       }
       .combined-privacy-preview p {
         margin: 3px 0;
       }
       .combined-activity-disclaimer {
+        margin: var(--ccu-space-2) var(--ccu-space-1) 0;
         color: var(--vscode-descriptionForeground);
         font-size: 11px;
         line-height: 1.45;
       }
-      .combined-markdown-label {
-        display: block;
-        margin: var(--ccu-space-3) 0 var(--ccu-space-1);
+      .combined-share-actions {
+        margin-top: var(--ccu-space-3);
+        padding-top: var(--ccu-space-3);
+        border-top: 1px solid var(--ccu-border);
+      }
+      .combined-output-panel {
+        margin-top: var(--ccu-space-4);
+        border-top: 1px solid var(--ccu-border);
+        padding-top: var(--ccu-space-3);
+      }
+      .combined-output-panel summary {
+        width: fit-content;
+        cursor: pointer;
+        color: var(--vscode-descriptionForeground);
         font-size: 11px;
         font-weight: 600;
       }
       .combined-markdown {
         width: 100%;
         min-height: 46px;
+        margin-top: var(--ccu-space-2);
         resize: vertical;
         box-sizing: border-box;
-        font-family: var(--ccu-data-font);
+        border: 1px solid var(--vscode-input-border, var(--ccu-border));
+        border-radius: var(--ccu-radius-control);
+        padding: var(--ccu-space-2);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground, var(--vscode-foreground));
+        font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
       }
       .combined-heatmap-preview {
-        margin-top: var(--ccu-space-3);
+        margin: 0;
+        padding: var(--ccu-space-3);
+        border-radius: var(--ccu-radius-panel);
+        background: var(--vscode-editor-background);
       }
       .combined-heatmap-preview svg {
         width: auto;
         max-width: none;
+        border-radius: 12px;
+        box-shadow: 0 8px 26px rgba(24, 16, 36, 0.18);
       }
 
       /* Clickable month bars in the all-time composition chart (drill to daily). */
@@ -8978,6 +9265,12 @@ export class UsageWebviewProvider {
         white-space: pre;
       }
       @media (max-width: 800px) {
+        .combined-share-layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .combined-config-card {
+          order: -1;
+        }
         .action-card-head {
           align-items: flex-start;
           flex-wrap: wrap;
@@ -9042,7 +9335,17 @@ export class UsageWebviewProvider {
         .combined-heatmap-panel {
           padding: var(--ccu-space-3);
         }
+        .combined-share-header {
+          flex-direction: column;
+          gap: var(--ccu-space-2);
+        }
+        .combined-private-badge {
+          white-space: normal;
+        }
         .combined-heatmap-controls {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .combined-palette-options {
           grid-template-columns: minmax(0, 1fr);
         }
       }
@@ -9344,10 +9647,14 @@ function combinedHeatmapReadConfig() {
   var title = document.getElementById('combinedHeatmapTitle');
   var range = document.getElementById('combinedHeatmapRange');
   var privacy = document.getElementById('combinedHeatmapPrivacy');
+  var palette = document.querySelector('input[name="combinedHeatmapPalette"]:checked');
+  var customAccent = document.getElementById('combinedHeatmapCustomAccent');
   return {
     title: title ? title.value : __combinedHeatmapCopy.defaultTitle,
     range: range ? range.value : 'year',
-    privacyPreview: privacy ? privacy.checked : true
+    privacyPreview: privacy ? privacy.checked : true,
+    palette: palette ? palette.value : 'academicViolet',
+    customAccent: customAccent ? customAccent.value : '#4f2f87'
   };
 }
 function combinedHeatmapSaveConfig(config) {
@@ -9355,7 +9662,14 @@ function combinedHeatmapSaveConfig(config) {
     localStorage.setItem('ccu.combinedHeatmap.title', config.title);
     localStorage.setItem('ccu.combinedHeatmap.range', config.range);
     localStorage.setItem('ccu.combinedHeatmap.privacyPreview', config.privacyPreview ? 'true' : 'false');
+    localStorage.setItem('ccu.combinedHeatmap.palette', config.palette);
+    localStorage.setItem('ccu.combinedHeatmap.customAccent', config.customAccent);
   } catch (e) {}
+}
+function toggleCombinedCustomAccent() {
+  var config = combinedHeatmapReadConfig();
+  var customAccent = document.getElementById('combinedHeatmapCustomAccent');
+  if (customAccent) { customAccent.disabled = config.palette !== 'custom'; }
 }
 function toggleCombinedHeatmapPrivacy(save) {
   var config = combinedHeatmapReadConfig();
@@ -9367,19 +9681,32 @@ function restoreCombinedHeatmapConfig() {
   var title = document.getElementById('combinedHeatmapTitle');
   var range = document.getElementById('combinedHeatmapRange');
   var privacy = document.getElementById('combinedHeatmapPrivacy');
-  if (!title || !range || !privacy) { return; }
+  var customAccent = document.getElementById('combinedHeatmapCustomAccent');
+  if (!title || !range || !privacy || !customAccent) { return; }
   var changed = false;
   try {
     var storedTitle = localStorage.getItem('ccu.combinedHeatmap.title');
     var storedRange = localStorage.getItem('ccu.combinedHeatmap.range');
     var storedPrivacy = localStorage.getItem('ccu.combinedHeatmap.privacyPreview');
+    var storedPalette = localStorage.getItem('ccu.combinedHeatmap.palette');
+    var storedAccent = localStorage.getItem('ccu.combinedHeatmap.customAccent');
     if (storedTitle) { title.value = storedTitle; changed = storedTitle !== title.getAttribute('data-default-value'); }
     if (storedRange === '30d' || storedRange === '90d' || storedRange === 'year') {
       range.value = storedRange;
       changed = changed || storedRange !== range.getAttribute('data-default-value');
     }
     if (storedPrivacy === 'false') { privacy.checked = false; }
+    if (['academicViolet', 'claudeOrange', 'codexBlue', 'githubGreen', 'custom'].indexOf(storedPalette) >= 0) {
+      var paletteInput = document.querySelector('input[name="combinedHeatmapPalette"][value="' + storedPalette + '"]');
+      if (paletteInput) { paletteInput.checked = true; }
+      changed = changed || storedPalette !== 'academicViolet';
+    }
+    if (storedAccent && /^#[0-9a-fA-F]{6}$/.test(storedAccent)) {
+      customAccent.value = storedAccent;
+      changed = changed || storedAccent.toLowerCase() !== '#4f2f87';
+    }
   } catch (e) {}
+  toggleCombinedCustomAccent();
   toggleCombinedHeatmapPrivacy(false);
   if (changed) { generateCombinedHeatmapPreview(); }
 }
@@ -9388,37 +9715,46 @@ function generateCombinedHeatmapPreview() {
   combinedHeatmapSaveConfig(config);
   var status = document.getElementById('combinedHeatmapStatus');
   if (status) { status.textContent = __combinedHeatmapCopy.updatePreview + '…'; }
-  vscode.postMessage({ command: 'previewCombinedHeatmap', title: config.title, range: config.range });
+  vscode.postMessage({ command: 'previewCombinedHeatmap', title: config.title, range: config.range, palette: config.palette, customAccent: config.customAccent });
 }
 function exportCombinedHeatmap() {
   var config = combinedHeatmapReadConfig();
   combinedHeatmapSaveConfig(config);
-  vscode.postMessage({ command: 'exportCombinedHeatmap', title: config.title, range: config.range });
+  vscode.postMessage({ command: 'exportCombinedHeatmap', title: config.title, range: config.range, palette: config.palette, customAccent: config.customAccent });
 }
 function copyCombinedHeatmapMarkdown() {
   var config = combinedHeatmapReadConfig();
   combinedHeatmapSaveConfig(config);
-  vscode.postMessage({ command: 'copyCombinedHeatmapMarkdown', title: config.title, range: config.range });
+  vscode.postMessage({ command: 'copyCombinedHeatmapMarkdown', title: config.title, range: config.range, palette: config.palette, customAccent: config.customAccent });
 }
 function resetCombinedHeatmapPreferences() {
   var title = document.getElementById('combinedHeatmapTitle');
   var range = document.getElementById('combinedHeatmapRange');
   var privacy = document.getElementById('combinedHeatmapPrivacy');
+  var customAccent = document.getElementById('combinedHeatmapCustomAccent');
   try {
     localStorage.removeItem('ccu.combinedHeatmap.title');
     localStorage.removeItem('ccu.combinedHeatmap.range');
     localStorage.removeItem('ccu.combinedHeatmap.privacyPreview');
+    localStorage.removeItem('ccu.combinedHeatmap.palette');
+    localStorage.removeItem('ccu.combinedHeatmap.customAccent');
   } catch (e) {}
   if (title) { title.value = __combinedHeatmapCopy.defaultTitle; }
   if (range) { range.value = 'year'; }
   if (privacy) { privacy.checked = true; }
+  var defaultPalette = document.querySelector('input[name="combinedHeatmapPalette"][value="academicViolet"]');
+  if (defaultPalette) { defaultPalette.checked = true; }
+  if (customAccent) { customAccent.value = '#4f2f87'; }
+  toggleCombinedCustomAccent();
   toggleCombinedHeatmapPrivacy(false);
   var status = document.getElementById('combinedHeatmapStatus');
   if (status) { status.textContent = __combinedHeatmapCopy.resetSharing + '…'; }
   vscode.postMessage({
     command: 'previewCombinedHeatmap',
     title: __combinedHeatmapCopy.defaultTitle,
-    range: 'year'
+    range: 'year',
+    palette: 'academicViolet',
+    customAccent: '#4f2f87'
   });
   vscode.postMessage({ command: 'resetCombinedHeatmapPreferences' });
 }
@@ -9460,7 +9796,9 @@ var __ccuUiPreferenceKeys = [
 var __ccuSharingPreferenceKeys = [
   'ccu.combinedHeatmap.title',
   'ccu.combinedHeatmap.range',
-  'ccu.combinedHeatmap.privacyPreview'
+  'ccu.combinedHeatmap.privacyPreview',
+  'ccu.combinedHeatmap.palette',
+  'ccu.combinedHeatmap.customAccent'
 ];
 
 function ccuCountPresentLocalStorageKeys(keys) {

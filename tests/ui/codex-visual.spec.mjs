@@ -313,7 +313,7 @@ test('Claude and Codex receive the exact same tokenized production stylesheet', 
   expect(codexStyles).toContain('@media (prefers-reduced-motion: reduce)');
 });
 
-test('Claude and Codex summary cards share geometry and data typography', async ({ page }) => {
+test('Claude and Codex summary cards share geometry and use the VS Code UI font', async ({ page }) => {
   // Metric labels, values, semantics, and card counts intentionally remain
   // provider-native; this samples one representative card from each shell.
   await openClaude(page);
@@ -336,6 +336,8 @@ test('Claude and Codex summary cards share geometry and data typography', async 
     'border-radius': '8px',
   });
   expect(codex.value.styles['font-variant-numeric']).toContain('tabular-nums');
+  const bodyFont = await page.locator('body').evaluate((element) => getComputedStyle(element).fontFamily);
+  expect(codex.value.styles['font-family']).toBe(bodyFont);
 });
 
 test('Claude and Codex model details share surface and disclosure contracts', async ({ page }) => {
@@ -630,15 +632,15 @@ test('weekly allowance value uses the shared all-time chart and exposes uncertai
   await page.locator('#tab-all').click();
 
   const panel = page.locator('#all .daily-breakdown').filter({
-    hasText: 'Weekly allowance value · Codex Beta',
+    hasText: 'Weekly subscription allowance · API-equivalent estimate · Codex Beta',
   });
   await expect(panel).toBeVisible();
-  await expect(panel).toContainText('Estimate, not a bill');
+  await expect(panel).toContainText('not an official balance, bill, or cash value');
   await expect(panel).toContainText('Historical used equivalents come directly from local token logs');
-  await expect(panel).toContainText('One coherent unattributed quota window can show a low-confidence total estimate');
-  await expect(panel).toContainText('If epochs overlap or attribution conflicts, only used equivalent is shown');
-  await expect(panel).toContainText('no account split is invented');
-  await expect(panel).toContainText('If an official reset falls within a recorded day');
+  await expect(panel).toContainText('One coherent window can show low-confidence total and unused durability estimates');
+  await expect(panel).toContainText('overlapping quota series still show used equivalent only');
+  await expect(panel).toContainText('No account split or official balance is invented');
+  await expect(panel).toContainText('A reset inside a recorded day lowers confidence');
   await expect(panel.locator('tbody')).toContainText('Low · Boundary approx.');
   await expect(panel.locator('.hc-col')).toHaveCount(2);
   await expect(panel.locator('tbody tr')).toHaveCount(2);
@@ -650,7 +652,10 @@ test('weekly allowance value uses the shared all-time chart and exposes uncertai
   await expect(panel.locator('tbody').getByText('Current period')).toHaveCount(1);
 
   const bars = panel.locator('.hc-col');
-  await expect(bars.last().locator('.seg-cache-read')).toHaveCount(0);
+  await expect(bars.last().locator('.seg-cache-read')).toHaveCount(1);
+  const currentRow = panel.locator('tbody tr').filter({ hasText: 'Current period' });
+  await expect(currentRow.locator('td').nth(4)).not.toHaveText('—');
+  await expect(currentRow.locator('td').nth(5)).toContainText('Low');
 });
 
 test('a completed observed Claude period can still show its unused segment', async ({ page }) => {
@@ -658,7 +663,7 @@ test('a completed observed Claude period can still show its unused segment', asy
   await page.locator('#tab-all').click();
 
   const panel = page.locator('#all .daily-breakdown').filter({
-    hasText: 'Weekly allowance value · Claude',
+    hasText: 'Weekly subscription allowance · API-equivalent estimate · Claude',
   });
   await expect(panel.locator('.hc-col .seg-cache-read')).toHaveCount(1);
   await expect(panel.locator('tbody tr')).toHaveCount(1);
@@ -669,7 +674,7 @@ test('weekly allowance value can be hidden without hiding Codex API-equivalent c
   await openCodex(page, { weeklyValue: false });
   await page.locator('#tab-all').click();
 
-  await expect(page.locator('#all')).not.toContainText('Weekly allowance value · Codex Beta');
+  await expect(page.locator('#all')).not.toContainText('Weekly subscription allowance · API-equivalent estimate · Codex Beta');
   await expect(page.locator('#all .summary-grid .summary-item').first()).toContainText(
     'API-equivalent cost',
   );
@@ -679,19 +684,19 @@ test('weekly allowance value can be hidden from Claude All time', async ({ page 
   await openClaude(page, { weeklyValue: false });
   await page.locator('#tab-all').click();
 
-  await expect(page.locator('#all')).not.toContainText('Weekly allowance value · Claude');
+  await expect(page.locator('#all')).not.toContainText('Weekly subscription allowance · API-equivalent estimate · Claude');
   await expect(page.locator('#all .usage-summary').first()).toBeVisible();
 });
 
 test('Compare shows both weekly panels by default and hides only those panels when disabled', async ({ page }) => {
   await openCompare(page);
-  await expect(page.locator('#provider-panel')).toContainText('Weekly allowance value · Claude');
-  await expect(page.locator('#provider-panel')).toContainText('Weekly allowance value · Codex Beta');
+  await expect(page.locator('#provider-panel')).toContainText('Weekly subscription allowance · API-equivalent estimate · Claude');
+  await expect(page.locator('#provider-panel')).toContainText('Weekly subscription allowance · API-equivalent estimate · Codex Beta');
   await expect(page.locator('#provider-panel .usage-summary .summary-item')).toHaveCount(2);
 
   await openCompare(page, { weeklyValue: false });
-  await expect(page.locator('#provider-panel')).not.toContainText('Weekly allowance value · Claude');
-  await expect(page.locator('#provider-panel')).not.toContainText('Weekly allowance value · Codex Beta');
+  await expect(page.locator('#provider-panel')).not.toContainText('Weekly subscription allowance · API-equivalent estimate · Claude');
+  await expect(page.locator('#provider-panel')).not.toContainText('Weekly subscription allowance · API-equivalent estimate · Codex Beta');
   await expect(page.locator('#provider-panel .usage-summary .summary-item')).toHaveCount(2);
   await expect(page.locator('#provider-panel .usage-summary')).toContainText('Claude');
   await expect(page.locator('#provider-panel .usage-summary')).toContainText('Codex Beta');
@@ -701,7 +706,7 @@ test('weekly allowance table fits at 1280px in the longest locale', async ({ pag
   await openCodex(page, { locale: 'de-DE', width: 1280 });
   await page.locator('#tab-all').click();
   const panel = page.locator('#all .daily-breakdown').filter({
-    hasText: 'Wöchentlicher Gegenwert · Codex Beta',
+    hasText: 'Wöchentliches Abo-Kontingent · API-Äquivalenzschätzung · Codex Beta',
   });
   const container = panel.locator('.daily-table-container');
   await expect(container).toBeVisible();
@@ -720,7 +725,7 @@ test('weekly chart uses a non-overflowing current-period label in German', async
   await openCodex(page, { locale: 'de-DE', width: 1280 });
   await page.locator('#tab-all').click();
   const panel = page.locator('#all .daily-breakdown').filter({
-    hasText: 'Wöchentlicher Gegenwert · Codex Beta',
+    hasText: 'Wöchentliches Abo-Kontingent · API-Äquivalenzschätzung · Codex Beta',
   });
   const labels = panel.locator('.hc-xlabel');
   const layout = await labels.evaluateAll((elements) => {
@@ -753,7 +758,7 @@ test('weekly used-value history remains visible without historical quota samples
   await page.locator('#tab-all').click();
 
   const panel = page.locator('#all .daily-breakdown').filter({
-    hasText: 'Weekly allowance value · Codex Beta',
+    hasText: 'Weekly subscription allowance · API-equivalent estimate · Codex Beta',
   });
   await expect(panel).toContainText('Monday-to-Monday UTC calendar weeks');
   await expect(panel.locator('tbody tr')).toHaveCount(2);

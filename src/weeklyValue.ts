@@ -873,17 +873,26 @@ export function buildWeeklyValueTimeline(
       0,
       (point.current ? now : point.resetAt) - latest.observedAt,
     );
+    // A locally flagged multi-sign-in history is weak evidence, but it still
+    // carries a real quota percentage and is useful for the user's intended
+    // "how durable is this subscription?" estimate. Only withhold when two
+    // actually overlapping quota series compete for the same bucket.
     const withholdInference = provider === 'codex' && (
-      accountAmbiguous ||
-      latest.flags?.includes('account-ambiguous') === true ||
-      (point.current && ambiguousCurrentCodexReset)
+      accountAmbiguous || (point.current && ambiguousCurrentCodexReset)
     );
-    const approximateInference = provider === 'codex' && (
+    const weakObservation = latest.accountAttribution === 'unattributed' ||
+      (latest.flags ?? []).some((flag) =>
+        flag === 'approximate-boundary' ||
+        flag === 'low-log-coverage' ||
+        flag === 'low-price-coverage' ||
+        flag === 'account-ambiguous' ||
+        flag === 'clock-anomaly'
+      );
+    const approximateInference = weakObservation || (provider === 'codex' && (
       !resetAligned ||
       !codexSourceAttributionExact ||
-      point.boundaryUncertain === true ||
-      latest.accountAttribution === 'unattributed'
-    );
+      point.boundaryUncertain === true
+    ));
     let fullEquivalentUsd: number | null = null;
     let observationOverrun = false;
     if (
@@ -906,13 +915,7 @@ export function buildWeeklyValueTimeline(
       utilizationPercent: latest.usedPercent,
       fullEquivalentUsd,
       unusedEquivalentUsd:
-        !point.current &&
-        fullEquivalentUsd !== null &&
-        !accountAmbiguous &&
-        resetAligned &&
-        point.boundaryUncertain !== true &&
-        latest.accountAttribution !== 'unattributed' &&
-        observedPricingCoverage >= MIN_PRICED_SHARE
+        fullEquivalentUsd !== null && !observationOverrun
           ? Math.max(0, fullEquivalentUsd - point.usedEquivalentUsd)
           : null,
       observationGapMs,
@@ -972,8 +975,30 @@ export function buildWeeklyValueTrend(
   now: number = Date.now(),
 ): WeeklyValuePoint[] {
   const points: WeeklyValuePoint[] = [];
-  for (const cluster of clusterObservations(inputs.observations)) {
+  const clusters = clusterObservations(inputs.observations);
+  for (const cluster of clusters) {
     const windowStart = cluster.resetAt - WEEK_MS;
+    const clusterSourceKeys = new Set(
+      cluster.observations.flatMap((item) => item.sourceKey ? [item.sourceKey] : []),
+    );
+    const hasOverlappingCodexSeries = cluster.provider === 'codex' && clusters.some((other) =>
+      {
+        if (
+          other === cluster ||
+          other.provider !== cluster.provider ||
+          windowStart >= other.resetAt ||
+          other.resetAt - WEEK_MS >= cluster.resetAt
+        ) {
+          return false;
+        }
+        const otherSourceKeys = new Set(
+          other.observations.flatMap((item) => item.sourceKey ? [item.sourceKey] : []),
+        );
+        const disjointExplicitSources = clusterSourceKeys.size > 0 && otherSourceKeys.size > 0 &&
+          [...clusterSourceKeys].every((sourceKey) => !otherSourceKeys.has(sourceKey));
+        return other.seriesKey !== cluster.seriesKey || disjointExplicitSources;
+      },
+    );
     const periodEnd = Math.min(now, cluster.resetAt);
     const eligibleObservations = cluster.observations
       .filter((item) => item.observedAt >= windowStart && item.observedAt <= periodEnd)
@@ -1003,10 +1028,6 @@ export function buildWeeklyValueTrend(
       ? Math.min(1, used.pricedTokens / used.totalTokens)
       : 0;
     const current = cluster.resetAt > now;
-    const unusedAttributionSafe = latest.accountAttribution !== 'unattributed';
-    const unusedBoundarySafe = !(latest.flags ?? []).some((flag) =>
-      flag === 'approximate-boundary' || flag === 'account-ambiguous',
-    );
     const observationGapMs = Math.max(
       0,
       (current ? now : cluster.resetAt) - latest.observedAt,
@@ -1014,6 +1035,7 @@ export function buildWeeklyValueTrend(
     let fullEquivalentUsd: number | null = null;
     let observationOverrun = false;
     if (
+      !hasOverlappingCodexSeries &&
       latest.usedPercent > 0 &&
       observed.equivalentUsd > 0 &&
       latest.usedPercent <= 100
@@ -1039,11 +1061,7 @@ export function buildWeeklyValueTrend(
       usedEquivalentUsd: used.equivalentUsd,
       fullEquivalentUsd,
       unusedEquivalentUsd:
-        !current &&
-        fullEquivalentUsd !== null &&
-        observedPricingCoverage >= MIN_PRICED_SHARE &&
-        unusedAttributionSafe &&
-        unusedBoundarySafe
+        fullEquivalentUsd !== null && !observationOverrun
           ? Math.max(0, fullEquivalentUsd - used.equivalentUsd)
           : null,
       utilizationPercent: latest.usedPercent,
@@ -1052,6 +1070,10 @@ export function buildWeeklyValueTrend(
       confidence: fullEquivalentUsd === null
         ? 'usage-only'
         : observationOverrun ||
+          latest.accountAttribution === 'unattributed' ||
+          (latest.flags ?? []).some((flag) =>
+            flag === 'approximate-boundary' || flag === 'account-ambiguous'
+          ) ||
           latest.usedPercent < 5 ||
           observedPricingCoverage < MIN_PRICED_SHARE
           ? 'low'

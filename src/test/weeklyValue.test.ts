@@ -63,7 +63,7 @@ test('completed reset window reports used, inferred full, and unused API-equival
   assert.equal(points[0].confidence, 'high');
 });
 
-test('current window is provisional and never presents unused allowance as final', () => {
+test('current window presents a provisional unused API-equivalent estimate', () => {
   const points = buildWeeklyValueTrend({
     observations: [observation({ resetAt: RESET + DAY, observedAt: RESET, usedPercent: 50 })],
     usage: [usage(20, RESET - HOUR)],
@@ -71,10 +71,11 @@ test('current window is provisional and never presents unused allowance as final
 
   assert.equal(points[0].current, true);
   assert.equal(points[0].fullEquivalentUsd, 40);
-  assert.equal(points[0].unusedEquivalentUsd, null);
+  assert.equal(points[0].unusedEquivalentUsd, 20);
+  assert.equal(points[0].confidence, 'medium');
 });
 
-test('legacy trend never claims unused value for explicit unattributed or ambiguous evidence', () => {
+test('legacy trend keeps an unattributed or approximate unused value visibly low-confidence', () => {
   for (const overrides of [
     { accountAttribution: 'unattributed' as const },
     { flags: ['account-ambiguous' as const] },
@@ -85,7 +86,8 @@ test('legacy trend never claims unused value for explicit unattributed or ambigu
       usage: [usage(45, RESET - 2 * HOUR)],
     }, RESET + HOUR);
     assert.equal(points[0].fullEquivalentUsd, 60);
-    assert.equal(points[0].unusedEquivalentUsd, null);
+    assert.equal(points[0].unusedEquivalentUsd, 15);
+    assert.equal(points[0].confidence, 'low');
   }
 });
 
@@ -100,7 +102,7 @@ test('usage observed after a stale quota sample cannot exceed the displayed full
 
   assert.equal(points[0].usedEquivalentUsd, 45);
   assert.equal(points[0].fullEquivalentUsd, 45);
-  assert.equal(points[0].unusedEquivalentUsd, 0);
+  assert.equal(points[0].unusedEquivalentUsd, null);
   assert.equal(points[0].confidence, 'low');
 });
 
@@ -122,7 +124,7 @@ test('valid tiny utilization and partial pricing still produce a low-confidence 
     }],
   }, RESET + HOUR);
   assert.equal(partialPricing[0].fullEquivalentUsd, 20 / 0.75);
-  assert.equal(partialPricing[0].unusedEquivalentUsd, null);
+  assert.equal(partialPricing[0].unusedEquivalentUsd, (20 / 0.75) - 20);
   assert.equal(partialPricing[0].confidence, 'low');
 });
 
@@ -168,6 +170,12 @@ test('source keys keep overlapping Codex account windows from sharing usage', ()
   const accountB = points.find((point) => point.resetAt === RESET + DAY);
   assert.equal(accountA?.usedEquivalentUsd, 40);
   assert.equal(accountB?.usedEquivalentUsd, 10);
+  assert.equal(accountA?.fullEquivalentUsd, null);
+  assert.equal(accountA?.unusedEquivalentUsd, null);
+  assert.equal(accountB?.fullEquivalentUsd, null);
+  assert.equal(accountB?.unusedEquivalentUsd, null);
+  assert.equal(accountA?.confidence, 'usage-only');
+  assert.equal(accountB?.confidence, 'usage-only');
 });
 
 test('quota history keeps the latest observation for each percentage step', () => {
@@ -423,7 +431,7 @@ test('same account-wide Codex series uses the newest coherent observation across
   const current = points.find((point) => point.current);
   assert.equal(current?.utilizationPercent, 43);
   assert.equal(current?.fullEquivalentUsd, 40 / 0.43);
-  assert.equal(current?.unusedEquivalentUsd, null);
+  assert.equal(current?.unusedEquivalentUsd, (40 / 0.43) - 40);
   assert.equal(current?.confidence, 'medium');
 });
 
@@ -470,7 +478,7 @@ test('Codex allowance inference includes multiple local log sources but lowers c
   assert.equal(points[0].usedEquivalentUsd, 50);
   assert.equal(points[0].utilizationPercent, 50);
   assert.equal(points[0].fullEquivalentUsd, 100);
-  assert.equal(points[0].unusedEquivalentUsd, null);
+  assert.equal(points[0].unusedEquivalentUsd, 50);
   assert.equal(points[0].confidence, 'low');
 });
 
@@ -506,7 +514,7 @@ test('a daily Codex aggregate crossing a reset keeps a low-confidence allowance 
   const affected = points.find((point) => point.resetAt === RESET + 7 * DAY);
   assert.equal(affected?.boundaryUncertain, true);
   assert.equal(affected?.fullEquivalentUsd, 80);
-  assert.equal(affected?.unusedEquivalentUsd, null);
+  assert.equal(affected?.unusedEquivalentUsd, 40);
   assert.equal(affected?.confidence, 'low');
 });
 
@@ -540,12 +548,12 @@ test('an irregular Codex reset is mapped to the fixed period containing its obse
   assert.equal(previous?.usedEquivalentUsd, 30);
   assert.equal(previous?.utilizationPercent, 40);
   assert.equal(previous?.fullEquivalentUsd, 75);
-  assert.equal(previous?.unusedEquivalentUsd, null);
+  assert.equal(previous?.unusedEquivalentUsd, 45);
   assert.equal(previous?.confidence, 'low');
   assert.equal(current?.usedEquivalentUsd, 40);
   assert.equal(current?.utilizationPercent, 20);
   assert.equal(current?.fullEquivalentUsd, 200);
-  assert.equal(current?.unusedEquivalentUsd, null);
+  assert.equal(current?.unusedEquivalentUsd, 160);
 });
 
 test('quota observations at the reset boundary do not decorate the closed period', () => {
@@ -701,11 +709,11 @@ test('low priced coverage lowers confidence but does not hide a mathematically v
   }, { now: RESET + HOUR });
 
   assert.equal(points[0].fullEquivalentUsd, 40);
-  assert.equal(points[0].unusedEquivalentUsd, null);
+  assert.equal(points[0].unusedEquivalentUsd, 20);
   assert.equal(points[0].confidence, 'low');
 });
 
-test('one unattributed Codex window may show a low-confidence total but never an unused claim', () => {
+test('one unattributed Codex window shows low-confidence total and unused estimates', () => {
   const points = buildWeeklyValueTimeline('codex', {
     observations: [observation({
       seriesKey: 'codex-epoch-1',
@@ -717,7 +725,23 @@ test('one unattributed Codex window may show a low-confidence total but never an
   }, { now: RESET + HOUR });
 
   assert.equal(points[0].fullEquivalentUsd, 80);
-  assert.equal(points[0].unusedEquivalentUsd, null);
+  assert.equal(points[0].unusedEquivalentUsd, 40);
+  assert.equal(points[0].confidence, 'low');
+});
+
+test('one unattributed Claude window also forces a low-confidence estimate', () => {
+  const points = buildWeeklyValueTimeline('claude', {
+    observations: [observation({
+      provider: 'claude',
+      seriesKey: 'claude-profile',
+      accountAttribution: 'unattributed',
+      usedPercent: 50,
+    })],
+    usage: [usage(40, RESET - 2 * HOUR)],
+  }, { now: RESET + HOUR });
+
+  assert.equal(points[0].fullEquivalentUsd, 80);
+  assert.equal(points[0].unusedEquivalentUsd, 40);
   assert.equal(points[0].confidence, 'low');
 });
 
@@ -753,8 +777,29 @@ test('a current unattributed Codex window after a completed reset still estimate
   assert.equal(current?.usedEquivalentUsd, 74);
   assert.equal(current?.utilizationPercent, 74);
   assert.equal(current?.fullEquivalentUsd, 100);
-  assert.equal(current?.unusedEquivalentUsd, null);
+  assert.equal(current?.unusedEquivalentUsd, 26);
   assert.equal(current?.confidence, 'low');
+});
+
+test('a single Codex window flagged account-ambiguous still exposes a durability estimate', () => {
+  const currentReset = RESET + 7 * DAY;
+  const now = currentReset - HOUR;
+  const points = buildWeeklyValueTimeline('codex', {
+    observations: [observation({
+      seriesKey: 'codex-local-home',
+      windowId: 'current-window',
+      accountAttribution: 'unattributed',
+      flags: ['account-ambiguous'],
+      observedAt: now - HOUR,
+      resetAt: currentReset,
+      usedPercent: 25,
+    })],
+    usage: [usage(50, now - 2 * HOUR)],
+  }, { now });
+
+  assert.equal(points[0].fullEquivalentUsd, 200);
+  assert.equal(points[0].unusedEquivalentUsd, 150);
+  assert.equal(points[0].confidence, 'low');
 });
 
 test('overlapping unattributed Codex epochs never share usage for an allowance estimate', () => {

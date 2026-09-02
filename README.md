@@ -53,14 +53,15 @@ Today, Last 30 days, months, models, effort, and all-time totals.*
 ![Codex weekly allowance estimate in English, dark theme](images/v2.3.1/codex-weekly-estimate-en-dark.png)
 
 *Observed quota windows retain reset evidence locally. A valid used fraction can
-produce a labelled total estimate and confidence; unused value is shown only
-when attribution and boundaries are reliable enough.*
+produce labelled total and unused subscription-durability estimates, including
+for the current window. Approximate evidence remains visible with low confidence.*
 
 ![Combined Claude and Codex heatmap in English, light theme](images/v2.3.1/compare-heatmap-en-light.png)
 
 *Compare combines provider daily activity without double-counting Codex cached
-input or reasoning. Sharing exports a deterministic local SVG and privacy-safe
-Markdown snippet; the metric is activity volume, not productivity or billing.*
+input or reasoning. Its preview-first share studio offers an Academic Violet
+default, curated/custom colors, deterministic local SVG, and privacy-safe
+Markdown; the metric is activity volume, not productivity or billing.*
 
 ### Status bar
 
@@ -147,14 +148,18 @@ same full-request preview and separate explicit Send action as AI advice.
 - **Reset-aware weekly estimates** — bounded, atomically written quota
   observations preserve reset-time/window changes and significant usage drops,
   including consecutive and same-day resets. Every valid same-window used
-  fraction contributes an observed full-allowance estimate; ambiguous account
-  overlap remains used-only and unused value never goes negative.
+  fraction contributes an observed full-allowance estimate. Coherent current and
+  completed windows show total and unused durability estimates; approximate or
+  unattributed evidence is labelled low confidence, while genuinely overlapping
+  quota series remain used-only. Unused value never goes negative.
 - **Combined heatmap in Compare** — Claude and Codex daily processed volume is
   merged with provider components visible in every tooltip. It works with both
   providers or either provider alone and reuses existing aggregates instead of
   scanning logs again.
-- **Private share loop** — customize title and 30/90-day or yearly range,
-  inspect the privacy preview, export deterministic SVG, and copy a Markdown
+- **Private share loop** — use the preview-first studio to customize title,
+  30/90-day or yearly range, and heatmap colors. Academic Violet is the default;
+  quantile intensity keeps outlier days from washing out ordinary activity.
+  Inspect the privacy preview, export deterministic SVG, and copy a Markdown
   snippet. Optional public-GitHub publication is a separate exact-destination
   confirmation; local export needs no account permission.
 - **Aligned dashboard interaction** — shared density, headings, disclosures,
@@ -233,9 +238,11 @@ separate human-controlled release step.
   time; file-source uncertainty, reset drift, and daily boundary crossings lower
   confidence and are labelled as approximate. File keys are not account
   identities, so eligible local files in one home are included together. A
-  genuinely different quota series, or a period without a usable observation,
-  remains usage-only rather than inventing an account split. Current unused value
-  is withheld; historical unused value appears only when a full estimate exists.
+  genuinely overlapping quota series, or a period without a usable observation,
+  remains usage-only rather than inventing an account split. Any coherent
+  observed window—including the current one—can show total and unused durability
+  estimates; attribution or boundary uncertainty lowers confidence instead of
+  silently replacing the values with dashes.
   This display rule neither changes the index schema nor triggers a rebuild.
   Current official API rates are applied consistently across history. This is a
   proxy, not a bill or an official subscription price. The panel is enabled by

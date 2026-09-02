@@ -6,19 +6,105 @@ import {
 } from './combinedHeatmap';
 import { renderHeatmapSvg } from './heatmapSvg';
 
-export const COMBINED_ACTIVITY_SCALE = [
-  '#ebedf0',
-  '#dbeafe',
-  '#93c5fd',
-  '#3b82f6',
-  '#1d4ed8',
+export type CombinedHeatmapPalette =
+  | 'academicViolet'
+  | 'claudeOrange'
+  | 'codexBlue'
+  | 'githubGreen'
+  | 'custom';
+
+/** The default mirrors Carl's public combined-activity card: a neutral empty
+ * cell plus five active violet bands. */
+export const ACADEMIC_VIOLET_SCALE = [
+  '#ebedf0', '#eee8f8', '#d8c9f1', '#bca5e6', '#8668c7', '#4f2f87',
 ];
+
+const EMPTY_CELL_COLOR = '#ebedf0';
+const MIN_ACCENT_CONTRAST = 1.5;
+
+export const COMBINED_ACTIVITY_PALETTES: Record<Exclude<CombinedHeatmapPalette, 'custom'>, string[]> = {
+  academicViolet: ACADEMIC_VIOLET_SCALE,
+  claudeOrange: ['#ebedf0', '#fff1e8', '#fadcc9', '#f0aa82', '#e07d4f', '#c85a2b'],
+  codexBlue: ['#ebedf0', '#eff6ff', '#dbeafe', '#93c5fd', '#3b82f6', '#1d4ed8'],
+  githubGreen: ['#ebedf0', '#dafbe1', '#aceebb', '#6fdd8b', '#2da44e', '#116329'],
+};
+
+/** Compatibility alias for callers that imported the original scale. */
+export const COMBINED_ACTIVITY_SCALE = ACADEMIC_VIOLET_SCALE;
+
+export function normalizeCombinedHeatmapPalette(value: unknown): CombinedHeatmapPalette {
+  return value === 'claudeOrange' || value === 'codexBlue' ||
+    value === 'githubGreen' || value === 'custom'
+    ? value
+    : 'academicViolet';
+}
+
+export function normalizeCombinedHeatmapAccent(value: unknown): string {
+  const normalized = typeof value === 'string' && /^#[0-9a-fA-F]{6}$/.test(value.trim())
+    ? value.trim().toLowerCase()
+    : '#4f2f87';
+  const emptyLuminance = relativeLuminance(EMPTY_CELL_COLOR);
+  let channels = hexChannels(normalized);
+  // A near-white custom colour can otherwise make active cells lighter than
+  // the neutral empty cell. Preserve hue while darkening only as much as is
+  // needed to keep the exported intensity direction visually honest.
+  for (let attempt = 0; attempt < 24; attempt++) {
+    const candidate = channelsToHex(channels);
+    const contrast = (emptyLuminance + 0.05) / (relativeLuminance(candidate) + 0.05);
+    if (contrast >= MIN_ACCENT_CONTRAST) {
+      return candidate;
+    }
+    channels = channels.map((channel) => Math.round(channel * 0.88));
+  }
+  return channelsToHex(channels);
+}
+
+function hexChannels(hex: string): number[] {
+  return [1, 3, 5].map((start) => Number.parseInt(hex.slice(start, start + 2), 16));
+}
+
+function channelsToHex(channels: number[]): string {
+  return '#' + channels.map((channel) =>
+    Math.max(0, Math.min(255, Math.round(channel))).toString(16).padStart(2, '0'),
+  ).join('');
+}
+
+function relativeLuminance(hex: string): number {
+  const linear = hexChannels(hex).map((channel) => {
+    const value = channel / 255;
+    return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2];
+}
+
+function mixFromEmpty(hex: string, accentShare: number): string {
+  const accent = normalizeCombinedHeatmapAccent(hex);
+  const baseChannels = hexChannels(EMPTY_CELL_COLOR);
+  const accentChannels = hexChannels(accent);
+  return channelsToHex(accentChannels.map((channel, index) =>
+    baseChannels[index] * (1 - accentShare) + channel * accentShare,
+  ));
+}
+
+export function customCombinedHeatmapScale(value: unknown): string[] {
+  const accent = normalizeCombinedHeatmapAccent(value);
+  return [
+    EMPTY_CELL_COLOR,
+    mixFromEmpty(accent, 0.12),
+    mixFromEmpty(accent, 0.28),
+    mixFromEmpty(accent, 0.48),
+    mixFromEmpty(accent, 0.72),
+    accent,
+  ];
+}
 
 export interface CombinedHeatmapSvgOptions {
   range?: CombinedHeatmapRange;
   endDateISO: string;
   title?: string;
   watermark?: string;
+  palette?: CombinedHeatmapPalette | string;
+  customAccent?: string;
   labels?: {
     combined: string;
     processedTokens: string;
@@ -60,6 +146,10 @@ export function renderCombinedHeatmapSvg(
     `Codex ${compactNumber(window.totals.codexProcessed)}`,
     `${labels.combined} ${compactNumber(window.totals.combinedProcessed)} ${labels.processedTokens}`,
   ].join(' · ');
+  const palette = normalizeCombinedHeatmapPalette(options.palette);
+  const scale = palette === 'custom'
+    ? customCombinedHeatmapScale(options.customAccent)
+    : COMBINED_ACTIVITY_PALETTES[palette];
   return renderHeatmapSvg(combinedDailyAsHeatmapUsage(window.daily), {
     metric: 'tokens',
     startDateISO: window.startDateISO,
@@ -68,7 +158,13 @@ export function renderCombinedHeatmapSvg(
     subtitle,
     footerNote: labels.footerNote,
     watermark: options.watermark ?? 'Made with Claude Code Usage',
-    scale: COMBINED_ACTIVITY_SCALE,
+    scale,
+    intensityMode: 'quantile',
+    background: '#fcfaff',
+    primaryText: '#2f2142',
+    secondaryText: '#685a77',
+    borderColor: '#e5dded',
+    accentColor: scale[scale.length - 1],
     minWidth: 720,
     ariaLabel: `${title}. ${subtitle}`,
     tooltip: (dateISO) => {
