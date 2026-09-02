@@ -102,6 +102,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   polling, credentials, or a second scanner.
 
 ### Fixed
+- **Claude watcher failures fall back safely** — asynchronous `fs.watch`
+  errors (for example, an exhausted watch-handle limit) are now handled after
+  registration, close the owned watcher cleanly, and leave normal polling
+  active instead of escaping through the Extension Host.
 - **Timezone-stable chart date labels** — daily and monthly usage keys no
   longer roll back a day or month when a chart metric changes or a drill-down
   renders in a Webview host/configured timezone west of UTC. Bare monthly keys

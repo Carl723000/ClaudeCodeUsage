@@ -3222,7 +3222,7 @@ export class ClaudeCodeUsageExtension {
     this.stopFileWatching();
     const activeGeneration = this.fileWatcherGeneration;
     try {
-      this.fileWatcher = fs.watch(projectsDir, { recursive: true }, (_event, filename) => {
+      const watcher = fs.watch(projectsDir, { recursive: true }, (_event, filename) => {
         if (this.disposed || activeGeneration !== this.fileWatcherGeneration) return;
         if (!filename || !String(filename).endsWith('.jsonl')) {
           return;
@@ -3240,6 +3240,7 @@ export class ClaudeCodeUsageExtension {
           void this.refreshData(false, 'watch');
         });
       });
+      this.fileWatcher = watcher;
       this.watchedDir = projectsDir;
       this.fileWatcherLease = this.resourceOwnership.register({
         kind: 'watcher',
@@ -3252,8 +3253,17 @@ export class ClaudeCodeUsageExtension {
           'extension-dispose',
           'settings-change',
           'profile-change',
+          'cancelled',
         ],
         boundedException: 'none',
+      });
+      watcher.on('error', (error) => {
+        if (this.fileWatcher !== watcher || activeGeneration !== this.fileWatcherGeneration) return;
+        const code = (error as NodeJS.ErrnoException).code || 'watch-error';
+        this.outputChannel.appendLine(
+          `Claude file watcher stopped (${code}); polling remains active.`,
+        );
+        this.stopFileWatching('cancelled');
       });
     } catch {
       // Recursive watching unsupported — the polling timer is enough.
@@ -3263,7 +3273,7 @@ export class ClaudeCodeUsageExtension {
   private stopFileWatching(
     condition: Extract<
       ResourceStopCondition,
-      'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change' | 'profile-change'
+      'cancelled' | 'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change' | 'profile-change'
     > = 'settings-change',
   ): void {
     this.fileWatcherGeneration += 1;

@@ -5,7 +5,11 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { ClaudeDataLoader } from '../dataLoader';
-import { WindowActivityGate } from '../refreshPolicy';
+import {
+  RefreshSingleFlight,
+  WindowActivityGate,
+} from '../refreshPolicy';
+import { createClaudeUsageIndex } from '../claudeIncrementalIndex';
 import {
   beginBackgroundWork,
   createBackgroundWorkState,
@@ -28,7 +32,10 @@ function loadExtensionModule(): ExtensionModule {
   };
   const originalLoad = moduleLoader._load;
   const vscodeStub: any = new Proxy(function () {}, {
-    get: (_target, property) => property === 'then' ? undefined : vscodeStub,
+    get: (_target, property) => {
+      if (property === 'then' || property === 'workspaceFolders') return undefined;
+      return vscodeStub;
+    },
     apply: () => vscodeStub,
     construct: () => vscodeStub,
   });
@@ -1212,6 +1219,202 @@ test('Claude recursive watcher forwards nested subagent JSONL writes to a watch 
   await Promise.resolve();
   await Promise.resolve();
   assert.equal(watcherClosed, 1);
+});
+
+test('Claude watcher errors close the watcher and fall back to polling', async () => {
+  const extension = bareExtension();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-watch-error-'));
+  fs.mkdirSync(path.join(root, 'projects'));
+  const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
+  const originalWatch = fs.watch;
+  let errorListener: ((error: Error) => void) | undefined;
+  let watcherClosed = 0;
+  const diagnostics: string[] = [];
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.watchDebounce = { clear: () => undefined };
+  extension.fileWatcher = undefined;
+  extension.fileWatcherLease = undefined;
+  extension.watchedDir = null;
+  extension.outputChannel = { appendLine: (line: string) => diagnostics.push(line) };
+  extension.getConfiguration = () => ({
+    fileWatchSeconds: 1,
+    dataDirectory: '',
+  });
+  (ClaudeDataLoader as any).findClaudeDataDirectory = async () => root;
+  const watcher = {
+    close: () => { watcherClosed += 1; },
+    on: (event: string, listener: (error: Error) => void) => {
+      if (event === 'error') errorListener = listener;
+      return watcher;
+    },
+  };
+  (fs as any).watch = () => watcher;
+
+  try {
+    await extension.startFileWatching();
+    assert.ok(errorListener, 'the watcher must handle asynchronous fs.watch errors');
+    const error = Object.assign(new Error('watch resources exhausted'), { code: 'EMFILE' });
+    errorListener(error);
+    await extension.drainResourceStops();
+
+    assert.equal(extension.fileWatcher, undefined);
+    assert.equal(extension.watchedDir, null);
+    assert.equal(watcherClosed, 1);
+    assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+    assert.match(diagnostics.join('\n'), /EMFILE/);
+    assert.match(diagnostics.join('\n'), /poll/i);
+  } finally {
+    extension.stopFileWatching();
+    (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
+    (fs as any).watch = originalWatch;
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('real Claude filesystem events flow through manifest, index, and dashboard refresh', {
+  timeout: 10_000,
+}, async (t) => {
+  const extension = bareExtension();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-watch-e2e-'));
+  const project = path.join(root, 'projects', '-fixture');
+  const subagents = path.join(project, 'session-root', 'subagents');
+  fs.mkdirSync(subagents, { recursive: true });
+  const timestamp = new Date().toISOString();
+  const usageLine = (id: string, input: number): string => JSON.stringify({
+    type: 'assistant',
+    timestamp,
+    cwd: '/fixture/project',
+    gitBranch: 'main',
+    requestId: `request-${id}`,
+    message: {
+      id: `message-${id}`,
+      model: 'claude-sonnet-4-5',
+      content: [{ type: 'text', text: `answer-${id}` }],
+      usage: {
+        input_tokens: input,
+        output_tokens: 1,
+        cache_creation_input_tokens: 2,
+        cache_read_input_tokens: 3,
+      },
+    },
+  });
+  const initialFile = path.join(project, 'session-root.jsonl');
+  const nestedFile = path.join(subagents, 'agent-review.jsonl');
+  fs.writeFileSync(initialFile, `${usageLine('root', 10)}\n`, 'utf8');
+
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.localDataClearedRequiresReload = false;
+  extension.refreshGate = new RefreshSingleFlight();
+  extension.watchDebounce = {
+    clear: () => undefined,
+    push: (_delay: number, callback: () => void) => callback(),
+  };
+  extension.fileWatcher = undefined;
+  extension.fileWatcherLease = undefined;
+  extension.watchedDir = null;
+  extension.quotaColdRetryDone = true;
+  extension.cache = {
+    records: [],
+    contentAnalysis: null,
+    claudeIndex: createClaudeUsageIndex(),
+    manifest: null,
+    lastUpdate: new Date(0),
+    dataDirectory: null,
+    usageLimits: null,
+    usageLimitsLastUpdate: new Date(0),
+    usageLimitsBackoffUntil: new Date(0),
+    usageLimitsFailStreak: 0,
+  };
+  extension.getConfiguration = () => ({
+    dataDirectory: root,
+    fileWatchSeconds: 1,
+    dashboardAutoRefresh: true,
+    enableContentAnalysis: false,
+    advicePromptWindowDays: 30,
+    projectGroupingMode: 'git',
+    contextWindowOverride: 0,
+  });
+  extension.refreshCodexData = () => undefined;
+  extension.maybeFetchUsageLimits = async () => null;
+  extension.syncProviderUi = () => undefined;
+  const diagnostics: string[] = [];
+  extension.outputChannel = { appendLine: (line: string) => diagnostics.push(line) };
+  extension.statusBar = {
+    setLoading: () => undefined,
+    updateQuota: () => undefined,
+    updateUsageData: () => undefined,
+    updateContext: () => undefined,
+  };
+
+  let resolveNestedRefresh!: () => void;
+  const nestedRefresh = new Promise<void>((resolve) => {
+    resolveNestedRefresh = resolve;
+  });
+  const todayInputs: number[] = [];
+  const allTimeInputs: number[] = [];
+  extension.webviewProvider = {
+    setLoading: () => undefined,
+    updateQuota: () => undefined,
+    updateData: (
+      _session: unknown,
+      today: { totalInputTokens?: number } | null,
+      _last30Days: unknown,
+      allTime: { totalInputTokens?: number } | null,
+      _dailyForLast30Days: unknown,
+      _monthlyForAllTime: unknown,
+      _hourlyForToday: unknown,
+      error?: string,
+    ) => {
+      const input = today?.totalInputTokens ?? 0;
+      todayInputs.push(input);
+      allTimeInputs.push(allTime?.totalInputTokens ?? 0);
+      if (error) diagnostics.push(error);
+      if (input === 30) resolveNestedRefresh();
+    },
+  };
+
+  try {
+    await extension.refreshData(true, 'manual');
+    assert.equal(
+      todayInputs[todayInputs.length - 1],
+      10,
+      `allTime=${allTimeInputs[allTimeInputs.length - 1]} records=${extension.cache.records.length} diagnostics=${diagnostics.join(' | ')}`,
+    );
+
+    await extension.startFileWatching();
+    if (!extension.fileWatcher) {
+      t.skip('recursive fs.watch is not supported on this platform');
+      return;
+    }
+    const activeWatcher = extension.fileWatcher as fs.FSWatcher;
+
+    const outcomePromise = new Promise<'refreshed' | 'watch-error'>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('timed out waiting for nested Claude refresh'));
+      }, 5_000);
+      nestedRefresh.then(() => {
+        clearTimeout(timeout);
+        resolve('refreshed');
+      });
+      activeWatcher.once('error', () => {
+        clearTimeout(timeout);
+        resolve('watch-error');
+      });
+    });
+    fs.writeFileSync(nestedFile, `${usageLine('subagent', 20)}\n`, 'utf8');
+    const outcome = await outcomePromise;
+    if (outcome === 'watch-error') {
+      t.skip('the test host cannot allocate a recursive fs.watch handle');
+      return;
+    }
+
+    assert.equal(todayInputs[todayInputs.length - 1], 30);
+    assert.equal(extension.cache.records.length, 2);
+    assert.equal(extension.cache.manifest?.entries.size, 2);
+  } finally {
+    extension.stopFileWatching();
+    fs.rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('rapid settings changes wait for every provider retirement and only latest generation restarts', async () => {
