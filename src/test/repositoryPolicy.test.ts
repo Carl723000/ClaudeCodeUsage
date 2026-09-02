@@ -11,6 +11,30 @@ function repoFile(relativePath: string): string {
   return readFileSync(resolve(REPO_ROOT, relativePath), 'utf8');
 }
 
+function privacySafePngChunkTypes(relativePath: string): string[] {
+  const bytes = readFileSync(resolve(REPO_ROOT, relativePath));
+  assert.deepEqual(
+    [...bytes.subarray(0, 8)],
+    [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a],
+    `${relativePath} must contain PNG bytes, not only use a .png suffix`,
+  );
+  const types: string[] = [];
+  let offset = 8;
+  while (offset + 12 <= bytes.length) {
+    const payloadLength = bytes.readUInt32BE(offset);
+    const type = bytes.toString('ascii', offset + 4, offset + 8);
+    const nextOffset = offset + 12 + payloadLength;
+    assert.ok(nextOffset <= bytes.length, `${relativePath} has a truncated ${type} chunk`);
+    types.push(type);
+    offset = nextOffset;
+    if (type === 'IEND') {
+      break;
+    }
+  }
+  assert.equal(types[types.length - 1], 'IEND', `${relativePath} must end with IEND`);
+  return types;
+}
+
 type WorkflowStepValue = {
   readonly value: string;
   readonly line: number;
@@ -1423,6 +1447,61 @@ test('all seven README editions explain Codex Beta in their own language', () =>
   }
 });
 
+test('v2.3.1 README editions share release evidence and local-data boundaries', () => {
+  const readmes = [
+    'README.md',
+    'README-en.md',
+    'README-zh-CN.md',
+    'README-zh-TW.md',
+    'README-ja.md',
+    'README-ko.md',
+    'README-id.md',
+  ];
+  const releaseImages = [
+    'images/v2.3.1/codex-overview-zh-CN-dark.png',
+    'images/v2.3.1/codex-weekly-estimate-en-dark.png',
+    'images/v2.3.1/compare-heatmap-en-light.png',
+  ];
+  for (const image of releaseImages) {
+    assert.ok(
+      existsSync(resolve(REPO_ROOT, image)),
+      `release evidence is missing ${image}`,
+    );
+    const chunkTypes = privacySafePngChunkTypes(image);
+    for (const metadataChunk of ['eXIf', 'iTXt', 'tEXt', 'zTXt']) {
+      assert.equal(
+        chunkTypes.includes(metadataChunk),
+        false,
+        `${image} retains unnecessary ${metadataChunk} metadata`,
+      );
+    }
+  }
+  for (const readme of readmes) {
+    const body = repoFile(readme);
+    assert.match(body, /2\.3\.1/, `${readme} is missing the release section`);
+    assert.match(body, /LOCAL-DATA(?:\.zh-CN)?\.md/, `${readme} is missing the local-data inventory`);
+    for (const image of releaseImages) {
+      assert.ok(body.includes(image), `${readme} is missing ${image}`);
+    }
+    assert.doesNotMatch(
+      body,
+      /local candidate|本地候选|本機候選|ローカル候補|로컬 후보|Kandidat lokal/i,
+      `${readme} still labels v2.3.1 as a local candidate`,
+    );
+  }
+
+  const packageJson = JSON.parse(repoFile('package.json')) as { version: string };
+  const packageLock = JSON.parse(repoFile('package-lock.json')) as {
+    version: string;
+    packages: Record<string, { version?: string }>;
+  };
+  assert.equal(packageJson.version, '2.3.1');
+  assert.equal(packageLock.version, '2.3.1');
+  assert.equal(packageLock.packages['']?.version, '2.3.1');
+  assert.match(repoFile('LOCAL-DATA.md'), /OAuth access or refresh tokens/);
+  assert.match(repoFile('LOCAL-DATA.zh-CN.md'), /OAuth access\/refresh token/);
+});
+
 test('Marketplace metadata presents Claude and Codex local usage support', () => {
   const packageJson = JSON.parse(repoFile('package.json')) as {
     description: string;
@@ -1458,8 +1537,9 @@ test('changelog records the V2.2.2 energy patch after the released V2.2.1 baseli
   assert.doesNotMatch(changelog, /^## \[2\.2\.[01]\] — Unreleased$/m);
 });
 
-test('changelog records the v2.3.0 candidate', () => {
+test('changelog records the v2.3.0 and v2.3.1 candidates', () => {
   const changelog = repoFile('CHANGELOG.md');
+  assert.match(changelog, /^## \[2\.3\.1\] — Unreleased$/m);
   assert.match(changelog, /^## \[2\.3\.0\] — Unreleased$/m);
 });
 
@@ -1468,6 +1548,7 @@ test('release announcements are exact-version and user-disableable', () => {
   const settings = repoFile('src/settings.ts');
 
   assert.match(extension, /'2\.3\.0'/);
+  assert.match(extension, /'2\.3\.1'/);
   assert.doesNotMatch(extension, /'2\.2'\s*:/);
   assert.match(settings, /key:\s*'releaseAnnouncements'/);
   assert.match(settings, /default:\s*true/);

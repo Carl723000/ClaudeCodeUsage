@@ -26,6 +26,16 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 
 ![Dashboard](images/v2-dashboard-en.png)
 
+### Codex dan Perbandingan v2.3.1
+
+![Ringkasan Codex, Tionghoa Sederhana, tema gelap](images/v2.3.1/codex-overview-zh-CN-dark.png)
+
+![Estimasi batas mingguan Codex, Inggris, tema gelap](images/v2.3.1/codex-weekly-estimate-en-dark.png)
+
+![Heatmap gabungan Claude dan Codex, Inggris, tema terang](images/v2.3.1/compare-heatmap-en-light.png)
+
+Semua diambil dari VSIX v2.3.1 terpasang yang sama dengan data sintetis, tanpa akun, jalur, proyek, thread, atau isi log.
+
 ## Fitur
 
 - **Status bar** — biaya hari ini, biaya sesi saat ini, dan kuota 5-jam / mingguan yang sebenarnya (`5h:N% wk:N%`) dibaca dari sesi OAuth Claude Code sendiri. Tanpa konfigurasi.
@@ -36,16 +46,16 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 - **Harga multi-vendor** — Opus 4.x / Sonnet 4.x / Haiku 4.5 diverifikasi terhadap harga publik Anthropic; tarif referensi untuk OpenAI / Gemini / DeepSeek / Kimi / GLM / Qwen dengan fallback berbasis family model. `Refresh Token Pricing` menarik data LiteLLM langsung.
 - **Personalisasi** — bahasa, zona waktu, angka desimal, angka ringkas, pengelompokan proyek, toggle penyegaran otomatis dashboard.
 
-## Kandidat lokal v2.3.1
+## Yang baru di v2.3.1
 
-- Get AI Advice dan Usage Optimizer berbagi satu batas untuk permintaan yang telah disiapkan, pratinjau persis, pengiriman eksplisit, pembatalan, dan parsing respons yang ketat. Tidak ada permintaan AI default atau latar belakang.
-- Setelah saran diterapkan, hanya tugas serupa yang andal yang dapat menjadi perbandingan lokal sebelum / sesudah dengan versi. Ledger hanya menyimpan metrik kasar, kualitas, cakupan, dan versi—tidak pernah prompt, isi, jalur, atau session ID. Tanpa pasangan yang andal, UI menyatakan bahwa buktinya tidak cukup.
-- Pekerjaan riwayat Codex menyimpan progres, jumlah kegagalan beruntun, waktu berikutnya yang memenuhi syarat, dan alasan jeda. Pemrosesan berat yang terbatas hanya boleh terjadi sekali pada penggunaan pertama; setelah selesai tidak diulang, dan kegagalan atau ketiadaan progres tidak dipicu terus oleh refresh biasa.
-- Setiap tanggal Codex yang memiliki data dalam 30 hari terakhir dapat membuka bucket per jam yang sudah diindeks. Klik membaca nol JSONL; Claude dan Codex memakai zona waktu konfigurasi serta format `HH:00` yang sama.
-- Pengamatan kuota mingguan Codex dipadatkan selama proses indeks yang sudah ada menjadi riwayat lokal yang terbatas dan netral terhadap akun, sehingga batas reset yang tidak teratur tetap dapat dipertahankan. Tidak ada polling, pembacaan kredensial, atau pemindai kedua; setelah seed sekali, refresh tanpa perubahan tetap membaca nol byte isi catatan penggunaan. Reset yang tidak pernah muncul di log lokal tidak dapat disimpulkan.
-- Tampilan 7/30 hari terakhir menolak proyeksi periode yang kedaluwarsa atau membengkak, lalu sementara kembali ke agregat harian terverifikasi sampai proyeksi zona waktu selesai dibangun ulang.
+- 30 hari terakhir berarti hari ini dan 29 tanggal sebelumnya dalam zona waktu konfigurasi. Total dapat direkonsiliasi, refresh berulang stabil, dan bulan tampil dari lama ke baru.
+- Reasoning effort terstruktur tidak ditebak dari nama model. `unknown` bukan nol dijelaskan; nilai nol disembunyikan.
+- Pengamatan kuota anonim yang terbatas mempertahankan reset tidak teratur dan pada hari yang sama. Fraksi valid dalam jendela yang sama memperkirakan batas mingguan; atribusi ambigu tetap hanya menampilkan nilai terpakai.
+- Perbandingan menampilkan heatmap aktivitas gabungan Claude + Codex dari agregat harian yang sudah ada dan tetap berfungsi dengan satu penyedia.
+- Berbagi mencakup SVG lokal deterministik, kartu, Markdown, judul/rentang, dan pratinjau privasi. Publikasi GitHub publik mengonfirmasi tujuan tepat secara terpisah.
+- Claude/Codex berbagi token desain untuk kepadatan, hierarki, fokus, ARIA, lebar sempit, serta tema terang/gelap tanpa menyamakan arti metrik.
 
-Versi paket tetap tidak berubah; ini kandidat validasi lokal, bukan rilis yang diterbitkan.
+Metadata paket adalah `2.3.1`; publikasi Marketplace tetap langkah manual terpisah.
 
 ## Codex Beta di v2.3
 
@@ -83,6 +93,24 @@ Buka Settings (`Ctrl+,`) dan cari **`Claude Code Usage`**. Semua pengaturan bers
 - `dashboardAutoRefresh` — nyalakan/matikan penyegaran otomatis dashboard (bisa juga di-toggle di header dashboard).
 
 Lihat [tabel pengaturan lengkap di README utama](README.md#configuration).
+
+## Data lokal, privasi, dan batasan
+
+Lihat [Local data and privacy](LOCAL-DATA.md) untuk inventaris lengkap,
+retensi, migrasi, penghapusan, dan batas interaksi jarak jauh.
+
+| Data | Retensi lokal | Perilaku jarak jauh |
+|---|---|---|
+| Log sumber | Milik penyedia, hanya-baca, tidak disalin utuh | Tidak ada secara default |
+| Indeks Codex | Agregat numerik/struktur pseudonim yang terbatas | Tidak ada |
+| Riwayat kuota | Pengamatan jendela anonim terbatas, tanpa ID akun mentah | Hanya kuota Claude saat aktif; Codex tetap lokal |
+| UI/berbagi | Filter serta judul/rentang/tujuan GitHub opsional | Publikasi hanya setelah konfirmasi tepat |
+| Saran/kunci | Bukti agregat terbatas; kunci hanya di SecretStorage | Hanya permintaan yang dipratinjau persis setelah tindakan Kirim terpisah |
+
+Reset tanpa bukti terstruktur tidak dapat direkonstruksi. Riwayat beberapa login
+yang ambigu tetap hanya menampilkan nilai terpakai. Nilai ekuivalen API bukan
+tagihan. Retensi log sumber dikelola Claude Code/Codex; kontrol hapus eksplisit
+adalah cara andal menghapus state turunan ekstensi.
 
 ## Pemecahan masalah
 

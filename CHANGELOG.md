@@ -7,7 +7,23 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ## [2.3.1] — Unreleased
 
 ### Added
-- **Evidence-backed advice loop** — the default-off candidate now keeps local
+- **Combined activity heatmap and private sharing** — Compare now leads with a
+  Claude + Codex calendar heatmap built from the existing provider daily
+  aggregates. It exports deterministic local SVG, a privacy-safe share card,
+  and a copyable Markdown snippet with configurable title, 30/90-day or yearly
+  range, and an explicit privacy preview. Claude-only and Codex-only histories
+  remain useful; no second log scan or statistics cache is introduced.
+- **Durable quota observation history** — versioned, atomically written,
+  bounded observations keep provider, machine-local anonymous account epoch,
+  observation/reset time, used/remaining fraction, window identity, source,
+  confidence, and quality flags. Window-ID changes, reset-time changes, and
+  significant usage rollbacks preserve irregular and same-day reset events.
+- **Observed weekly allowance estimates** — every valid observation in a
+  coherent window contributes `priced used equivalent / used fraction`; robust
+  aggregation weights price/log coverage, boundary quality, attribution, and
+  recency. Total estimates never fall below confirmed usage, unused estimates
+  never go negative, and ambiguous multi-account evidence stays used-only.
+- **Evidence-backed advice loop** — the default-off feature keeps local
   observations, evidence, recommendations, actions, local helpful/not-helpful/
   applied feedback, and guarded comparable-task results in one surface. When
   reliable comparable work is unavailable, it says that the evidence is
@@ -30,6 +46,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   and Codex use the configured timezone and shared `HH:00` labels.
 
 ### Changed
+- **Shared dashboard system** — Claude and Codex now reuse the same density,
+  headings, disclosure controls, chart/table framing, empty states, focus
+  treatment, responsive navigation, and light/dark design tokens while keeping
+  provider-specific metric labels and meanings.
+- **Chronological month views** — Codex monthly charts and tables render
+  oldest-first in every range.
 - **System-reminder prompt filtering remains intentional** — framework reminder
   messages are excluded from user-input counts; token and cost totals are unchanged.
 - **One AI request boundary** — the former Get AI Advice command and Usage
@@ -47,23 +69,37 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Safer Codex rolling totals and reset history** — recent 7/30-day views no
   longer trust an inflated or still-rebuilding period sidecar; they use the
   verified daily aggregate until the configured-zone projection catches up.
-  The existing index pass also keeps a small, account-neutral history of
-  account-wide weekly reset observations, preserving irregular reset boundaries
-  across file replacement or removal without polling, credentials, or a second
-  scanner. The weekly-value timeline now treats Codex file keys as local-source
-  evidence rather than account identities: the same account-wide `codex` series
-  can estimate historical and current full values from all eligible files. Reset
-  drift and daily boundary crossings are mapped conservatively and lower
-  confidence; genuinely different quota series remain used-value-only. Codex
-  monthly charts and tables now list months oldest-first.
+  The existing index pass also captures compact quota observations without
+  polling, credentials, or a second scanner.
+
+### Fixed
+- **Reconciled 30-day Codex statistics** — “Last 30 days” is the configured
+  timezone's current calendar date plus the preceding 29 dates. The view is
+  projected from verified daily aggregates, so Today ≤ Last 30 days ≤ All time,
+  daily/monthly/model/effort totals reconcile, and repeated refresh/reindex does
+  not accumulate duplicate thread or historical-file usage.
+- **Reasoning-effort normalization** — current, legacy, nested, missing, and
+  invalid structured variants are normalized without guessing from a model
+  name. Non-zero unknown usage is visible with an explanation; zero-value
+  unknown rows are omitted.
+- **Duplicate share rows fail safely** — identical provider/date rows are
+  idempotent, conflicting duplicates block export, and absent dates render as
+  zero in the selected range.
 
 ### Privacy and packaging
 - Disabled or unconsented advice adds no timer, watcher, worker, network request,
   log scan, or hidden Webview render relative to v2.3.0. There are no default or
   background AI requests.
+- Combined exports contain only title, date range, daily aggregate totals,
+  provider labels, and caveats—never accounts, fingerprints, projects, threads,
+  paths, prompts, or log content. Local SVG/Markdown needs no account permission.
+- Direct GitHub publication remains an explicit, exact-destination action. It
+  requests only `public_repo`, verifies a public repository and default branch,
+  previews create/overwrite, and stores owner/repository/path only after success.
+  Release validation uses mocks and performs no real repository write.
 - Dormant migration/experiment modules and internal v2.3.1 review documents are
-  explicitly excluded from the VSIX. The package version and release workflow
-  remain unchanged for this local candidate.
+  explicitly excluded from the VSIX. Package metadata is now `2.3.1`; this
+  changelog entry remains Unreleased until a human performs the remote release.
 
 ## [2.3.0] — Unreleased
 

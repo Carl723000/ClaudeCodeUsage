@@ -108,6 +108,7 @@ export interface Translations {
   };
   releaseAnnouncement: {
     v230: string;
+    v231: string;
   };
   providers: ProviderTranslations;
   weeklyValue: WeeklyValueCopy;
@@ -1173,6 +1174,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: "What's new — Codex Beta usage and local optimization guidance, exact-version release notes, and removal of the obsolete model-specific weekly Opus option.",
+      v231: 'Accurate 30-day Codex totals, reset-aware weekly allowance estimates, and a private combined activity heatmap with local SVG and Markdown sharing.',
     },
     providers: PROVIDERS.en,
     weeklyValue: WEEKLY_VALUE_COPY.en,
@@ -1472,6 +1474,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: 'Neu: Codex-Beta-Nutzung und lokale Optimierungshinweise, versionsgenaue Release-Hinweise und Entfernung der veralteten modellspezifischen wöchentlichen Opus-Option.',
+      v231: 'Neu: korrekte 30-Tage-Codex-Werte, reset-bewusste Wochenschätzungen und eine private kombinierte Aktivitäts-Heatmap mit lokalem SVG- und Markdown-Export.',
     },
     providers: PROVIDERS['de-DE'],
     weeklyValue: WEEKLY_VALUE_COPY['de-DE'],
@@ -1774,6 +1777,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: '新功能：Codex Beta 用量與本機優化建議、與安裝版本精確對應的更新說明，並移除已過時的特定模型每週 Opus 選項。',
+      v231: '新功能：正確的 Codex 最近 30 天統計、可識別重置的每週額度估算，以及可匯出本機 SVG／Markdown 的隱私安全綜合活動熱力圖。',
     },
     providers: PROVIDERS['zh-TW'],
     weeklyValue: WEEKLY_VALUE_COPY['zh-TW'],
@@ -2069,6 +2073,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: '新功能：Codex Beta 用量与本地优化建议、与安装版本精确对应的更新说明，并移除已过时的特定模型每周 Opus 选项。',
+      v231: '新功能：准确的 Codex 最近 30 天统计、可识别重置的每周额度估算，以及可导出本地 SVG／Markdown 的隐私安全综合活动热力图。',
     },
     providers: PROVIDERS['zh-CN'],
     weeklyValue: WEEKLY_VALUE_COPY['zh-CN'],
@@ -2364,6 +2369,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: '新機能：Codex Beta の使用量とローカル最適化ガイド、完全なバージョンに対応するリリース通知、および古いモデル別の週間 Opus オプションの削除。',
+      v231: '新機能：正確な Codex の直近 30 日集計、リセットを考慮した週間枠の推定、ローカル SVG／Markdown 共有に対応したプライバシー保護の統合アクティビティヒートマップ。',
     },
     providers: PROVIDERS.ja,
     weeklyValue: WEEKLY_VALUE_COPY.ja,
@@ -2664,6 +2670,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: '새 기능: Codex Beta 사용량과 로컬 최적화 안내, 설치된 전체 버전에 맞는 릴리스 알림, 그리고 오래된 모델별 주간 Opus 옵션 제거.',
+      v231: '새 기능: 정확한 Codex 최근 30일 통계, 재설정을 인식하는 주간 한도 추정, 로컬 SVG/Markdown 공유를 지원하는 개인정보 보호 통합 활동 히트맵.',
     },
     providers: PROVIDERS.ko,
     weeklyValue: WEEKLY_VALUE_COPY.ko,
@@ -2964,6 +2971,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: 'Novidades: uso do Codex Beta e orientações locais de otimização, avisos da versão exata instalada e remoção da opção semanal obsoleta do Opus por modelo.',
+      v231: 'Novidades: totais corretos dos últimos 30 dias do Codex, estimativas semanais cientes de redefinições e um mapa de calor combinado e privado com exportação local em SVG e Markdown.',
     },
     providers: PROVIDERS['pt-BR'],
     weeklyValue: WEEKLY_VALUE_COPY['pt-BR'],
@@ -3263,6 +3271,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: 'Yang baru: penggunaan Codex Beta dan panduan optimasi lokal, catatan rilis yang sesuai dengan versi lengkap terpasang, serta penghapusan opsi Opus mingguan khusus model yang sudah usang.',
+      v231: 'Yang baru: statistik 30 hari Codex yang akurat, estimasi batas mingguan yang mengenali reset, dan heatmap aktivitas gabungan privat dengan ekspor SVG serta Markdown lokal.',
     },
     providers: PROVIDERS.id,
     weeklyValue: WEEKLY_VALUE_COPY.id,

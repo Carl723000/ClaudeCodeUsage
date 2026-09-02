@@ -26,6 +26,17 @@ Hover the quota indicator for a breakdown:
 
 ![Dashboard](images/v2-dashboard-en.png)
 
+### v2.3.1 Codex and Compare
+
+![Codex overview, Simplified Chinese, dark theme](images/v2.3.1/codex-overview-zh-CN-dark.png)
+
+![Codex weekly allowance estimate, English, dark theme](images/v2.3.1/codex-weekly-estimate-en-dark.png)
+
+![Combined Claude and Codex heatmap, English, light theme](images/v2.3.1/compare-heatmap-en-light.png)
+
+These images come from the same installed v2.3.1 VSIX with synthetic data and
+contain no account, path, project, thread, or log content.
+
 ## Features
 
 - **Status bar** — today's cost, current-session cost, and real 5-hour / weekly quota (`5h:N% wk:N%`) read from Claude Code's own OAuth session. Zero configuration.
@@ -36,16 +47,17 @@ Hover the quota indicator for a breakdown:
 - **Multi-vendor pricing** — Opus 4.x / Sonnet 4.x / Haiku 4.5 verified against Anthropic's public pricing; reference rates for OpenAI / Gemini / DeepSeek / Kimi / GLM / Qwen with family-aware fallback. `Refresh Token Pricing` pulls live LiteLLM data.
 - **Personalisation** — language, timezone, decimal places, compact numbers, project grouping, dashboard auto-refresh toggle.
 
-## v2.3.1 local candidate
+## What's new in v2.3.1
 
-- Get AI Advice and the Usage Optimizer now share one prepared-request, exact-preview, explicit-send, cancellation, and strict-response boundary. No default or background AI request exists; the Optimizer still includes only the draft you pasted.
-- Reliable similar tasks may be paired into a versioned local comparison result after a recommendation is applied. The ledger stores coarse metric, quality, coverage, and version fields only—never prompts, bodies, paths, or session IDs. Without a reliable pair, the UI says the evidence is insufficient.
-- Codex historical work persists progress, failure streak, next-eligible time, and pause reason. First-use work may perform one bounded heavy pass, then does not repeat equivalent work after completion or hot-loop after failure/no progress.
-- Every populated Codex day in the rolling last 30 days can expand to its already-indexed hourly buckets with zero JSONL reads on click. Claude and Codex share the configured timezone and `HH:00` formatter.
-- Weekly Codex quota observations are compacted during those existing index passes into a bounded, account-neutral local history, so separate irregular reset boundaries can survive file replacement or removal. It does not poll, read credentials, or add a second scanner; unchanged warm refreshes still read zero usage-record bodies. If a reset never appears in a local log line, it cannot be inferred.
-- Recent 7/30-day views reject stale or inflated period projections and temporarily fall back to the verified daily aggregate until the zone-aware projection is rebuilt.
+- Last 30 days is the configured-timezone current date plus the preceding 29 dates. Today ≤ Last 30 days ≤ All time, repeated refresh/reindex is stable, all breakdowns reconcile, and months run oldest-first.
+- Structured reasoning-effort variants normalize without model-name guessing. Non-zero unknown is explained; zero unknown is hidden.
+- Bounded anonymous quota observations preserve irregular and same-day resets. Every valid same-window used fraction contributes to a labelled weekly total estimate; ambiguous account overlap remains used-only and unused value never becomes negative.
+- Compare now leads with a combined Claude + Codex activity heatmap that reuses daily aggregates, works with either provider alone, and keeps both components in every tooltip.
+- Sharing supports deterministic local SVG, a combined card, copyable Markdown, title/range controls, and a privacy preview. Optional public-GitHub publication is separately confirmed at the exact destination.
+- Claude and Codex now share dashboard density, hierarchy, disclosure, focus, ARIA, narrow-width, and light/dark design tokens while retaining provider-specific metric meanings.
+- Get AI Advice and Usage Optimizer share one exact-preview and explicit-send boundary. There is no default or background AI request, and local evidence/feedback remains bounded.
 
-The package version remains unchanged; this is a local validation candidate, not a published release.
+Package metadata is `2.3.1`; Marketplace publication remains a separate human-controlled release step.
 
 ## Codex Beta in v2.3
 
@@ -84,6 +96,25 @@ Open Settings (`Ctrl+,`) and search for **`Claude Code Usage`**. All settings ar
 - `pauseDashboardRefresh` — pause dashboard auto-refresh (also toggleable in the dashboard header).
 
 See the [full settings table in the main README](README.md#configuration).
+
+## Local data, privacy, and known limits
+
+See [Local data and privacy](LOCAL-DATA.md) for the complete inventory,
+retention, migration, clearing, and remote-interaction contract.
+
+| Data | Local retention | Remote behavior |
+|---|---|---|
+| Source logs | Provider-owned, read-only; never copied wholesale | None by default |
+| Codex index | Bounded pseudonymous numeric/structural aggregates | None |
+| Quota history | Bounded anonymous window observations; no raw account ID | Claude quota lookup only when enabled; Codex evidence stays local |
+| UI/share state | Filters plus optional title/range and GitHub destination strings | Publish only after exact explicit confirmation |
+| Advice state/key | Bounded aggregate evidence; key only in SecretStorage | Exact previewed request only after a separate Send action |
+
+A reset absent from official/local structured evidence cannot be reconstructed.
+Ambiguous multi-login Codex history remains used-only. API-equivalent values
+depend on visible pricing coverage and are not bills. Source-log retention is
+controlled by Claude Code and Codex; explicit clear controls are the reliable
+way to remove extension-derived state.
 
 ## Troubleshooting
 

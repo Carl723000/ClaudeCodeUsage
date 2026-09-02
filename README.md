@@ -43,6 +43,25 @@ the same data.
 
 ## Screenshots
 
+### v2.3.1 Codex and Compare
+
+![Codex overview in Simplified Chinese, dark theme](images/v2.3.1/codex-overview-zh-CN-dark.png)
+
+*The corrected Codex overview uses one configured-timezone calendar model for
+Today, Last 30 days, months, models, effort, and all-time totals.*
+
+![Codex weekly allowance estimate in English, dark theme](images/v2.3.1/codex-weekly-estimate-en-dark.png)
+
+*Observed quota windows retain reset evidence locally. A valid used fraction can
+produce a labelled total estimate and confidence; unused value is shown only
+when attribution and boundaries are reliable enough.*
+
+![Combined Claude and Codex heatmap in English, light theme](images/v2.3.1/compare-heatmap-en-light.png)
+
+*Compare combines provider daily activity without double-counting Codex cached
+input or reasoning. Sharing exports a deterministic local SVG and privacy-safe
+Markdown snippet; the metric is activity volume, not productivity or billing.*
+
 ### Status bar
 
 ![Status bar](images/v2-status-bar-en.png)
@@ -75,7 +94,7 @@ for optimising your usage. Scoped to the last 30 days
 
 ### AI advice — evidence first, sending optional
 
-The v2.3.1 candidate keeps one readable path from a local observation to its
+v2.3.1 keeps one readable path from a local observation to its
 evidence, recommendation, action, feedback, and guarded result. It is off by
 default. Local evidence appears before any model is involved; **Helpful**, **Not
 helpful**, and **Applied** stay on this device. Once enough reliable, similar
@@ -116,8 +135,32 @@ same full-request preview and separate explicit Send action as AI advice.
 
 ---
 
-## v2.3.1 local candidate
+## What's new in v2.3.1
 
+- **Correct, stable date ranges** — Last 30 days means today plus the preceding
+  29 calendar dates in the configured timezone. Today ≤ Last 30 days ≤ All time,
+  provider totals reconcile, repeated refresh/reindex is idempotent, and Codex
+  monthly charts/tables run oldest-first.
+- **Truthful effort attribution** — legacy and current structured effort fields
+  normalize without guessing from model names. A non-zero `unknown` bucket is
+  explained; a zero bucket is not rendered.
+- **Reset-aware weekly estimates** — bounded, atomically written quota
+  observations preserve reset-time/window changes and significant usage drops,
+  including consecutive and same-day resets. Every valid same-window used
+  fraction contributes an observed full-allowance estimate; ambiguous account
+  overlap remains used-only and unused value never goes negative.
+- **Combined heatmap in Compare** — Claude and Codex daily processed volume is
+  merged with provider components visible in every tooltip. It works with both
+  providers or either provider alone and reuses existing aggregates instead of
+  scanning logs again.
+- **Private share loop** — customize title and 30/90-day or yearly range,
+  inspect the privacy preview, export deterministic SVG, and copy a Markdown
+  snippet. Optional public-GitHub publication is a separate exact-destination
+  confirmation; local export needs no account permission.
+- **Aligned dashboard interaction** — shared density, headings, disclosures,
+  charts, empty states, keyboard focus, ARIA behavior, narrow layout, and
+  light/dark design tokens keep Claude and Codex consistent without claiming
+  their metrics are semantically equivalent.
 - **One advice loop** — local evidence, explainable recommendations, optional
   exact BYOK preview/send, device-local feedback, and versioned comparable-task
   results share one boundary. Get AI Advice opens this surface; the Optimizer
@@ -132,18 +175,13 @@ same full-request preview and separate explicit Send action as AI advice.
 - **Thirty-day hour drill-down** — any populated Codex day in the last 30 days
   expands from the existing index with zero JSONL reads on click. Claude and
   Codex use the configured timezone and the same `HH:00` labels.
-- **Reset-aware local evidence** — weekly Codex quota observations are compacted
-  during the existing index passes into a bounded, account-neutral history, so
-  irregular reset boundaries survive file replacement or removal. It adds no
-  polling, credential read, or second scanner; after the one-time seed, unchanged
-  refreshes still read zero usage-record bodies. A reset absent from local logs
-  cannot be inferred.
-- **Safe rolling totals** — recent 7/30-day views reject stale or inflated period
-  projections and temporarily use the verified daily aggregate until the
-  configured-zone projection is rebuilt.
+- **Safe rolling totals and resumable indexing** — recent 7/30-day views reject
+  stale/inflated period projections and use verified daily aggregates until the
+  zone projection catches up. First-use work persists bounded progress and does
+  not hot-loop or repeat after completion.
 
-The candidate keeps the package version unchanged and is not a published
-release.
+The repository package metadata is `2.3.1`. Marketplace publication remains a
+separate human-controlled release step.
 
 ## What's new in 2.3
 
@@ -462,6 +500,17 @@ authoritative.
 
 ## Privacy
 
+The complete user-facing inventory, retention rules, clearing behavior, and
+remote boundaries are in [Local data and privacy](LOCAL-DATA.md) ([简体中文](LOCAL-DATA.zh-CN.md)).
+
+| Data | Stored locally | Remote behavior | Clear path |
+|---|---|---|---|
+| Claude/Codex source logs | Provider-owned and read-only; never copied wholesale | None by default | Managed by the provider tools, not deleted by this extension |
+| Codex derived index | Bounded pseudonymous numeric/structural aggregates | None | Rebuild or clear derived index |
+| Quota observations | Bounded anonymous window facts; no raw account ID | Claude quota fetch only when enabled; Codex evidence stays local | Clear by provider/account epoch or all |
+| UI/share preferences | Tab/filter state plus optional title/range and GitHub destination strings | Publish only after exact explicit confirmation | Reset UI or sharing preferences independently |
+| Advice data/key | Bounded aggregate evidence; key only in SecretStorage | Exact previewed request only after separate Send | Clear advice data and key independently |
+
 - All **Claude** token / cost / session analysis runs locally by reading your
   `~/.claude/projects/**/*.jsonl` files.
 - Codex usage records are discovered only from `sessions/**/*.jsonl` and
@@ -486,6 +535,18 @@ authoritative.
   paste into it** (never your files or terminal). Both use the exact previewed
   bytes, the endpoint in `advice.apiUrl`, and your own `advice.apiKey`.
   **Bring your own key**; no key or generative OAuth credential is shipped.
+
+### Known limits
+
+- A reset absent from an official response or local structured event cannot be
+  reconstructed; day-only evidence lowers confidence.
+- One Codex home may contain several sign-ins. Ambiguous overlap is shown as
+  used-only rather than inventing an account split or unused allowance.
+- API-equivalent values depend on current known API prices and visible pricing
+  coverage. They are not bills or subscription prices.
+- Source-log retention belongs to Claude Code and Codex. Uninstall may leave
+  host-managed extension storage behind, so the explicit clear controls are the
+  reliable deletion route.
 
 ---
 
