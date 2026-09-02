@@ -31,7 +31,14 @@ import {
   buildOptimizerSystemPrompt,
 } from './advisor';
 import { ClaudeApiUsageResponse, ContentAnalysis, ExtensionConfig } from './types';
-import { SettingsSecretMigrationError, SettingsStore } from './settings';
+import {
+  KNOWN_CONFIGURATION_SETTING_KEYS,
+  OWNED_SETTING_GLOBAL_STATE_KEYS,
+  REGISTERED_CONFIGURATION_SETTING_KEYS,
+  SettingsLocalDataClearError,
+  SettingsSecretMigrationError,
+  SettingsStore,
+} from './settings';
 import { normalizeQuotaWindows } from './quotaWindows';
 import {
   WeeklyQuotaObservation,
@@ -41,10 +48,12 @@ import {
   codexQuotaCapturesFromWeeklyObservations,
   createEmptyQuotaObservationStore,
   fingerprintForStableIdentity,
+  loadQuotaObservationStore,
   mergeQuotaCaptures,
   QUOTA_OBSERVATION_FILE,
   QuotaCapture,
   QuotaObservationRepository,
+  QuotaObservationScopedClearBlockedError,
   QuotaObservationStoreV2,
   quotaStoreWeeklyObservations,
 } from './quotaObservationStore';
@@ -79,6 +88,7 @@ import {
   CodexIndexProgress,
   loadCodexIndex,
 } from './providers/codex/codexIndex';
+import { acquireCodexIndexLease } from './providers/codex/codexIndexLease';
 import { weeklyQuotaObservationsFromCodexHistory } from './providers/codex/codexQuotaHistory';
 import { resolveCodexHome } from './providers/codex/codexManifest';
 import { buildCodexUsageView, CodexUsageView } from './providers/codex/codexUsage';
@@ -124,6 +134,26 @@ import {
   ResourceOwnershipRegistry,
   ResourceStopCondition,
 } from './resourceOwnership';
+import {
+  LOCAL_DATA_ACTION_TARGETS,
+  LOCAL_DATA_GLOBAL_STATE_KEYS,
+  LOCAL_DATA_GLOBAL_STATE_PREFIXES,
+  LOCAL_DATA_PENDING_CLIENT_RESET_KEY,
+  LOCAL_DATA_SOURCE_EXCLUSIONS,
+  LEGACY_ADVICE_LOCAL_STATE_KEYS,
+  LocalDataAction,
+  LocalDataActionResult,
+  LocalDataClientAction,
+  LocalDataClientSummary,
+  LocalDataInventory,
+  LocalDataInventoryRow,
+  LocalDataQuotaScopeOption,
+  ResolvedQuotaScope,
+  approximateJsonBytes,
+  finiteTimestampRange,
+  groupQuotaAccountEpochs,
+  localDataActionTitle,
+} from './localDataControls';
 
 interface LocalizedReleaseAnnouncement {
   version: string;
@@ -146,6 +176,20 @@ const QUOTA_FINGERPRINT_SALT_KEY = 'ccu.quota.fingerprintSalt.v1';
 const QUOTA_P5_MIGRATION_KEY = 'ccu.quota.migratedCodexIndex.v2';
 const LEGACY_QUOTA_PREFIX = 'ccu.usageLimits.';
 const LEGACY_WEEKLY_PREFIX = 'ccu.weeklyQuotaHistory.v1.';
+const LOCAL_DATA_QUOTA_SCOPE_TTL_MS = 5 * 60_000;
+const LOCAL_DATA_EXACT_GLOBAL_STATE_KEYS = [
+  ...new Set([
+    ...LOCAL_DATA_GLOBAL_STATE_KEYS,
+    ...OWNED_SETTING_GLOBAL_STATE_KEYS,
+  ]),
+] as const;
+
+class QuotaObservationScopedMigrationBlockedError extends Error {
+  constructor() {
+    super('quota-observation-clear:scoped-clear-blocked-by-unresolved-migration');
+    this.name = 'QuotaObservationScopedMigrationBlockedError';
+  }
+}
 
 function legacyProfileSuffix(credentialsPath: string): string {
   return createHash('sha256').update(credentialsPath).digest('hex').slice(0, 16);
@@ -416,6 +460,21 @@ export class ClaudeCodeUsageExtension {
   private readonly pendingResourceStops = new Set<Promise<void>>();
   private resourceStopFailure: unknown = null;
   private codexBackgroundStateWrite: Promise<void> = Promise.resolve();
+  private initializationWrites: Promise<void> = Promise.resolve();
+  private initializationWriteFailure: unknown = null;
+  private localDataActionWrite: Promise<void> = Promise.resolve();
+  private pendingClientResetReplay: Promise<void> = Promise.resolve();
+  private clearingAllLocalData = false;
+  private localDataClearedRequiresReload = false;
+  private readonly localDataQuotaScopes = new Map<
+    string,
+    {
+      scope: ResolvedQuotaScope;
+      label: string;
+      createdAt: number;
+      revision: string;
+    }
+  >();
   private configurationGeneration = 0;
   private fileWatcherGeneration = 0;
   private codexWatcherGeneration = 0;
@@ -455,7 +514,7 @@ export class ClaudeCodeUsageExtension {
       backgroundRestore.disposition !== 'valid' ||
       backgroundRestore.state.status === 'running'
     ) {
-      void this.saveCodexBackgroundState().catch(() => undefined);
+      this.queueInitializationWrite(() => this.saveCodexBackgroundState());
     }
     this.webviewProvider = new UsageWebviewProvider(context);
     const existingQuotaSalt = context.globalState.get<string>(
@@ -464,10 +523,10 @@ export class ClaudeCodeUsageExtension {
     this.quotaFingerprintSalt = quotaRuntime?.salt ??
       existingQuotaSalt ?? randomBytes(32).toString('hex');
     if (!existingQuotaSalt && !quotaRuntime) {
-      void context.globalState.update(
+      this.queueInitializationWrite(() => context.globalState.update(
         'ccu.quota.fingerprintSalt.v1',
         this.quotaFingerprintSalt,
-      );
+      ));
     }
     this.quotaObservationRepository = quotaRuntime?.repository ??
       new QuotaObservationRepository(
@@ -489,18 +548,20 @@ export class ClaudeCodeUsageExtension {
     const existingCodexSalt = context.globalState.get<string>('ccu.codex.machineSalt');
     this.codexSalt = existingCodexSalt ?? randomBytes(32).toString('hex');
     if (!existingCodexSalt) {
-      void context.globalState.update('ccu.codex.machineSalt', this.codexSalt);
+      this.queueInitializationWrite(() =>
+        context.globalState.update('ccu.codex.machineSalt', this.codexSalt),
+      );
     }
     this.codexProvider = this.createCodexProvider(this.getConfiguration());
     // Migrate any pre-2.1 settings.json values for the keys that have moved out
     // of the VS Code Settings UI into the dashboard-managed store. Runs once.
-    void this.settings.migrateOnce();
+    this.queueInitializationWrite(() => this.settings.migrateOnce());
     // V2.2: convert the old pauseDashboardRefresh to the positive
     // dashboardAutoRefresh (inverted). Runs once.
-    void this.settings.migrateDashboardAutoRefresh();
+    this.queueInitializationWrite(() => this.settings.migrateDashboardAutoRefresh());
     // Rename showOpusWeekly -> showScopedWeekly (the API stopped naming Opus).
     // Runs once.
-    void this.settings.migrateScopedWeekly();
+    this.queueInitializationWrite(() => this.settings.migrateScopedWeekly());
     // Usage Optimizer (Phase 9c): the webview posts a draft prompt; we run it
     // through the same model backend as the advice feature and post back a
     // tightened prompt + a settings recommendation. Consent gate lives here.
@@ -572,6 +633,15 @@ export class ClaudeCodeUsageExtension {
     // (globalState changes don't fire onDidChangeConfiguration).
     this.webviewProvider.settings = this.settings;
     this.webviewProvider.onSettingsChanged = (key) => this.onSettingsChangedFromPanel(key);
+    this.webviewProvider.onRequestLocalDataInventory = (client) =>
+      this.buildLocalDataInventory(client);
+    this.webviewProvider.onRunLocalDataAction = (action, quotaScopeToken) =>
+      this.runLocalDataActionInteractive(action, quotaScopeToken);
+    this.webviewProvider.onResetSharingPreferences = () =>
+      this.resetSharingPreferencesHost();
+    this.webviewProvider.onLocalDataClientReady = () => {
+      void this.replayPendingClientReset();
+    };
 
     this.setupCommands();
     this.loadConfiguration();
@@ -596,6 +666,30 @@ export class ClaudeCodeUsageExtension {
     console.log('Claude Code Usage Extension: Initialization complete');
   }
 
+  private queueInitializationWrite(
+    operation: () => PromiseLike<void>,
+  ): void {
+    const run = this.initializationWrites
+      .catch(() => undefined)
+      .then(async () => {
+        if (this.disposed || this.localDataClearedRequiresReload) return;
+        await operation();
+      });
+    this.initializationWrites = run.catch((error) => {
+      this.initializationWriteFailure ??= error;
+    });
+  }
+
+  private async drainInitializationWritesForClear(): Promise<void> {
+    await this.initializationWrites;
+    // An initialization failure is non-fatal for normal activation, but a
+    // destructive clear cannot claim a verified postcondition while an owned
+    // initialization write failed or remains unknown.
+    if (this.initializationWriteFailure !== null) {
+      throw new Error('initialization-write-barrier-failed');
+    }
+  }
+
   /** After an upgrade, show a single "what's new" notification pointing at the
    * dashboard — so users discover new features (including opt-in, default-off
    * ones they'd never find otherwise). Shown once per version; skipped on a
@@ -612,7 +706,9 @@ export class ClaudeCodeUsageExtension {
       this.getConfiguration().releaseAnnouncements,
       WHATS_NEW,
     );
-    void this.context.globalState.update('ccu.lastSeenVersion', current);
+    this.queueInitializationWrite(() =>
+      this.context.globalState.update('ccu.lastSeenVersion', current),
+    );
     if (announcement) {
       this.showWhatsNew(announcement.version);
     }
@@ -677,10 +773,884 @@ export class ClaudeCodeUsageExtension {
       }),
       vscode.commands.registerCommand('claudeCodeUsage.previewWhatsNew', () => {
         this.previewWhatsNew();
+      }),
+      vscode.commands.registerCommand('claudeCodeUsage.manageLocalData', () => {
+        this.webviewProvider.show('settings');
+        queueMicrotask(() => this.webviewProvider.requestLocalDataInventoryRefresh());
+      }),
+      vscode.commands.registerCommand('claudeCodeUsage.rebuildCodexIndex', () => {
+        void this.runLocalDataActionInteractive('rebuild-codex-index');
+      }),
+      vscode.commands.registerCommand('claudeCodeUsage.clearQuotaHistory', () => {
+        void this.clearQuotaHistoryFromCommandPalette();
+      }),
+      vscode.commands.registerCommand('claudeCodeUsage.clearAdviceData', () => {
+        void this.runLocalDataActionInteractive('clear-advice-data');
+      }),
+      vscode.commands.registerCommand('claudeCodeUsage.resetUiState', () => {
+        this.webviewProvider.show('settings');
+        void this.runLocalDataActionInteractive('reset-ui-state');
+      }),
+      vscode.commands.registerCommand('claudeCodeUsage.resetSharingPreferences', () => {
+        this.webviewProvider.show('settings');
+        void this.runLocalDataActionInteractive('reset-sharing-preferences');
+      }),
+      vscode.commands.registerCommand('claudeCodeUsage.clearByokSecret', () => {
+        void this.runLocalDataActionInteractive('clear-byok-secret');
+      }),
+      vscode.commands.registerCommand('claudeCodeUsage.clearAllDerivedData', () => {
+        this.webviewProvider.show('settings');
+        void this.runLocalDataActionInteractive('clear-all-derived-data');
       })
     ];
 
     commands.forEach(command => this.context.subscriptions.push(command));
+  }
+
+  private async derivedFileFamilyNames(
+    filePath: string,
+    family: 'codex-index' | 'quota-observations',
+  ): Promise<string[]> {
+    const directory = path.dirname(filePath);
+    const canonical = path.basename(filePath);
+    let names: string[];
+    try {
+      names = await fs.promises.readdir(directory);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    return names.filter((name) => {
+      if (name === canonical) return true;
+      if (family === 'codex-index') {
+        return /^codex-index-v1\.corrupt-\d+-\d+\.json$/.test(name) ||
+          /^codex-index-v1\.json\.tmp-\d+-[a-f0-9-]{36}$/.test(name);
+      }
+      return /^quota-observations-v2\.json\.quarantine-\d+-[a-f0-9]{8}$/.test(name) ||
+        /^\.quota-observations-v2\.json\.\d+\.[a-f0-9]{12}\.tmp$/.test(name);
+    });
+  }
+
+  private async localFileFamilyInventory(
+    filePath: string,
+    family: 'codex-index' | 'quota-observations',
+  ): Promise<{
+    approximateBytes: number | null;
+    itemCount: number;
+    oldestAt: number | null;
+    newestAt: number | null;
+  }> {
+    try {
+      const names = await this.derivedFileFamilyNames(filePath, family);
+      const stats = await Promise.all(names.map((name) =>
+        fs.promises.lstat(path.join(path.dirname(filePath), name)),
+      ));
+      const files = stats.filter((stat) => stat.isFile() || stat.isSymbolicLink());
+      if (files.length === 0) {
+        return { approximateBytes: 0, itemCount: 0, oldestAt: null, newestAt: null };
+      }
+      const range = finiteTimestampRange(files.flatMap((stat) => [
+        stat.birthtimeMs > 0 ? stat.birthtimeMs : stat.ctimeMs,
+        stat.mtimeMs,
+      ]));
+      return {
+        approximateBytes: files.reduce((sum, stat) => sum + stat.size, 0),
+        itemCount: files.length,
+        ...range,
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        this.outputChannel.appendLine('local-data inventory: one derived file is unreadable');
+      }
+      return { approximateBytes: null, itemCount: 0, oldestAt: null, newestAt: null };
+    }
+  }
+
+  private async removeDerivedFileFamily(
+    filePath: string,
+    family: 'codex-index' | 'quota-observations',
+  ): Promise<void> {
+    const directory = path.dirname(filePath);
+    const names = await this.derivedFileFamilyNames(filePath, family);
+    for (const name of names) {
+      // `name` came from an exact allowlisted family matcher in this one
+      // directory. unlink never follows a symlink target.
+      await fs.promises.unlink(path.join(directory, name)).catch((error) => {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      });
+    }
+  }
+
+  private async removeDerivedFileFamilyWithLease(
+    filePath: string,
+    family: 'codex-index' | 'quota-observations',
+  ): Promise<void> {
+    const lease = await acquireCodexIndexLease(filePath);
+    try {
+      await this.removeDerivedFileFamily(filePath, family);
+    } finally {
+      await lease.release();
+    }
+  }
+
+  private extensionGlobalStateKeys(): readonly string[] {
+    const keys = this.context.globalState.keys;
+    return typeof keys === 'function' ? keys.call(this.context.globalState) : [];
+  }
+
+  private globalStateAggregate(keys: readonly string[]): {
+    approximateBytes: number | null;
+    itemCount: number;
+  } {
+    let bytes = 0;
+    let knownBytes = true;
+    for (const key of keys) {
+      const valueBytes = approximateJsonBytes(this.context.globalState.get<unknown>(key));
+      if (valueBytes === null) knownBytes = false;
+      else bytes += valueBytes;
+    }
+    return {
+      approximateBytes: knownBytes ? bytes : null,
+      itemCount: keys.length,
+    };
+  }
+
+  private buildQuotaScopeOptions(): LocalDataQuotaScopeOption[] {
+    this.localDataQuotaScopes.clear();
+    const locale = I18n.getLocale();
+    const zh = locale === 'zh-CN';
+    const observations = this.quotaObservationStore.observations;
+    const revision = this.quotaObservationRevision();
+    const createdAt = Date.now();
+    const result: LocalDataQuotaScopeOption[] = [];
+    const add = (
+      label: string,
+      scope: ResolvedQuotaScope,
+      itemCount: number,
+      oldestAt: number | null,
+      newestAt: number | null,
+      provider: 'claude' | 'codex' | 'all',
+    ): void => {
+      const token = randomBytes(18).toString('hex');
+      this.localDataQuotaScopes.set(token, {
+        scope,
+        label,
+        createdAt,
+        revision,
+      });
+      result.push({ token, label, provider, itemCount, oldestAt, newestAt });
+    };
+    const allRange = finiteTimestampRange(observations.map((item) => item.observedAt));
+    add(
+      zh ? `全部额度观测（${observations.length} 项）` : `All quota observations (${observations.length})`,
+      {},
+      observations.length,
+      allRange.oldestAt,
+      allRange.newestAt,
+      'all',
+    );
+    for (const provider of ['claude', 'codex'] as const) {
+      const selected = observations.filter((item) => item.provider === provider);
+      if (selected.length === 0) continue;
+      const range = finiteTimestampRange(selected.map((item) => item.observedAt));
+      add(
+        zh
+          ? `${provider === 'claude' ? 'Claude' : 'Codex'} 全部观测（${selected.length} 项）`
+          : `${provider === 'claude' ? 'Claude' : 'Codex'} observations (${selected.length})`,
+        { provider },
+        selected.length,
+        range.oldestAt,
+        range.newestAt,
+        provider,
+      );
+    }
+    const epochNumber = new Map<'claude' | 'codex', number>([['claude', 0], ['codex', 0]]);
+    for (const epoch of groupQuotaAccountEpochs(this.quotaObservationStore)) {
+      const index = (epochNumber.get(epoch.provider) ?? 0) + 1;
+      epochNumber.set(epoch.provider, index);
+      const providerLabel = epoch.provider === 'claude' ? 'Claude' : 'Codex';
+      add(
+        zh
+          ? `${providerLabel} 本地匿名账号周期 ${index}（${epoch.itemCount} 项）`
+          : `${providerLabel} local anonymous account epoch ${index} (${epoch.itemCount})`,
+        {
+          provider: epoch.provider,
+          accountFingerprint: epoch.accountFingerprint,
+        },
+        epoch.itemCount,
+        epoch.oldestAt,
+        epoch.newestAt,
+        epoch.provider,
+      );
+    }
+    return result;
+  }
+
+  private quotaObservationRevision(): string {
+    return createHash('sha256')
+      .update(JSON.stringify(this.quotaObservationStore.observations))
+      .digest('hex');
+  }
+
+  private async buildLocalDataInventory(
+    client: LocalDataClientSummary,
+  ): Promise<LocalDataInventory> {
+    const zh = I18n.getLocale() === 'zh-CN';
+    const local = (english: string, chinese: string): string =>
+      zh ? chinese : english;
+    const indexPath = path.join(this.context.globalStorageUri.fsPath, 'codex-index-v1.json');
+    const quotaPath = path.join(this.context.globalStorageUri.fsPath, QUOTA_OBSERVATION_FILE);
+    const [indexFile, quotaFile] = await Promise.all([
+      this.localFileFamilyInventory(indexPath, 'codex-index'),
+      this.localFileFamilyInventory(quotaPath, 'quota-observations'),
+    ]);
+    const stateKeys = this.extensionGlobalStateKeys();
+    const legacyQuotaKeys = stateKeys.filter((key) =>
+      key.startsWith(LEGACY_QUOTA_PREFIX) || key.startsWith(LEGACY_WEEKLY_PREFIX),
+    );
+    const sharingSettingKeys = new Set([
+      'ccu.setting.showHeatmap',
+      'ccu.setting.enableShareCard',
+    ]);
+    const ownedSettingKeys = new Set(OWNED_SETTING_GLOBAL_STATE_KEYS);
+    const preferenceKeys = stateKeys.filter((key) =>
+      (ownedSettingKeys.has(key) &&
+        !sharingSettingKeys.has(key) &&
+        key !== 'ccu.setting.advice.apiKey') ||
+      [
+        'ccu.lastSeenVersion',
+        'ccu.codex.backgroundWork.v1',
+        'ccu.migrated.dashboardAutoRefresh',
+        'ccu.migrated.showScopedWeekly',
+        LOCAL_DATA_PENDING_CLIENT_RESET_KEY,
+        'ccu.quota.migratedCodexIndex.v2',
+        'ccu.settingsMigrated.v1',
+      ].includes(key),
+    );
+    const saltKeys = stateKeys.filter((key) =>
+      key === QUOTA_FINGERPRINT_SALT_KEY || key === 'ccu.codex.machineSalt',
+    );
+    const sharingKeys = stateKeys.filter((key) =>
+      key === 'ccu.heatmapRepo' ||
+      key === 'ccu.heatmapPath' ||
+      sharingSettingKeys.has(key),
+    );
+    const adviceSummary = this.webviewProvider.adviceLocalDataInventorySummary();
+    const quotaRange = finiteTimestampRange(
+      this.quotaObservationStore.observations.map((item) => item.observedAt),
+    );
+    const byokConfigured = this.settings.snapshot().some((item) =>
+      item.key === 'advice.apiKey' && item.configured === true,
+    );
+    const rows: LocalDataInventoryRow[] = [
+      {
+        id: 'R1',
+        category: local('R1 · Claude provider-owned source logs', 'R1 · Claude 自有源日志'),
+        locationClass: local('Claude Code data directory (read-only source)', 'Claude Code 数据目录（只读源）'),
+        schema: 'provider-owned JSONL',
+        approximateBytes: null,
+        itemCount: null,
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('None by default; exact preview only for separately consented advice', '默认无；仅另行同意的建议会发送精确预览内容'),
+        clearability: local('Never touched by these controls; opt-in Session Actions is separate', '这些控制绝不触碰；另行启用的会话操作相互独立'),
+      },
+      {
+        id: 'R2',
+        category: local('R2 · Codex provider-owned source logs', 'R2 · Codex 自有源日志'),
+        locationClass: local('Codex home sessions/archives (read-only source)', 'Codex home 会话/归档（只读源）'),
+        schema: 'provider-owned JSONL',
+        approximateBytes: null,
+        itemCount: null,
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('None', '无'),
+        clearability: local('Never cleared by this extension', '插件绝不清除'),
+      },
+      {
+        id: 'P1',
+        category: local('P1 · Codex incremental index', 'P1 · Codex 增量索引'),
+        locationClass: local('Extension global storage / codex index', '插件全局存储 / Codex 索引'),
+        schema: 'internal schema 3',
+        ...indexFile,
+        networkInteraction: local('None', '无'),
+        clearability: local('Clear and rebuild from R2', '清除后从 R2 重建'),
+      },
+      {
+        id: 'P2',
+        category: local('P2 · Quota observation history', 'P2 · 额度观测历史'),
+        locationClass: local('Extension global storage / quota observations', '插件全局存储 / 额度观测'),
+        schema: 'schema 2',
+        approximateBytes: quotaFile.approximateBytes,
+        itemCount: this.quotaObservationStore.observations.length,
+        ...quotaRange,
+        networkInteraction: local('Claude official quota request; Codex local structured events', 'Claude 官方额度请求；Codex 本地结构化事件'),
+        clearability: local('Clear by provider, anonymous account epoch, or all', '按供应商、匿名账号 epoch 或全部清除'),
+      },
+      {
+        id: 'P3-P4',
+        category: local('P3/P4 · Legacy quota migration inputs', 'P3/P4 · 旧版额度迁移输入'),
+        locationClass: local('Extension globalState (legacy, migration-only)', '插件 globalState（旧版，仅迁移）'),
+        schema: 'legacy',
+        ...this.globalStateAggregate(legacyQuotaKeys),
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('None', '无'),
+        clearability: local('Imported transactionally, then removed; included in clear-all', '事务导入后删除；纳入清除全部'),
+      },
+      {
+        id: 'P5',
+        category: local('P5 · Codex legacy quota migration input', 'P5 · Codex 旧额度迁移输入'),
+        locationClass: local('Embedded in the P1 Codex index (migration-only)', '嵌入 P1 Codex 索引（仅迁移）'),
+        schema: 'legacy quotaHistory + exact migration marker',
+        approximateBytes: null,
+        itemCount: this.context.globalState.get<boolean>(QUOTA_P5_MIGRATION_KEY) === true
+          ? 0
+          : null,
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('None', '无'),
+        clearability: local('Migrated once into P2; P1 rebuild never deletes migrated P2 history', '一次性迁入 P2；重建 P1 不删除已迁移的 P2 历史'),
+      },
+      {
+        id: 'P6',
+        category: local('P6 · Extension preferences and migration state', 'P6 · 插件偏好与迁移状态'),
+        locationClass: local('VS Code configuration + extension globalState', 'VS Code 配置 + 插件 globalState'),
+        schema: 'typed settings + versioned flags',
+        ...this.globalStateAggregate(preferenceKeys),
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('VS Code Settings Sync may apply to configuration', '配置可能参与 VS Code Settings Sync'),
+        clearability: local('Reset settings or clear all extension-derived data', '重置设置或清除全部插件派生数据'),
+      },
+      {
+        id: 'P7',
+        category: local('P7 · Machine-local pseudonymization material', 'P7 · 本机匿名化材料'),
+        locationClass: local('Extension globalState', '插件 globalState'),
+        schema: 'random salts / HMAC v1',
+        approximateBytes: null,
+        itemCount: saltKeys.length,
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('Never', '永不'),
+        clearability: local('Included in clear-all; invalidates prior local fingerprints', '纳入清除全部；旧本机 fingerprint 随即失效'),
+      },
+      {
+        id: 'P8',
+        category: local('P8 · BYOK advice credential', 'P8 · BYOK 建议凭证'),
+        locationClass: 'VS Code SecretStorage',
+        schema: 'host SecretStorage',
+        approximateBytes: null,
+        itemCount: byokConfigured ? 1 : 0,
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('Only to the configured endpoint after explicit Send', '仅在明确点击发送后用于所配置端点'),
+        clearability: local('Clear BYOK secret or clear all; value is never inventoried', '清除 BYOK 密钥或清除全部；清单绝不读取值'),
+      },
+      {
+        id: 'P9',
+        category: local('P9 · Advice-effectiveness ledger', 'P9 · 建议效果台账'),
+        locationClass: local('Extension globalState', '插件 globalState'),
+        schema: 'schema 3',
+        ...adviceSummary,
+        networkInteraction: local('Only exact previewed payload after explicit Send', '仅在明确点击发送后发送精确预览载荷'),
+        clearability: local('Clear Advice Data', '清除建议数据'),
+      },
+      {
+        id: 'P10',
+        category: local('P10 · Dashboard UI preferences', 'P10 · 仪表板界面偏好'),
+        locationClass: local('Webview state + allowlisted localStorage keys', 'Webview 状态 + 白名单 localStorage 键'),
+        schema: 'ephemeral UI state',
+        approximateBytes: null,
+        itemCount: client.uiPreferenceKeys + client.webviewStateFields,
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('Never', '永不'),
+        clearability: local('Reset UI State', '重置界面状态'),
+      },
+      {
+        id: 'P11',
+        category: local('P11 · Heatmap/share preferences', 'P11 · 热力图/分享偏好'),
+        locationClass: local('Webview localStorage + extension globalState', 'Webview localStorage + 插件 globalState'),
+        schema: 'bounded title/range/privacy + destination strings',
+        approximateBytes: this.globalStateAggregate(sharingKeys).approximateBytes,
+        itemCount: sharingKeys.length + client.sharingPreferenceKeys,
+        oldestAt: null,
+        newestAt: null,
+        networkInteraction: local('Local export: none; GitHub publish: explicit confirmed action only', '本地导出：无；GitHub 发布：仅明确确认的动作'),
+        clearability: local('Reset Sharing Preferences', '重置分享偏好'),
+      },
+    ];
+    return {
+      schemaVersion: 1,
+      generatedAt: Date.now(),
+      rows,
+      quotaScopes: this.buildQuotaScopeOptions(),
+      exclusions: zh
+        ? [
+            'Claude 自有源日志',
+            'Codex 自有源日志',
+            '供应商自有 OAuth 凭证与 cookie',
+            '外部账号额度与订阅状态',
+          ]
+        : [...LOCAL_DATA_SOURCE_EXCLUSIONS],
+    };
+  }
+
+  private async clearQuotaHistoryFromCommandPalette(): Promise<void> {
+    const inventory = await this.buildLocalDataInventory({
+      uiPreferenceKeys: 0,
+      webviewStateFields: 0,
+      sharingPreferenceKeys: 0,
+    });
+    const picked = await vscode.window.showQuickPick(
+      inventory.quotaScopes.map((scope) => ({
+        label: scope.label,
+        description: `${scope.itemCount} observations`,
+        token: scope.token,
+      })),
+      { placeHolder: 'Select the exact quota-history scope to clear' },
+    );
+    if (!picked) return;
+    await this.runLocalDataActionInteractive('clear-quota-history', picked.token);
+  }
+
+  private serializeLocalDataAction<T>(operation: () => Promise<T>): Promise<T> {
+    const result = this.localDataActionWrite.then(operation, operation);
+    this.localDataActionWrite = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  /**
+   * Prevent a deliberate P2 clear from being undone by one-shot legacy
+   * migration on the next activation. Account-specific Claude legacy inputs
+   * cannot be mapped safely from their old path suffix, so they are only
+   * removed for a provider-wide/all clear; such inputs normally disappeared
+   * immediately after their original durable migration.
+   */
+  private async clearLegacyQuotaMigrationInputs(
+    scope: ResolvedQuotaScope,
+  ): Promise<void> {
+    const broadScope = scope.accountFingerprint === undefined;
+    const clearsClaude = scope.provider === undefined || scope.provider === 'claude';
+    const clearsCodex = scope.provider === undefined || scope.provider === 'codex';
+    if (broadScope && clearsClaude) {
+      const legacyKeys = this.extensionGlobalStateKeys().filter((key) =>
+        key.startsWith(LEGACY_QUOTA_PREFIX) ||
+        key.startsWith(LEGACY_WEEKLY_PREFIX),
+      );
+      for (const key of legacyKeys) {
+        await this.context.globalState.update(key, undefined);
+      }
+    }
+    if (broadScope && clearsCodex) {
+      // A clear is the user's decision to discard legacy P5 quota history too.
+      // Keep the marker so a surviving P1 cannot repopulate P2 later.
+      await this.context.globalState.update(QUOTA_P5_MIGRATION_KEY, true);
+    }
+  }
+
+  private assertScopedQuotaMigrationIsResolved(scope: ResolvedQuotaScope): void {
+    if (scope.accountFingerprint === undefined) return;
+    if (scope.provider === 'claude') {
+      const unresolved = this.extensionGlobalStateKeys().some((key) =>
+        key.startsWith(LEGACY_QUOTA_PREFIX) ||
+        key.startsWith(LEGACY_WEEKLY_PREFIX),
+      );
+      if (unresolved) throw new QuotaObservationScopedMigrationBlockedError();
+    }
+    if (
+      scope.provider === 'codex' &&
+      this.context.globalState.get<boolean>(QUOTA_P5_MIGRATION_KEY) !== true
+    ) {
+      throw new QuotaObservationScopedMigrationBlockedError();
+    }
+  }
+
+  private async resetSharingPreferencesHost(): Promise<void> {
+    await this.settings.resetSharingOwnedData();
+    await this.context.globalState.update('ccu.heatmapRepo', undefined);
+    await this.context.globalState.update('ccu.heatmapPath', undefined);
+    this.webviewProvider.clearSharingRuntimeState();
+  }
+
+  private pendingClientReset(): LocalDataClientAction | undefined {
+    const value = this.context.globalState.get<unknown>(
+      LOCAL_DATA_PENDING_CLIENT_RESET_KEY,
+    );
+    return value === 'reset-ui-state' ||
+      value === 'reset-sharing-preferences' ||
+      value === 'clear-all-client-state'
+      ? value
+      : undefined;
+  }
+
+  private replayPendingClientReset(): Promise<void> {
+    const run = this.pendingClientResetReplay
+      .catch(() => undefined)
+      .then(async () => {
+        const pending = this.pendingClientReset();
+        if (!pending) return;
+        if (await this.webviewProvider.requestClientLocalDataAction(pending)) {
+          await this.context.globalState.update(
+            LOCAL_DATA_PENDING_CLIENT_RESET_KEY,
+            undefined,
+          );
+        }
+      });
+    this.pendingClientResetReplay = run;
+    return run;
+  }
+
+  private async runLocalDataActionInteractive(
+    action: LocalDataAction,
+    quotaScopeToken?: string,
+  ): Promise<LocalDataActionResult> {
+    return this.serializeLocalDataAction(async () => {
+      const locale = I18n.getLocale();
+      const zh = locale === 'zh-CN';
+      let quotaSelection: {
+        scope: ResolvedQuotaScope;
+        label: string;
+        createdAt: number;
+        revision: string;
+        token: string;
+      } | undefined;
+      if (action === 'clear-quota-history') {
+        const selected = quotaScopeToken
+          ? this.localDataQuotaScopes.get(quotaScopeToken)
+          : undefined;
+        if (
+          !selected ||
+          Date.now() - selected.createdAt > LOCAL_DATA_QUOTA_SCOPE_TTL_MS ||
+          selected.revision !== this.quotaObservationRevision()
+        ) {
+          return {
+            ok: false,
+            message: zh ? '额度历史范围已过期，请刷新清单后重试。' : 'The quota-history scope expired. Refresh the inventory and try again.',
+          };
+        }
+        quotaSelection = { ...selected, token: quotaScopeToken as string };
+      }
+      const title = localDataActionTitle(action, locale);
+      const targets = LOCAL_DATA_ACTION_TARGETS[action].map((target) => `• ${target}`);
+      if (quotaSelection) targets.unshift(`• ${quotaSelection.label}`);
+      const preflightNotes: string[] = [];
+      if (action === 'clear-all-derived-data') {
+        targets.push(...LOCAL_DATA_EXACT_GLOBAL_STATE_KEYS.map((key) =>
+          `• globalState/${key}`,
+        ));
+        targets.push(...REGISTERED_CONFIGURATION_SETTING_KEYS.map((key) =>
+          `• configuration/claudeCodeUsage.${key}`,
+        ));
+        const discoveredMigrationKeys = this.extensionGlobalStateKeys().filter((key) =>
+          LOCAL_DATA_GLOBAL_STATE_PREFIXES.some((prefix) => key.startsWith(prefix)),
+        );
+        targets.push(...discoveredMigrationKeys.map((key) => `• globalState/${key}`));
+        const registered = new Set(REGISTERED_CONFIGURATION_SETTING_KEYS);
+        const inspectedOnly = KNOWN_CONFIGURATION_SETTING_KEYS.filter((key) =>
+          !registered.has(key),
+        );
+        preflightNotes.push(
+          zh
+            ? `仅预检（若存在则在任何删除前停止）：${inspectedOnly.map((key) => `claudeCodeUsage.${key}`).join(', ')}`
+            : `Preflight only (if present, stop before any deletion): ${inspectedOnly.map((key) => `claudeCodeUsage.${key}`).join(', ')}`,
+        );
+      }
+      const exclusions = LOCAL_DATA_SOURCE_EXCLUSIONS.map((target) => `• ${target}`);
+      const proceed = zh ? '继续' : 'Continue';
+      const detail = [
+        zh ? '精确目标：' : 'Exact targets:',
+        ...targets,
+        ...(preflightNotes.length > 0 ? ['', ...preflightNotes] : []),
+        '',
+        zh ? '始终排除：' : 'Always excluded:',
+        ...exclusions,
+      ].join('\n');
+      const picked = await vscode.window.showWarningMessage(
+        title,
+        { modal: true, detail },
+        proceed,
+      );
+      if (picked !== proceed) {
+        return {
+          ok: false,
+          cancelled: true,
+          message: zh ? '已取消；未更改任何本地数据。' : 'Cancelled; no local data was changed.',
+        };
+      }
+      if (quotaSelection) {
+        const current = this.localDataQuotaScopes.get(quotaSelection.token);
+        this.localDataQuotaScopes.delete(quotaSelection.token);
+        if (
+          current !== undefined &&
+          (
+            current.createdAt !== quotaSelection.createdAt ||
+            current.revision !== quotaSelection.revision ||
+            Date.now() - current.createdAt > LOCAL_DATA_QUOTA_SCOPE_TTL_MS ||
+            current.revision !== this.quotaObservationRevision()
+          )
+        ) {
+          return {
+            ok: false,
+            message: zh ? '额度历史在确认期间发生变化，请刷新清单后重试。' : 'Quota history changed while confirming. Refresh the inventory and try again.',
+          };
+        }
+        if (!current) {
+          return {
+            ok: false,
+            message: zh ? '额度历史范围已使用或过期，请刷新后重试。' : 'The quota-history scope was already used or expired. Refresh and try again.',
+          };
+        }
+      }
+      let result: LocalDataActionResult;
+      try {
+        result = await this.executeLocalDataAction(action, quotaSelection?.scope);
+      } catch (error) {
+        if (error instanceof SettingsLocalDataClearError) {
+          result = {
+            ok: false,
+            message: zh
+              ? '检测到当前清单无法通过 VS Code API 安全删除的旧版 settings.json 项；尚未删除任何设置或密钥，请先手动移除这些旧项后重试。'
+              : 'Legacy settings.json entries cannot be removed safely through the current VS Code API. No setting or secret was deleted; remove those legacy entries manually, then retry.',
+          };
+        } else if (
+          error instanceof QuotaObservationScopedClearBlockedError ||
+          error instanceof QuotaObservationScopedMigrationBlockedError
+        ) {
+          result = {
+            ok: false,
+            message: zh
+              ? '所选按账号/供应商范围无法与隔离或待迁移的额度数据安全对应；尚未做范围删除。请选择“全部额度观测”并再次明确确认。'
+              : 'The selected account/provider scope cannot be mapped safely while quarantined or pending-migration quota data exists. Nothing was scope-cleared; choose All quota observations and confirm again.',
+          };
+        } else {
+          result = {
+            ok: false,
+            message: zh ? '操作未完成；源日志和账号数据均未更改。' : 'The action did not complete; source logs and account data were not changed.',
+          };
+        }
+      }
+      if (result.clientAction) {
+        let tombstoneStored = false;
+        try {
+          await this.context.globalState.update(
+            LOCAL_DATA_PENDING_CLIENT_RESET_KEY,
+            result.clientAction,
+          );
+          tombstoneStored = true;
+        } catch {
+          // Still attempt the live client clear. A successful verified ACK is
+          // sufficient even when the recovery tombstone could not be written.
+        }
+        const clientResetOk = await this.webviewProvider.requestClientLocalDataAction(
+          result.clientAction,
+        );
+        if (clientResetOk && tombstoneStored) {
+          try {
+            await this.context.globalState.update(
+              LOCAL_DATA_PENDING_CLIENT_RESET_KEY,
+              undefined,
+            );
+          } catch {
+            // A stale tombstone only replays the same exact idempotent reset.
+          }
+        }
+        result = clientResetOk
+          ? { ...result, clientAction: undefined }
+          : {
+              ok: false,
+              message: zh
+                ? tombstoneStored
+                  ? '宿主数据已处理，但 Webview 未确认本地状态重置；已记录待处理重置，下次打开面板会自动重试。'
+                  : '宿主数据已处理，但 Webview 未确认本地状态重置，且无法写入重试标记；请保持面板打开后重试。'
+                : tombstoneStored
+                  ? 'Host data was handled, but the Webview did not confirm its local reset. A pending reset was recorded and will retry when the panel next opens.'
+                  : 'Host data was handled, but the Webview did not confirm its local reset and a retry marker could not be stored. Keep the panel open and retry.',
+            };
+      }
+      if (result.ok) {
+        this.webviewProvider.requestLocalDataInventoryRefresh();
+      }
+      if (!this.webviewProvider) return result;
+      void vscode.window.showInformationMessage(result.message);
+      return result;
+    });
+  }
+
+  private async executeLocalDataAction(
+    action: LocalDataAction,
+    quotaScope: ResolvedQuotaScope | undefined,
+  ): Promise<LocalDataActionResult> {
+    const zh = I18n.getLocale() === 'zh-CN';
+    switch (action) {
+      case 'rebuild-codex-index':
+        await this.clearCodexDerivedIndex(true);
+        return { ok: true, message: zh ? 'Codex 派生索引已安全重建。' : 'The Codex derived index was safely rebuilt.' };
+      case 'clear-quota-history':
+        this.stopQuotaColdRetry('settings-change');
+        await this.cancelQuotaNetworks('cancelled');
+        this.assertScopedQuotaMigrationIsResolved(quotaScope ?? {});
+        this.quotaObservationStore = await this.quotaObservationRepository.clear(quotaScope ?? {});
+        await this.clearLegacyQuotaMigrationInputs(quotaScope ?? {});
+        this.refreshQuotaObservationViews();
+        return { ok: true, message: zh ? '所选额度观测历史已清除；官方额度未受影响。' : 'The selected quota observations were cleared; provider quotas were not changed.' };
+      case 'clear-advice-data': {
+        const cleared = await this.webviewProvider.clearAdviceLocalData();
+        if (!cleared) throw new Error('advice-clear-failed');
+        for (const key of LEGACY_ADVICE_LOCAL_STATE_KEYS) {
+          await this.context.globalState.update(key, undefined);
+        }
+        return { ok: true, message: zh ? '本地建议台账已清除。' : 'The local advice ledger was cleared.' };
+      }
+      case 'reset-ui-state':
+        return {
+          ok: true,
+          message: zh ? '仪表板界面状态已重置。' : 'Dashboard UI state was reset.',
+          clientAction: 'reset-ui-state',
+        };
+      case 'reset-sharing-preferences':
+        await this.resetSharingPreferencesHost();
+        return {
+          ok: true,
+          message: zh ? '分享偏好和目标字符串已重置。' : 'Sharing preferences and destination strings were reset.',
+          clientAction: 'reset-sharing-preferences',
+        };
+      case 'clear-byok-secret':
+        this.webviewProvider.invalidatePreparedAiRequests();
+        await this.cancelAdviceNetworks('cancelled');
+        await this.settings.clearByokOwnedData();
+        return { ok: true, message: zh ? 'BYOK 建议密钥已从 SecretStorage 清除。' : 'The BYOK advice secret was cleared from SecretStorage.' };
+      case 'clear-all-derived-data':
+        return this.clearAllExtensionDerivedData();
+    }
+  }
+
+  private async clearCodexDerivedIndex(rebuild: boolean): Promise<void> {
+    const generation = ++this.configurationGeneration;
+    this.stopCodexWatching('settings-change');
+    this.codexWorkerCancellationRequested = true;
+    await this.waitForCodexProviderRetirements();
+    const retiring = this.codexProvider;
+    await this.cancelCodexProviderAndWait(retiring);
+    while (this.activeCodexRefreshes.size > 0) {
+      await Promise.allSettled([...this.activeCodexRefreshes]);
+    }
+    await retiring.dispose();
+    await this.releaseCodexOwnership('settings-change');
+    const indexPath = path.join(this.context.globalStorageUri.fsPath, 'codex-index-v1.json');
+    await this.removeDerivedFileFamilyWithLease(indexPath, 'codex-index');
+    this.codexView = null;
+    this.codexInsights = emptyCodexScopedInsights();
+    this.codexHasData = false;
+    this.codexRefreshing = false;
+    this.codexProgress = null;
+    this.codexBackgroundState = createBackgroundWorkState({
+      measurementVersion: ClaudeCodeUsageExtension.CODEX_BACKGROUND_MEASUREMENT_VERSION,
+      reason: 'first-index',
+      now: Date.now(),
+    });
+    await this.saveCodexBackgroundState();
+    this.codexProvider = this.createCodexProvider(this.getConfiguration());
+    this.syncProviderUi();
+    if (
+      rebuild &&
+      !this.disposed &&
+      generation === this.configurationGeneration &&
+      this.windowActivity.focused &&
+      this.getConfiguration().codexEnabled
+    ) {
+      await this.refreshCodexData('manual');
+      if (!this.disposed && generation === this.configurationGeneration) {
+        this.startCodexWatching();
+      }
+    }
+  }
+
+  private async clearAllExtensionDerivedData(): Promise<LocalDataActionResult> {
+    const zh = I18n.getLocale() === 'zh-CN';
+    this.settings.preflightResetAllOwnedData();
+    this.clearingAllLocalData = true;
+    // The in-memory fingerprint salt and repositories deliberately stay
+    // immutable. Fail closed after any clear-all attempt until a reload creates
+    // fresh runtime objects from the now-empty stores.
+    this.localDataClearedRequiresReload = true;
+    try {
+      await this.drainInitializationWritesForClear();
+      this.stopQuotaColdRetry('settings-change');
+      this.stopAutoRefresh('settings-change');
+      this.stopFileWatching('settings-change');
+      this.stopCredentialsWatching('settings-change');
+      await Promise.all([
+        this.cancelAdviceNetworks('cancelled'),
+        this.cancelQuotaNetworks('cancelled'),
+      ]);
+      await this.settings.resetAllOwnedData();
+      await this.clearCodexDerivedIndex(false);
+      this.quotaObservationStore = await this.quotaObservationRepository.clear({});
+      await this.webviewProvider.clearAdviceLocalData();
+      this.webviewProvider.clearSharingRuntimeState();
+      const keys = this.extensionGlobalStateKeys().filter((key) =>
+        LOCAL_DATA_EXACT_GLOBAL_STATE_KEYS.includes(key as typeof LOCAL_DATA_EXACT_GLOBAL_STATE_KEYS[number]) ||
+        LOCAL_DATA_GLOBAL_STATE_PREFIXES.some((prefix) => key.startsWith(prefix)) ||
+        LEGACY_ADVICE_LOCAL_STATE_KEYS.includes(key),
+      );
+      for (const key of keys) {
+        await this.context.globalState.update(key, undefined);
+      }
+      await this.verifyClearAllPostcondition();
+      this.quotaObservationStore = createEmptyQuotaObservationStore();
+      this.claudeWeeklyQuotaHistory = [];
+      this.cache.usageLimits = null;
+      this.cache.usageLimitsLastUpdate = new Date(0);
+      this.cache.records = [];
+      this.cache.contentAnalysis = null;
+      this.cache.claudeIndex = createClaudeUsageIndex();
+      this.codexView = null;
+      this.codexInsights = emptyCodexScopedInsights();
+      this.codexHasData = false;
+      this.refreshQuotaObservationViews();
+      this.syncProviderUi();
+      return {
+        ok: true,
+        message: zh
+          ? '插件派生数据已按清单清除；Claude/Codex 源日志和账号凭证未更改。请重载窗口以重新初始化。'
+          : 'Extension-derived data was cleared as listed; Claude/Codex source logs and provider credentials were unchanged. Reload the window to reinitialize.',
+        clientAction: 'clear-all-client-state',
+      };
+    } finally {
+      this.clearingAllLocalData = false;
+    }
+  }
+
+  private async verifyClearAllPostcondition(): Promise<void> {
+    const residualState = this.extensionGlobalStateKeys().filter((key) =>
+      LOCAL_DATA_EXACT_GLOBAL_STATE_KEYS.includes(key as typeof LOCAL_DATA_EXACT_GLOBAL_STATE_KEYS[number]) ||
+      LOCAL_DATA_GLOBAL_STATE_PREFIXES.some((prefix) => key.startsWith(prefix)) ||
+      LEGACY_ADVICE_LOCAL_STATE_KEYS.includes(key),
+    );
+    if (residualState.length > 0) {
+      throw new Error('local-data-clear:global-state-postcondition-failed');
+    }
+    const indexPath = path.join(this.context.globalStorageUri.fsPath, 'codex-index-v1.json');
+    if ((await this.derivedFileFamilyNames(indexPath, 'codex-index')).length > 0) {
+      throw new Error('local-data-clear:codex-index-postcondition-failed');
+    }
+    const quotaPath = path.join(
+      this.context.globalStorageUri.fsPath,
+      QUOTA_OBSERVATION_FILE,
+    );
+    const quotaNames = await this.derivedFileFamilyNames(
+      quotaPath,
+      'quota-observations',
+    );
+    if (quotaNames.some((name) => name !== QUOTA_OBSERVATION_FILE)) {
+      throw new Error('local-data-clear:quota-auxiliary-postcondition-failed');
+    }
+    const quota = await loadQuotaObservationStore(quotaPath);
+    if (quota.disposition !== 'valid' || quota.store.observations.length > 0) {
+      throw new Error('local-data-clear:quota-postcondition-failed');
+    }
   }
 
   private async refreshPricing(): Promise<void> {
@@ -1588,7 +2558,7 @@ export class ClaudeCodeUsageExtension {
   }
 
   private async refreshCodexData(trigger: RefreshTrigger): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || this.localDataClearedRequiresReload) return;
     const generation = this.configurationGeneration;
     try {
       await this.waitForCodexProviderRetirements();
@@ -2119,7 +3089,11 @@ export class ClaudeCodeUsageExtension {
   }
 
   private onConfigurationChanged(): void {
-    if (this.disposed) return;
+    if (
+      this.disposed ||
+      this.clearingAllLocalData ||
+      this.localDataClearedRequiresReload
+    ) return;
     const generation = ++this.configurationGeneration;
     // Any endpoint/model/key/consent-affecting configuration change invalidates
     // a visible preview before a later click could send it.
@@ -2209,7 +3183,7 @@ export class ClaudeCodeUsageExtension {
    * filesystems do not support recursive watching).
    */
   private async startFileWatching(): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || this.localDataClearedRequiresReload) return;
     const requestGeneration = ++this.fileWatcherGeneration;
     if (!this.windowActivity.focused) {
       this.stopFileWatching('window-blur');
@@ -2313,7 +3287,7 @@ export class ClaudeCodeUsageExtension {
   }
 
   private startCodexWatching(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.localDataClearedRequiresReload) return;
     if (!this.windowActivity.focused) {
       this.stopCodexWatching('window-blur');
       return;
@@ -2411,7 +3385,7 @@ export class ClaudeCodeUsageExtension {
    * watch — those still self-correct on the next refresh tick.
    */
   private startCredentialsWatching(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.localDataClearedRequiresReload) return;
     if (!this.windowActivity.focused) {
       this.stopCredentialsWatching('window-blur');
       return;
@@ -2557,7 +3531,7 @@ export class ClaudeCodeUsageExtension {
   }
 
   private resumeRecurringWork(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.localDataClearedRequiresReload) return;
     this.stopFirstBackfillBlurDeadline('cancelled');
     this.startAutoRefresh();
     void this.startFileWatching();
@@ -2653,7 +3627,7 @@ export class ClaudeCodeUsageExtension {
   }
 
   private startAutoRefresh(): void {
-    if (this.disposed) return;
+    if (this.disposed || this.localDataClearedRequiresReload) return;
     this.stopAutoRefresh();
     if (!this.windowActivity.focused) {
       return;
@@ -2765,7 +3739,11 @@ export class ClaudeCodeUsageExtension {
   }
 
   private async maybeFetchUsageLimits(config: ExtensionConfig): Promise<ClaudeApiUsageResponse | null> {
-    if (this.disposed || !config.usageLimitTracking) {
+    if (
+      this.disposed ||
+      this.localDataClearedRequiresReload ||
+      !config.usageLimitTracking
+    ) {
       return null;
     }
     const now = Date.now();
@@ -2876,7 +3854,7 @@ export class ClaudeCodeUsageExtension {
     forceReload: boolean = false,
     trigger: RefreshTrigger = 'poll'
   ): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed || this.localDataClearedRequiresReload) return;
     // `watch` reaches this shared path only from the Claude projects watcher.
     // Codex has its own watcher and quiet-delay setting, so refreshing it here
     // would bypass codex.fileWatchSeconds whenever Claude writes a JSONL line.

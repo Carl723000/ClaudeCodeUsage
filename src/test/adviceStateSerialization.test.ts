@@ -11,9 +11,9 @@ import {
 } from '../adviceEffectiveness/versionedPersistence';
 
 class ControlledStorage implements AdviceLocalStateStorage {
-  public value: AdviceLocalState;
+  public value: AdviceLocalState | undefined;
   public readonly pending: Array<{
-    value: AdviceLocalState;
+    value: AdviceLocalState | undefined;
     resolve: () => void;
   }> = [];
 
@@ -29,9 +29,9 @@ class ControlledStorage implements AdviceLocalStateStorage {
     assert.equal(key, ADVICE_LOCAL_STATE_KEY);
     return new Promise((resolve) => {
       this.pending.push({
-        value: value as AdviceLocalState,
+        value: value as AdviceLocalState | undefined,
         resolve: () => {
-          this.value = value as AdviceLocalState;
+          this.value = value as AdviceLocalState | undefined;
           resolve();
         },
       });
@@ -110,13 +110,14 @@ test('clear is serialized after an older consent write and remains the final dur
   storage.releaseNext();
   await Promise.all([consent, clear]);
 
-  assert.equal(storage.value.featureMode, 'enabled');
-  assert.equal(storage.value.aggregateConsent, 'not-granted');
-  assert.equal(storage.value.promptSampleConsent, 'not-granted');
-  assert.deepEqual(storage.value.feedback, []);
-  assert.deepEqual(storage.value.suppression, []);
-  assert.deepEqual(storage.value.comparablePairs, []);
-  assert.deepEqual(storage.value.comparisonResults, []);
+  assert.equal(storage.value, undefined, 'the current ledger key is removed');
+  assert.equal(provider.adviceLocalState.featureMode, 'enabled');
+  assert.equal(provider.adviceLocalState.aggregateConsent, 'not-granted');
+  assert.equal(provider.adviceLocalState.promptSampleConsent, 'not-granted');
+  assert.deepEqual(provider.adviceLocalState.feedback, []);
+  assert.deepEqual(provider.adviceLocalState.suppression, []);
+  assert.deepEqual(provider.adviceLocalState.comparablePairs, []);
+  assert.deepEqual(provider.adviceLocalState.comparisonResults, []);
 });
 
 test('discarded optimizer request cannot install a stale result after await', async () => {

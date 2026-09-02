@@ -22,7 +22,9 @@ test('Compare opens with the combined Claude + Codex heatmap and privacy-bounded
 
 test('combined share preferences stay local and every export action is explicit', async ({ page }) => {
   await openCompare(page, { fixture: 'combined-heatmap', locale: 'en' });
-  expect(await page.evaluate(() => window.__ccuPostedMessages)).toEqual([]);
+  expect(await page.evaluate(() => window.__ccuPostedMessages.filter(
+    (message) => message.command !== 'localDataClientReady',
+  ))).toEqual([]);
 
   await page.locator('#combinedHeatmapTitle').fill('My local activity');
   await page.locator('#combinedHeatmapRange').selectOption('30d');
@@ -36,7 +38,9 @@ test('combined share preferences stay local and every export action is explicit'
     title: localStorage.getItem('ccu.combinedHeatmap.title'),
     range: localStorage.getItem('ccu.combinedHeatmap.range'),
     privacy: localStorage.getItem('ccu.combinedHeatmap.privacyPreview'),
-    messages: window.__ccuPostedMessages,
+    messages: window.__ccuPostedMessages.filter(
+      (message) => message.command !== 'localDataClientReady',
+    ),
   }));
   expect(state).toMatchObject({ title: 'My local activity', range: '30d', privacy: 'false' });
   expect(state.messages).toEqual([

@@ -122,6 +122,46 @@
         "command": "claudeCodeUsage.previewWhatsNew",
         "title": "Preview What's New",
         "category": "Claude Code Usage"
+      },
+      {
+        "command": "claudeCodeUsage.manageLocalData",
+        "title": "Manage Local Data and Privacy",
+        "category": "Claude Code Usage"
+      },
+      {
+        "command": "claudeCodeUsage.rebuildCodexIndex",
+        "title": "Rebuild Codex Derived Index",
+        "category": "Claude Code Usage"
+      },
+      {
+        "command": "claudeCodeUsage.clearQuotaHistory",
+        "title": "Clear Quota Observation History…",
+        "category": "Claude Code Usage"
+      },
+      {
+        "command": "claudeCodeUsage.clearAdviceData",
+        "title": "Clear Local Advice Data…",
+        "category": "Claude Code Usage"
+      },
+      {
+        "command": "claudeCodeUsage.resetUiState",
+        "title": "Reset Dashboard UI State…",
+        "category": "Claude Code Usage"
+      },
+      {
+        "command": "claudeCodeUsage.resetSharingPreferences",
+        "title": "Reset Sharing Preferences…",
+        "category": "Claude Code Usage"
+      },
+      {
+        "command": "claudeCodeUsage.clearByokSecret",
+        "title": "Clear BYOK Advice Secret…",
+        "category": "Claude Code Usage"
+      },
+      {
+        "command": "claudeCodeUsage.clearAllDerivedData",
+        "title": "Clear All Extension-Derived Data…",
+        "category": "Claude Code Usage"
       }
     ]
   },

@@ -181,7 +181,9 @@ test('materialized Codex hourly detail sends no host message and survives a full
   await expect(page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`))
     .toHaveAttribute('aria-expanded', 'true');
   await expect(page.locator(`#month [data-codex-hourly-detail-row][data-date="${day}"]`)).toBeVisible();
-  expect(await page.evaluate(() => window.__ccuPostedMessages)).toEqual([]);
+  expect(await page.evaluate(() => window.__ccuPostedMessages.filter(
+    (message) => message.command !== 'localDataClientReady',
+  ))).toEqual([]);
 });
 
 test('a covered Codex date with no hourly token rows expands to an explicit empty state', async ({ page }) => {

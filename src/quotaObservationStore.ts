@@ -3,6 +3,7 @@ import {
   mkdir,
   open,
   readFile,
+  readdir,
   rename,
   unlink,
 } from 'node:fs/promises';
@@ -93,6 +94,12 @@ export interface QuotaObservationV2 {
   flags: QuotaObservationFlag[];
 }
 
+export interface QuotaObservationClearScope {
+  provider?: UsageProvider;
+  /** Internal machine-local HMAC. It must never cross into a Webview/export. */
+  accountFingerprint?: string;
+}
+
 export interface QuotaResetEventV2 {
   schemaVersion: 2;
   provider: UsageProvider;
@@ -126,6 +133,15 @@ export interface QuotaObservationLoadResult {
   store: QuotaObservationStoreV2;
   disposition: 'missing' | 'valid' | 'quarantined';
   quarantinePath?: string;
+}
+
+export class QuotaObservationScopedClearBlockedError extends Error {
+  readonly code = 'quota-scoped-clear-blocked-by-quarantine' as const;
+
+  constructor() {
+    super('quota-observation-clear:scoped-clear-blocked-by-quarantine');
+    this.name = 'QuotaObservationScopedClearBlockedError';
+  }
 }
 
 const PERIOD_TYPES = new Set<QuotaPeriodType>([
@@ -871,6 +887,34 @@ function cloneStore(store: QuotaObservationStoreV2): QuotaObservationStoreV2 {
   };
 }
 
+async function quotaObservationAuxiliaryNames(filePath: string): Promise<string[]> {
+  const directory = path.dirname(filePath);
+  const canonical = path.basename(filePath);
+  let names: string[];
+  try {
+    names = await readdir(directory);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw error;
+  }
+  const quarantinePattern = new RegExp(
+    `^${canonical.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.quarantine-\\d+-[a-f0-9]{8}$`,
+  );
+  const temporaryPattern = new RegExp(
+    `^\\.${canonical.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.\\d+\\.[a-f0-9]{12}\\.tmp$`,
+  );
+  return names.filter((name) => quarantinePattern.test(name) || temporaryPattern.test(name));
+}
+
+async function purgeQuotaObservationAuxiliaries(filePath: string): Promise<void> {
+  const directory = path.dirname(filePath);
+  for (const name of await quotaObservationAuxiliaryNames(filePath)) {
+    await unlink(path.join(directory, name)).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    });
+  }
+}
+
 export class QuotaObservationRepository {
   private state: QuotaObservationStoreV2 | undefined;
   private pending: Promise<void> = Promise.resolve();
@@ -911,6 +955,54 @@ export class QuotaObservationRepository {
         });
         if (JSON.stringify(next) !== JSON.stringify(current)) {
           await saveQuotaObservationStoreAtomic(this.filePath, next);
+        }
+        this.state = next;
+        return cloneStore(next);
+      } finally {
+        await lease.release();
+      }
+    });
+  }
+
+  /**
+   * Remove only observations selected by an exact provider/fingerprint scope.
+   * The same process-shared lease and atomic writer as append() prevent a
+   * clear from racing another Extension Host into resurrecting an older file.
+   */
+  clear(scope: QuotaObservationClearScope = {}): Promise<QuotaObservationStoreV2> {
+    return this.serialized(async () => {
+      const lease = await acquireCodexIndexLease(this.filePath);
+      try {
+        const loaded = await loadQuotaObservationStore(this.filePath, {
+          now: this.now(),
+        });
+        const clearAll = scope.provider === undefined &&
+          scope.accountFingerprint === undefined;
+        const auxiliaries = await quotaObservationAuxiliaryNames(this.filePath);
+        if (!clearAll && (loaded.disposition === 'quarantined' || auxiliaries.length > 0)) {
+          throw new QuotaObservationScopedClearBlockedError();
+        }
+        const current = loaded.store;
+        const observations = current.observations.filter((item) => {
+          const providerMatches = scope.provider === undefined ||
+            item.provider === scope.provider;
+          const accountMatches = scope.accountFingerprint === undefined ||
+            item.accountFingerprint === scope.accountFingerprint;
+          return !(providerMatches && accountMatches);
+        });
+        const next: QuotaObservationStoreV2 = {
+          schemaVersion: 2,
+          fingerprintAlgorithm: 'hmac-sha256-v1',
+          observations,
+        };
+        if (clearAll || observations.length !== current.observations.length) {
+          await saveQuotaObservationStoreAtomic(this.filePath, next);
+        }
+        if (clearAll) {
+          // Keep the canonical empty file. Another Extension Host that appends
+          // after this lease is released must extend that empty store instead
+          // of having its new write deleted by a second lease acquisition.
+          await purgeQuotaObservationAuxiliaries(this.filePath);
         }
         this.state = next;
         return cloneStore(next);

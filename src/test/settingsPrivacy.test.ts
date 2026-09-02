@@ -114,10 +114,9 @@ function fakeContext(options: {
 
 test('legacy plaintext BYOK migrates to SecretStorage and never enters a settings snapshot', async () => {
   const canary = 'sk-v2.3.1-privacy-canary';
-  activeConfiguration = fakeConfiguration({ global: canary, workspace: canary });
-  const folderConfiguration = fakeConfiguration({ folder: canary });
-  activeWorkspaceFolders = [{ uri: 'folder-a' }];
-  activeFolderConfigurations = new Map([['folder-a', folderConfiguration]]);
+  activeConfiguration = fakeConfiguration();
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
   const context = fakeContext({
     state: new Map([['ccu.setting.advice.apiKey', canary]]),
   });
@@ -127,11 +126,7 @@ test('legacy plaintext BYOK migrates to SecretStorage and never enters a setting
 
   assert.equal(context._secrets.get('claudeCodeUsage.secret.advice.apiKey'), canary);
   assert.equal(context._state.has('ccu.setting.advice.apiKey'), false);
-  assert.deepEqual(activeConfiguration.values, {
-    global: undefined,
-    workspace: undefined,
-  });
-  assert.equal(folderConfiguration.values.folder, undefined);
+  assert.equal(activeConfiguration.updates.length, 0);
   assert.equal(store.get('advice.apiKey'), canary, 'the extension host can still use the key');
   const apiKeyView = store.snapshot().find((entry) => entry.key === 'advice.apiKey');
   assert.equal(apiKeyView?.configured, true);
@@ -139,7 +134,7 @@ test('legacy plaintext BYOK migrates to SecretStorage and never enters a setting
   assert.doesNotMatch(JSON.stringify(store.snapshot()), /v2\.3\.1-privacy-canary/);
 });
 
-test('conflicting machine and workspace secrets fail closed without deleting plaintext', async () => {
+test('legacy settings.json secrets fail closed because the key is no longer registered', async () => {
   activeConfiguration = fakeConfiguration({
     global: 'sk-global-canary',
     workspace: 'sk-workspace-canary',
@@ -151,7 +146,7 @@ test('conflicting machine and workspace secrets fail closed without deleting pla
 
   await assert.rejects(
     () => store.initializeSecrets(),
-    /settings-secret-migration:legacy-secret-conflict/,
+    /settings-secret-migration:workspace-secret-requires-manual-migration/,
   );
 
   assert.equal(context._secrets.size, 0);
@@ -183,7 +178,7 @@ test('workspace-only secrets require explicit migration and every open folder is
 
 test('failed SecretStorage migration leaves legacy plaintext in place for recovery', async () => {
   const canary = 'sk-recovery-canary';
-  activeConfiguration = fakeConfiguration({ global: canary });
+  activeConfiguration = fakeConfiguration();
   activeWorkspaceFolders = [];
   activeFolderConfigurations = new Map();
   const context = fakeContext({
@@ -201,7 +196,7 @@ test('failed SecretStorage migration leaves legacy plaintext in place for recove
     },
   );
   assert.equal(context._state.get('ccu.setting.advice.apiKey'), canary);
-  assert.equal(activeConfiguration.values.global, canary);
+  assert.equal(activeConfiguration.values.global, undefined);
 });
 
 test('BYOK set and reset use only SecretStorage', async () => {
@@ -220,6 +215,116 @@ test('BYOK set and reset use only SecretStorage', async () => {
   await store.reset('advice.apiKey');
   assert.equal(store.get('advice.apiKey'), '');
   assert.equal(context._secrets.size, 0);
+});
+
+test('clear-all settings uses the exact catalog across current scopes and preserves unrelated state', async () => {
+  activeConfiguration = fakeConfiguration();
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
+  const context = fakeContext({
+    state: new Map<string, unknown>([
+      ['ccu.setting.showCost', true],
+      ['ccu.setting.pauseDashboardRefresh', true],
+      ['ccu.setting.fileWatching', true],
+      ['ccu.setting.advice.backend', 'subscription'],
+      ['ccu.setting.advice.subscriptionModel', 'legacy-model'],
+      ['ccu.unrelated.canary', 'preserve'],
+    ]),
+    secrets: new Map([['claudeCodeUsage.secret.advice.apiKey', 'secret-canary']]),
+  });
+  const store = new SettingsStore(context);
+
+  await store.resetAllOwnedData();
+
+  assert.equal(context._state.has('ccu.setting.showCost'), false);
+  assert.equal(context._state.has('ccu.setting.pauseDashboardRefresh'), false);
+  assert.equal(context._state.has('ccu.setting.fileWatching'), false);
+  assert.equal(context._state.has('ccu.setting.advice.backend'), false);
+  assert.equal(context._state.has('ccu.setting.advice.subscriptionModel'), false);
+  assert.equal(context._state.get('ccu.unrelated.canary'), 'preserve');
+  assert.equal(context._secrets.size, 0);
+  assert.ok(context._secretDeletes.includes('claudeCodeUsage.secret.advice.apiKey'));
+  assert.equal(activeConfiguration.updates.length, 0);
+});
+
+test('BYOK and sharing resets clear only their exact owned stores and visible scopes', async () => {
+  activeConfiguration = fakeConfiguration();
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
+  const context = fakeContext({
+    state: new Map<string, unknown>([
+      ['ccu.setting.advice.apiKey', 'legacy-state-canary'],
+      ['ccu.setting.showHeatmap', true],
+      ['ccu.setting.enableShareCard', true],
+      ['ccu.setting.showCost', true],
+    ]),
+    secrets: new Map([['claudeCodeUsage.secret.advice.apiKey', 'secret-canary']]),
+  });
+  const store = new SettingsStore(context);
+
+  await store.clearByokOwnedData();
+  assert.equal(context._secrets.has('claudeCodeUsage.secret.advice.apiKey'), false);
+  assert.equal(context._state.has('ccu.setting.advice.apiKey'), false);
+  assert.equal(context._state.get('ccu.setting.showHeatmap'), true);
+
+  await store.resetSharingOwnedData();
+  assert.equal(context._state.has('ccu.setting.showHeatmap'), false);
+  assert.equal(context._state.has('ccu.setting.enableShareCard'), false);
+  assert.equal(context._state.get('ccu.setting.showCost'), true);
+  assert.equal(activeConfiguration.updates.length, 0);
+});
+
+test('unregistered legacy configuration blocks a clear before state or SecretStorage changes', async () => {
+  activeConfiguration = fakeConfiguration({ global: 'legacy-plaintext-canary' });
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
+  const context = fakeContext({
+    state: new Map([['ccu.setting.advice.apiKey', 'legacy-state-canary']]),
+    secrets: new Map([['claudeCodeUsage.secret.advice.apiKey', 'secret-canary']]),
+  });
+  const store = new SettingsStore(context);
+
+  await assert.rejects(
+    () => store.clearByokOwnedData(),
+    /settings-local-data-clear:legacy-configuration-requires-manual-removal/,
+  );
+  assert.equal(context._state.get('ccu.setting.advice.apiKey'), 'legacy-state-canary');
+  assert.equal(context._secrets.get('claudeCodeUsage.secret.advice.apiKey'), 'secret-canary');
+  assert.equal(activeConfiguration.updates.length, 0);
+});
+
+test('registered configuration clear updates only explicit valid scopes', async () => {
+  activeConfiguration = fakeConfiguration({
+    global: '/global/claude',
+    workspace: '/workspace/claude',
+  });
+  const first = fakeConfiguration({ folder: '/folder/claude' });
+  activeWorkspaceFolders = [{ uri: 'folder-a' }];
+  activeFolderConfigurations = new Map([['folder-a', first]]);
+  const store = new SettingsStore(fakeContext());
+
+  await store.resetOwnedSettings(['dataDirectory']);
+
+  assert.deepEqual(activeConfiguration.updates.map((entry) => entry.target).sort(), [1, 2]);
+  assert.deepEqual(first.updates.map((entry) => entry.target), [3]);
+  assert.ok([...activeConfiguration.updates, ...first.updates].every((entry) =>
+    entry.key === 'dataDirectory' && entry.value === undefined,
+  ));
+});
+
+test('registered global configuration clear does not write a workspace target in an empty window', async () => {
+  activeConfiguration = fakeConfiguration({ global: '/global/claude' });
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
+  const store = new SettingsStore(fakeContext());
+
+  await store.resetOwnedSettings(['dataDirectory']);
+
+  assert.deepEqual(activeConfiguration.updates, [{
+    key: 'dataDirectory',
+    value: undefined,
+    target: 1,
+  }]);
 });
 
 test('repeat activation is idempotent and secret metadata is independent of key length', async () => {

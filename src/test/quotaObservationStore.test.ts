@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { access, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -12,6 +12,7 @@ import {
   mergeQuotaCaptures,
   QuotaCapture,
   QuotaObservationRepository,
+  QuotaObservationScopedClearBlockedError,
   quotaStoreWeeklyObservations,
   saveQuotaObservationStoreAtomic,
 } from '../quotaObservationStore';
@@ -402,4 +403,123 @@ test('repository serializes cross-instance concurrent appends without losing eit
 
   assert.equal(loaded.observations.length, 2);
   assert.deepEqual(loaded.observations.map((item) => item.usedFraction), [0.2, 0.3]);
+});
+
+test('repository clears exact provider and account scopes without rewriting unrelated epochs', async () => {
+  const root = path.join(os.tmpdir(), `ccu-quota-clear-${process.pid}-${Math.random().toString(16).slice(2)}`);
+  await mkdir(root, { recursive: true });
+  const file = path.join(root, 'quota-observations-v2.json');
+  const repository = new QuotaObservationRepository(file, SALT, () => NOW);
+  await repository.append([
+    capture({
+      provider: 'claude',
+      stableIdentitySignal: 'claude-profile-one',
+      unattributedEpochSignal: undefined,
+      accountAttribution: 'profile-continuity',
+      source: 'claude-official-api',
+      sourceWindowId: 'weekly',
+      observedAt: NOW - 2 * HOUR,
+    }),
+    capture({
+      provider: 'claude',
+      stableIdentitySignal: 'claude-profile-two',
+      unattributedEpochSignal: undefined,
+      accountAttribution: 'profile-continuity',
+      source: 'claude-official-api',
+      sourceWindowId: 'weekly',
+      observedAt: NOW - HOUR,
+    }),
+    capture({ observedAt: NOW }),
+  ]);
+  const seeded = await repository.load();
+  const firstClaude = seeded.observations.find((item) =>
+    item.provider === 'claude' && item.observedAt === NOW - 2 * HOUR,
+  );
+  assert.ok(firstClaude);
+
+  const afterEpochClear = await repository.clear({
+    provider: 'claude',
+    accountFingerprint: firstClaude.accountFingerprint,
+  });
+  assert.equal(afterEpochClear.observations.length, 2);
+  assert.equal(afterEpochClear.observations.some((item) =>
+    item.accountFingerprint === firstClaude.accountFingerprint,
+  ), false);
+  assert.equal(afterEpochClear.observations.some((item) => item.provider === 'codex'), true);
+
+  const afterProviderClear = await repository.clear({ provider: 'claude' });
+  assert.deepEqual(afterProviderClear.observations.map((item) => item.provider), ['codex']);
+
+  const afterAllClear = await repository.clear();
+  assert.deepEqual(afterAllClear.observations, []);
+  assert.deepEqual((await repository.load()).observations, []);
+});
+
+test('provider clear and a concurrent append preserve the new unrelated observation', async () => {
+  const root = path.join(os.tmpdir(), `ccu-quota-clear-race-${process.pid}-${Math.random().toString(16).slice(2)}`);
+  await mkdir(root, { recursive: true });
+  const file = path.join(root, 'quota-observations-v2.json');
+  const first = new QuotaObservationRepository(file, SALT, () => NOW);
+  const second = new QuotaObservationRepository(file, SALT, () => NOW);
+  await first.append([capture({ observedAt: NOW - HOUR })]);
+
+  await Promise.all([
+    first.clear({ provider: 'codex' }),
+    second.append([capture({
+      provider: 'claude',
+      stableIdentitySignal: 'concurrent-profile',
+      unattributedEpochSignal: undefined,
+      accountAttribution: 'profile-continuity',
+      source: 'claude-official-api',
+      sourceWindowId: 'weekly',
+      observedAt: NOW,
+    })]),
+  ]);
+  const loaded = await first.load();
+  assert.equal(loaded.observations.some((item) => item.provider === 'codex'), false);
+  assert.equal(loaded.observations.some((item) => item.provider === 'claude'), true);
+});
+
+test('all-history clear purges exact auxiliaries under one lease and preserves later appends', async () => {
+  const root = path.join(os.tmpdir(), `ccu-quota-clear-all-${process.pid}-${Math.random().toString(16).slice(2)}`);
+  await mkdir(root, { recursive: true });
+  const file = path.join(root, 'quota-observations-v2.json');
+  const first = new QuotaObservationRepository(file, SALT, () => NOW);
+  const second = new QuotaObservationRepository(file, SALT, () => NOW);
+  await first.append([capture({ observedAt: NOW - HOUR })]);
+  await writeFile(`${file}.quarantine-100-deadbeef`, 'quarantined-canary', 'utf8');
+  await writeFile(path.join(root, '.quota-observations-v2.json.200.abcdef123456.tmp'), 'temp-canary', 'utf8');
+
+  const cleared = await first.clear({});
+  assert.deepEqual(cleared.observations, []);
+  assert.deepEqual((await readdir(root)).sort(), ['quota-observations-v2.json']);
+
+  await second.append([capture({
+    provider: 'claude',
+    stableIdentitySignal: 'post-clear-profile',
+    unattributedEpochSignal: undefined,
+    accountAttribution: 'profile-continuity',
+    source: 'claude-official-api',
+    sourceWindowId: 'weekly',
+    observedAt: NOW,
+  })]);
+  const loaded = await first.load();
+  assert.deepEqual(loaded.observations.map((item) => item.provider), ['claude']);
+});
+
+test('scoped clear refuses to strand quarantined quota data', async () => {
+  const root = path.join(os.tmpdir(), `ccu-quota-scoped-quarantine-${process.pid}-${Math.random().toString(16).slice(2)}`);
+  await mkdir(root, { recursive: true });
+  const file = path.join(root, 'quota-observations-v2.json');
+  const repository = new QuotaObservationRepository(file, SALT, () => NOW);
+  await repository.append([capture()]);
+  const quarantine = `${file}.quarantine-100-deadbeef`;
+  await writeFile(quarantine, 'quarantined-canary', 'utf8');
+
+  await assert.rejects(
+    () => repository.clear({ provider: 'codex' }),
+    QuotaObservationScopedClearBlockedError,
+  );
+  assert.equal((await repository.load()).observations.length, 1);
+  await access(quarantine);
 });

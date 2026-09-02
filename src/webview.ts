@@ -87,6 +87,7 @@ import {
   loadAndMigrateAdviceLocalState,
   adviceRecommendationSnoozedUntil,
   ADVICE_SNOOZE_DURATION_MS,
+  ADVICE_LOCAL_STATE_KEY,
   resumeAdviceRecommendation,
   saveAdviceLocalState,
   snoozeAdviceRecommendation,
@@ -115,6 +116,16 @@ import {
   WorkflowUsage,
 } from './types';
 import { dayKeyInZone } from './dateKeys';
+import {
+  LocalDataAction,
+  LocalDataActionResult,
+  LocalDataClientAction,
+  LocalDataClientSummary,
+  LocalDataInventory,
+  approximateJsonBytes,
+  finiteTimestampRange,
+  isLocalDataAction,
+} from './localDataControls';
 
 interface CodexRenderProgress {
   scannedFiles: number;
@@ -125,6 +136,93 @@ interface CodexRenderProgress {
 }
 
 const OPTIMIZER_FEEDBACK_RECOMMENDATION_ID = 'recommendation-optimizer-result-v1';
+
+interface LocalDataUiCopy {
+  title: string;
+  intro: string;
+  inventory: string;
+  refresh: string;
+  category: string;
+  location: string;
+  schema: string;
+  sizeCount: string;
+  dateRange: string;
+  network: string;
+  clearability: string;
+  actions: string;
+  rebuildIndex: string;
+  quotaScope: string;
+  clearQuota: string;
+  clearAdvice: string;
+  resetUi: string;
+  resetSharing: string;
+  clearByok: string;
+  clearAll: string;
+  loading: string;
+  unavailable: string;
+  bytes: string;
+  items: string;
+  sourceExclusions: string;
+}
+
+function localDataUiCopy(locale: string): LocalDataUiCopy {
+  if (locale === 'zh-CN') {
+    return {
+      title: '本地数据与隐私控制',
+      intro: '清单只显示类别、非敏感位置类型和汇总元数据；不会显示路径、账号指纹、设置值或日志内容。',
+      inventory: '本地数据清单',
+      refresh: '刷新清单',
+      category: '类别',
+      location: '位置类型',
+      schema: 'Schema',
+      sizeCount: '约占用 / 数量',
+      dateRange: '最早 / 最新',
+      network: '可能的网络交互',
+      clearability: '清除方式',
+      actions: '安全清除与重建',
+      rebuildIndex: '重建 Codex 索引…',
+      quotaScope: '额度历史范围',
+      clearQuota: '清除所选额度历史…',
+      clearAdvice: '清除建议数据…',
+      resetUi: '重置界面状态…',
+      resetSharing: '重置分享偏好…',
+      clearByok: '清除 BYOK 密钥…',
+      clearAll: '清除全部插件派生数据…',
+      loading: '正在读取不含敏感值的本地清单…',
+      unavailable: '暂时无法读取本地数据清单。',
+      bytes: '字节',
+      items: '项',
+      sourceExclusions: '始终排除：',
+    };
+  }
+  return {
+    title: 'Local data and privacy controls',
+    intro: 'The inventory exposes categories, non-sensitive location classes, and aggregate metadata only—never paths, account fingerprints, setting values, or log content.',
+    inventory: 'Local data inventory',
+    refresh: 'Refresh inventory',
+    category: 'Category',
+    location: 'Location class',
+    schema: 'Schema',
+    sizeCount: 'Approx. size / count',
+    dateRange: 'Oldest / newest',
+    network: 'Possible network interaction',
+    clearability: 'Clearing route',
+    actions: 'Safe clearing and rebuild',
+    rebuildIndex: 'Rebuild Codex index…',
+    quotaScope: 'Quota-history scope',
+    clearQuota: 'Clear selected quota history…',
+    clearAdvice: 'Clear advice data…',
+    resetUi: 'Reset UI state…',
+    resetSharing: 'Reset sharing preferences…',
+    clearByok: 'Clear BYOK secret…',
+    clearAll: 'Clear all extension-derived data…',
+    loading: 'Reading a value-free local inventory…',
+    unavailable: 'The local data inventory is temporarily unavailable.',
+    bytes: 'bytes',
+    items: 'items',
+    sourceExclusions: 'Always excluded:',
+  };
+}
 
 interface CombinedHeatmapUiCopy {
   panelTitle: string;
@@ -291,6 +389,10 @@ export class UsageWebviewProvider {
     fullNumbers: boolean;
     theme: string;
   };
+  private readonly localDataClientActionRequests = new Map<
+    string,
+    { resolve: (ok: boolean) => void; timeout: NodeJS.Timeout }
+  >();
   // Real quota utilisation (pushed asynchronously) for the workflow quota
   // guard banner; dismissal lasts for the lifetime of this window.
   private usageLimits: ClaudeApiUsageResponse | null = null;
@@ -323,6 +425,15 @@ export class UsageWebviewProvider {
   ) => Promise<StructuredAdviceRequestResult>;
   public onAiSurfaceClosed?: () => void;
   public onAdviceDataCleared?: () => Promise<void>;
+  public onRequestLocalDataInventory?: (
+    client: LocalDataClientSummary,
+  ) => Promise<LocalDataInventory>;
+  public onRunLocalDataAction?: (
+    action: LocalDataAction,
+    quotaScopeToken?: string,
+  ) => Promise<LocalDataActionResult>;
+  public onResetSharingPreferences?: () => Promise<void>;
+  public onLocalDataClientReady?: () => void;
   // Shared settings store + a callback to let extension.ts re-apply config when
   // the user edits a setting in the dashboard's ⚙ Settings tab. Both are set by
   // extension.ts right after construction.
@@ -746,29 +857,109 @@ export class UsageWebviewProvider {
     this.updateWebview();
   }
 
-  private async handleClearAdviceLocalDataMessage(): Promise<void> {
-    if (
-      !this.adviceExperimentEnabled() ||
-      this.adviceLocalStateStatus !== 'ready' ||
-      !this.adviceStateStorage()
-    ) {
-      this.postAdviceMessage({ command: 'adviceClearResult', ok: false });
-      return;
+  public async clearAdviceLocalData(): Promise<boolean> {
+    const storage = this.adviceStateStorage();
+    if (!storage) {
+      return false;
     }
     this.adviceLocalStateGeneration += 1;
     this.adviceConsentGeneration += 1;
     this.clearPreparedAdviceSnapshots();
     this.adviceComparisonProductionRevision = '';
-    const write = this.enqueueAdviceLocalStateWrite(() => createClearedAdviceLocalState());
+    const write = this.adviceLocalStateWrite.then(async () => {
+      const cleared = createClearedAdviceLocalState();
+      try {
+        // Removing the current key is the user-visible privacy guarantee. The
+        // in-memory enabled/closed surface remains usable until reload, while a
+        // later mutation must queue after this removal before recreating state.
+        await storage.update(ADVICE_LOCAL_STATE_KEY, undefined);
+        this.adviceLocalState = cleared;
+        this.adviceLocalStateStatus = 'ready';
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    });
+    this.adviceLocalStateWrite = write.then(() => undefined, () => undefined);
     const cancelled = Promise.resolve(this.onAdviceDataCleared?.()).catch(() => undefined);
     const saved = await write;
     await cancelled;
     if (!saved.ok) {
-      this.postAdviceMessage({ command: 'adviceClearResult', ok: false });
-      return;
+      return false;
     }
-    this.postAdviceMessage({ command: 'adviceClearResult', ok: true });
     this.updateWebview();
+    return true;
+  }
+
+  public adviceLocalDataInventorySummary(): {
+    approximateBytes: number | null;
+    itemCount: number;
+    oldestAt: number | null;
+    newestAt: number | null;
+  } {
+    const state = this.adviceLocalState;
+    const timestamps = [
+      ...state.feedback.flatMap((item) => [item.updatedAtEpochMs, item.appliedAtEpochMs]),
+      ...state.suppression.flatMap((item) => [item.updatedAtEpochMs, item.snoozedUntilEpochMs]),
+      ...state.comparablePairs.map((item) => item.recordedAtEpochMs),
+      ...state.comparisonResults.map((item) => item.recordedAtEpochMs),
+    ];
+    const range = finiteTimestampRange(timestamps);
+    return {
+      approximateBytes: approximateJsonBytes(state),
+      itemCount:
+        state.feedback.length +
+        state.suppression.length +
+        state.comparablePairs.length +
+        state.comparisonResults.length,
+      ...range,
+    };
+  }
+
+  public requestLocalDataInventoryRefresh(): void {
+    this.panel?.webview.postMessage({ command: 'requestLocalDataInventoryClient' });
+  }
+
+  private settleLocalDataClientAction(requestId: string, ok: boolean): void {
+    const pending = this.localDataClientActionRequests.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    this.localDataClientActionRequests.delete(requestId);
+    pending.resolve(ok);
+  }
+
+  /**
+   * Apply Webview-owned deletion with an acknowledgement. Host-side success is
+   * not reported until the live panel confirms its exact allowlists ran.
+   */
+  public requestClientLocalDataAction(action: LocalDataClientAction): Promise<boolean> {
+    const panel = this.panel;
+    if (!panel) return Promise.resolve(false);
+    const requestId = randomBytes(12).toString('hex');
+    return new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(
+        () => this.settleLocalDataClientAction(requestId, false),
+        2_000,
+      );
+      this.localDataClientActionRequests.set(requestId, { resolve, timeout });
+      void Promise.resolve(panel.webview.postMessage({
+        command: 'localDataClientAction',
+        action,
+        requestId,
+      })).then((delivered) => {
+        if (!delivered) this.settleLocalDataClientAction(requestId, false);
+      }).catch(() => this.settleLocalDataClientAction(requestId, false));
+    });
+  }
+
+  public clearSharingRuntimeState(): void {
+    this.lastShareCardSvg = undefined;
+    this.lastShareCardConfig = undefined;
+  }
+
+  private async handleClearAdviceLocalDataMessage(): Promise<void> {
+    const ok = await this.clearAdviceLocalData();
+    this.postAdviceMessage({ command: 'adviceClearResult', ok });
   }
 
   private async handleAdviceFeedbackMessage(message: Record<string, unknown>): Promise<void> {
@@ -1098,6 +1289,9 @@ export class UsageWebviewProvider {
   show(tab?: string): void {
     if (tab) {
       this.currentTab = tab;
+      if (tab === 'settings' && this.currentProvider === 'compare') {
+        this.currentProvider = this.providerAvailability.claude ? 'claude' : 'codex';
+      }
     }
     if (this.panel) {
       this.panel.reveal();
@@ -1112,6 +1306,9 @@ export class UsageWebviewProvider {
 
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      for (const requestId of [...this.localDataClientActionRequests.keys()]) {
+        this.settleLocalDataClientAction(requestId, false);
+      }
       this.clearPreparedAdviceSnapshots();
       this.discardPreparedOptimizer();
       this.onAiSurfaceClosed?.();
@@ -1159,6 +1356,74 @@ export class UsageWebviewProvider {
         case 'clearAdviceLocalData':
           await this.handleClearAdviceLocalDataMessage();
           break;
+        case 'localDataClientReady':
+          this.onLocalDataClientReady?.();
+          break;
+        case 'requestLocalDataInventory': {
+          const summary = message.clientSummary as Partial<LocalDataClientSummary> | undefined;
+          const clientSummary: LocalDataClientSummary = {
+            uiPreferenceKeys: Number.isInteger(summary?.uiPreferenceKeys) &&
+              Number(summary?.uiPreferenceKeys) >= 0
+              ? Number(summary?.uiPreferenceKeys)
+              : 0,
+            webviewStateFields: Number.isInteger(summary?.webviewStateFields) &&
+              Number(summary?.webviewStateFields) >= 0
+              ? Number(summary?.webviewStateFields)
+              : 0,
+            sharingPreferenceKeys: Number.isInteger(summary?.sharingPreferenceKeys) &&
+              Number(summary?.sharingPreferenceKeys) >= 0
+              ? Number(summary?.sharingPreferenceKeys)
+              : 0,
+          };
+          try {
+            const inventory = await this.onRequestLocalDataInventory?.(clientSummary);
+            this.panel?.webview.postMessage({
+              command: 'localDataInventoryResult',
+              ok: inventory !== undefined,
+              inventory,
+            });
+          } catch {
+            this.panel?.webview.postMessage({
+              command: 'localDataInventoryResult',
+              ok: false,
+            });
+          }
+          break;
+        }
+        case 'runLocalDataAction': {
+          if (!isLocalDataAction(message.action) || !this.onRunLocalDataAction) {
+            this.panel?.webview.postMessage({
+              command: 'localDataActionResult',
+              result: { ok: false, message: 'Unsupported local-data action.' },
+            });
+            break;
+          }
+          const token = typeof message.quotaScopeToken === 'string'
+            ? message.quotaScopeToken
+            : undefined;
+          try {
+            const result = await this.onRunLocalDataAction(message.action, token);
+            this.panel?.webview.postMessage({
+              command: 'localDataActionResult',
+              result,
+            });
+          } catch {
+            this.panel?.webview.postMessage({
+              command: 'localDataActionResult',
+              result: { ok: false, message: 'The local-data action could not be completed.' },
+            });
+          }
+          break;
+        }
+        case 'localDataClientActionAck': {
+          if (typeof message.requestId === 'string') {
+            this.settleLocalDataClientAction(
+              message.requestId,
+              message.ok === true,
+            );
+          }
+          break;
+        }
         case 'exportHeatmap':
           vscode.commands.executeCommand('claudeCodeUsage.exportHeatmap');
           break;
@@ -1231,8 +1496,13 @@ export class UsageWebviewProvider {
         }
         case 'resetCombinedHeatmapPreferences': {
           try {
-            await this.context.globalState.update('ccu.heatmapRepo', undefined);
-            await this.context.globalState.update('ccu.heatmapPath', undefined);
+            if (this.onResetSharingPreferences) {
+              await this.onResetSharingPreferences();
+            } else {
+              await this.context.globalState.update('ccu.heatmapRepo', undefined);
+              await this.context.globalState.update('ccu.heatmapPath', undefined);
+              this.clearSharingRuntimeState();
+            }
             this.panel?.webview.postMessage({
               command: 'combinedHeatmapPreferencesReset',
               ok: true,
@@ -1735,6 +2005,11 @@ export class UsageWebviewProvider {
   }
 
   private getWebviewContent(): string {
+    // Data/privacy controls must remain reachable even when neither provider
+    // has logs yet or a refresh is in progress.
+    if (this.currentTab === 'settings' && this.currentProvider !== 'compare') {
+      return this.getMainContent();
+    }
     if (this.isLoading) {
       return this.getLoadingContent();
     }
@@ -2186,8 +2461,44 @@ export class UsageWebviewProvider {
       }
       html += '</div>';
     }
+    html += this.renderLocalDataControls();
     html += '</div>';
     return html;
+  }
+
+  private renderLocalDataControls(): string {
+    const copy = localDataUiCopy(I18n.getLocale());
+    const esc = (value: string): string => this.escapeHtml(value);
+    return (
+      '<section class="settings-group local-data-controls" aria-labelledby="localDataTitle">' +
+      '<h3 id="localDataTitle">' + esc(copy.title) + '</h3>' +
+      '<p class="table-hint">' + esc(copy.intro) + '</p>' +
+      '<div class="local-data-heading"><h4>' + esc(copy.inventory) + '</h4>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="requestLocalDataInventory()">' +
+      esc(copy.refresh) + '</button></div>' +
+      '<div class="table-wrap local-data-table-wrap" role="region" tabindex="0" aria-label="' +
+      esc(copy.inventory) + '"><table class="data-table local-data-table">' +
+      '<thead><tr><th>' + esc(copy.category) + '</th><th>' + esc(copy.location) + '</th>' +
+      '<th>' + esc(copy.schema) + '</th><th>' + esc(copy.sizeCount) + '</th>' +
+      '<th>' + esc(copy.dateRange) + '</th><th>' + esc(copy.network) + '</th>' +
+      '<th>' + esc(copy.clearability) + '</th></tr></thead>' +
+      '<tbody id="localDataInventoryBody"><tr><td colspan="7" class="table-hint">' +
+      esc(copy.loading) + '</td></tr></tbody></table></div>' +
+      '<p id="localDataExclusions" class="table-hint"></p>' +
+      '<div class="local-data-heading"><h4>' + esc(copy.actions) + '</h4></div>' +
+      '<div class="local-data-actions" role="group" aria-label="' + esc(copy.actions) + '">' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'rebuild-codex-index\')">' + esc(copy.rebuildIndex) + '</button>' +
+      '<label class="local-data-scope-label" for="localDataQuotaScope">' + esc(copy.quotaScope) + '</label>' +
+      '<select id="localDataQuotaScope" aria-label="' + esc(copy.quotaScope) + '"></select>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'clear-quota-history\')">' + esc(copy.clearQuota) + '</button>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'clear-advice-data\')">' + esc(copy.clearAdvice) + '</button>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'reset-ui-state\')">' + esc(copy.resetUi) + '</button>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'reset-sharing-preferences\')">' + esc(copy.resetSharing) + '</button>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'clear-byok-secret\')">' + esc(copy.clearByok) + '</button>' +
+      '<button class="btn-secondary btn-small local-data-danger" type="button" onclick="runLocalDataAction(\'clear-all-derived-data\')">' + esc(copy.clearAll) + '</button>' +
+      '</div><p id="localDataActionStatus" class="table-hint" role="status" aria-live="polite"></p>' +
+      '</section>'
+    );
   }
 
   /** One row in the settings panel: label + help + the right input control. The
@@ -6808,6 +7119,44 @@ export class UsageWebviewProvider {
         transform: translateX(18px);
         background: #fff;
       }
+      .local-data-controls { margin-top: 26px; }
+      .local-data-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 12px 0 8px;
+      }
+      .local-data-heading h4 { margin: 0; font-size: 12px; }
+      .local-data-table-wrap { max-width: 100%; overflow-x: auto; }
+      .local-data-table { min-width: 920px; }
+      .local-data-table td { vertical-align: top; font-size: 11px; }
+      .local-data-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .local-data-actions select {
+        max-width: 260px;
+        min-width: 180px;
+        color: var(--vscode-dropdown-foreground);
+        background: var(--vscode-dropdown-background);
+        border: 1px solid var(--vscode-dropdown-border, var(--ccu-border));
+        border-radius: 4px;
+        padding: 4px 6px;
+      }
+      .local-data-scope-label { font-size: 11px; color: var(--vscode-descriptionForeground); }
+      .local-data-danger {
+        color: var(--vscode-errorForeground);
+        border-color: var(--vscode-errorForeground);
+      }
+      @media (max-width: 520px) {
+        .set-row { flex-direction: column; gap: 6px; }
+        .set-control, .set-control input, .set-control select, .set-control textarea { width: 100%; }
+        .local-data-actions { align-items: stretch; flex-direction: column; }
+        .local-data-actions > * { width: 100%; max-width: none; }
+      }
 
       /* Manual refresh is also the explicit accelerated Codex catch-up path. */
       .btn-refresh-now {
@@ -8894,7 +9243,9 @@ function restoreUi() {
   initializeChartDrilldowns();
   initializeStatusRegions();
   restoreCombinedHeatmapConfig();
+  requestLocalDataInventoryForVisibleSettings();
   restoreScrollPosition();
+  vscode.postMessage({ command: 'localDataClientReady' });
 }
 function ccuScrollStateKey() {
   var active = document.querySelector('.tab.active');
@@ -8937,6 +9288,7 @@ if (document.readyState === 'loading') {
 const __locale = ${JSON.stringify(I18n.getLocale())};
 const __tz = ${JSON.stringify(I18n.getTimezone())};
 const __combinedHeatmapCopy = ${JSON.stringify(combinedHeatmapUiCopy(I18n.getLocale()))};
+const __localDataCopy = ${JSON.stringify(localDataUiCopy(I18n.getLocale()))};
 const __dateOpts = (extra) => {
   const opts = Object.assign({}, extra || {});
   if (__tz) opts.timeZone = __tz;
@@ -9097,6 +9449,153 @@ function setSetting(key, value, type) {
 
 function resetAllSettings(keys) {
   vscode.postMessage({ command: 'resetAllSettings', keys: Array.isArray(keys) ? keys : undefined });
+}
+
+var __ccuUiPreferenceKeys = [
+  'ccu.activeTab',
+  'ccu.sessionFilter',
+  'ccu.sessionRange',
+  'ccu.sessionModel'
+];
+var __ccuSharingPreferenceKeys = [
+  'ccu.combinedHeatmap.title',
+  'ccu.combinedHeatmap.range',
+  'ccu.combinedHeatmap.privacyPreview'
+];
+
+function ccuCountPresentLocalStorageKeys(keys) {
+  var count = 0;
+  try {
+    keys.forEach(function(key) {
+      if (localStorage.getItem(key) !== null) { count += 1; }
+    });
+  } catch (e) {}
+  return count;
+}
+
+function ccuLocalDataClientSummary() {
+  var state = ccuReadUiState();
+  return {
+    uiPreferenceKeys: ccuCountPresentLocalStorageKeys(__ccuUiPreferenceKeys),
+    webviewStateFields: state && typeof state === 'object' ? Object.keys(state).length : 0,
+    sharingPreferenceKeys: ccuCountPresentLocalStorageKeys(__ccuSharingPreferenceKeys)
+  };
+}
+
+function requestLocalDataInventory() {
+  if (!document.getElementById('localDataInventoryBody')) { return; }
+  vscode.postMessage({
+    command: 'requestLocalDataInventory',
+    clientSummary: ccuLocalDataClientSummary()
+  });
+}
+
+function requestLocalDataInventoryForVisibleSettings() {
+  var settings = document.getElementById('settings');
+  if (settings && !settings.hidden && settings.classList.contains('active')) {
+    requestLocalDataInventory();
+  }
+}
+
+function runLocalDataAction(action) {
+  var status = document.getElementById('localDataActionStatus');
+  if (status) { status.textContent = '…'; }
+  var scope = document.getElementById('localDataQuotaScope');
+  vscode.postMessage({
+    command: 'runLocalDataAction',
+    action: action,
+    quotaScopeToken: action === 'clear-quota-history' && scope ? scope.value : undefined
+  });
+}
+
+function ccuResetLocalStorageKeys(keys) {
+  try {
+    keys.forEach(function(key) { localStorage.removeItem(key); });
+    return keys.every(function(key) { return localStorage.getItem(key) === null; });
+  } catch (e) {
+    return false;
+  }
+}
+
+function ccuApplyLocalDataClientAction(action) {
+  var ok = true;
+  if (action === 'reset-ui-state' || action === 'clear-all-client-state') {
+    ok = ccuResetLocalStorageKeys(__ccuUiPreferenceKeys) && ok;
+    try {
+      vscode.setState({});
+      var state = vscode.getState();
+      ok = (state === undefined || state === null || Object.keys(state).length === 0) && ok;
+    } catch (e) {
+      ok = false;
+    }
+  }
+  if (action === 'reset-sharing-preferences' || action === 'clear-all-client-state') {
+    ok = ccuResetLocalStorageKeys(__ccuSharingPreferenceKeys) && ok;
+    restoreCombinedHeatmapConfig();
+  }
+  return ok;
+}
+
+function ccuLocalDataFormatSizeCount(row) {
+  var parts = [];
+  if (typeof row.approximateBytes === 'number' && isFinite(row.approximateBytes)) {
+    parts.push(new Intl.NumberFormat(__locale).format(row.approximateBytes) + ' ' + __localDataCopy.bytes);
+  }
+  if (typeof row.itemCount === 'number' && isFinite(row.itemCount)) {
+    parts.push(new Intl.NumberFormat(__locale).format(row.itemCount) + ' ' + __localDataCopy.items);
+  }
+  return parts.length ? parts.join(' · ') : '—';
+}
+
+function ccuLocalDataFormatDate(value) {
+  if (typeof value !== 'number' || !isFinite(value) || value < 0) { return '—'; }
+  try {
+    return new Intl.DateTimeFormat(__locale, __dateOpts({
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    })).format(new Date(value));
+  } catch (e) { return '—'; }
+}
+
+function ccuRenderLocalDataInventory(inventory) {
+  var body = document.getElementById('localDataInventoryBody');
+  var exclusions = document.getElementById('localDataExclusions');
+  var select = document.getElementById('localDataQuotaScope');
+  if (!body || !inventory || inventory.schemaVersion !== 1 || !Array.isArray(inventory.rows)) { return false; }
+  while (body.firstChild) { body.removeChild(body.firstChild); }
+  inventory.rows.forEach(function(row) {
+    var tr = document.createElement('tr');
+    var values = [
+      row.category,
+      row.locationClass,
+      row.schema,
+      ccuLocalDataFormatSizeCount(row),
+      ccuLocalDataFormatDate(row.oldestAt) + ' / ' + ccuLocalDataFormatDate(row.newestAt),
+      row.networkInteraction,
+      row.clearability
+    ];
+    values.forEach(function(value) {
+      var td = document.createElement('td');
+      td.textContent = typeof value === 'string' ? value : '—';
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  if (exclusions) {
+    exclusions.textContent = __localDataCopy.sourceExclusions + ' ' +
+      (Array.isArray(inventory.exclusions) ? inventory.exclusions.join(' · ') : '');
+  }
+  if (select) {
+    while (select.firstChild) { select.removeChild(select.firstChild); }
+    (Array.isArray(inventory.quotaScopes) ? inventory.quotaScopes : []).forEach(function(scope) {
+      if (!scope || typeof scope.token !== 'string' || typeof scope.label !== 'string') { return; }
+      var option = document.createElement('option');
+      option.value = scope.token;
+      option.textContent = scope.label;
+      select.appendChild(option);
+    });
+  }
+  return true;
 }
 
 function runOptimizer() {
@@ -9617,6 +10116,7 @@ function showTab(tabName, restoring) {
         clearPersistedDetails();
         // Persist in localStorage too — survives the reload, restored before paint.
         try { localStorage.setItem('ccu.activeTab', tabName); } catch (e) {}
+        if (tabName === 'settings') { requestLocalDataInventory(); }
       }
     } else {
       console.error("Tab or content not found:", tabName);
@@ -10079,6 +10579,55 @@ document.addEventListener('click', function(event) {
 // Handle messages from extension
 window.addEventListener('message', async function(event) {
   const message = event.data;
+
+  if (message.command === 'requestLocalDataInventoryClient') {
+    requestLocalDataInventory();
+  }
+
+  if (message.command === 'localDataClientAction') {
+    var localDataClientActionOk = false;
+    try {
+      localDataClientActionOk = ccuApplyLocalDataClientAction(message.action) === true;
+    } catch (e) {}
+    if (typeof message.requestId === 'string' && message.requestId.length > 0) {
+      vscode.postMessage({
+        command: 'localDataClientActionAck',
+        requestId: message.requestId,
+        ok: localDataClientActionOk
+      });
+    }
+    requestLocalDataInventory();
+  }
+
+  if (message.command === 'localDataInventoryResult') {
+    var inventoryBody = document.getElementById('localDataInventoryBody');
+    if (message.ok !== true || !ccuRenderLocalDataInventory(message.inventory)) {
+      if (inventoryBody) {
+        while (inventoryBody.firstChild) { inventoryBody.removeChild(inventoryBody.firstChild); }
+        var unavailableRow = document.createElement('tr');
+        var unavailableCell = document.createElement('td');
+        unavailableCell.colSpan = 7;
+        unavailableCell.className = 'table-hint';
+        unavailableCell.textContent = __localDataCopy.unavailable;
+        unavailableRow.appendChild(unavailableCell);
+        inventoryBody.appendChild(unavailableRow);
+      }
+    }
+  }
+
+  if (message.command === 'localDataActionResult') {
+    var localDataResult = message.result || {};
+    var localDataStatus = document.getElementById('localDataActionStatus');
+    if (localDataResult.clientAction) {
+      ccuApplyLocalDataClientAction(localDataResult.clientAction);
+    }
+    if (localDataStatus) {
+      localDataStatus.textContent = typeof localDataResult.message === 'string'
+        ? localDataResult.message
+        : __localDataCopy.unavailable;
+    }
+    requestLocalDataInventory();
+  }
 
   if (message.command === 'adviceConsentResult') {
     var consentProvider = message.provider;

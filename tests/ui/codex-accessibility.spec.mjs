@@ -160,7 +160,9 @@ test('provider tabs keep the shared keyboard navigation contract', async ({ page
   await claude.press('End');
   await expect(compare).toBeFocused();
 
-  expect(await page.evaluate(() => window.__ccuPostedMessages.map((message) => message.provider)))
+  expect(await page.evaluate(() => window.__ccuPostedMessages
+    .filter((message) => message.command === 'providerChanged')
+    .map((message) => message.provider)))
     .toEqual(['compare', 'claude', 'compare']);
 });
 

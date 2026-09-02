@@ -12,7 +12,7 @@ contract is in
 
 | Data class | Source | What is retained by the extension | Retention and clearing | Remote interaction |
 |---|---|---|---|---|
-| Claude usage records | Claude Code's local `projects/**/*.jsonl` | Runtime usage records and an in-memory per-file index; bounded prompt samples only when content analysis is enabled | Released on window reload/exit; source logs are never changed | None unless the user separately previews and sends an advice request |
+| Claude usage records | Claude Code's local `projects/**/*.jsonl` | Runtime usage records and an in-memory per-file index; bounded prompt samples only when content analysis is enabled | Released on window reload/exit. Data controls never touch source logs; the separately opt-in Session Actions feature may move one exactly confirmed log to the OS trash (recoverable) | None unless the user separately previews and sends an advice request |
 | Codex usage records | `$CODEX_HOME/sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl` | A versioned incremental index of pseudonymous file keys, offsets, numeric usage, dates, model/effort, and sanitized structural aggregates | Until rebuild, explicit clear, schema replacement, or host removal | None |
 | Codex titles | Exactly `$CODEX_HOME/session_index.jsonl` | `id → thread_name` is streamed for runtime display; titles are not written to the index | Runtime only | None |
 | Quota observations | Claude's official quota response or structured Codex rate-limit events | Provider, machine-local anonymous account epoch, observed/reset time, period, used/remaining fraction, anonymous window identity, source, confidence, and quality flags | At most 180 days and 512 observations per provider/account/period after boundary-preserving compaction; clear separately or with all derived data | Claude quota lookup contacts Anthropic when enabled; Codex quota evidence is local |
@@ -72,11 +72,36 @@ remove the BYOK secret. “Clear all extension-derived data” first lists its
 targets. None of these controls deletes Claude or Codex source logs or
 provider-owned credentials.
 
+Clearing all quota history atomically replaces the quota store with one valid
+empty schema-2 document and removes only its exact quarantine/interrupted-write
+siblings under the same cross-process lease. A provider/account-only clear
+fails closed when quarantined data or an unresolved legacy migration cannot be
+assigned safely; the user may then explicitly choose the all-history clear.
+
+Clear All deletes an exact catalog of released setting/state names, not every
+key beginning with `ccu.setting.`. Unknown or future keys are preserved. Before
+any mutation it checks all currently visible configuration scopes; an
+unregistered legacy setting that VS Code cannot safely update blocks the whole
+operation, leaves existing data intact, and is reported for manual removal.
+Queued activation writes are drained before deletion and exact postconditions
+are verified afterward. If the Webview cannot acknowledge its allowlisted
+browser-state reset, a value-free pending action marker is retried on the next
+panel open instead of reporting a false success.
+
+This clearing boundary is separate from the opt-in Session Actions feature.
+That feature can move one user-selected Claude session log to the OS trash only
+after its own modal confirmation; it never participates in Clear All.
+
 v2.3.1 validates and atomically migrates known legacy quota/config state before
 removing the legacy copy. Corrupt or future-schema files fail closed; an old
 valid file is not overwritten until the replacement validates. Uninstall may
 leave host-managed extension storage behind, so the explicit clear command is
 the reliable deletion route.
+
+VS Code only lets the running extension inspect Global, the current Workspace,
+and currently open Workspace Folder configuration scopes. A legacy value that
+exists only in a closed workspace remains there until that workspace is opened
+and the clear control is run again (or the setting is removed manually).
 
 ## Known limits
 
