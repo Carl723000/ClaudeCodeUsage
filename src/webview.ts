@@ -2397,7 +2397,7 @@ export class UsageWebviewProvider {
     // Keep the navigation familiar across providers. Codex still renders the
     // provider-native "Recent task" heading and aggregation inside this tab.
     const today = I18n.t.popup.today;
-    const thisMonth = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.thisMonth;
+    const thisMonth = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.last30days;
     const allTime = provider === 'codex' ? codexCopy.allTime : I18n.t.popup.allTime;
     const sessions = provider === 'codex' ? codexCopy.sessions : I18n.t.popup.sessions;
     const projects = provider === 'codex' ? codexCopy.projects : I18n.t.popup.projects;
@@ -2771,7 +2771,25 @@ export class UsageWebviewProvider {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
 
-    const todaySummary = this.renderUsageData(this.todayData, provider) + this.renderTodayInsights(provider);
+    const todayHasActivity = this.todayData.messageCount > 0 ||
+      this.todayData.totalInputTokens > 0 ||
+      this.todayData.totalOutputTokens > 0 ||
+      this.todayData.totalCacheCreationTokens > 0 ||
+      this.todayData.totalCacheReadTokens > 0;
+    const latestActivityDate = this.dailyDataForMonth.reduce<string | undefined>(
+      (latest, row) => latest === undefined || row.date > latest ? row.date : latest,
+      undefined,
+    );
+    const emptyRangeHint = todayHasActivity
+      ? ''
+      : '<p class="table-hint range-empty-hint"><strong>' +
+        this.escapeHtml(I18n.t.popup.today) + ':</strong> 0' +
+        (latestActivityDate
+          ? ' · ' + this.escapeHtml(I18n.t.popup.lastActive) + ': ' +
+            this.escapeHtml(this.formatDate(latestActivityDate))
+          : '') + '</p>';
+    const todaySummary = emptyRangeHint + this.renderUsageData(this.todayData, provider) +
+      this.renderTodayInsights(provider);
 
     let hourlyBreakdown = '';
     if (this.hourlyDataForToday.length > 0) {
@@ -3820,12 +3838,13 @@ export class UsageWebviewProvider {
     ).join('');
     return '<div class="daily-breakdown"><div class="section-header"><h3>' + heading +
       '</h3></div><p class="table-hint">' + notes + '</p>' + chart +
-      '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+      '<details class="weekly-value-details"><summary>' + this.escapeHtml(copy.periodDetails) +
+      '</summary><div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
       '<th>' + this.escapeHtml(copy.period) + '</th><th>' + this.escapeHtml(copy.usedValue) + '</th>' +
       '<th>' + this.escapeHtml(copy.utilization) + '</th><th>' + this.escapeHtml(copy.fullValue) + '</th>' +
       '<th>' + this.escapeHtml(copy.unusedValue) + '</th><th>' + this.escapeHtml(copy.confidence) + '</th>' +
       '<th>' + this.escapeHtml(copy.pricingCoverage) + '</th></tr></thead><tbody>' +
-      tableRows + '</tbody></table></div></div>';
+      tableRows + '</tbody></table></div></details></div>';
   }
 
   /** The "Share card" panel (All tab). Off by default (`enableShareCard`); when
@@ -7716,6 +7735,28 @@ export class UsageWebviewProvider {
         margin-top: 12px;
       }
 
+      .weekly-value-details {
+        margin-top: var(--ccu-space-3);
+        border-top: 1px solid var(--ccu-border);
+      }
+
+      .weekly-value-details > summary {
+        width: fit-content;
+        padding-top: var(--ccu-space-3);
+        color: var(--vscode-textLink-foreground);
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .weekly-value-details > summary:focus-visible {
+        outline: 1px solid var(--ccu-focus);
+        outline-offset: 3px;
+      }
+
+      .range-empty-hint {
+        margin-bottom: var(--ccu-space-3);
+      }
+
       .daily-table {
         width: 100%;
         border-collapse: collapse;
@@ -8278,7 +8319,7 @@ export class UsageWebviewProvider {
       }
       .combined-share-layout {
         display: grid;
-        grid-template-columns: minmax(0, 2fr) minmax(290px, 0.85fr);
+        grid-template-columns: minmax(0, 1fr);
         gap: var(--ccu-space-4);
         align-items: start;
       }
@@ -8314,7 +8355,7 @@ export class UsageWebviewProvider {
       }
       .combined-heatmap-controls {
         display: grid;
-        grid-template-columns: minmax(0, 1fr);
+        grid-template-columns: minmax(0, 2fr) minmax(180px, 0.8fr);
         gap: var(--ccu-space-3);
         margin-bottom: var(--ccu-space-4);
       }
@@ -8347,7 +8388,7 @@ export class UsageWebviewProvider {
       }
       .combined-palette-options {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(5, minmax(0, 1fr));
         gap: 6px;
       }
       .combined-palette-choice {
@@ -9269,8 +9310,11 @@ export class UsageWebviewProvider {
         .combined-share-layout {
           grid-template-columns: minmax(0, 1fr);
         }
-        .combined-config-card {
-          order: -1;
+        .combined-heatmap-controls {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .combined-palette-options {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
         .combined-heatmap-preview svg {
           width: auto;

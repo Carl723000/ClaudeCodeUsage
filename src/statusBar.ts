@@ -23,7 +23,13 @@ import {
   normalizeQuotaWindows,
   visibleQuotaWindows
 } from './quotaWindows';
-import { CodexStatusMetric, formatCodexStatus } from './codexStatus';
+import {
+  CodexStatusMetric,
+  codexQuotaWarningPercent,
+  codexQuotaWindowLabel,
+  formatCodexStatus,
+  visibleCodexQuotaWindows,
+} from './codexStatus';
 import { CodexUsageScopeView } from './providers/codex/codexUsage';
 import { ProviderLimitSnapshot } from './providers/providerTypes';
 
@@ -102,7 +108,7 @@ export class StatusBarManager {
         );
       } else {
         this.statusBarItem.text = 'CX —';
-        this.statusBarItem.tooltip = I18n.t.providers.codex.noRecentTask;
+        this.statusBarItem.tooltip = I18n.t.providers.codex.noDailyData;
         this.statusBarItem.backgroundColor = undefined;
         this.quotaItem.hide();
         this.applyCostVisibility();
@@ -369,19 +375,21 @@ export class StatusBarManager {
     metric: CodexStatusMetric,
     limit: ProviderLimitSnapshot | null,
   ): void {
+    const now = Date.now();
+    const quotaOptions = { quotaFiveHourOnly: this.quotaFiveHourOnly };
     const formatted = formatCodexStatus(
       scope,
       metric,
       limit,
-      Date.now(),
-      { quotaFiveHourOnly: this.quotaFiveHourOnly },
+      now,
+      quotaOptions,
     );
     const copy = I18n.t.providers.codex;
     this.isLoading = false;
     this.statusBarItem.text = formatted.text;
     this.statusBarItem.backgroundColor = undefined;
     const md = new vscode.MarkdownString();
-    md.appendMarkdown(`**${copy.title} — ${copy.lastTask}**\n\n`);
+    md.appendMarkdown(`**${copy.title} — ${I18n.t.popup.today}**\n\n`);
     if (scope.indexedSubtotal) {
       md.appendMarkdown(`_${copy.indexedSubtotal} — ${copy.indexingInProgress}_\n\n`);
     }
@@ -394,36 +402,12 @@ export class StatusBarManager {
     this.statusBarItem.tooltip = md;
     this.applyCostVisibility();
 
-    if (formatted.limitText && formatted.limit) {
+    if (formatted.limitText && formatted.limit && limit) {
       this.quotaItem.text = `$(dashboard) ${formatted.limitText}`;
-      const windowName = formatted.limit.windowMinutes === 7 * 24 * 60
-        ? copy.weeklyWindow
-        : formatted.limit.windowMinutes === 5 * 60
-          ? copy.fiveHourWindow
-          : formatted.limit.label;
-      let resetText = '';
-      if (formatted.limit.resetsAt !== undefined) {
-        try {
-          const reset = new Intl.DateTimeFormat(
-            I18n.getLocale(),
-            I18n.dateFormatOptions({
-              year: 'numeric',
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit',
-            }),
-          ).format(new Date(formatted.limit.resetsAt));
-          resetText = ` · ${copy.resets}: ${reset}`;
-        } catch {
-          resetText = '';
-        }
-      }
-      this.quotaItem.tooltip =
-        `${windowName}: ${copy.remaining} ${Math.round(formatted.limit.remainingPercent)}% ` +
-        `(${copy.used} ${Math.round(formatted.limit.usedPercent)}%)${resetText}\n\n` +
-        `${copy.accountSnapshotLastObserved}`;
-      this.quotaItem.backgroundColor = undefined;
+      this.quotaItem.tooltip = this.createCodexQuotaTooltip(limit, now);
+      this.quotaItem.backgroundColor = this.fillBackground(
+        fillLevel(codexQuotaWarningPercent(limit, now, quotaOptions), QUOTA_FILL_THRESHOLDS),
+      );
       this.quotaItem.show();
     } else {
       this.quotaItem.hide();
@@ -557,6 +541,65 @@ export class StatusBarManager {
     }
     md.appendMarkdown(`</table>\n\n*${t.quotaHint}*`);
     return md;
+  }
+
+  /** Codex exposes the same window facts through its local provider adapter.
+   * Render them with the exact table, progress bar, reset-cell, and threshold
+   * vocabulary used by Claude so switching providers does not change the
+   * interaction model. */
+  private createCodexQuotaTooltip(limit: ProviderLimitSnapshot, now: number): vscode.MarkdownString {
+    const t = I18n.t.popup;
+    const copy = I18n.t.providers.codex;
+    const live = visibleCodexQuotaWindows(limit, now, {
+      quotaFiveHourOnly: this.quotaFiveHourOnly,
+    });
+    const md = new vscode.MarkdownString();
+    md.supportThemeIcons = true;
+    md.supportHtml = true;
+    md.appendMarkdown(`**${copy.usageLimits}**\n\n`);
+    md.appendMarkdown(`<table>\n`);
+    md.appendMarkdown(
+      `<tr><th align="left">${t.quotaWindow}</th>` +
+      `<th></th><th align="right">${t.share}</th>` +
+      `<th align="right">${t.resets}</th></tr>\n`,
+    );
+    for (const window of live) {
+      const pct = Math.max(0, Math.min(100, window.usedPercent));
+      const label = window.windowMinutes === 5 * 60
+        ? t.quota5h
+        : window.windowMinutes === 7 * 24 * 60
+          ? t.quotaWeekly
+          : codexQuotaWindowLabel(window.windowMinutes, window.label);
+      const reset = window.resetsAt === undefined
+        ? '—'
+        : formatResetCell(new Date(window.resetsAt).toISOString(), {
+            format: this.resetCountdownFormat,
+            now,
+          });
+      md.appendMarkdown(this.quotaRowHtml(
+        this.escapeTooltipHtml(label),
+        `${Math.round(pct)}%`,
+        pct,
+        reset,
+      ));
+    }
+    md.appendMarkdown(`</table>\n\n`);
+    md.appendMarkdown(`*${copy.localLogNotLive}*`);
+    for (const note of copy.accountSnapshotLastObserved.split(' · ')) {
+      md.appendMarkdown(`  \n*${note}*`);
+    }
+    return md;
+  }
+
+  /** Provider labels can originate in local structured observations. Escape
+   * them before inserting them into the HTML-enabled Markdown tooltip. */
+  private escapeTooltipHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
   }
 
   /** Credit amounts always carry two decimals (they are real money, unlike the

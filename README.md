@@ -150,8 +150,10 @@ same full-request preview and separate explicit Send action as AI advice.
   including consecutive and same-day resets. Every valid same-window used
   fraction contributes an observed full-allowance estimate. Coherent current and
   completed windows show total and unused durability estimates; approximate or
-  unattributed evidence is labelled low confidence, while genuinely overlapping
-  quota series remain used-only. Unused value never goes negative.
+  unattributed evidence is labelled low confidence. If local Codex series
+  overlap, the current window uses the latest real observation for a labelled
+  low-confidence blended estimate; ambiguous completed windows remain
+  usage-only. Unused value never goes negative.
 - **Combined heatmap in Compare** — Claude and Codex daily processed volume is
   merged with provider components visible in every tooltip. It works with both
   providers or either provider alone and reuses existing aggregates instead of
@@ -238,8 +240,10 @@ separate human-controlled release step.
   time; file-source uncertainty, reset drift, and daily boundary crossings lower
   confidence and are labelled as approximate. File keys are not account
   identities, so eligible local files in one home are included together. A
-  genuinely overlapping quota series, or a period without a usable observation,
-  remains usage-only rather than inventing an account split. Any coherent
+  current period still uses the latest real observation for a low-confidence
+  blended estimate when local quota series overlap. Ambiguous completed periods,
+  or periods without a usable observation, remain usage-only rather than
+  inventing an account split. Any coherent
   observed window—including the current one—can show total and unused durability
   estimates; attribution or boundary uncertainty lowers confidence instead of
   silently replacing the values with dashes.
@@ -248,7 +252,7 @@ separate human-controlled release step.
   proxy, not a bill or an official subscription price. The panel is enabled by
   default and can be hidden in Settings with `showWeeklyEquivalentValue`.
 - **One dashboard render stack** — switching to Codex keeps the established
-  Today / Month / All time / Sessions / Projects / Content / Settings structure,
+  Today / Last 30 days / All time / Sessions / Projects / Content / Settings structure,
   relabelled where Codex semantics differ. The same render functions, HTML
   classes, charts, tables, spacing, and responsive rules are used for both
   providers. Claude and Codex time-series charts stay width-aligned while dense
@@ -547,8 +551,9 @@ remote boundaries are in [Local data and privacy](LOCAL-DATA.md) ([简体中文]
 
 - A reset absent from an official response or local structured event cannot be
   reconstructed; day-only evidence lowers confidence.
-- One Codex home may contain several sign-ins. Ambiguous overlap is shown as
-  used-only rather than inventing an account split or unused allowance.
+- One Codex home may contain several sign-ins. The current period may therefore
+  show a low-confidence blended estimate from the latest real observation;
+  ambiguous completed periods remain used-only rather than inventing an account split.
 - API-equivalent values depend on current known API prices and visible pricing
   coverage. They are not bills or subscription prices.
 - Source-log retention belongs to Claude Code and Codex. Uninstall may leave

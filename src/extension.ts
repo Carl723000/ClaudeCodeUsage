@@ -2162,9 +2162,9 @@ export class ClaudeCodeUsageExtension {
             : 'claude'
         : config.statusBarProvider;
     if (selected === 'codex') {
-      if (this.codexView?.lastTask) {
+      if (this.codexView) {
         this.statusBar.updateCodex(
-          this.codexView.lastTask,
+          this.codexView.today,
           config.codexStatusMetric,
           this.codexView.limit,
         );
@@ -4042,9 +4042,10 @@ export class ClaudeCodeUsageExtension {
         const sessionData = materialized.session;
         const todayData = materialized.today;
         const workspaceTodayData = materialized.workspaceToday;
-        const monthData = materialized.month;
+        const calendarMonthData = materialized.month;
+        const rolling30Data = materialized.last30Days;
         const allTimeData = materialized.allTime;
-        const dailyDataForMonth = materialized.dailyForMonth;
+        const dailyDataForRolling30 = materialized.dailyForLast30Days;
         const dailyDataForAllTime = materialized.monthlyForAllTime;
         const hourlyDataForToday = materialized.hourlyForToday;
         const sessionBreakdown = materialized.sessions;
@@ -4053,10 +4054,13 @@ export class ClaudeCodeUsageExtension {
         const workflowBreakdown = materialized.workflows;
         const costliestMessages = materialized.costliestMessages;
 
-        this.statusBar.updateUsageData(todayData, workspaceTodayData, undefined, undefined, monthData);
+        // The status bar setting is explicitly "monthly cost" and therefore
+        // keeps calendar-month semantics. The dashboard's middle range is the
+        // more useful rolling 30-day view and receives a separate aggregate.
+        this.statusBar.updateUsageData(todayData, workspaceTodayData, undefined, undefined, calendarMonthData);
         this.statusBar.updateContext(materialized.context);
         if (updateWebview) {
-          this.webviewProvider.updateData(sessionData, todayData, monthData, allTimeData, dailyDataForMonth, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages);
+          this.webviewProvider.updateData(sessionData, todayData, rolling30Data, allTimeData, dailyDataForRolling30, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages);
         }
       }
 

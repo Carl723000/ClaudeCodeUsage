@@ -29,7 +29,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   a subscription-durability estimate. If later logs overrun a stale observation,
   the full value remains a low-confidence lower bound while unused is withheld
   instead of showing a false zero. Unattributed or approximate windows are
-  labelled low confidence; genuinely overlapping quota series stay used-only.
+  labelled low confidence. Even when local Codex quota series overlap, the
+  current period uses the latest real observation for a clearly labelled
+  low-confidence blended total/unused estimate; ambiguous completed periods
+  stay used-only.
 - **Evidence-backed advice loop** — the default-off feature keeps local
   observations, evidence, recommendations, actions, local helpful/not-helpful/
   applied feedback, and guarded comparable-task results in one surface. When
@@ -58,6 +61,13 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   treatment, responsive navigation, and light/dark design tokens while keeping
   provider-specific metric labels and meanings. Dashboard figures use the VS
   Code UI font again; monospace remains limited to code and copyable snippets.
+- **Preview-first sharing layout** — the combined heatmap now occupies the full
+  reading width and Card settings sit directly below it. Weekly period tables
+  are collapsed by default so the trend chart remains primary.
+- **Aligned Codex status bar** — the main Codex item now uses configured-zone
+  Today instead of Recent task. Its compact quota percentage means used share,
+  and its tooltip reuses Claude's progress bars, threshold colours, reset
+  columns, and structured line wrapping.
 - **Chronological month views** — Codex monthly charts and tables render
   oldest-first in every range.
 - **System-reminder prompt filtering remains intentional** — framework reminder
@@ -81,6 +91,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   polling, credentials, or a second scanner.
 
 ### Fixed
+- **Claude rolling-range regression** — Claude's middle dashboard tab now uses
+  Today plus the preceding 29 configured-zone calendar dates instead of the
+  current calendar month. The monthly-cost status-bar option remains a calendar
+  month, and an empty Today view identifies the latest recent activity date.
 - **Reconciled 30-day Codex statistics** — “Last 30 days” is the configured
   timezone's current calendar date plus the preceding 29 dates. The view is
   projected from verified daily aggregates, so Today ≤ Last 30 days ≤ All time,

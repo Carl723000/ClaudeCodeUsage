@@ -174,8 +174,13 @@ export interface ClaudeUsageIndexUpdateResult {
 
 export interface ClaudeUsageAggregateSnapshot {
   today: UsageData;
+  /** Rolling 30 local calendar days, including the snapshot day. This is kept
+   * separate from `month` because the status bar's monthly-cost metric is a
+   * true calendar-month total while the dashboard range is rolling. */
+  last30Days: UsageData;
   month: UsageData;
   allTime: UsageData;
+  dailyForLast30Days: { date: string; data: UsageData }[];
   dailyForMonth: { date: string; data: UsageData }[];
   monthlyForAllTime: { date: string; data: UsageData }[];
   hourlyForToday: { hour: string; data: UsageData }[];
@@ -1283,7 +1288,15 @@ export function claudeUsageAggregateSnapshot(
 ): ClaudeUsageAggregateSnapshot {
   const localToday = dayKeyInZone(now, index.timeZone);
   const configuredMonth = monthKeyInZone(now, index.timeZone);
-  const dailyForMonth = [...index.aggregates.byDay.entries()]
+  const last30DayKeys = rollingDayKeys(now.getTime(), index.timeZone, 30);
+  const last30Days = emptyUsageData();
+  const dailyForLast30Days = last30DayKeys.flatMap((date) => {
+    const data = index.aggregates.byLocalDay.get(date);
+    if (!data) return [];
+    addUsageData(last30Days, data, 1);
+    return [{ date, data: cloneUsageData(data) }];
+  }).sort((left, right) => right.date.localeCompare(left.date));
+  const dailyForMonth = [...index.aggregates.byLocalDay.entries()]
     .filter(([day]) => day.startsWith(configuredMonth))
     .map(([date, data]) => ({ date, data: cloneUsageData(data) }))
     .sort((left, right) => right.date.localeCompare(left.date));
@@ -1311,8 +1324,10 @@ export function claudeUsageAggregateSnapshot(
   }
   return {
     today: cloneUsageData(index.aggregates.byLocalDay.get(localToday) ?? emptyUsageData()),
+    last30Days,
     month: cloneUsageData(index.aggregates.byMonth.get(configuredMonth) ?? emptyUsageData()),
     allTime: cloneUsageData(index.aggregates.allTime),
+    dailyForLast30Days,
     dailyForMonth,
     monthlyForAllTime,
     hourlyForToday,
@@ -1385,7 +1400,7 @@ export function claudeUsageDashboardSnapshot(
     const dayKeys = new Set(rollingDayKeys(now.getTime(), index.timeZone, windowDays));
     const aggregate = emptyUsageData();
     for (const day of dayKeys) {
-      const value = index.aggregates.byDay.get(day);
+      const value = index.aggregates.byLocalDay.get(day);
       if (value) addUsageData(aggregate, value, 1);
     }
     const windowSessions = [...index.sessionRows.values()].filter((row) =>

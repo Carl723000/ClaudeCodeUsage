@@ -213,6 +213,11 @@ test('Codex uses the shared dashboard shell and tab vocabulary', async ({ page }
   await expect(page.locator('[class*="codex-"]')).toHaveCount(0);
 });
 
+test('Claude middle dashboard scope is labelled as a rolling 30-day range', async ({ page }) => {
+  await openClaude(page);
+  await expect(page.locator('#tab-month')).toHaveText('Last 30 days');
+});
+
 test('Codex header matches Claude with only Refresh and Settings actions', async ({ page }) => {
   await openCodex(page);
 
@@ -637,10 +642,17 @@ test('weekly allowance value uses the shared all-time chart and exposes uncertai
   await expect(panel).toBeVisible();
   await expect(panel).toContainText('not an official balance, bill, or cash value');
   await expect(panel).toContainText('Historical used equivalents come directly from local token logs');
-  await expect(panel).toContainText('One coherent window can show low-confidence total and unused durability estimates');
-  await expect(panel).toContainText('overlapping quota series still show used equivalent only');
+  await expect(panel).toContainText('Full and unused estimates appear only for windows with a real quota-utilization observation');
+  await expect(panel).toContainText('current window uses the latest real quota observation for a low-confidence blended durability estimate');
+  await expect(panel).toContainText('ambiguous completed windows remain usage-only');
   await expect(panel).toContainText('No account split or official balance is invented');
   await expect(panel).toContainText('A reset inside a recorded day lowers confidence');
+  const details = panel.locator('.weekly-value-details');
+  await expect(details).not.toHaveAttribute('open', '');
+  await expect(details.getByText('Period details', { exact: true })).toBeVisible();
+  await expect(details.locator('.daily-table-container')).toBeHidden();
+  await details.locator('summary').click();
+  await expect(details.locator('.daily-table-container')).toBeVisible();
   await expect(panel.locator('tbody')).toContainText('Low · Boundary approx.');
   await expect(panel.locator('.hc-col')).toHaveCount(2);
   await expect(panel.locator('tbody tr')).toHaveCount(2);
@@ -666,6 +678,8 @@ test('a completed observed Claude period can still show its unused segment', asy
     hasText: 'Weekly subscription allowance · API-equivalent estimate · Claude',
   });
   await expect(panel.locator('.hc-col .seg-cache-read')).toHaveCount(1);
+  await expect(panel.locator('.weekly-value-details')).not.toHaveAttribute('open', '');
+  await panel.locator('.weekly-value-details summary').click();
   await expect(panel.locator('tbody tr')).toHaveCount(1);
   await expect(panel.locator('tbody tr td').nth(4)).not.toHaveText('—');
 });
@@ -708,6 +722,7 @@ test('weekly allowance table fits at 1280px in the longest locale', async ({ pag
   const panel = page.locator('#all .daily-breakdown').filter({
     hasText: 'Wöchentliches Abo-Kontingent · API-Äquivalenzschätzung · Codex Beta',
   });
+  await panel.locator('.weekly-value-details summary').click();
   const container = panel.locator('.daily-table-container');
   await expect(container).toBeVisible();
   const dimensions = await container.evaluate((element) => ({
@@ -761,6 +776,8 @@ test('weekly used-value history remains visible without historical quota samples
     hasText: 'Weekly subscription allowance · API-equivalent estimate · Codex Beta',
   });
   await expect(panel).toContainText('Monday-to-Monday UTC calendar weeks');
+  await expect(panel.locator('.weekly-value-details')).not.toHaveAttribute('open', '');
+  await panel.locator('.weekly-value-details summary').click();
   await expect(panel.locator('tbody tr')).toHaveCount(2);
   await expect(panel.locator('tbody')).toContainText('Usage only');
   await expect(panel.locator('tbody')).toContainText('$12.00');

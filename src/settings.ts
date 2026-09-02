@@ -422,7 +422,7 @@ export const SETTINGS: SettingDef[] = [
     storage: 'state',
     group: 'statusBar',
     label: 'Codex status metric',
-    help: 'Uncached usage, processed tokens, or output tokens.',
+    help: "Today's uncached usage, processed tokens, or output tokens.",
     enumValues: ['fresh', 'processed', 'output'],
     enumLabels: ['Uncached', 'Processed', 'Output'],
     providers: ['codex'],

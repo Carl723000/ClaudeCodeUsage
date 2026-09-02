@@ -41,7 +41,10 @@ function compact(value: number): string {
   return String(Math.round(safe));
 }
 
-function windowLabel(minutes: number | undefined, fallback: string | undefined): string {
+export function codexQuotaWindowLabel(
+  minutes: number | undefined,
+  fallback: string | undefined,
+): string {
   if (minutes === FIVE_HOUR_MINUTES) {
     return '5h';
   }
@@ -78,6 +81,32 @@ function selectQuotaWindow(
     ?? windows[0];
 }
 
+/** Live windows that the Codex status item and its tooltip actually expose.
+ * The five-hour-only preference must affect the compact text, tooltip, and
+ * warning colour together; otherwise a red item can have no visible red row. */
+export function visibleCodexQuotaWindows(
+  limit: ProviderLimitSnapshot | null,
+  now: number = Date.now(),
+  options: CodexStatusOptions = {},
+): ProviderLimitSnapshot['windows'] {
+  return (limit?.windows ?? []).filter((window) =>
+    (window.resetsAt === undefined || window.resetsAt > now) &&
+    (!options.quotaFiveHourOnly || window.windowMinutes === FIVE_HOUR_MINUTES),
+  );
+}
+
+/** Highest utilisation among the live rows rendered for Codex. */
+export function codexQuotaWarningPercent(
+  limit: ProviderLimitSnapshot | null,
+  now: number = Date.now(),
+  options: CodexStatusOptions = {},
+): number {
+  return visibleCodexQuotaWindows(limit, now, options).reduce(
+    (worst, window) => Math.max(worst, clampPercent(window.usedPercent)),
+    0,
+  );
+}
+
 export function formatCodexStatus(
   scope: CodexUsageScopeView,
   metric: CodexStatusMetric,
@@ -91,13 +120,11 @@ export function formatCodexStatus(
       : metric === 'output'
         ? scope.total.output
         : scope.total.fresh;
-  const liveWindows = limit?.windows.filter(
-    (window) => window.resetsAt === undefined || window.resetsAt > now,
-  ) ?? [];
+  const liveWindows = visibleCodexQuotaWindows(limit, now, options);
   const liveWindow = selectQuotaWindow(liveWindows, options);
   const selectedLimit = liveWindow
     ? {
-        label: windowLabel(liveWindow.windowMinutes, liveWindow.label),
+        label: codexQuotaWindowLabel(liveWindow.windowMinutes, liveWindow.label),
         ...(liveWindow.windowMinutes !== undefined
           ? { windowMinutes: liveWindow.windowMinutes }
           : {}),
@@ -107,8 +134,12 @@ export function formatCodexStatus(
         ...(liveWindow.resetsAt !== undefined ? { resetsAt: liveWindow.resetsAt } : {}),
       }
     : undefined;
+  // Match Claude's status-bar convention: the compact percentage is the
+  // utilised share, while remaining capacity stays available in the detail
+  // tooltip.  Showing the inverse here made the two providers look alike while
+  // saying opposite things.
   const limitText = selectedLimit
-    ? `${selectedLimit.label} ${Math.round(selectedLimit.remainingPercent)}%`
+    ? `${selectedLimit.label} ${Math.round(selectedLimit.usedPercent)}%`
     : undefined;
   return {
     text: `CX ${compact(value)}${scope.indexedSubtotal ? '*' : ''}`,

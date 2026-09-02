@@ -435,7 +435,7 @@ test('same account-wide Codex series uses the newest coherent observation across
   assert.equal(current?.confidence, 'medium');
 });
 
-test('different anonymous Codex series with overlapping current resets are still ambiguous', () => {
+test('overlapping current Codex resets use the latest observation as a low-confidence blended estimate', () => {
   const now = Date.parse('2026-08-27T04:00:00.000Z');
   const points = buildWeeklyValueTimeline('codex', {
     observations: [
@@ -457,8 +457,9 @@ test('different anonymous Codex series with overlapping current resets are still
 
   const current = points.find((point) => point.current);
   assert.equal(current?.utilizationPercent, 43);
-  assert.equal(current?.fullEquivalentUsd, null);
-  assert.equal(current?.confidence, 'usage-only');
+  assert.equal(current?.fullEquivalentUsd, 40 / 0.43);
+  assert.equal(current?.unusedEquivalentUsd, (40 / 0.43) - 40);
+  assert.equal(current?.confidence, 'low');
 });
 
 test('Codex allowance inference includes multiple local log sources but lowers confidence', () => {

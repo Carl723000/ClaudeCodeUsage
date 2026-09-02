@@ -251,6 +251,90 @@ test('materialized dashboard rows match every legacy full-record aggregation', a
   );
 });
 
+test('the dashboard middle scope is a rolling 30-day window across month boundaries', async () => {
+  const previousTimeZone = I18n.getTimezone();
+  I18n.setTimezone('UTC');
+  try {
+    const { root, first } = await fixture();
+    await appendFile(first, [
+      usageLine('rolling-boundary', 30, 12, {
+        timestamp: '2026-08-04T09:00:00.000Z',
+      }),
+      usageLine('rolling-outside', 40, 16, {
+        timestamp: '2026-08-03T09:00:00.000Z',
+      }),
+      '',
+    ].join('\n'), 'utf8');
+    const loaded = await updateClaudeUsageIndex(createClaudeUsageIndex(), root, {
+      analyzeContent: false,
+    });
+    const snapshot = claudeUsageDashboardSnapshot(loaded.index, {
+      now: new Date('2026-09-02T12:00:00.000Z'),
+    });
+
+    assert.equal(snapshot.month.messageCount, 0);
+    assert.equal(snapshot.last30Days.messageCount, 1);
+    assert.equal(snapshot.last30Days.totalInputTokens, 60);
+    assert.equal(snapshot.last30Days.totalOutputTokens, 24);
+    assert.deepEqual(
+      snapshot.dailyForLast30Days.map((row) => row.date),
+      ['2026-08-21', '2026-08-04'],
+    );
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
+test('Today and rolling 30 days share the configured local-day map across DST', async () => {
+  const previousTimeZone = I18n.getTimezone();
+  I18n.setTimezone('America/Los_Angeles');
+  try {
+    const { root, first, second } = await fixture();
+    await writeFile(first, [
+      usageLine('dst-today', 10, 1, { timestamp: '2026-11-02T08:30:00.000Z' }),
+      usageLine('dst-transition-day', 20, 2, { timestamp: '2026-11-01T07:30:00.000Z' }),
+      usageLine('rolling-first-day', 30, 3, { timestamp: '2026-10-04T07:30:00.000Z' }),
+      usageLine('rolling-outside', 40, 4, { timestamp: '2026-10-04T06:30:00.000Z' }),
+      '',
+    ].join('\n'), 'utf8');
+    await unlink(second);
+
+    const loaded = await updateClaudeUsageIndex(createClaudeUsageIndex(), root, {
+      analyzeContent: false,
+    });
+    const bodyReads = loaded.diagnostics.bodyReads;
+    const snapshot = claudeUsageDashboardSnapshot(loaded.index, {
+      now: new Date('2026-11-02T12:00:00.000Z'),
+    });
+
+    assert.deepEqual(
+      snapshot.dailyForLast30Days.map((row) => row.date),
+      ['2026-11-02', '2026-11-01', '2026-10-04'],
+    );
+    assert.equal(snapshot.today.totalInputTokens, 10);
+    assert.equal(snapshot.last30Days.totalInputTokens, 60);
+    assert.equal(snapshot.allTime.totalInputTokens, 100);
+    assert.deepEqual(
+      stableValue(snapshot.dailyForLast30Days.find((row) => row.date === '2026-11-02')?.data),
+      stableValue(snapshot.today),
+    );
+    for (const field of [
+      'messageCount',
+      'totalInputTokens',
+      'totalOutputTokens',
+      'totalCacheCreationTokens',
+      'totalCacheReadTokens',
+      'totalCost',
+    ] as const) {
+      assert.ok(snapshot.today[field] <= snapshot.last30Days[field], `${field}: Today <= 30 days`);
+      assert.ok(snapshot.last30Days[field] <= snapshot.allTime[field], `${field}: 30 days <= all time`);
+    }
+    assert.equal(loaded.diagnostics.bodyReads, bodyReads, 'snapshot materialization performs no extra reads');
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
 test('advice window is opt-in and comes only from materialized day and session aggregates', async () => {
   const { root, first } = await fixture();
   await writeFile(

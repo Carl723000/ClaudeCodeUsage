@@ -20,6 +20,17 @@ class RecordingThemeColor {
   constructor(public readonly id: string) {}
 }
 
+class RecordingMarkdownString {
+  value = '';
+  supportThemeIcons = false;
+  supportHtml = false;
+
+  appendMarkdown(value: string): this {
+    this.value += value;
+    return this;
+  }
+}
+
 function loadStatusBarModule(): StatusBarModule {
   const moduleLoader = require('node:module') as {
     _load: (request: string, parent: unknown, isMain: boolean) => unknown;
@@ -32,6 +43,9 @@ function loadStatusBarModule(): StatusBarModule {
       }
       if (property === 'ThemeColor') {
         return RecordingThemeColor;
+      }
+      if (property === 'MarkdownString') {
+        return RecordingMarkdownString;
       }
       return vscodeStub;
     },
@@ -109,4 +123,112 @@ test('item background follows the same level as the bar', () => {
   assert.equal(bg(77, CONTEXT_FILL_THRESHOLDS), undefined);
   assert.equal(bg(80, CONTEXT_FILL_THRESHOLDS), 'statusBarItem.warningBackground');
   assert.equal(bg(95, CONTEXT_FILL_THRESHOLDS), 'statusBarItem.errorBackground');
+});
+
+test('Codex quota tooltip reuses the Claude table, progress bar, and line-broken notes', () => {
+  const now = Date.parse('2026-09-02T12:00:00.000Z');
+  const tooltip = bareStatusBar().createCodexQuotaTooltip({
+    provider: 'codex',
+    observedAt: now - 60_000,
+    source: 'local-log',
+    confidence: 'last-observed',
+    windows: [{
+      label: 'primary',
+      usedPercent: 36,
+      windowMinutes: 7 * 24 * 60,
+      resetsAt: now + 5 * 24 * 60 * 60 * 1000,
+    }],
+  }, now) as RecordingMarkdownString;
+
+  assert.match(tooltip.value, /<table>/);
+  assert.match(tooltip.value, /Weekly/);
+  assert.match(tooltip.value, /36%/);
+  assert.match(tooltip.value, /#4caf50/);
+  assert.doesNotMatch(tooltip.value, /Codex home · limits/);
+  assert.equal(tooltip.supportHtml, true);
+});
+
+test('Codex item warns for the worst rendered window while keeping weekly compact text', () => {
+  const item = (): any => ({
+    text: '',
+    tooltip: undefined,
+    backgroundColor: undefined,
+    visible: false,
+    show(): void { this.visible = true; },
+    hide(): void { this.visible = false; },
+  });
+  const manager = bareStatusBar();
+  manager.statusBarItem = item();
+  manager.quotaItem = item();
+  manager.contextItem = item();
+  manager.showCost = true;
+  manager.showContext = true;
+  manager.usageLimitTracking = true;
+  manager.quotaFiveHourOnly = false;
+  manager.resetCountdownFormat = 'decimal';
+
+  const resetsAt = Date.now() + 24 * 60 * 60 * 1000;
+  manager.renderCodex({
+    total: {
+      processed: 5_000_000,
+      fresh: 1_000_000,
+      input: 4_500_000,
+      cachedInput: 3_500_000,
+      output: 500_000,
+      reasoning: 100_000,
+    },
+    rootTasks: 1,
+    threads: 1,
+    childThreads: 0,
+    childProcessedShare: 0,
+    childFreshShare: 0,
+    approvalReviewerThreads: 0,
+    approvalReviewerFreshShare: 0,
+    cacheShare: 0.7,
+    durationMs: 1_000,
+    structural: {
+      patchCalls: 0,
+      toolCalls: 0,
+      postPatchToolCalls: 0,
+      compactCount: 0,
+      taskCompleteCount: 0,
+    },
+    models: [],
+    efforts: [],
+  }, 'fresh', {
+    provider: 'codex',
+    observedAt: Date.now() - 60_000,
+    source: 'local-log',
+    confidence: 'last-observed',
+    windows: [
+      { label: 'primary', usedPercent: 96, windowMinutes: 300, resetsAt },
+      { label: 'secondary', usedPercent: 40, windowMinutes: 10_080, resetsAt },
+    ],
+  });
+
+  assert.equal(manager.quotaItem.text, '$(dashboard) wk 40%');
+  assert.equal(manager.quotaItem.backgroundColor?.id, 'statusBarItem.errorBackground');
+  assert.match(manager.quotaItem.tooltip.value, /96%/);
+  assert.match(manager.quotaItem.tooltip.value, /#f44336/);
+});
+
+test('Codex quota tooltip escapes provider labels', () => {
+  const now = Date.parse('2026-09-02T12:00:00.000Z');
+  const manager = bareStatusBar();
+  manager.quotaFiveHourOnly = false;
+  manager.resetCountdownFormat = 'decimal';
+  const tooltip = manager.createCodexQuotaTooltip({
+    provider: 'codex',
+    observedAt: now,
+    source: 'local-log',
+    confidence: 'last-observed',
+    windows: [{
+      label: '<unsafe & label>',
+      usedPercent: 12,
+      resetsAt: now + 60_000,
+    }],
+  }, now) as RecordingMarkdownString;
+
+  assert.match(tooltip.value, /&lt;unsafe &amp; label&gt;/);
+  assert.doesNotMatch(tooltip.value, /<unsafe/);
 });

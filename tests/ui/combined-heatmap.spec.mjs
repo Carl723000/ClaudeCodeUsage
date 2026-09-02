@@ -50,6 +50,22 @@ test('Compare opens with the combined Claude + Codex heatmap and privacy-bounded
   expect(desktopPreviewGeometry.overflow).toBeLessThanOrEqual(1);
   expect(desktopPreviewGeometry.svgRight).toBeLessThanOrEqual(desktopPreviewGeometry.previewRight);
   expect(desktopPreviewGeometry.moreRight).toBeLessThanOrEqual(desktopPreviewGeometry.previewRight);
+  const verticalLayout = await panel.evaluate((element) => {
+    const preview = element.querySelector('.combined-preview-column');
+    const settings = element.querySelector('.combined-config-card');
+    if (!preview || !settings) return null;
+    const previewRect = preview.getBoundingClientRect();
+    const settingsRect = settings.getBoundingClientRect();
+    return {
+      previewBottom: previewRect.bottom,
+      settingsTop: settingsRect.top,
+      settingsWidth: settingsRect.width,
+      panelWidth: element.getBoundingClientRect().width,
+    };
+  });
+  expect(verticalLayout).not.toBeNull();
+  expect(verticalLayout.settingsTop).toBeGreaterThanOrEqual(verticalLayout.previewBottom);
+  expect(verticalLayout.settingsWidth).toBeLessThanOrEqual(verticalLayout.panelWidth);
 });
 
 test('combined share preferences stay local and every export action is explicit', async ({ page }) => {

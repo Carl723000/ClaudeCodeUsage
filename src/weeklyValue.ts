@@ -873,13 +873,11 @@ export function buildWeeklyValueTimeline(
       0,
       (point.current ? now : point.resetAt) - latest.observedAt,
     );
-    // A locally flagged multi-sign-in history is weak evidence, but it still
-    // carries a real quota percentage and is useful for the user's intended
-    // "how durable is this subscription?" estimate. Only withhold when two
-    // actually overlapping quota series compete for the same bucket.
-    const withholdInference = provider === 'codex' && (
-      accountAmbiguous || (point.current && ambiguousCurrentCodexReset)
-    );
+    // Overlapping Codex series make completed periods usage-only. For the
+    // current period, the latest real quota percentage can still support a
+    // deliberately low-confidence durability estimate against combined local
+    // usage; this is neither an account split nor an official balance.
+    const withholdInference = provider === 'codex' && accountAmbiguous && !point.current;
     const weakObservation = latest.accountAttribution === 'unattributed' ||
       (latest.flags ?? []).some((flag) =>
         flag === 'approximate-boundary' ||
@@ -889,6 +887,8 @@ export function buildWeeklyValueTimeline(
         flag === 'clock-anomaly'
       );
     const approximateInference = weakObservation || (provider === 'codex' && (
+      accountAmbiguous ||
+      (point.current && ambiguousCurrentCodexReset) ||
       !resetAligned ||
       !codexSourceAttributionExact ||
       point.boundaryUncertain === true
