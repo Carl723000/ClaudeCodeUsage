@@ -120,7 +120,7 @@ import {
   UsageData,
   WorkflowUsage,
 } from './types';
-import { dayKeyInZone, resolveTimeZone, rollingDayKeysFromDayKey } from './dateKeys';
+import { dayKeyInZone, resolveTimeZone, rollingDayKeys, rollingDayKeysFromDayKey } from './dateKeys';
 import {
   LocalDataAction,
   LocalDataActionResult,
@@ -5031,30 +5031,32 @@ export class UsageWebviewProvider {
    * diagnostic — it tells whether the provider reuses the prompt cache across
    * a workflow's agents (see the hint line / V2.1-WORKFLOW-SPEC §Phase 2).
    */
-  private renderWorkflowData(): string {
+  private renderWorkflowData(now: Date = new Date()): string {
     if (!this.workflowBreakdown || this.workflowBreakdown.length === 0) {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
 
     const t = I18n.t.popup;
 
-    // Summary strip: workflow count + cost this calendar month, and that
-    // cost's share of the month's total spend.
-    const now = new Date();
-    const thisMonth = this.workflowBreakdown.filter(
-      (w) => w.endTime.getFullYear() === now.getFullYear() && w.endTime.getMonth() === now.getMonth()
+    // The middle dashboard scope is Today plus the preceding 29 configured-zone
+    // civil dates. Match that exact range and classify runs by their displayed
+    // start time so the numerator and rolling-30-day denominator reconcile.
+    const timeZone = I18n.getTimezone();
+    const rollingDays = new Set(rollingDayKeys(now.getTime(), timeZone, 30));
+    const recentWorkflows = this.workflowBreakdown.filter(
+      (w) => rollingDays.has(this.configuredDateTimeParts(w.startTime).dayKey)
     );
-    const monthWorkflowCost = thisMonth.reduce(
+    const rollingWorkflowCost = recentWorkflows.reduce(
       (sum, w) => sum + w.data.totalCost + (w.orchestration ? w.orchestration.totalCost : 0),
       0
     );
-    const monthTotalCost = this.monthData ? this.monthData.totalCost : 0;
-    const monthShare = monthTotalCost > 0 ? monthWorkflowCost / monthTotalCost : null;
+    const rollingTotalCost = this.monthData ? this.monthData.totalCost : 0;
+    const rollingShare = rollingTotalCost > 0 ? rollingWorkflowCost / rollingTotalCost : null;
     const summaryStrip =
       '<p class="table-hint">' +
-      t.workflowsThisMonth + ': ' + thisMonth.length +
-      ' · ' + I18n.formatCurrency(monthWorkflowCost) +
-      (monthShare !== null ? ' · ' + this.formatPercent(monthShare) + ' ' + t.workflowCostShare : '') +
+      t.workflowsLast30Days + ': ' + recentWorkflows.length +
+      ' · ' + I18n.formatCurrency(rollingWorkflowCost) +
+      (rollingShare !== null ? ' · ' + this.formatPercent(rollingShare) + ' ' + t.workflowLast30DaysCostShare : '') +
       '</p>';
 
     let rows = '';

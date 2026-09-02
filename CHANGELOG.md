@@ -127,7 +127,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   the page initialized; an intentional tab switch still clears expansions.
 - **Claude rolling-range regression** — Claude's middle dashboard tab now uses
   Today plus the preceding 29 configured-zone calendar dates instead of the
-  current calendar month. The monthly-cost status-bar option remains a calendar
+  current calendar month. The Workflows summary now uses the same rolling range,
+  classifies runs by their configured-zone start date, and compares against the
+  matching 30-day total. The monthly-cost status-bar option remains a calendar
   month, and an empty Today view identifies the latest recent activity date.
 - **Reconciled 30-day Codex statistics** — “Last 30 days” is the configured
   timezone's current calendar date plus the preceding 29 dates. The view is

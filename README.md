@@ -142,7 +142,8 @@ same full-request preview and separate explicit Send action as AI advice.
 - **Correct, stable date ranges** — Last 30 days means today plus the preceding
   29 calendar dates in the configured timezone. Today ≤ Last 30 days ≤ All time,
   provider totals reconcile, repeated refresh/reindex is idempotent, and Codex
-  monthly charts/tables run oldest-first.
+  monthly charts/tables run oldest-first. Claude's Workflows summary uses that
+  same rolling range and assigns each run by its configured-zone start date.
 - **Truthful effort attribution** — legacy and current structured effort fields
   normalize without guessing from model names. A non-zero `unknown` bucket is
   explained; a zero bucket is not rendered.

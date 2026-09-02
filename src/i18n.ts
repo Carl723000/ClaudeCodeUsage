@@ -203,8 +203,8 @@ export interface Translations {
     model: string;
     agents: string;
     agent: string;
-    workflowsThisMonth: string;
-    workflowCostShare: string;
+    workflowsLast30Days: string;
+    workflowLast30DaysCostShare: string;
     workflowCacheHint: string;
     adhocBadge: string;
     workflowModeBadge: string;
@@ -1331,8 +1331,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: 'Model',
       agents: 'Agents',
       agent: 'Agent',
-      workflowsThisMonth: 'Workflows this month',
-      workflowCostShare: "share of this month's cost",
+      workflowsLast30Days: 'Workflows in the last 30 days',
+      workflowLast30DaysCostShare: "share of the last 30 days' cost",
       workflowCacheHint:
         'Cache hit rate = cache reads ÷ all input-side tokens. Native Claude workflows reuse the prompt cache across agents (high rate); a provider without cross-agent caching shows ~0% — the same workflow costs disproportionately more there.',
       adhocBadge: 'subagents (ad-hoc)',
@@ -1631,8 +1631,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: "Modell",
       agents: "Agenten",
       agent: "Agent",
-      workflowsThisMonth: "Workflows diesen Monat",
-      workflowCostShare: "Anteil an den Monatskosten",
+      workflowsLast30Days: 'Workflows in den letzten 30 Tagen',
+      workflowLast30DaysCostShare: 'Anteil an den Kosten der letzten 30 Tage',
       workflowCacheHint:
         "Cache-Trefferrate = Cache-Lesevorgänge ÷ alle eingabeseitigen Tokens. Native Claude-Workflows nutzen den Prompt-Cache agentenübergreifend (hohe Rate); ein Anbieter ohne agentenübergreifenden Cache zeigt ~0 % — derselbe Workflow kostet dort unverhältnismäßig mehr.",
       adhocBadge: "Subagenten (ad-hoc)",
@@ -1934,8 +1934,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: '模型',
       agents: '代理數',
       agent: '代理',
-      workflowsThisMonth: '本月工作流',
-      workflowCostShare: '佔本月成本',
+      workflowsLast30Days: '最近 30 天工作流',
+      workflowLast30DaysCostShare: '佔最近 30 天成本',
       workflowCacheHint:
         '快取命中率 = 快取讀取 ÷ 全部輸入側 token。原生 Claude 工作流可在代理間重用提示快取（命中率高）；不支援跨代理快取的供應商約為 0%——同樣的工作流在那裡的成本會高出許多。',
       adhocBadge: '子代理（臨時）',
@@ -2230,8 +2230,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: '模型',
       agents: '代理数',
       agent: '代理',
-      workflowsThisMonth: '本月工作流',
-      workflowCostShare: '占本月成本',
+      workflowsLast30Days: '最近 30 天工作流',
+      workflowLast30DaysCostShare: '占最近 30 天成本',
       workflowCacheHint:
         '缓存命中率 = 缓存读取 ÷ 全部输入侧 token。原生 Claude 工作流可在代理间复用提示缓存（命中率高）；不支持跨代理缓存的供应商约为 0%——同样的工作流在那里的成本会高出许多。',
       adhocBadge: '子代理（临时）',
@@ -2526,8 +2526,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: 'モデル',
       agents: 'エージェント数',
       agent: 'エージェント',
-      workflowsThisMonth: '今月のワークフロー',
-      workflowCostShare: '今月のコストに占める割合',
+      workflowsLast30Days: '過去30日間のワークフロー',
+      workflowLast30DaysCostShare: '過去30日間のコストに占める割合',
       workflowCacheHint:
         'キャッシュヒット率 = キャッシュ読取 ÷ 入力側トークン全体。ネイティブ Claude のワークフローはエージェント間でプロンプトキャッシュを再利用します（高い率）。エージェント間キャッシュのないプロバイダーでは約 0% となり、同じワークフローのコストが大幅に高くなります。',
       adhocBadge: 'サブエージェント（アドホック）',
@@ -2827,8 +2827,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: '모델',
       agents: '에이전트 수',
       agent: '에이전트',
-      workflowsThisMonth: '이번 달 워크플로',
-      workflowCostShare: '이번 달 비용 중 비율',
+      workflowsLast30Days: '최근 30일 워크플로',
+      workflowLast30DaysCostShare: '최근 30일 비용 중 비율',
       workflowCacheHint:
         '캐시 적중률 = 캐시 읽기 ÷ 전체 입력측 토큰. 네이티브 Claude 워크플로는 에이전트 간 프롬프트 캐시를 재사용합니다(높은 적중률). 에이전트 간 캐시가 없는 공급자는 약 0%로, 같은 워크플로 비용이 훨씬 더 많이 듭니다.',
       adhocBadge: '서브에이전트(애드혹)',
@@ -3128,8 +3128,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: 'Modelo',
       agents: 'Agentes',
       agent: 'Agente',
-      workflowsThisMonth: 'Workflows neste mês',
-      workflowCostShare: 'do custo deste mês',
+      workflowsLast30Days: 'Workflows nos últimos 30 dias',
+      workflowLast30DaysCostShare: 'dos custos dos últimos 30 dias',
       workflowCacheHint:
         'Taxa de acerto do cache = leituras de cache ÷ todos os tokens do lado da entrada. Workflows nativos do Claude reaproveitam o cache de prompt entre agentes (taxa alta); um provedor sem cache entre agentes mostra ~0% — o mesmo workflow custa desproporcionalmente mais nele.',
       adhocBadge: 'subagentes (ad-hoc)',
@@ -3429,8 +3429,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: 'Model',
       agents: 'Agen',
       agent: 'Agen',
-      workflowsThisMonth: 'Workflow bulan ini',
-      workflowCostShare: 'proporsi dari biaya bulan ini',
+      workflowsLast30Days: 'Workflow 30 hari terakhir',
+      workflowLast30DaysCostShare: 'proporsi biaya 30 hari terakhir',
       workflowCacheHint:
         'Tingkat cache hit = cache read ÷ semua token sisi masukan. Workflow native Claude memakai ulang prompt cache lintas agen (tingkat tinggi); provider tanpa cache lintas-agen menunjukkan ~0% — workflow yang sama jadi jauh lebih mahal di sana.',
       adhocBadge: 'subagent (ad-hoc)',
