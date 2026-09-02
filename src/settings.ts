@@ -336,11 +336,12 @@ export const SETTINGS: SettingDef[] = [
   {
     key: 'enableShareCard',
     type: 'boolean',
-    default: false,
+    default: true,
     storage: 'state',
     group: 'features',
-    label: 'Enable usage share card',
-    help: 'Off by default. When on, the All tab gets a configurable "Share card" — pick a range (week / month / year / a specific month), a scope (overall / a project / a session) and which metrics to show, then generate a one-page SVG to share. Only aggregate numbers leave your machine, and only when you export.',
+    label: 'Enable sharing workspace',
+    help: 'On by default. Show the Compare sharing workspace and provider share card. Turn it off to hide sharing UI; exporting still requires an explicit action.',
+    providers: ['claude', 'codex'],
   },
   {
     key: 'showCostliestMessages',

@@ -47,6 +47,7 @@ const server = createServer(async (request, response) => {
       : 'default';
     const autoRefresh = url.searchParams.get('autoRefresh') === 'true';
     const weeklyValue = url.searchParams.get('weeklyValue') !== 'false';
+    const shareStudio = url.searchParams.get('shareStudio') !== 'false';
     const requestedFeedback = url.searchParams.get('adviceFeedback');
     const adviceFeedback = requestedFeedback === 'claude-helpful' ||
       requestedFeedback === 'optimizer-helpful'
@@ -59,6 +60,7 @@ const server = createServer(async (request, response) => {
       fixture,
       autoRefresh,
       weeklyValue,
+      shareStudio,
       adviceFeedback,
     });
     response.writeHead(200, {

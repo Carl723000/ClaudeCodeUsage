@@ -1,35 +1,20 @@
 import { test, expect, openCodex } from './support/app.mjs';
 
-test('Settings/Data exposes every inventory and clearing route with value-free client metadata', async ({ page }) => {
+test('Settings stays concise: repository privacy controls are not rendered in the plugin', async ({ page }) => {
   await openCodex(page);
   await page.locator('#tab-settings').click();
 
-  await expect(page.locator('#localDataTitle')).toHaveText('Local data and privacy controls');
-  await expect(page.locator('.local-data-actions button')).toHaveCount(7);
-  await expect(page.locator('#localDataQuotaScope')).toBeVisible();
-
-  await page.evaluate(() => {
-    localStorage.setItem('ccu.activeTab', 'settings');
-    localStorage.setItem('ccu.sessionFilter', 'all');
-    localStorage.setItem('ccu.combinedHeatmap.range', '90d');
-    localStorage.setItem('unrelated-private-canary', '/Users/private/account');
-    const api = acquireVsCodeApi();
-    api.setState({ openDetails: ['synthetic'], scrollPositions: { settings: 10 } });
-    window.requestLocalDataInventory();
-  });
-  const request = await page.evaluate(() => window.__ccuPostedMessages.at(-1));
-  expect(request).toEqual({
-    command: 'requestLocalDataInventory',
-    clientSummary: {
-      uiPreferenceKeys: 2,
-      webviewStateFields: 2,
-      sharingPreferenceKeys: 1,
-    },
-  });
-  expect(JSON.stringify(request)).not.toContain('/Users/private/account');
+  await expect(page.locator('#localDataTitle')).toHaveCount(0);
+  await expect(page.locator('.local-data-controls')).toHaveCount(0);
+  await expect(page.locator('#localDataQuotaScope')).toHaveCount(0);
+  await expect(page.getByText('Enable sharing workspace', { exact: true })).toBeVisible();
+  await expect(page.locator('#set_enableShareCard')).toBeChecked();
+  expect(await page.evaluate(() => window.__ccuPostedMessages.some(
+    (message) => message.command === 'requestLocalDataInventory',
+  ))).toBe(false);
 });
 
-test('inventory rendering uses text nodes and quota clearing returns only an opaque scope token', async ({ page }) => {
+test('an inventory reply cannot materialize the removed settings UI', async ({ page }) => {
   await openCodex(page);
   await page.locator('#tab-settings').click();
   await page.evaluate(() => {
@@ -66,20 +51,8 @@ test('inventory rendering uses text nodes and quota clearing returns only an opa
     }));
   });
 
-  await expect(page.locator('#localDataInventoryBody tr')).toHaveCount(1);
-  await expect(page.locator('#localDataInventoryBody img')).toHaveCount(0);
-  await expect(page.locator('#localDataInventoryBody td').first()).toContainText('<img src=x');
+  await expect(page.locator('#localDataInventoryBody')).toHaveCount(0);
   expect(await page.evaluate(() => window.__inventoryInjected === true)).toBe(false);
-  await expect(page.locator('#localDataQuotaScope')).toHaveValue('0123456789abcdef0123456789abcdef0123');
-
-  await page.getByRole('button', { name: 'Clear selected quota history…' }).click();
-  const posted = await page.evaluate(() => window.__ccuPostedMessages.at(-1));
-  expect(posted).toEqual({
-    command: 'runLocalDataAction',
-    action: 'clear-quota-history',
-    quotaScopeToken: '0123456789abcdef0123456789abcdef0123',
-  });
-  expect(JSON.stringify(posted)).not.toMatch(/fingerprint|accountFingerprint|Users\//);
 });
 
 test('UI and sharing resets are independent and preserve unrelated localStorage', async ({ page }) => {

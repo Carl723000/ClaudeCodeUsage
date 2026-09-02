@@ -134,12 +134,12 @@ export function formatCodexStatus(
         ...(liveWindow.resetsAt !== undefined ? { resetsAt: liveWindow.resetsAt } : {}),
       }
     : undefined;
-  // Match Claude's status-bar convention: the compact percentage is the
-  // utilised share, while remaining capacity stays available in the detail
-  // tooltip.  Showing the inverse here made the two providers look alike while
-  // saying opposite things.
+  // The compact Codex allowance item answers the immediate planning question:
+  // how much room is left. The tooltip and warning colour still use the
+  // provider's observed utilisation, so progress semantics and thresholds stay
+  // aligned with Claude without making the short label ambiguous.
   const limitText = selectedLimit
-    ? `${selectedLimit.label} ${Math.round(selectedLimit.usedPercent)}%`
+    ? `${selectedLimit.label} ${Math.round(selectedLimit.remainingPercent)}%`
     : undefined;
   return {
     text: `CX ${compact(value)}${scope.indexedSubtotal ? '*' : ''}`,

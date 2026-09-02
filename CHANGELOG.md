@@ -63,11 +63,16 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   Code UI font again; monospace remains limited to code and copyable snippets.
 - **Preview-first sharing layout** — the combined heatmap now occupies the full
   reading width and Card settings sit directly below it. Weekly period tables
-  are collapsed by default so the trend chart remains primary.
+  are collapsed by default so the trend chart remains primary. The sharing
+  workspace is enabled by default and one Settings toggle hides all sharing UI.
+- **Concise plugin settings** — the verbose local-data inventory and destructive
+  privacy-control panel no longer renders inside the dashboard. The authoritative
+  inventory, retention boundaries, and clear paths remain in the repository's
+  `LOCAL-DATA.md` files.
 - **Aligned Codex status bar** — the main Codex item now uses configured-zone
-  Today instead of Recent task. Its compact quota percentage means used share,
-  and its tooltip reuses Claude's progress bars, threshold colours, reset
-  columns, and structured line wrapping.
+  Today instead of Recent task. Its compact quota percentage means remaining
+  allowance; the tooltip and warning colour continue to use observed utilisation
+  with Claude's progress bars, thresholds, reset columns, and line wrapping.
 - **Chronological month views** — Codex monthly charts and tables render
   oldest-first in every range.
 - **System-reminder prompt filtering remains intentional** — framework reminder

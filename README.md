@@ -61,7 +61,8 @@ for the current window. Approximate evidence remains visible with low confidence
 *Compare combines provider daily activity without double-counting Codex cached
 input or reasoning. Its preview-first share studio offers an Academic Violet
 default, curated/custom colors, deterministic local SVG, and privacy-safe
-Markdown; the metric is activity volume, not productivity or billing.*
+Markdown. It is enabled by default and can be hidden with the single sharing
+workspace setting; the metric is activity volume, not productivity or billing.*
 
 ### Status bar
 
@@ -568,6 +569,13 @@ remote boundaries are in [Local data and privacy](LOCAL-DATA.md) ([简体中文]
 - Make sure Claude Code is installed and you have used it at least once.
 - Check the `dataDirectory` setting; auto-detection looks at
   `~/.claude/projects` and `~/.config/claude/projects`.
+
+**One-shot Claude CLI activity is missing**
+- Calls made with `--no-session-persistence` can leave a prompt-history entry
+  but no project transcript and no token `usage` fields. The extension does not
+  invent token or cost totals from prompt history. Run future audited calls
+  without that flag if they should appear; past unpersisted token usage cannot
+  be reconstructed locally.
 
 **Quota row shows `5h:--% wk:--%`**
 - Claude Code's OAuth token is missing or expired. Log in to the active Claude

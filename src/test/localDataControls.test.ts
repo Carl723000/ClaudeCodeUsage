@@ -297,7 +297,7 @@ test('shouldClearQuotaObservation applies all, provider, account, and exact scop
   }), false);
 });
 
-test('source policy wires all actions, keeps public inventory safe, and uses exact allowlists', () => {
+test('source policy keeps controls out of Settings while preserving safe command allowlists', () => {
   const extensionSource = readFileSync(path.join(REPOSITORY_ROOT, 'src', 'extension.ts'), 'utf8');
   const webviewSource = readFileSync(path.join(REPOSITORY_ROOT, 'src', 'webview.ts'), 'utf8');
   const controlsSource = readFileSync(
@@ -319,7 +319,7 @@ test('source policy wires all actions, keeps public inventory safe, and uses exa
     '/** One row in the settings panel',
   );
 
-  assert.match(webviewSource, /html \+= this\.renderLocalDataControls\(\);/);
+  assert.doesNotMatch(webviewSource, /html \+= this\.renderLocalDataControls\(\);/);
   for (const { action, command } of DATA_ACTION_COMMANDS) {
     assert.equal(
       contributedCommands.filter((entry) => entry.command === command).length,

@@ -206,7 +206,7 @@ test('Codex item warns for the worst rendered window while keeping weekly compac
     ],
   });
 
-  assert.equal(manager.quotaItem.text, '$(dashboard) wk 40%');
+  assert.equal(manager.quotaItem.text, '$(dashboard) wk 60%');
   assert.equal(manager.quotaItem.backgroundColor?.id, 'statusBarItem.errorBackground');
   assert.match(manager.quotaItem.tooltip.value, /96%/);
   assert.match(manager.quotaItem.tooltip.value, /#f44336/);

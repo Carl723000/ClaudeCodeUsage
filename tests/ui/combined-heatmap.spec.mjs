@@ -40,6 +40,8 @@ test('Compare opens with the combined Claude + Codex heatmap and privacy-bounded
     const svgRect = svg.getBoundingClientRect();
     const moreRect = more.getBoundingClientRect();
     return {
+      previewWidth: previewRect.width,
+      svgWidth: svgRect.width,
       previewRight: previewRect.right,
       svgRight: svgRect.right,
       moreRight: moreRect.right,
@@ -48,6 +50,7 @@ test('Compare opens with the combined Claude + Codex heatmap and privacy-bounded
   });
   expect(desktopPreviewGeometry).not.toBeNull();
   expect(desktopPreviewGeometry.overflow).toBeLessThanOrEqual(1);
+  expect(desktopPreviewGeometry.svgWidth).toBeGreaterThanOrEqual(desktopPreviewGeometry.previewWidth * 0.95);
   expect(desktopPreviewGeometry.svgRight).toBeLessThanOrEqual(desktopPreviewGeometry.previewRight);
   expect(desktopPreviewGeometry.moreRight).toBeLessThanOrEqual(desktopPreviewGeometry.previewRight);
   const verticalLayout = await panel.evaluate((element) => {
@@ -66,6 +69,20 @@ test('Compare opens with the combined Claude + Codex heatmap and privacy-bounded
   expect(verticalLayout).not.toBeNull();
   expect(verticalLayout.settingsTop).toBeGreaterThanOrEqual(verticalLayout.previewBottom);
   expect(verticalLayout.settingsWidth).toBeLessThanOrEqual(verticalLayout.panelWidth);
+});
+
+test('sharing workspace is on by default and can be hidden without removing Compare data', async ({ page }) => {
+  await openCompare(page, { fixture: 'combined-heatmap', locale: 'en' });
+  await expect(page.locator('.combined-heatmap-panel')).toBeVisible();
+
+  await openCompare(page, {
+    fixture: 'combined-heatmap',
+    locale: 'en',
+    shareStudio: false,
+  });
+  await expect(page.locator('.combined-heatmap-panel')).toHaveCount(0);
+  await expect(page.locator('.usage-summary')).toBeVisible();
+  await expect(page.locator('.weekly-value-details')).toHaveCount(2);
 });
 
 test('combined share preferences stay local and every export action is explicit', async ({ page }) => {

@@ -59,7 +59,7 @@ function limit(
   };
 }
 
-test('Codex status defaults to fresh and shows used weekly quota like Claude', () => {
+test('Codex status defaults to fresh and shows remaining weekly quota', () => {
   const formatted = formatCodexStatus(scope, 'fresh', limit(NOW + 60_000, [
     {
       label: 'primary',
@@ -77,7 +77,7 @@ test('Codex status defaults to fresh and shows used weekly quota like Claude', (
 
   assert.deepEqual(formatted, {
     text: 'CX 400',
-    limitText: 'wk 67%',
+    limitText: 'wk 33%',
     limit: {
       label: 'wk',
       windowMinutes: 10_080,
@@ -90,20 +90,20 @@ test('Codex status defaults to fresh and shows used weekly quota like Claude', (
   });
 });
 
-test('the existing five-hour-only preference selects the five-hour used quota', () => {
+test('the existing five-hour-only preference selects the five-hour remaining quota', () => {
   const formatted = formatCodexStatus(scope, 'fresh', limit(NOW + 60_000, [
     { label: 'primary', usedPercent: 42, windowMinutes: 300, resetsAt: NOW + 60_000 },
     { label: 'secondary', usedPercent: 67, windowMinutes: 10_080, resetsAt: NOW + 86_400_000 },
   ]), NOW, { quotaFiveHourOnly: true });
 
-  assert.equal(formatted.limitText, '5h 42%');
+  assert.equal(formatted.limitText, '5h 58%');
   assert.equal(formatted.limit?.windowMinutes, 300);
   assert.equal(formatted.limit?.remainingPercent, 58);
 });
 
 test('the default falls back to a live five-hour window when weekly data is absent', () => {
   const formatted = formatCodexStatus(scope, 'fresh', limit(NOW + 60_000), NOW);
-  assert.equal(formatted.limitText, '5h 42%');
+  assert.equal(formatted.limitText, '5h 58%');
   assert.equal(formatted.limit?.remainingPercent, 58);
 });
 
@@ -114,7 +114,7 @@ test('quota warning follows the worst live visible window, not the compact weekl
     { label: 'expired', usedPercent: 100, windowMinutes: 60, resetsAt: NOW - 1 },
   ]);
 
-  assert.equal(formatCodexStatus(scope, 'fresh', snapshot, NOW).limitText, 'wk 40%');
+  assert.equal(formatCodexStatus(scope, 'fresh', snapshot, NOW).limitText, 'wk 60%');
   assert.equal(codexQuotaWarningPercent(snapshot, NOW), 96);
   assert.equal(codexQuotaWarningPercent(snapshot, NOW, { quotaFiveHourOnly: true }), 96);
   assert.deepEqual(

@@ -72,7 +72,7 @@ AI 个性化仍为可选项。自备 `advice.apiKey` 后，默认请求只含聚
 - 兼容当前和旧版结构化 reasoning effort，不根据模型名猜测；非零 `unknown` 会解释原因，零值不会渲染。
 - 有界匿名额度观测可保留不规则、连续乃至同日重置。每个同窗有效已用比例都参与总额度和未用耐用度估算（包括当前周期）；近似或未归属证据标为低可信度。即使本地 Codex 额度系列重叠，当前周期仍采用最后一次真实观测给出低可信度混合估算；归属不清的已结束周期保持仅已用值。未用估算不会为负。
 - 「对比」默认展示 Claude + Codex 综合活动热力图，直接复用日聚合、支持任一单供应商，并在 tooltip 中分别显示两侧数据。
-- 预览优先的分享工作台包含确定性本地 SVG、综合分享卡、可复制 Markdown、自定义标题/范围、隐私预览和可调配色。默认采用 Academic Violet，分位数强度避免少数极端日期压平普通活跃日；可选的公开 GitHub 发布需要另行确认精确目标。
+- 预览优先的分享工作台包含确定性本地 SVG、综合分享卡、可复制 Markdown、自定义标题/范围、隐私预览和可调配色。工作台默认开启，可在设置中用一个开关整体隐藏。默认采用 Academic Violet，分位数强度避免少数极端日期压平普通活跃日；可选的公开 GitHub 发布需要另行确认精确目标。
 - Claude/Codex 共用卡片密度、层级、折叠、焦点、ARIA、窄宽度和深浅主题 token，同时保持各供应商指标含义独立。
 - AI 建议与用量优化器共用精确预览和明确发送边界；没有默认/后台 AI 请求，本地证据与反馈保持有界。
 
@@ -226,6 +226,11 @@ ext install GrowthJack.claude-code-usage
 **"无 Claude Code 数据"**
 - 确认 Claude Code 已安装并至少使用过一次。
 - 检查 `dataDirectory` 设置；自动检测会查 `~/.claude/projects` 和 `~/.config/claude/projects`。
+
+**一次性 Claude CLI 调用没有计入**
+- 使用 `--no-session-persistence` 的调用可能只留下提示历史，不会写入项目转录，
+  也没有 token `usage` 字段。插件不会根据提示历史虚构 token 或成本。希望后续
+  审计调用计入时，请不要使用该参数；过去未持久化的 token 用量无法在本地重建。
 
 **配额行显示 `5h:--% wk:--%`**
 - Claude Code 的 OAuth token 缺失或过期。请登录一次当前 Claude profile。凭证按显式 `dataDirectory`、首个有效 `CLAUDE_CONFIG_DIR`、最后 `~/.claude` 的顺序选择；全局 macOS 钥匙串条目不会替代已选中的自定义 profile。

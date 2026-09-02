@@ -53,7 +53,7 @@ contain no account, path, project, thread, or log content.
 - Structured reasoning-effort variants normalize without model-name guessing. Non-zero unknown is explained; zero unknown is hidden.
 - Bounded anonymous quota observations preserve irregular and same-day resets. Every valid same-window used fraction contributes to labelled total and unused subscription-durability estimates, including the current window. Approximate or unattributed evidence is low confidence. If local Codex quota series overlap, the current window uses the latest real observation for a low-confidence blended estimate; ambiguous completed windows remain used-only. Unused value never becomes negative.
 - Compare now leads with a combined Claude + Codex activity heatmap that reuses daily aggregates, works with either provider alone, and keeps both components in every tooltip.
-- The preview-first share studio supports deterministic local SVG, a combined card, copyable Markdown, title/range controls, a privacy preview, and curated/custom colors. Academic Violet is the default and quantile intensity keeps isolated peaks from flattening ordinary active days. Optional public-GitHub publication is separately confirmed at the exact destination.
+- The preview-first share studio supports deterministic local SVG, a combined card, copyable Markdown, title/range controls, a privacy preview, and curated/custom colors. It is on by default and can be hidden with one Settings switch. Academic Violet is the default and quantile intensity keeps isolated peaks from flattening ordinary active days. Optional public-GitHub publication is separately confirmed at the exact destination.
 - Claude and Codex now share dashboard density, hierarchy, disclosure, focus, ARIA, narrow-width, and light/dark design tokens while retaining provider-specific metric meanings.
 - Get AI Advice and Usage Optimizer share one exact-preview and explicit-send boundary. There is no default or background AI request, and local evidence/feedback remains bounded.
 
@@ -120,6 +120,12 @@ way to remove extension-derived state.
 ## Troubleshooting
 
 **"No Claude Code Data"** — make sure Claude Code is installed and used at least once; check the `dataDirectory` setting (auto-detection looks at `~/.claude/projects`).
+
+**One-shot Claude CLI activity is missing** — calls made with
+`--no-session-persistence` can leave prompt history but no project transcript or
+token `usage` fields. The extension does not invent token/cost totals from that
+history. Run future audited calls without the flag if they should appear; past
+unpersisted token usage cannot be reconstructed locally.
 
 **Quota shows `5h:--% wk:--%`** — log in to the active Claude profile once.
 Credentials follow explicit `dataDirectory`, then the first valid

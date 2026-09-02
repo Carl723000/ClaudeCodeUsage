@@ -146,6 +146,7 @@ const THEMES = {
 function settingsStore({
   autoRefresh = false,
   weeklyValue = true,
+  shareStudio = true,
   adviceEffectiveness = false,
   adviceOptimizer = false,
 } = {}) {
@@ -153,6 +154,7 @@ function settingsStore({
   values.set('codex.optimization.enabled', true);
   values.set('dashboardAutoRefresh', autoRefresh);
   values.set('showWeeklyEquivalentValue', weeklyValue);
+  values.set('enableShareCard', shareStudio);
   values.set('advice.effectiveness.enabled', adviceEffectiveness);
   values.set('advice.optimizer.enabled', adviceOptimizer);
   return {
@@ -370,6 +372,7 @@ exports.renderHarness = async function renderHarness({
   fixture = 'default',
   autoRefresh = false,
   weeklyValue = true,
+  shareStudio = true,
   adviceFeedback = 'none',
 } = {}) {
   I18n.setLanguage(locale);
@@ -415,6 +418,7 @@ exports.renderHarness = async function renderHarness({
     provider.settings = settingsStore({
       autoRefresh,
       weeklyValue,
+      shareStudio,
       adviceEffectiveness: adviceEffectivenessFixture,
       adviceOptimizer: adviceOptimizerFixture,
     });

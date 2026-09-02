@@ -2336,7 +2336,10 @@ export class UsageWebviewProvider {
       '<span><span class="model-stat-label">' + this.escapeHtml(copy.cachedInput) + '</span><strong>' + I18n.formatNumber(cache) + '</strong></span>' +
       '<span><span class="model-stat-label">' + this.escapeHtml(copy.output) + '</span><strong>' + I18n.formatNumber(output) + '</strong></span>' +
       '</div></article>';
-    return this.renderCombinedHeatmapPanel() +
+    const sharingWorkspace = this.setting<boolean>('enableShareCard', true)
+      ? this.renderCombinedHeatmapPanel()
+      : '';
+    return sharingWorkspace +
       '<section class="usage-summary">' +
       '<p class="model-details"><strong>' + this.escapeHtml(copy.indexedAllTime) + '</strong> · ' +
       this.escapeHtml(copy.updatedAt) + ': ' + this.escapeHtml(formatters.formatDateTime(updatedAt)) + '</p>' +
@@ -2561,7 +2564,6 @@ export class UsageWebviewProvider {
       }
       html += '</div>';
     }
-    html += this.renderLocalDataControls();
     html += '</div>';
     return html;
   }
@@ -3847,19 +3849,14 @@ export class UsageWebviewProvider {
       tableRows + '</tbody></table></div></details></div>';
   }
 
-  /** The "Share card" panel (All tab). Off by default (`enableShareCard`); when
-   * on, a config form — range / scope / which metrics — with a Generate button.
+  /** The "Share card" panel (All tab). On by default (`enableShareCard`); when
+   * enabled, a config form — range / scope / which metrics — with a Generate button.
    * The preview is built on demand (no per-keystroke re-render), and export uses
    * the same config. Privacy-safe: built from buildShareCardData, aggregate only. */
   private renderShareCardPanel(): string {
     const esc = (s: string): string => this.escapeHtml(s);
-    if (!this.setting<boolean>('enableShareCard', false)) {
-      // Off by default, but leave a discoverable pointer.
-      return (
-        '<div class="share-panel"><h3>Share card</h3>' +
-        '<p class="table-hint">Turn on <b>Enable usage share card</b> in <a href="#" onclick="openSettings();return false;">⚙ Settings</a> to build a one-page, shareable summary of your usage.</p>' +
-        '</div>'
-      );
+    if (!this.setting<boolean>('enableShareCard', true)) {
+      return '';
     }
     if (!this.allRecords || this.allRecords.length === 0) {
       return '';
@@ -8506,7 +8503,7 @@ export class UsageWebviewProvider {
       }
       .combined-heatmap-preview svg {
         width: 100%;
-        max-width: 843px;
+        max-width: none;
         height: auto;
         border-radius: 12px;
         box-shadow: 0 8px 26px rgba(24, 16, 36, 0.18);
