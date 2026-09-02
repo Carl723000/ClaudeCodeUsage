@@ -78,10 +78,10 @@ function redactAbsolutePaths(value: string): string {
     .replace(/file:\/\/\/[^\s"'`<>]+/gi, '[path]')
     .replace(/[a-z]:[\\/][^\s"'`<>]+/gi, '[path]')
     .replace(
-      /(^|[^:/])\/(?:[^\s/"'`<>]+\/)+[^\s"'`<>]+/g,
+      /(^|[^/])\/(?:[^\s/"'`<>]+\/)+[^\s"'`<>]+/g,
       '$1[path]',
     )
-    .replace(/(^|[\s("'`])\/[^\s"'`<>]+/g, '$1[path]')
+    .replace(/(^|[\s("'`:])\/[^\s"'`<>]+/g, '$1[path]')
     .replace(/(^|[\s("'`])\\\\[^\s"'`<>]+/g, '$1[path]');
 }
 

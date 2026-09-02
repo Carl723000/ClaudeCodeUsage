@@ -102,6 +102,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   polling, credentials, or a second scanner.
 
 ### Fixed
+- **Hardened Codex thread-title path redaction** — runtime titles now mask POSIX
+  absolute paths even when a path is attached directly to a colon or other
+  punctuation (for example, `3:/Users/name`), preventing local usernames and
+  filesystem locations from reaching dashboard text or screenshots.
 - **Claude rolling-range regression** — Claude's middle dashboard tab now uses
   Today plus the preceding 29 configured-zone calendar dates instead of the
   current calendar month. The monthly-cost status-bar option remains a calendar
