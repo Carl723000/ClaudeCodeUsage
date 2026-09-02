@@ -13,9 +13,11 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   privacy-safe card, and a copyable Markdown snippet with configurable title,
   30/90-day or yearly range, and an explicit privacy preview. The default
   Academic Violet ramp follows the project-profile visual reference, quantile
-  bands keep isolated peaks from flattening ordinary days, and four curated or
-  one custom accent palette can be selected locally. Claude-only and Codex-only
-  histories remain useful; no second log scan or statistics cache is introduced.
+  bands keep isolated peaks from flattening ordinary days, and the mapping can
+  be switched locally between quantile, logarithmic, and linear modes. Four
+  curated or one custom accent palette can be selected. Claude-only and
+  Codex-only histories remain useful; no second log scan or statistics cache is
+  introduced.
 - **Durable quota observation history** — versioned, atomically written,
   bounded observations keep provider, machine-local anonymous account epoch,
   observation/reset time, used/remaining fraction, window identity, source,
@@ -75,6 +77,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   with Claude's progress bars, thresholds, reset columns, and line wrapping.
 - **Chronological month views** — Codex monthly charts and tables render
   oldest-first in every range.
+- **Explicit Codex uncached composition** — the Token composition summary now
+  surfaces uncached usage (uncached input + output) while retaining the
+  non-overlapping uncached-input / cached-input / output stack; reasoning stays
+  a disclosed subset of output.
 - **System-reminder prompt filtering remains intentional** — framework reminder
   messages are excluded from user-input counts; token and cost totals are unchanged.
 - **One AI request boundary** — the former Get AI Advice command and Usage
@@ -112,6 +118,11 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Duplicate share rows fail safely** — identical provider/date rows are
   idempotent, conflicting duplicates block export, and absent dates render as
   zero in the selected range.
+- **OpenAI reasoning-effort requests** — OpenAI-compatible request bodies now
+  send `reasoning_effort` without the unsupported top-level `thinking`
+  parameter, fixing [#94](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/94).
+  Thanks to [@aaroncvan](https://github.com/aaroncvan) for the report and
+  [@Alex668866](https://github.com/Alex668866) for the precise diagnosis.
 
 ### Privacy and packaging
 - Disabled or unconsented advice adds no timer, watcher, worker, network request,

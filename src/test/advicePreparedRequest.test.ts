@@ -71,8 +71,29 @@ test('OpenAI-compatible optimizer uses the same boundary without advice parser f
   assert.equal(prepared.endpoint, 'https://api.deepseek.com/chat/completions');
   assert.equal(body.messages[1].content, 'User pasted draft only');
   assert.equal(body.reasoning_effort, 'high');
-  assert.deepEqual(body.thinking, { type: 'enabled' });
+  assert.equal(body.thinking, undefined);
   assert.equal(JSON.stringify(body).includes('byok-secret'), false);
+});
+
+test('OpenAI reasoning effort never emits the unsupported top-level thinking parameter', () => {
+  const prepared = prepareAiInvocation({
+    kind: 'optimizer',
+    apiFormat: 'openai',
+    apiUrl: 'https://api.openai.com/v1',
+    model: 'gpt-5.6-sol',
+    reasoningEffort: 'max',
+    systemPrompt: 'Return the requested optimizer payload.',
+    userContent: 'Draft request',
+    dataMode: 'user-draft-only',
+    sourceRevision: 'issue-94',
+    consentGeneration: 1,
+    createdAtEpochMs: 2_500,
+  });
+  const body = JSON.parse(previewAiInvocation(prepared).body);
+
+  assert.equal(prepared.endpoint, 'https://api.openai.com/v1/chat/completions');
+  assert.equal(body.reasoning_effort, 'max');
+  assert.equal(body.thinking, undefined);
 });
 
 test('prepared request fails closed for subscription OAuth, missing BYOK, stale state, or tampering', async () => {

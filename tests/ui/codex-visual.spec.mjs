@@ -560,6 +560,10 @@ for (const theme of ['light', 'dark']) {
 test('Codex Today exposes hourly API-equivalent cost and token composition', async ({ page }) => {
   await openCodex(page);
 
+  const overviewComposition = page.locator('#today .cost-composition').first();
+  await expect(overviewComposition.locator('.cost-comp-head strong')).toHaveText(/^Uncached usage [\d,.]+(?:[KMB])?$/);
+  await expect(overviewComposition.locator('.cost-comp-bar .cost-comp-seg')).toHaveCount(3);
+
   const hourly = page.locator('#today .daily-breakdown', {
     has: page.getByRole('heading', { name: 'Hourly Usage', exact: true }),
   });

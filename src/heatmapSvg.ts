@@ -22,7 +22,7 @@ export interface HeatmapSvgOptions {
   footerNote?: string; // optional semantic disclaimer above the watermark row
   watermark?: string; // bottom-left source note (default "Made with Claude Code Usage")
   scale?: string[]; // 2..8 colours, empty→max (default CLAUDE_ORANGE_SCALE)
-  intensityMode?: 'linear' | 'quantile'; // default linear; quantile keeps outliers from flattening the history
+  intensityMode?: 'linear' | 'quantile' | 'logarithmic'; // default linear; alternatives keep outliers from flattening the history
   background?: string;
   primaryText?: string;
   secondaryText?: string;
@@ -51,7 +51,7 @@ function assignRenderBuckets(
   cells: HeatGridCell[],
   activeBands: number,
   max: number,
-  mode: 'linear' | 'quantile',
+  mode: 'linear' | 'quantile' | 'logarithmic',
 ): void {
   // buildContributionGrid already applies the original four-band linear rule.
   // Preserve that exact output for the long-standing Claude ramp.
@@ -71,11 +71,16 @@ function assignRenderBuckets(
     // the lightest active band. The observed maximum is always the top band;
     // otherwise sparse inputs and a tie at the maximum make the legend's
     // darkest swatch unreachable.
-    cell.bucket = mode === 'quantile' && positive.length > 0
-      ? cell.value >= max
+    if (mode === 'quantile' && positive.length > 0) {
+      cell.bucket = cell.value >= max
         ? bands
-        : Math.min(bands, Math.max(1, Math.floor((lowerBound(positive, cell.value) / positive.length) * bands) + 1))
-      : Math.min(bands, Math.max(1, Math.ceil((cell.value / max) * bands)));
+        : Math.min(bands, Math.max(1, Math.floor((lowerBound(positive, cell.value) / positive.length) * bands) + 1));
+      continue;
+    }
+    const normalized = mode === 'logarithmic'
+      ? Math.log1p(cell.value) / Math.log1p(max)
+      : cell.value / max;
+    cell.bucket = Math.min(bands, Math.max(1, Math.ceil(normalized * bands)));
   }
 }
 

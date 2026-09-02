@@ -398,6 +398,7 @@ test('the tracked bilingual data contract covers quota, retention, clearing, and
       'ccu.combinedHeatmap.title',
       'ccu.combinedHeatmap.range',
       'ccu.combinedHeatmap.privacyPreview',
+      'ccu.combinedHeatmap.intensityMode',
       'ccu.combinedHeatmap.palette',
       'ccu.combinedHeatmap.customAccent',
       'Codex processed',

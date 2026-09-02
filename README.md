@@ -161,10 +161,17 @@ same full-request preview and separate explicit Send action as AI advice.
   scanning logs again.
 - **Private share loop** — use the preview-first studio to customize title,
   30/90-day or yearly range, and heatmap colors. Academic Violet is the default;
-  quantile intensity keeps outlier days from washing out ordinary activity.
-  Inspect the privacy preview, export deterministic SVG, and copy a Markdown
-  snippet. Optional public-GitHub publication is a separate exact-destination
-  confirmation; local export needs no account permission.
+  choose quantile (default), logarithmic, or linear intensity mapping to suit
+  the activity distribution. Inspect the privacy preview, export deterministic
+  SVG, and copy a Markdown snippet. Optional public-GitHub publication is a
+  separate exact-destination confirmation; local export needs no account
+  permission.
+- **Explicit Codex uncached composition** — Token composition shows uncached
+  usage (uncached input + output) above the non-overlapping uncached-input /
+  cached-input / output stack; reasoning remains a subset of output.
+- **OpenAI reasoning compatibility** — OpenAI-compatible optimizer requests
+  send `reasoning_effort` without the unsupported top-level `thinking`
+  parameter, resolving [#94](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/94).
 - **Aligned dashboard interaction** — shared density, headings, disclosures,
   charts, empty states, keyboard focus, ARIA behavior, narrow layout, and
   light/dark design tokens keep Claude and Codex consistent without claiming

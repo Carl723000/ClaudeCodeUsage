@@ -13,6 +13,8 @@ export type CombinedHeatmapPalette =
   | 'githubGreen'
   | 'custom';
 
+export type CombinedHeatmapIntensityMode = 'quantile' | 'logarithmic' | 'linear';
+
 /** The default mirrors Carl's public combined-activity card: a neutral empty
  * cell plus five active violet bands. */
 export const ACADEMIC_VIOLET_SCALE = [
@@ -37,6 +39,10 @@ export function normalizeCombinedHeatmapPalette(value: unknown): CombinedHeatmap
     value === 'githubGreen' || value === 'custom'
     ? value
     : 'academicViolet';
+}
+
+export function normalizeCombinedHeatmapIntensityMode(value: unknown): CombinedHeatmapIntensityMode {
+  return value === 'logarithmic' || value === 'linear' ? value : 'quantile';
 }
 
 export function normalizeCombinedHeatmapAccent(value: unknown): string {
@@ -105,6 +111,7 @@ export interface CombinedHeatmapSvgOptions {
   watermark?: string;
   palette?: CombinedHeatmapPalette | string;
   customAccent?: string;
+  intensityMode?: CombinedHeatmapIntensityMode | string;
   labels?: {
     combined: string;
     processedTokens: string;
@@ -159,7 +166,7 @@ export function renderCombinedHeatmapSvg(
     footerNote: labels.footerNote,
     watermark: options.watermark ?? 'Made with Claude Code Usage',
     scale,
-    intensityMode: 'quantile',
+    intensityMode: normalizeCombinedHeatmapIntensityMode(options.intensityMode),
     background: '#fcfaff',
     primaryText: '#2f2142',
     secondaryText: '#685a77',

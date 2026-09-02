@@ -93,10 +93,21 @@ test('combined share preferences stay local and every export action is explicit'
 
   await page.locator('#combinedHeatmapTitle').fill('My local activity');
   await page.locator('#combinedHeatmapRange').selectOption('30d');
+  await page.locator('#combinedHeatmapIntensityMode').selectOption('logarithmic');
   await page.getByRole('radio', { name: 'Custom' }).check();
   await page.locator('#combinedHeatmapCustomAccent').fill('#0f766e');
   await page.locator('#combinedHeatmapPrivacy').uncheck();
   await expect(page.locator('#combinedHeatmapPrivacyPreview')).toBeHidden();
+
+  await page.reload({ waitUntil: 'load' });
+  await expect(page.locator('#combinedHeatmapTitle')).toHaveValue('My local activity');
+  await expect(page.locator('#combinedHeatmapRange')).toHaveValue('30d');
+  await expect(page.locator('#combinedHeatmapIntensityMode')).toHaveValue('logarithmic');
+  await expect(page.getByRole('radio', { name: 'Custom' })).toBeChecked();
+  await expect(page.locator('#combinedHeatmapCustomAccent')).toHaveValue('#0f766e');
+  await expect(page.locator('#combinedHeatmapPrivacy')).not.toBeChecked();
+  await page.evaluate(() => { window.__ccuPostedMessages = []; });
+
   await page.getByRole('button', { name: 'Update preview' }).click();
   await page.getByRole('button', { name: 'Export SVG…' }).click();
   await page.getByRole('button', { name: 'Copy Markdown' }).click();
@@ -105,6 +116,7 @@ test('combined share preferences stay local and every export action is explicit'
     title: localStorage.getItem('ccu.combinedHeatmap.title'),
     range: localStorage.getItem('ccu.combinedHeatmap.range'),
     privacy: localStorage.getItem('ccu.combinedHeatmap.privacyPreview'),
+    intensityMode: localStorage.getItem('ccu.combinedHeatmap.intensityMode'),
     palette: localStorage.getItem('ccu.combinedHeatmap.palette'),
     customAccent: localStorage.getItem('ccu.combinedHeatmap.customAccent'),
     messages: window.__ccuPostedMessages.filter(
@@ -113,24 +125,26 @@ test('combined share preferences stay local and every export action is explicit'
   }));
   expect(state).toMatchObject({
     title: 'My local activity', range: '30d', privacy: 'false',
-    palette: 'custom', customAccent: '#0f766e',
+    intensityMode: 'logarithmic', palette: 'custom', customAccent: '#0f766e',
   });
   expect(state.messages).toEqual([
-    { command: 'previewCombinedHeatmap', title: 'My local activity', range: '30d', palette: 'custom', customAccent: '#0f766e' },
-    { command: 'exportCombinedHeatmap', title: 'My local activity', range: '30d', palette: 'custom', customAccent: '#0f766e' },
-    { command: 'copyCombinedHeatmapMarkdown', title: 'My local activity', range: '30d', palette: 'custom', customAccent: '#0f766e' },
+    { command: 'previewCombinedHeatmap', title: 'My local activity', range: '30d', intensityMode: 'logarithmic', palette: 'custom', customAccent: '#0f766e' },
+    { command: 'exportCombinedHeatmap', title: 'My local activity', range: '30d', intensityMode: 'logarithmic', palette: 'custom', customAccent: '#0f766e' },
+    { command: 'copyCombinedHeatmapMarkdown', title: 'My local activity', range: '30d', intensityMode: 'logarithmic', palette: 'custom', customAccent: '#0f766e' },
   ]);
   expect(state.messages.some((message) => /publish/i.test(message.command))).toBe(false);
 
   await page.getByRole('button', { name: 'Reset sharing preferences' }).click();
   await expect(page.locator('#combinedHeatmapTitle')).toHaveValue('Claude + Codex local activity');
   await expect(page.locator('#combinedHeatmapRange')).toHaveValue('year');
+  await expect(page.locator('#combinedHeatmapIntensityMode')).toHaveValue('quantile');
   await expect(page.getByRole('radio', { name: 'Academic Violet' })).toBeChecked();
   await expect(page.locator('#combinedHeatmapPrivacy')).toBeChecked();
   const reset = await page.evaluate(() => ({
     title: localStorage.getItem('ccu.combinedHeatmap.title'),
     range: localStorage.getItem('ccu.combinedHeatmap.range'),
     privacy: localStorage.getItem('ccu.combinedHeatmap.privacyPreview'),
+    intensityMode: localStorage.getItem('ccu.combinedHeatmap.intensityMode'),
     palette: localStorage.getItem('ccu.combinedHeatmap.palette'),
     customAccent: localStorage.getItem('ccu.combinedHeatmap.customAccent'),
     messages: window.__ccuPostedMessages.slice(-2),
@@ -139,10 +153,11 @@ test('combined share preferences stay local and every export action is explicit'
     title: null,
     range: null,
     privacy: null,
+    intensityMode: null,
     palette: null,
     customAccent: null,
     messages: [
-      { command: 'previewCombinedHeatmap', title: 'Claude + Codex local activity', range: 'year', palette: 'academicViolet', customAccent: '#4f2f87' },
+      { command: 'previewCombinedHeatmap', title: 'Claude + Codex local activity', range: 'year', intensityMode: 'quantile', palette: 'academicViolet', customAccent: '#4f2f87' },
       { command: 'resetCombinedHeatmapPreferences' },
     ],
   });
@@ -153,6 +168,7 @@ for (const theme of ['light', 'dark']) {
     await openCompare(page, { fixture: 'combined-heatmap', locale: 'zh-CN', theme });
     await expect(page.getByLabel('分享标题')).toBeVisible();
     await expect(page.getByLabel('时间范围')).toBeVisible();
+    await expect(page.getByLabel('色阶映射')).toHaveValue('quantile');
     await expect(page.getByRole('group', { name: '热力图配色' })).toBeVisible();
     await expect(page.getByLabel('显示隐私预览')).toBeChecked();
     await page.locator('.combined-output-panel').evaluate((element) => { element.open = true; });
@@ -168,6 +184,23 @@ for (const theme of ['light', 'dark']) {
     expect(results.incomplete.filter((item) => item.id === 'color-contrast')).toEqual([]);
   });
 }
+
+test('intensity mapping labels are localized in every supported locale', async ({ page }) => {
+  const labels = {
+    en: 'Intensity scale',
+    'de-DE': 'Intensitätsskala',
+    'zh-TW': '色階映射',
+    'zh-CN': '色阶映射',
+    ja: '強度スケール',
+    ko: '강도 스케일',
+    'pt-BR': 'Escala de intensidade',
+    id: 'Skala intensitas',
+  };
+  for (const [locale, label] of Object.entries(labels)) {
+    await openCompare(page, { fixture: 'combined-heatmap', locale });
+    await expect(page.getByLabel(label)).toHaveValue('quantile');
+  }
+});
 
 test('combined heatmap remains usable at a 360px webview width', async ({ page }) => {
   await openCompare(page, { fixture: 'combined-heatmap', locale: 'zh-CN', width: 360, height: 900 });

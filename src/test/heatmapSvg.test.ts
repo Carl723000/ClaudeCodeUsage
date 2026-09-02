@@ -126,6 +126,27 @@ test('quantile mode always reaches the top band for sparse and maximum-tied data
   assert.equal(fillForDate(svg, '2026-06-04'), scale[5]);
 });
 
+test('logarithmic mode compresses a long tail while preserving value order', () => {
+  const scale = ['#eeeeee', '#dddddd', '#bbbbbb', '#999999', '#777777', '#333333'];
+  const svg = renderHeatmapSvg({
+    '2026-06-01': day(1),
+    '2026-06-02': day(9),
+    '2026-06-03': day(99),
+    '2026-06-04': day(999),
+  }, {
+    startDateISO: '2026-06-01',
+    endDateISO: '2026-06-04',
+    scale,
+    intensityMode: 'logarithmic',
+    tooltip: (dateISO) => dateISO,
+  });
+
+  assert.equal(fillForDate(svg, '2026-06-01'), scale[1]);
+  assert.equal(fillForDate(svg, '2026-06-02'), scale[2]);
+  assert.equal(fillForDate(svg, '2026-06-03'), scale[4]);
+  assert.equal(fillForDate(svg, '2026-06-04'), scale[5]);
+});
+
 test('short-range legends stay inside a min-width share card', () => {
   const svg = renderHeatmapSvg({}, {
     startDateISO: '2026-06-23',

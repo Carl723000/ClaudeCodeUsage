@@ -134,7 +134,6 @@ function requestBody(input: PrepareAiInvocationInput): Record<string, unknown> {
       throw new Error('reasoningEffort is invalid');
     }
     body.reasoning_effort = reasoningEffort;
-    body.thinking = { type: 'enabled' };
   }
   return body;
 }

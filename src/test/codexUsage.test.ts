@@ -960,6 +960,7 @@ test('token composition partitions processed tokens without counting reasoning t
       reasoning: 60,
     }),
     {
+      uncachedUsage: 200,
       freshInput: 100,
       cachedInput: 400,
       output: 100,

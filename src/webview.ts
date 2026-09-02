@@ -24,6 +24,7 @@ import {
 } from './combinedHeatmap';
 import {
   normalizeCombinedHeatmapAccent,
+  normalizeCombinedHeatmapIntensityMode,
   normalizeCombinedHeatmapPalette,
   renderCombinedHeatmapSvg,
 } from './combinedHeatmapSvg';
@@ -241,6 +242,10 @@ interface CombinedHeatmapUiCopy {
   last30: string;
   last90: string;
   year: string;
+  intensityLabel: string;
+  intensityQuantile: string;
+  intensityLogarithmic: string;
+  intensityLinear: string;
   paletteLabel: string;
   academicViolet: string;
   claudeOrange: string;
@@ -265,9 +270,29 @@ interface CombinedHeatmapUiCopy {
   svgFooterNote: string;
 }
 
+function combinedHeatmapIntensityUiCopy(locale: string): Pick<
+  CombinedHeatmapUiCopy,
+  'intensityLabel' | 'intensityQuantile' | 'intensityLogarithmic' | 'intensityLinear'
+> {
+  const copy: Record<string, [string, string, string, string]> = {
+    en: ['Intensity scale', 'Quantile', 'Logarithmic', 'Linear'],
+    'de-DE': ['Intensitätsskala', 'Quantil', 'Logarithmisch', 'Linear'],
+    'zh-TW': ['色階映射', '分位數', '對數', '線性'],
+    'zh-CN': ['色阶映射', '分位数', '对数', '线性'],
+    ja: ['強度スケール', '分位数', '対数', '線形'],
+    ko: ['강도 스케일', '분위수', '로그', '선형'],
+    'pt-BR': ['Escala de intensidade', 'Quantil', 'Logarítmica', 'Linear'],
+    id: ['Skala intensitas', 'Kuantil', 'Logaritmik', 'Linear'],
+  };
+  const [intensityLabel, intensityQuantile, intensityLogarithmic, intensityLinear] = copy[locale] ?? copy.en;
+  return { intensityLabel, intensityQuantile, intensityLogarithmic, intensityLinear };
+}
+
 function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
+  const intensity = combinedHeatmapIntensityUiCopy(locale);
   if (locale === 'zh-CN') {
     return {
+      ...intensity,
       eyebrow: '分享工作台',
       panelTitle: '综合活动热力图与分享卡',
       description: '按本地自然日合并 Claude 与 Codex 的已处理 Token 活动量；默认强度不是成本。',
@@ -306,6 +331,7 @@ function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
   }
   if (locale === 'zh-TW') {
     return {
+      ...intensity,
       eyebrow: '分享工作台',
       panelTitle: '綜合活動熱力圖與分享卡',
       description: '依本機自然日合併 Claude 與 Codex 的已處理 Token 活動量；預設強度不是成本。',
@@ -343,6 +369,7 @@ function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
     };
   }
   return {
+    ...intensity,
     eyebrow: 'Share studio',
     panelTitle: 'Combined activity heatmap and share card',
     description: 'Combines Claude and Codex processed-token activity by local calendar day. Cost is not the default intensity.',
@@ -1488,6 +1515,7 @@ export class UsageWebviewProvider {
               message.title,
               message.palette,
               message.customAccent,
+              message.intensityMode,
             );
             this.panel.webview.postMessage({
               command: 'combinedHeatmapResult',
@@ -1513,6 +1541,7 @@ export class UsageWebviewProvider {
               message.title,
               message.palette,
               message.customAccent,
+              message.intensityMode,
             );
           } catch (error) {
             vscode.window.showErrorMessage(`Combined heatmap export failed: ${error instanceof Error ? error.message : String(error)}`);
@@ -1545,6 +1574,7 @@ export class UsageWebviewProvider {
               message.title,
               message.palette,
               message.customAccent,
+              message.intensityMode,
             );
             await vscode.env.clipboard.writeText(artifact.markdown);
             this.panel?.webview.postMessage({ command: 'combinedHeatmapMarkdownCopied', ok: true });
@@ -2193,6 +2223,7 @@ export class UsageWebviewProvider {
     titleInput: unknown,
     paletteInput: unknown = 'academicViolet',
     customAccentInput: unknown = '#4f2f87',
+    intensityModeInput: unknown = 'quantile',
   ): {
     range: CombinedHeatmapRange;
     title: string;
@@ -2207,6 +2238,7 @@ export class UsageWebviewProvider {
     const title = sanitizeCombinedHeatmapTitle(titleInput, copy.defaultTitle);
     const palette = normalizeCombinedHeatmapPalette(paletteInput);
     const customAccent = normalizeCombinedHeatmapAccent(customAccentInput);
+    const intensityMode = normalizeCombinedHeatmapIntensityMode(intensityModeInput);
     const timeZone = I18n.getTimezone();
     const endDateISO = dayKeyInZone(new Date(), timeZone);
     if (!endDateISO) {
@@ -2231,6 +2263,7 @@ export class UsageWebviewProvider {
         title,
         palette,
         customAccent,
+        intensityMode,
         labels: {
           combined: copy.combinedLabel,
           processedTokens: copy.processedTokensLabel,
@@ -2287,6 +2320,12 @@ export class UsageWebviewProvider {
       '<option value="30d">' + this.escapeHtml(copy.last30) + '</option>' +
       '<option value="90d">' + this.escapeHtml(copy.last90) + '</option>' +
       '<option value="year" selected>' + this.escapeHtml(copy.year) + '</option>' +
+      '</select></label>' +
+      '<label class="sc-field" for="combinedHeatmapIntensityMode"><span>' + this.escapeHtml(copy.intensityLabel) + '</span>' +
+      '<select id="combinedHeatmapIntensityMode" data-default-value="quantile">' +
+      '<option value="quantile" selected>' + this.escapeHtml(copy.intensityQuantile) + '</option>' +
+      '<option value="logarithmic">' + this.escapeHtml(copy.intensityLogarithmic) + '</option>' +
+      '<option value="linear">' + this.escapeHtml(copy.intensityLinear) + '</option>' +
       '</select></label></div>' +
       '<fieldset class="combined-palette-fieldset"><legend>' + this.escapeHtml(copy.paletteLabel) + '</legend>' +
       '<div class="combined-palette-options">' + palettes + '</div>' +
@@ -3123,7 +3162,9 @@ export class UsageWebviewProvider {
         '<span class="legend-item"><span class="legend-dot ' + className + '"></span>' +
         this.escapeHtml(label) + ' ' + I18n.formatNumber(value) + '</span>';
       const compositionHtml = '<div class="cost-composition"><div class="cost-comp-head">' +
-        this.escapeHtml(copy.tokenComposition) + '</div><div class="cost-comp-bar">' +
+        '<span>' + this.escapeHtml(copy.tokenComposition) + '</span>' +
+        '<strong>' + this.escapeHtml(copy.fresh) + ' ' +
+        I18n.formatNumber(composition.uncachedUsage) + '</strong></div><div class="cost-comp-bar">' +
         '<div class="cost-comp-seg seg-input" style="width:' + width(composition.freshInput) + '"></div>' +
         '<div class="cost-comp-seg seg-cache-read" style="width:' + width(composition.cachedInput) + '"></div>' +
         '<div class="cost-comp-seg seg-output" style="width:' + width(composition.output) + '"></div>' +
@@ -8352,7 +8393,7 @@ export class UsageWebviewProvider {
       }
       .combined-heatmap-controls {
         display: grid;
-        grid-template-columns: minmax(0, 2fr) minmax(180px, 0.8fr);
+        grid-template-columns: minmax(0, 2fr) repeat(2, minmax(160px, 0.8fr));
         gap: var(--ccu-space-3);
         margin-bottom: var(--ccu-space-4);
       }
@@ -8525,9 +8566,19 @@ export class UsageWebviewProvider {
       }
 
       .cost-comp-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 4px 12px;
         font-size: 12px;
         color: var(--vscode-descriptionForeground);
         margin-bottom: 6px;
+      }
+
+      .cost-comp-head strong {
+        color: var(--vscode-foreground);
+        font-weight: 600;
       }
 
       .cost-comp-bar {
@@ -9692,12 +9743,14 @@ function publishHeatmap() {
 function combinedHeatmapReadConfig() {
   var title = document.getElementById('combinedHeatmapTitle');
   var range = document.getElementById('combinedHeatmapRange');
+  var intensityMode = document.getElementById('combinedHeatmapIntensityMode');
   var privacy = document.getElementById('combinedHeatmapPrivacy');
   var palette = document.querySelector('input[name="combinedHeatmapPalette"]:checked');
   var customAccent = document.getElementById('combinedHeatmapCustomAccent');
   return {
     title: title ? title.value : __combinedHeatmapCopy.defaultTitle,
     range: range ? range.value : 'year',
+    intensityMode: intensityMode ? intensityMode.value : 'quantile',
     privacyPreview: privacy ? privacy.checked : true,
     palette: palette ? palette.value : 'academicViolet',
     customAccent: customAccent ? customAccent.value : '#4f2f87'
@@ -9707,6 +9760,7 @@ function combinedHeatmapSaveConfig(config) {
   try {
     localStorage.setItem('ccu.combinedHeatmap.title', config.title);
     localStorage.setItem('ccu.combinedHeatmap.range', config.range);
+    localStorage.setItem('ccu.combinedHeatmap.intensityMode', config.intensityMode);
     localStorage.setItem('ccu.combinedHeatmap.privacyPreview', config.privacyPreview ? 'true' : 'false');
     localStorage.setItem('ccu.combinedHeatmap.palette', config.palette);
     localStorage.setItem('ccu.combinedHeatmap.customAccent', config.customAccent);
@@ -9726,13 +9780,15 @@ function toggleCombinedHeatmapPrivacy(save) {
 function restoreCombinedHeatmapConfig() {
   var title = document.getElementById('combinedHeatmapTitle');
   var range = document.getElementById('combinedHeatmapRange');
+  var intensityMode = document.getElementById('combinedHeatmapIntensityMode');
   var privacy = document.getElementById('combinedHeatmapPrivacy');
   var customAccent = document.getElementById('combinedHeatmapCustomAccent');
-  if (!title || !range || !privacy || !customAccent) { return; }
+  if (!title || !range || !intensityMode || !privacy || !customAccent) { return; }
   var changed = false;
   try {
     var storedTitle = localStorage.getItem('ccu.combinedHeatmap.title');
     var storedRange = localStorage.getItem('ccu.combinedHeatmap.range');
+    var storedIntensityMode = localStorage.getItem('ccu.combinedHeatmap.intensityMode');
     var storedPrivacy = localStorage.getItem('ccu.combinedHeatmap.privacyPreview');
     var storedPalette = localStorage.getItem('ccu.combinedHeatmap.palette');
     var storedAccent = localStorage.getItem('ccu.combinedHeatmap.customAccent');
@@ -9740,6 +9796,10 @@ function restoreCombinedHeatmapConfig() {
     if (storedRange === '30d' || storedRange === '90d' || storedRange === 'year') {
       range.value = storedRange;
       changed = changed || storedRange !== range.getAttribute('data-default-value');
+    }
+    if (storedIntensityMode === 'quantile' || storedIntensityMode === 'logarithmic' || storedIntensityMode === 'linear') {
+      intensityMode.value = storedIntensityMode;
+      changed = changed || storedIntensityMode !== intensityMode.getAttribute('data-default-value');
     }
     if (storedPrivacy === 'false') { privacy.checked = false; }
     if (['academicViolet', 'claudeOrange', 'codexBlue', 'githubGreen', 'custom'].indexOf(storedPalette) >= 0) {
@@ -9761,32 +9821,35 @@ function generateCombinedHeatmapPreview() {
   combinedHeatmapSaveConfig(config);
   var status = document.getElementById('combinedHeatmapStatus');
   if (status) { status.textContent = __combinedHeatmapCopy.updatePreview + '…'; }
-  vscode.postMessage({ command: 'previewCombinedHeatmap', title: config.title, range: config.range, palette: config.palette, customAccent: config.customAccent });
+  vscode.postMessage({ command: 'previewCombinedHeatmap', title: config.title, range: config.range, intensityMode: config.intensityMode, palette: config.palette, customAccent: config.customAccent });
 }
 function exportCombinedHeatmap() {
   var config = combinedHeatmapReadConfig();
   combinedHeatmapSaveConfig(config);
-  vscode.postMessage({ command: 'exportCombinedHeatmap', title: config.title, range: config.range, palette: config.palette, customAccent: config.customAccent });
+  vscode.postMessage({ command: 'exportCombinedHeatmap', title: config.title, range: config.range, intensityMode: config.intensityMode, palette: config.palette, customAccent: config.customAccent });
 }
 function copyCombinedHeatmapMarkdown() {
   var config = combinedHeatmapReadConfig();
   combinedHeatmapSaveConfig(config);
-  vscode.postMessage({ command: 'copyCombinedHeatmapMarkdown', title: config.title, range: config.range, palette: config.palette, customAccent: config.customAccent });
+  vscode.postMessage({ command: 'copyCombinedHeatmapMarkdown', title: config.title, range: config.range, intensityMode: config.intensityMode, palette: config.palette, customAccent: config.customAccent });
 }
 function resetCombinedHeatmapPreferences() {
   var title = document.getElementById('combinedHeatmapTitle');
   var range = document.getElementById('combinedHeatmapRange');
+  var intensityMode = document.getElementById('combinedHeatmapIntensityMode');
   var privacy = document.getElementById('combinedHeatmapPrivacy');
   var customAccent = document.getElementById('combinedHeatmapCustomAccent');
   try {
     localStorage.removeItem('ccu.combinedHeatmap.title');
     localStorage.removeItem('ccu.combinedHeatmap.range');
+    localStorage.removeItem('ccu.combinedHeatmap.intensityMode');
     localStorage.removeItem('ccu.combinedHeatmap.privacyPreview');
     localStorage.removeItem('ccu.combinedHeatmap.palette');
     localStorage.removeItem('ccu.combinedHeatmap.customAccent');
   } catch (e) {}
   if (title) { title.value = __combinedHeatmapCopy.defaultTitle; }
   if (range) { range.value = 'year'; }
+  if (intensityMode) { intensityMode.value = 'quantile'; }
   if (privacy) { privacy.checked = true; }
   var defaultPalette = document.querySelector('input[name="combinedHeatmapPalette"][value="academicViolet"]');
   if (defaultPalette) { defaultPalette.checked = true; }
@@ -9799,6 +9862,7 @@ function resetCombinedHeatmapPreferences() {
     command: 'previewCombinedHeatmap',
     title: __combinedHeatmapCopy.defaultTitle,
     range: 'year',
+    intensityMode: 'quantile',
     palette: 'academicViolet',
     customAccent: '#4f2f87'
   });
@@ -9842,6 +9906,7 @@ var __ccuUiPreferenceKeys = [
 var __ccuSharingPreferenceKeys = [
   'ccu.combinedHeatmap.title',
   'ccu.combinedHeatmap.range',
+  'ccu.combinedHeatmap.intensityMode',
   'ccu.combinedHeatmap.privacyPreview',
   'ccu.combinedHeatmap.palette',
   'ccu.combinedHeatmap.customAccent'

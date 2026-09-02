@@ -13,6 +13,7 @@ import {
   ACADEMIC_VIOLET_SCALE,
   customCombinedHeatmapScale,
   normalizeCombinedHeatmapAccent,
+  normalizeCombinedHeatmapIntensityMode,
   normalizeCombinedHeatmapPalette,
   renderCombinedHeatmapSvg,
 } from '../combinedHeatmapSvg';
@@ -188,6 +189,31 @@ test('combined heatmap supports curated and sanitized custom colour ramps', () =
       `${nearWhite[index]} should be darker than ${nearWhite[index - 1]}`,
     );
   }
+});
+
+test('combined heatmap exposes deterministic quantile, logarithmic, and linear intensity modes', () => {
+  assert.equal(normalizeCombinedHeatmapIntensityMode('quantile'), 'quantile');
+  assert.equal(normalizeCombinedHeatmapIntensityMode('logarithmic'), 'logarithmic');
+  assert.equal(normalizeCombinedHeatmapIntensityMode('linear'), 'linear');
+  assert.equal(normalizeCombinedHeatmapIntensityMode('unexpected'), 'quantile');
+
+  const daily = mergeCombinedDailyUsage([
+    { dateISO: '2026-07-17', processed: 1 },
+    { dateISO: '2026-07-18', processed: 9 },
+    { dateISO: '2026-07-19', processed: 99 },
+    { dateISO: '2026-07-20', processed: 999 },
+  ], []);
+  const base = { range: '30d' as const, endDateISO: '2026-07-20' };
+  const logarithmic = renderCombinedHeatmapSvg(daily, { ...base, intensityMode: 'logarithmic' });
+  const linear = renderCombinedHeatmapSvg(daily, { ...base, intensityMode: 'linear' });
+  const quantile = renderCombinedHeatmapSvg(daily, { ...base, intensityMode: 'quantile' });
+
+  assert.notEqual(logarithmic, linear);
+  assert.notEqual(quantile, linear);
+  assert.equal(
+    logarithmic,
+    renderCombinedHeatmapSvg(daily, { ...base, intensityMode: 'logarithmic' }),
+  );
 });
 
 test('30d and 90d SVG windows render every date from non-Sunday starts in the correct weekday row', () => {

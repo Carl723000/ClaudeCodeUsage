@@ -146,6 +146,8 @@ export interface CodexHourlyUsageView {
 }
 
 export interface CodexTokenComposition {
+  /** Uncached input plus output. Kept outside the stack because output is already a segment. */
+  uncachedUsage: number;
   freshInput: number;
   cachedInput: number;
   output: number;
@@ -249,8 +251,10 @@ export function tokenComposition(
   const input = Math.max(0, total.input);
   const cachedInput = Math.min(input, Math.max(0, total.cachedInput));
   const output = Math.max(0, total.output);
+  const freshInput = Math.max(0, input - cachedInput);
   return {
-    freshInput: Math.max(0, input - cachedInput),
+    uncachedUsage: freshInput + output,
+    freshInput,
     cachedInput,
     output,
     reasoningWithinOutput: Math.min(output, Math.max(0, total.reasoning)),
