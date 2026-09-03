@@ -182,6 +182,12 @@ same byte object to the configured BYOK endpoint. Feedback, comparable pairs,
 and comparison envelopes remain local and accept no prompt, response, path,
 session, title, endpoint, or credential field.
 
+Advice consent changes invalidate prepared handles immediately. A host-side
+pending-write counter blocks new previews and sends until every queued consent
+write settles; failed persistence stays closed. Aggregate/prompt revocation also
+cancels active advice transports through the existing network owner, separately
+from user-draft Optimizer calls. Cancellation cannot recall transmitted bytes.
+
 The machine salt lives in VS Code `globalState`, not in the index file. Worker
 progress/results/errors and diagnostics contain anonymous counts and timings,
 not paths or identifiers.

@@ -114,7 +114,7 @@ The default advice snapshot is `aggregates-only`, and its inner evidence JSON om
 
 ## 6. Local feedback and versioned persistence
 
-The experimental UI's only write target is `ccu.adviceEffectiveness.localState` in VS Code `globalState`, currently schema version 2. The v2 envelope permits only:
+The experimental UI's only write target is `ccu.adviceEffectiveness.localState` in VS Code `globalState`, currently schema version 3. The v3 envelope permits only:
 
 - feature mode and two consent enums;
 - opaque validated advice / recommendation / pair / rubric / metric IDs;
@@ -127,12 +127,12 @@ It accepts no prompt, payload, explanation, endpoint, path, raw session ID, or a
 
 Migration and degradation policy:
 
-- Missing state yields an all-closed v2 default.
-- Valid v2 state loads unchanged.
+- Missing state yields an all-closed v3 default.
+- Current v3 state loads unchanged. Supported legacy v2/v3 shapes migrate in place to the current bounded feedback, suppression, comparable-pair, and comparison-result shape.
 - A valid v1 envelope migrates only validated feedback; feature mode, aggregate consent, and prompt consent all close, and comparable pairs start empty.
 - An unknown future version, extra field, duplicate ID, invalid enum, non-finite number, or storage error returns the all-closed state and does not overwrite the unknown/corrupt source.
 - After a write failure, the host enters degraded mode and rejects further consent or feedback mutations.
-- A v2 state with explicit prompt consent but no aggregate consent is treated as corrupt, fails closed as a whole, and is never overwritten.
+- A state with explicit prompt consent but no aggregate consent is treated as corrupt, fails closed as a whole, and is never overwritten.
 
 The foundation's separate `feedback.ts` / `claudeCodeUsage.adviceEffectiveness.feedback.v1` event ledger remains for compatibility tests, but it is not the integrated UI's write target and is not silently merged into the v2 envelope. Any future migration needs a separately reviewed one-time import; code must not dual-write in the meantime.
 

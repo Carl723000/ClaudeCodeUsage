@@ -20,6 +20,7 @@ test('production host registers timer, watcher, worker, network, and backfill ow
     assert.ok(source.includes(actualStop), `missing actual stop: ${actualStop}`);
   }
   assert.match(source, /onAiSurfaceClosed\s*=.*cancelAdviceNetworks/s);
+  assert.match(source, /onAdviceConsentWithdrawn\s*=\s*\(\)\s*=>\s*this\.cancelAdviceNetworks\('cancelled', 'advice'\)/);
   assert.match(source, /scheduleFirstBackfillBlurDeadline/);
   assert.match(source, /CODEX_FIRST_BACKFILL_BLUR_DEADLINE_MS/);
   assert.match(source, /stopFirstBackfillBlurDeadline\('extension-dispose'\)/);

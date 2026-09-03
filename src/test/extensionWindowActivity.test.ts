@@ -833,6 +833,28 @@ test('network ownership remains active until an aborted request actually settles
   assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 0);
 });
 
+test('advice consent cancellation aborts advice without cancelling a separate optimizer request', async () => {
+  const extension = bareExtension();
+  let adviceSignal!: AbortSignal;
+  let optimizerSignal!: AbortSignal;
+  const advice = extension.runAdviceNetwork((signal: AbortSignal) => {
+    adviceSignal = signal;
+    return new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+  }, 'advice');
+  const optimizer = extension.runAdviceNetwork((signal: AbortSignal) => {
+    optimizerSignal = signal;
+    return new Promise<void>((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }));
+  }, 'optimizer');
+  await extension.cancelAdviceNetworks('cancelled', 'advice');
+  await advice;
+  assert.equal(adviceSignal.aborted, true);
+  assert.equal(optimizerSignal.aborted, false);
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 1);
+  await extension.cancelAdviceNetworks('cancelled');
+  await optimizer;
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.network, 0);
+});
+
 test('quota cold retry timer is owned and cleared on blur', async () => {
   const extension = bareExtension();
   const originalSetTimeout = global.setTimeout;

@@ -44,6 +44,7 @@ contain no account, path, project, thread, or log content.
 - **Stacked cost-composition charts** with a Y-axis and reference lines — see at a glance how much of each day / month went to input, output, cache-write and cache-read.
 - **Content tab** — estimates which content consumes your tokens (your prompts vs. tool results vs. assistant output / thinking).
 - **AI advice** (opt-in) — starts with local evidence and explainable actions. Optional BYOK personalisation defaults to aggregates only; prompt samples require separate consent. The exact full request is previewed before a separate Send action, and helpful / not-helpful / applied feedback stays local. Recommendations can be snoozed for a bounded period and return after expiry or on demand.
+  Withdrawing advice consent immediately invalidates previews and cancels active advice requests; already transmitted bytes cannot be recalled.
 - **Multi-vendor pricing** — Opus 4.x / Sonnet 4.x / Haiku 4.5 verified against Anthropic's public pricing; reference rates for OpenAI / Gemini / DeepSeek / Kimi / GLM / Qwen with family-aware fallback. `Refresh Token Pricing` pulls live LiteLLM data.
 - **Personalisation** — language, timezone, decimal places, compact numbers, project grouping, dashboard auto-refresh toggle.
 

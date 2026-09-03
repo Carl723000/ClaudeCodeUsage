@@ -699,6 +699,7 @@ export class UsageWebviewProvider {
   ) => Promise<StructuredAdviceRequestResult>;
   public onAiSurfaceClosed?: () => void;
   public onAdviceDataCleared?: () => Promise<void>;
+  public onAdviceConsentWithdrawn?: () => Promise<void>;
   public onRequestLocalDataInventory?: (
     client: LocalDataClientSummary,
   ) => Promise<LocalDataInventory>;
@@ -758,6 +759,7 @@ export class UsageWebviewProvider {
     }
   >();
   private adviceConsentGeneration = 0;
+  private adviceConsentWritesPending = 0;
   private adviceLocalState: AdviceLocalState = createClosedAdviceLocalState();
   private adviceLocalStateStatus: 'loading' | 'ready' | 'degraded' = 'loading';
   private adviceLocalStateGeneration = 0;
@@ -931,32 +933,43 @@ export class UsageWebviewProvider {
       this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
       return;
     }
-    const saved = await this.enqueueAdviceLocalStateWrite((current) => {
-      if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
-      return {
-        ...current,
-        featureMode: 'enabled',
-        aggregateConsent,
-        promptSampleConsent,
-      };
-    });
-    if (!saved.ok) {
-      this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
-      return;
-    }
-    if (!saved.changed) {
-      this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
-      return;
-    }
+    const withdrawn =
+      (this.adviceLocalState.aggregateConsent === 'explicit' && aggregateConsent === 'not-granted') ||
+      (this.adviceLocalState.promptSampleConsent === 'explicit' && promptSampleConsent === 'not-granted');
+    // Revocation takes effect on receipt, not after a potentially slow disk write.
+    // A counter also covers overlapping consent changes in the shared writer queue.
+    this.adviceConsentWritesPending += 1;
     this.adviceConsentGeneration += 1;
     this.clearPreparedAdviceSnapshots(providerState.provider);
-    this.postAdviceMessage({
-      command: 'adviceConsentResult',
-      ok: true,
-      provider: providerState.provider,
-      aggregateConsent: saved.value.aggregateConsent,
-      promptSampleConsent: saved.value.promptSampleConsent,
-    });
+    const cancellation = withdrawn
+      ? Promise.resolve().then(() => this.onAdviceConsentWithdrawn?.()).then(() => true, () => false)
+      : Promise.resolve(true);
+    try {
+      const saved = await this.enqueueAdviceLocalStateWrite((current) => {
+        if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
+        return {
+          ...current,
+          featureMode: 'enabled',
+          aggregateConsent,
+          promptSampleConsent,
+        };
+      });
+      const cancelled = await cancellation;
+      if (!cancelled) this.adviceLocalStateStatus = 'degraded';
+      if (!saved.ok || !saved.changed || !cancelled) {
+        this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
+        return;
+      }
+      this.postAdviceMessage({
+        command: 'adviceConsentResult',
+        ok: true,
+        provider: providerState.provider,
+        aggregateConsent: saved.value.aggregateConsent,
+        promptSampleConsent: saved.value.promptSampleConsent,
+      });
+    } finally {
+      this.adviceConsentWritesPending -= 1;
+    }
   }
 
   private handlePrepareAdviceSnapshotMessage(message: Record<string, unknown>): void {
@@ -971,6 +984,7 @@ export class UsageWebviewProvider {
       (aggregate !== 'explicit' && aggregate !== 'not-granted') ||
       (promptSamples !== 'explicit' && promptSamples !== 'not-granted') ||
       this.adviceLocalStateStatus !== 'ready' ||
+      this.adviceConsentWritesPending > 0 ||
       aggregate !== this.adviceLocalState.aggregateConsent ||
       (promptSamples === 'explicit' && this.adviceLocalState.promptSampleConsent !== 'explicit')
     ) {
@@ -1047,6 +1061,9 @@ export class UsageWebviewProvider {
     if (
       !providerState ||
       !stored ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      this.adviceConsentWritesPending > 0 ||
+      this.adviceLocalState.aggregateConsent !== 'explicit' ||
       stored.provider !== providerState.provider ||
       stored.sourceRevision !== this.adviceSourceRevision(providerState) ||
       stored.consentGeneration !== this.adviceConsentGeneration ||

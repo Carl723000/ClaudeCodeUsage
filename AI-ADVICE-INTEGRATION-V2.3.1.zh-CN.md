@@ -110,7 +110,7 @@ SHA-256 是快照身份/一致性摘要，不是签名，也不代表服务端�
 
 ## 6. 本地反馈与版本化持久化
 
-实验 UI 的唯一写入目标是 VS Code `globalState` 中的 `ccu.adviceEffectiveness.localState`，当前 schema version 为 2。v2 envelope 只允许：
+实验 UI 的唯一写入目标是 VS Code `globalState` 中的 `ccu.adviceEffectiveness.localState`，当前 schema version 为 3。v3 envelope 只允许：
 
 - feature mode 与两个 consent enum；
 - opaque、格式已验证的 advice / recommendation / pair / rubric / metric IDs；
@@ -123,12 +123,12 @@ SHA-256 是快照身份/一致性摘要，不是签名，也不代表服务端�
 
 迁移/降级策略：
 
-- 缺少状态时返回全关闭的 v2 默认值。
-- 合法 v2 原样读取。
+- 缺少状态时返回全关闭的 v3 默认值。
+- 当前 v3 原样读取；受支持的旧 v2/v3 形状原地迁移到包含有界反馈、暂停、可比任务对与比较结果的当前形状。
 - 合法 v1 envelope 只迁移已验证反馈；feature、aggregate consent、prompt consent 全部重置为关闭，可比任务对从空数组开始。
 - 未知未来版本、额外字段、重复 ID、非法 enum、非有限数或存储错误都返回全关闭状态，并且不覆盖原始未知/损坏数据。
 - 写入失败后 host 进入 degraded 状态，拒绝继续修改 consent 或反馈。
-- v2 状态若出现 `promptSampleConsent=explicit` 但 aggregate consent 未授予，会作为损坏状态整体失败关闭，且不会覆盖原值。
+- 状态若出现 `promptSampleConsent=explicit` 但 aggregate consent 未授予，会作为损坏状态整体失败关闭，且不会覆盖原值。
 
 基础提交中的独立 `feedback.ts` / `claudeCodeUsage.adviceEffectiveness.feedback.v1` event ledger 仍保留供兼容测试，但不是集成 UI 的写入点，也不会被静默合并进 v2 envelope。未来若决定迁移，必须单独设计可审计的一次性导入；在此之前不得双写。
 

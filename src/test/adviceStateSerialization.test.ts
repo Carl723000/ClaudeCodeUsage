@@ -10,6 +10,8 @@ import {
   snoozeAdviceRecommendation,
 } from '../adviceEffectiveness/versionedPersistence';
 import { I18n } from '../i18n';
+import { prepareStructuredAdviceInvocation } from '../adviceEffectiveness/remoteAdvice';
+import { payloadInputFixture } from './adviceTestFixtures';
 
 class ControlledStorage implements AdviceLocalStateStorage {
   public value: AdviceLocalState | undefined;
@@ -71,6 +73,139 @@ async function createProvider(storage: AdviceLocalStateStorage): Promise<any> {
   provider.postAdviceMessage = () => undefined;
   return provider;
 }
+
+function grantedState(promptSamples = false): AdviceLocalState {
+  const state = createClosedAdviceLocalState();
+  state.featureMode = 'enabled';
+  state.aggregateConsent = 'explicit';
+  state.promptSampleConsent = promptSamples ? 'explicit' : 'not-granted';
+  return state;
+}
+
+async function preparedProvider(storage: AdviceLocalStateStorage, initial: AdviceLocalState) {
+  const provider = await createProvider(storage);
+  const input = payloadInputFixture();
+  const messages: Array<Record<string, unknown>> = [];
+  provider.adviceLocalState = initial;
+  provider.postAdviceMessage = (message: Record<string, unknown>) => messages.push(message);
+  provider.adviceEffectivenessStates = {
+    claude: {
+      provider: 'claude', remotePreviewEligible: true, aggregate: input.aggregate,
+      promptSamples: [{ text: 'synthetic consent fixture' }],
+      contract: {
+        adviceId: 'advice-consent-test', recommendations: [],
+        observations: input.observations, evidence: input.evidence,
+        provenance: { locale: input.locale, sources: input.sources },
+      },
+    },
+  };
+  provider.onPrepareAdviceInvocation = (snapshot: any, sourceRevision: string, consentGeneration: number) =>
+    prepareStructuredAdviceInvocation(snapshot.prepared, {
+      apiFormat: 'openai', apiUrl: 'https://example.invalid/v1', model: 'fixture',
+      sourceRevision, consentGeneration, createdAtEpochMs: 1_000,
+    });
+  provider.handlePrepareAdviceSnapshotMessage({
+    provider: 'claude', aggregateConsent: 'explicit',
+    promptSampleConsent: initial.promptSampleConsent,
+  });
+  assert.equal(provider.preparedAdviceSnapshots.size, 1);
+  const snapshotId = [...provider.preparedAdviceSnapshots.keys()][0];
+  return { provider, snapshotId, messages };
+}
+
+test('withdrawal rejects an old preview before its durable consent write completes', async () => {
+  const initial = grantedState();
+  const storage = new ControlledStorage(initial);
+  const { provider, snapshotId } = await preparedProvider(storage, initial);
+  let sends = 0;
+  provider.onSendAdviceInvocation = async () => {
+    sends += 1;
+    return { ok: false, code: 'transport-error' };
+  };
+  const withdrawal = provider.handleAdviceConsentMessage({
+    provider: 'claude', aggregateConsent: 'not-granted', promptSampleConsent: 'not-granted',
+  });
+  await nextTurn();
+  assert.equal(storage.pending.length, 1);
+  await provider.handleSendAdviceSnapshotMessage({ provider: 'claude', snapshotId });
+  assert.equal(sends, 0, 'a pending disk write must not extend revoked permission');
+  storage.releaseNext();
+  await withdrawal;
+});
+
+test('prompt withdrawal blocks fresh previews until all queued consent writes settle', async () => {
+  const initial = grantedState(true);
+  const storage = new ControlledStorage(initial);
+  const { provider, messages } = await preparedProvider(storage, initial);
+  const change = { provider: 'claude', aggregateConsent: 'explicit', promptSampleConsent: 'not-granted' };
+  const first = provider.handleAdviceConsentMessage(change);
+  const second = provider.handleAdviceConsentMessage(change);
+  await nextTurn();
+  messages.length = 0;
+  provider.handlePrepareAdviceSnapshotMessage({ ...change, promptSampleConsent: 'explicit' });
+  assert.equal(messages[messages.length - 1]?.ok, false, 'cannot recreate the old personalized request');
+  assert.equal(provider.preparedAdviceSnapshots.size, 0);
+  storage.releaseNext();
+  await nextTurn();
+  assert.equal(storage.pending.length, 1);
+  provider.handlePrepareAdviceSnapshotMessage(change);
+  assert.equal(messages[messages.length - 1]?.ok, false, 'one settled write does not unlock another pending write');
+  storage.releaseNext();
+  await Promise.all([first, second]);
+  provider.handlePrepareAdviceSnapshotMessage(change);
+  assert.equal(messages[messages.length - 1]?.ok, true, 'fresh aggregate-only preview works after withdrawal settles');
+});
+
+for (const kind of ['aggregate', 'prompt'] as const) {
+  test(`${kind} withdrawal cancels an active send before storage settles`, async () => {
+    const initial = grantedState(true);
+    const storage = new ControlledStorage(initial);
+    const { provider, snapshotId, messages } = await preparedProvider(storage, initial);
+    let finish!: (value: unknown) => void;
+    let cancelled = false;
+    provider.onSendAdviceInvocation = () => new Promise((resolve) => { finish = resolve; });
+    provider.onAdviceConsentWithdrawn = async () => {
+      cancelled = true;
+      finish({ ok: false, code: 'transport-error' });
+    };
+    const send = provider.handleSendAdviceSnapshotMessage({ provider: 'claude', snapshotId });
+    await nextTurn();
+    const withdrawal = provider.handleAdviceConsentMessage({
+      provider: 'claude', aggregateConsent: kind === 'aggregate' ? 'not-granted' : 'explicit',
+      promptSampleConsent: 'not-granted',
+    });
+    await nextTurn();
+    assert.equal(storage.pending.length, 1);
+    assert.equal(cancelled, true, 'host cancellation cannot wait for disk persistence');
+    await send;
+    assert.equal(messages.some((m) => m.command === 'adviceSendResult' && m.ok === true), false);
+    storage.releaseNext();
+    await withdrawal;
+  });
+}
+
+test('failed consent persistence cannot revive an old preview or create a new one', async () => {
+  const initial = grantedState();
+  const { provider, snapshotId, messages } = await preparedProvider({
+    get: <T>() => initial as T,
+    update: async () => { throw new Error('synthetic storage failure'); },
+  }, initial);
+  let sends = 0;
+  provider.onSendAdviceInvocation = async () => {
+    sends += 1;
+    return { ok: false, code: 'transport-error' };
+  };
+  await provider.handleAdviceConsentMessage({
+    provider: 'claude', aggregateConsent: 'not-granted', promptSampleConsent: 'not-granted',
+  });
+  await provider.handleSendAdviceSnapshotMessage({ provider: 'claude', snapshotId });
+  provider.handlePrepareAdviceSnapshotMessage({
+    provider: 'claude', aggregateConsent: 'explicit', promptSampleConsent: 'not-granted',
+  });
+  assert.equal(sends, 0);
+  assert.equal(provider.preparedAdviceSnapshots.size, 0);
+  assert.equal(messages[messages.length - 1]?.ok, false);
+});
 
 test('clear is serialized after an older consent write and remains the final durable state', async () => {
   const initial = createClosedAdviceLocalState();

@@ -188,6 +188,8 @@ same full-request preview and separate explicit Send action as AI advice.
 - **No automatic AI traffic** — the feature is off by default, aggregate consent
   and prompt-personalisation consent are separate, and a request crosses the
   network only after the user previews it and clicks Send.
+  Withdrawing advice consent immediately invalidates previews and cancels active
+  advice requests; it cannot recall bytes already transmitted.
 - **Resumable first-use work** — Codex history and the rolling 30-day hour
   migration show why they are running, persist progress/failure/backoff state,
   and do not restart equivalent work after completion or on every refresh.

@@ -452,7 +452,10 @@ export class ClaudeCodeUsageExtension {
   private codexFirstBackfillBlurTimer: NodeJS.Timeout | undefined;
   private codexFirstBackfillBlurTimerLease: ResourceLease | undefined;
   private codexWorkerCancellationRequested = false;
-  private readonly activeAdviceNetworks = new Map<AbortController, ActiveNetworkOperation>();
+  private readonly activeAdviceNetworks = new Map<
+    AbortController,
+    ActiveNetworkOperation & { surface: 'advice' | 'optimizer' }
+  >();
   private readonly activeQuotaNetworks = new Map<AbortController, ActiveNetworkOperation>();
   private readonly codexProviderRetirements = new Set<Promise<void>>();
   private codexProviderRetirementFailure: unknown = null;
@@ -589,6 +592,7 @@ export class ClaudeCodeUsageExtension {
           expectedConsentGeneration,
           signal,
         }),
+        'optimizer',
       );
     };
     this.webviewProvider.onAiSurfaceClosed = () => {
@@ -596,6 +600,8 @@ export class ClaudeCodeUsageExtension {
     };
     this.webviewProvider.onAdviceDataCleared = () =>
       this.cancelAdviceNetworks('cancelled');
+    this.webviewProvider.onAdviceConsentWithdrawn = () =>
+      this.cancelAdviceNetworks('cancelled', 'advice');
     this.webviewProvider.onPrepareAdviceInvocation = (
       snapshot,
       sourceRevision,
@@ -2363,6 +2369,7 @@ export class ClaudeCodeUsageExtension {
 
   private async runAdviceNetwork<T>(
     request: (signal: AbortSignal) => Promise<T>,
+    surface: 'advice' | 'optimizer' = 'advice',
   ): Promise<T> {
     if (this.disposed) {
       throw new Error('Extension is disposed');
@@ -2386,7 +2393,7 @@ export class ClaudeCodeUsageExtension {
     const settled = new Promise<void>((resolve) => {
       markSettled = resolve;
     });
-    this.activeAdviceNetworks.set(controller, { lease, settled });
+    this.activeAdviceNetworks.set(controller, { lease, settled, surface });
     try {
       return await request(controller.signal);
     } finally {
@@ -2403,8 +2410,10 @@ export class ClaudeCodeUsageExtension {
       ResourceStopCondition,
       'cancelled' | 'feature-disabled' | 'extension-dispose' | 'settings-change'
     >,
+    surface?: 'advice' | 'optimizer',
   ): Promise<void> {
-    const active = [...this.activeAdviceNetworks.entries()];
+    const active = [...this.activeAdviceNetworks.entries()]
+      .filter(([, operation]) => surface === undefined || operation.surface === surface);
     await Promise.all(active.map(async ([controller, operation]) => {
       const { lease, settled } = operation;
       if (lease.active) {

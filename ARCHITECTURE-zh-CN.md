@@ -150,6 +150,10 @@ host 保管 Prepared 对象和 API key；webview 只拿到预览与不透明 han
 发给用户配置的 BYOK endpoint。Feedback、comparable pair 与 comparison envelope 全部保持本地，
 不接受 prompt、response、path、session、title、endpoint 或 credential 字段。
 
+Advice 同意变更会立即作废 Prepared handle。host 的 pending-write 计数器在全部排队同意
+写入结束前阻止新预览与发送；持久化失败保持关闭。聚合或提示授权撤回还会通过既有 network
+owner 取消在途建议请求，与仅含用户草稿的 Optimizer 请求隔离。取消不能追回已传出的字节。
+
 Machine salt 存在 VS Code `globalState`，不写入索引。Worker progress/result/error 与 diagnostics
 只含匿名计数与时间，不含 path 或 ID。
 

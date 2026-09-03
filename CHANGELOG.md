@@ -102,6 +102,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   polling, credentials, or a second scanner.
 
 ### Fixed
+- **Immediate advice-consent revocation** — withdrawing aggregate or prompt
+  consent immediately invalidates prepared previews and cancels active advice
+  requests, without waiting for local storage. New previews/sends stay blocked
+  until all consent writes settle; persistence failures stay closed. Unrelated
+  user-draft Optimizer requests are not cancelled. Already transmitted bytes
+  cannot be recalled.
 - **Claude watcher failures fall back safely** — asynchronous `fs.watch`
   errors (for example, an exhausted watch-handle limit) are now handled after
   registration, close the owned watcher cleanly, and leave normal polling
