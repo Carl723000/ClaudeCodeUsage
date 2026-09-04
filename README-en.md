@@ -10,7 +10,7 @@
 >
 > **What it is _not_:** a billing tool. All amounts are estimates based on public per-million-token rates. Refer to your Anthropic account for actual charges.
 
-> Screenshots are from the English UI. See the [main README](README.md) for the full feature reference.
+> Screenshots include English and Simplified Chinese. See the [main README](README.md) for the full feature reference.
 
 ## Screenshots
 
@@ -28,14 +28,19 @@ Hover the quota indicator for a breakdown:
 
 ### v2.3.1 Codex and Compare
 
+![Claude Today, Simplified Chinese, dark theme](images/v2.3.1/claude-today-zh-CN-dark.png)
+
 ![Codex overview, Simplified Chinese, dark theme](images/v2.3.1/codex-overview-zh-CN-dark.png)
 
 ![Codex weekly allowance estimate, English, dark theme](images/v2.3.1/codex-weekly-estimate-en-dark.png)
 
 ![Combined Claude and Codex heatmap, English, light theme](images/v2.3.1/compare-heatmap-en-light.png)
 
-These images come from the same installed v2.3.1 VSIX with synthetic data and
-contain no account, path, project, thread, or log content.
+These four v2.3.1 captures use the production renderer, synthetic fixtures, and VS Code Light+/Dark+ theme variables—not personal usage or billing evidence. Native VSIX installation is checked separately.
+
+- Codex shows **Today token usage** and separate **remaining quota**: 36% used means `wk 64%`. Hover shows utilisation bars, resets, and wrapped notes. Quota is last-observed local evidence, not a live balance.
+- Period details start collapsed; sharing settings sit below the preview. Sharing is on by default with an off switch and quantile, logarithmic, or linear intensity.
+- CLI calls count only when persistent sessions leave usage-bearing logs. Non-persisted calls cannot be backfilled; Today and Last 30 days use the configured timezone.
 
 ## Features
 

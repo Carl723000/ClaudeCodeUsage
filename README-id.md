@@ -10,7 +10,7 @@
 
 > **ini _Bukanlah_:** alat billing. Semua angka adalah estimasi berdasarkan tarif publik per-juta-token. Rujuk ke akun Anthropic Anda untuk biaya yang sebenarnya.
 
-> Screenshot berasal dari UI berbahasa Inggris. Lihat [README utama](README.md) untuk referensi fitur lengkap.
+> Screenshot mencakup UI bahasa Inggris dan Tionghoa Sederhana. Lihat [README utama](README.md) untuk referensi lengkap.
 
 ## Screenshot
 
@@ -28,13 +28,19 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 
 ### Codex dan Perbandingan v2.3.1
 
+![Claude hari ini, Tionghoa Sederhana, tema gelap](images/v2.3.1/claude-today-zh-CN-dark.png)
+
 ![Ringkasan Codex, Tionghoa Sederhana, tema gelap](images/v2.3.1/codex-overview-zh-CN-dark.png)
 
 ![Estimasi batas mingguan Codex, Inggris, tema gelap](images/v2.3.1/codex-weekly-estimate-en-dark.png)
 
 ![Heatmap gabungan Claude dan Codex, Inggris, tema terang](images/v2.3.1/compare-heatmap-en-light.png)
 
-Semua diambil dari VSIX v2.3.1 terpasang yang sama dengan data sintetis, tanpa akun, jalur, proyek, thread, atau isi log.
+Empat gambar v2.3.1 ini menggunakan renderer produksi, data sintetis, dan variabel tema VS Code Light+/Dark+, bukan bukti penggunaan pribadi atau tagihan. Instalasi VSIX native diverifikasi secara terpisah.
+
+- Codex menampilkan **token terpakai hari ini** dan **sisa kuota** secara terpisah: penggunaan mingguan 36% berarti `wk 64%`. Tooltip tetap menampilkan bilah penggunaan, waktu reset, dan catatan berbaris. Kuota berasal dari pengamatan lokal terakhir, bukan saldo langsung.
+- Detail periode tertutup secara default; pengaturan berbagi berada di bawah pratinjau. Berbagi aktif secara default dan dapat dimatikan, dengan intensitas kuantil, logaritmik, atau linear.
+- Panggilan CLI dihitung hanya jika sesi persisten menyimpan log dengan usage. Panggilan tanpa log tidak dapat dipulihkan; Hari ini dan 30 hari terakhir memakai zona waktu yang dikonfigurasi.
 
 ## Fitur
 

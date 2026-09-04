@@ -58,6 +58,10 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   and Codex use the configured timezone and shared `HH:00` labels.
 
 ### Changed
+- **Refreshed release documentation** — all seven README editions now show the
+  current Claude Today, Codex overview, collapsed weekly details, and vertical
+  sharing studio. Captures use the production renderer with disclosed synthetic
+  fixtures; a repeatable capture script keeps screenshot provenance explicit.
 - **Shared dashboard system** — Claude and Codex now reuse the same density,
   headings, disclosure controls, chart/table framing, empty states, focus
   treatment, responsive navigation, and light/dark design tokens while keeping

@@ -1458,6 +1458,7 @@ test('v2.3.1 README editions share release evidence and local-data boundaries', 
     'README-id.md',
   ];
   const releaseImages = [
+    'images/v2.3.1/claude-today-zh-CN-dark.png',
     'images/v2.3.1/codex-overview-zh-CN-dark.png',
     'images/v2.3.1/codex-weekly-estimate-en-dark.png',
     'images/v2.3.1/compare-heatmap-en-light.png',

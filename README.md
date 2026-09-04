@@ -43,7 +43,17 @@ the same data.
 
 ## Screenshots
 
-### v2.3.1 Codex and Compare
+### v2.3.1 Claude, Codex and Compare
+
+The four v2.3.1 images below are reproducible captures of the production dashboard
+renderer with synthetic fixtures and VS Code Light+/Dark+ theme variables, not
+personal usage or billing evidence. Native VSIX installation is verified separately.
+
+![Claude Today in Simplified Chinese, dark theme](images/v2.3.1/claude-today-zh-CN-dark.png)
+
+*Today and Last 30 days share the configured calendar timezone. CLI usage is
+counted only when normal persistent sessions leave usage-bearing local logs;
+calls made without session persistence cannot be reconstructed.*
 
 ![Codex overview in Simplified Chinese, dark theme](images/v2.3.1/codex-overview-zh-CN-dark.png)
 
@@ -54,7 +64,8 @@ Today, Last 30 days, months, models, effort, and all-time totals.*
 
 *Observed quota windows retain reset evidence locally. A valid used fraction can
 produce labelled total and unused subscription-durability estimates, including
-for the current window. Approximate evidence remains visible with low confidence.*
+for the current window. Approximate evidence remains visible with low confidence.
+Period details start collapsed; expand them to inspect the numeric evidence.*
 
 ![Combined Claude and Codex heatmap in English, light theme](images/v2.3.1/compare-heatmap-en-light.png)
 
@@ -62,9 +73,15 @@ for the current window. Approximate evidence remains visible with low confidence
 input or reasoning. Its preview-first share studio offers an Academic Violet
 default, curated/custom colors, deterministic local SVG, and privacy-safe
 Markdown. It is enabled by default and can be hidden with the single sharing
-workspace setting; the metric is activity volume, not productivity or billing.*
+workspace setting. Card settings sit below the preview; intensity can use quantile,
+logarithmic, or linear scaling. The metric is activity volume, not productivity or billing.*
 
-### Status bar
+### Claude status bar
+
+Codex uses a compact **Today token usage** item and a separate **remaining quota**
+item: observed 36% weekly utilisation displays `wk 64%`. The hover card retains
+utilisation progress bars, reset times, and wrapped explanations. Local Codex
+quota is last-observed evidence, not a live account balance.
 
 ![Status bar](images/v2-status-bar-en.png)
 
