@@ -9,6 +9,7 @@ import { chromium, expect } from '@playwright/test';
 
 const require = createRequire(import.meta.url);
 const { renderHarness } = require('./render-harness.cjs');
+const fixtureNow = Date.parse('2026-07-20T12:00:00.000Z');
 const output = resolve('images/v2.3.1');
 const views = {
   claude: { provider: 'claude', locale: 'zh-CN', theme: 'dark', fixture: 'default' },
@@ -19,12 +20,21 @@ const views = {
 const server = createServer(async (request, response) => {
   const options = views[request.url?.slice(1)];
   if (!options) { response.writeHead(404); response.end(); return; }
+  const NativeDate = Date;
   try {
+    // The shared harness freezes Date.now; documentation must also freeze the
+    // no-argument constructor used for the calendar end date.
+    globalThis.Date = class extends NativeDate {
+      constructor(...args) { super(...(args.length ? args : [fixtureNow])); }
+      static now() { return fixtureNow; }
+    };
     const html = await renderHarness({ ...options, autoRefresh: false, weeklyValue: true, shareStudio: true });
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
     response.end(html);
   } catch {
     response.writeHead(500); response.end('Fixture rendering failed');
+  } finally {
+    globalThis.Date = NativeDate;
   }
 });
 await new Promise((done) => server.listen(0, '127.0.0.1', done));
