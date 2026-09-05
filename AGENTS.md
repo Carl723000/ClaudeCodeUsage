@@ -213,3 +213,6 @@ Co-authored-by: OpenAI Codex <215057067+openai-codex[bot]@users.noreply.github.c
 ```
 - Keep controlled comment-only first-pass automation separate from the
   privileged maintainer-only mention workflow.
+
+## Codex 工具適配
+瀏覽器操作使用當前 Codex browser／computer-use 工具；原文的 Claude MCP 工具名稱只描述操作意圖，不能直接呼叫。提問依目前模式使用可用工具；Git 操作仍需當次明確授權。
