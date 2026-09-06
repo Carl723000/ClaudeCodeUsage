@@ -173,6 +173,15 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Duplicate share rows fail safely** — identical provider/date rows are
   idempotent, conflicting duplicates block export, and absent dates render as
   zero in the selected range.
+- **Smooth Codex dashboard scrolling** — scroll position is persisted once
+  after a gesture instead of serializing Webview state on every animation
+  frame. Live first-index progress now patches its status text in place rather
+  than rebuilding the complete dashboard DOM every 250 ms, so active indexing
+  no longer interrupts scrolling or disclosure state.
+- **Per-model API-equivalent headlines** — Codex model disclosures now follow
+  Claude's visual meaning: the green value is an exact-model API-equivalent
+  price with pricing-coverage help. Unknown models remain visibly unpriced, and
+  effort disclosures keep their uncached-token value in neutral text.
 - **OpenAI reasoning-effort requests** — OpenAI-compatible request bodies now
   send `reasoning_effort` without the unsupported top-level `thinking`
   parameter, fixing [#94](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/94).

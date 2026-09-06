@@ -197,6 +197,11 @@ same full-request preview and separate explicit Send action as AI advice.
 - **Explicit Codex uncached composition** — Token composition shows uncached
   usage (uncached input + output) above the non-overlapping uncached-input /
   cached-input / output stack; reasoning remains a subset of output.
+- **Smooth live Codex dashboard** — scroll state is saved once after a gesture,
+  and active index progress updates its text in place instead of rebuilding the
+  page. Per-model disclosure headlines now use Claude's green-money convention:
+  exact-model API-equivalent price with coverage help; unknown models show `—`,
+  while effort headlines keep neutral uncached-token values.
 - **OpenAI reasoning compatibility** — OpenAI-compatible optimizer requests
   send `reasoning_effort` without the unsupported top-level `thinking`
   parameter, resolving [#94](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/94).
