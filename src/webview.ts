@@ -11,6 +11,23 @@ import {
 } from './settings';
 import { buildResumeCommand, isUsableCwd, isValidSessionId, isUnderDir } from './sessionResume';
 import { renderHeatmapSvg } from './heatmapSvg';
+import {
+  CombinedHeatmapRange,
+  claudeDailyPointsFromUsage,
+  codexDailyPointsFromUsage,
+  combinedHeatmapFilename,
+  combinedHeatmapMarkdown,
+  mergeCombinedDailyUsage,
+  normalizeCombinedHeatmapRange,
+  sanitizeCombinedHeatmapTitle,
+  selectCombinedHeatmapWindow,
+} from './combinedHeatmap';
+import {
+  normalizeCombinedHeatmapAccent,
+  normalizeCombinedHeatmapIntensityMode,
+  normalizeCombinedHeatmapPalette,
+  renderCombinedHeatmapSvg,
+} from './combinedHeatmapSvg';
 import { DEFAULT_SECTIONS, ShareSections, buildShareCardData, shareCardFilename } from './shareCard';
 import { renderShareCardSvg, ShareCardTheme } from './shareCardSvg';
 import { parseConversation } from './conversationLog';
@@ -47,6 +64,48 @@ import { getProviderNavClientScript } from './providerNavClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
+import { createHash, randomBytes } from 'crypto';
+import {
+  AdviceEffectivenessProvider,
+  AdviceEffectivenessProviderState,
+  AdviceEffectivenessProviderStates,
+  PreparedAdviceSnapshot,
+  prepareAdviceSnapshot,
+} from './adviceEffectiveness/integration';
+import type { PreparedAiInvocation } from './adviceEffectiveness/preparedRequest';
+import { previewAiInvocation } from './adviceEffectiveness/preparedRequest';
+import type {
+  StructuredAdviceRequestResult,
+} from './adviceEffectiveness/remoteAdvice';
+import type { StructuredAdviceReferences } from './adviceEffectiveness/structuredOutput';
+import { AdviceRecommendation, createAdviceContract } from './adviceEffectiveness/contract';
+import type { PreparedOptimizerResult } from './optimizerRequest';
+import type { BackgroundWorkReason } from './backgroundWorkState';
+import {
+  AdviceLocalState,
+  AdviceLocalStateStorage,
+  StoredComparablePair,
+  appendAdviceComparisonResult,
+  appendStoredComparablePair,
+  createClearedAdviceLocalState,
+  createClosedAdviceLocalState,
+  loadAndMigrateAdviceLocalState,
+  adviceRecommendationSnoozedUntil,
+  ADVICE_SNOOZE_DURATION_MS,
+  ADVICE_LOCAL_STATE_KEY,
+  resumeAdviceRecommendation,
+  saveAdviceLocalState,
+  snoozeAdviceRecommendation,
+  upsertAdviceLocalFeedback,
+} from './adviceEffectiveness/versionedPersistence';
+import {
+  CODEX_COMPARISON_MEASUREMENT_PROFILE_VERSION,
+  CODEX_LOCAL_RECOMMENDATION_VERSION,
+  CodexComparableTaskProjection,
+  buildAppliedComparablePairs,
+  isComparableCodexRecommendationId,
+} from './adviceEffectiveness/comparisonProduction';
+import { buildAdviceComparisonResultEnvelope } from './adviceEffectiveness/comparisonResult';
 import {
   AttributionScope,
   BranchUsage,
@@ -61,12 +120,486 @@ import {
   UsageData,
   WorkflowUsage,
 } from './types';
+import { dayKeyInZone, resolveTimeZone, rollingDayKeys, rollingDayKeysFromDayKey } from './dateKeys';
+import {
+  LocalDataAction,
+  LocalDataActionResult,
+  LocalDataClientAction,
+  LocalDataClientSummary,
+  LocalDataInventory,
+  approximateJsonBytes,
+  finiteTimestampRange,
+  isLocalDataAction,
+} from './localDataControls';
 
 interface CodexRenderProgress {
   scannedFiles: number;
   totalFiles: number;
   indexedBytes: number;
   totalBytes: number;
+  reason?: BackgroundWorkReason;
+}
+
+const OPTIMIZER_FEEDBACK_RECOMMENDATION_ID = 'recommendation-optimizer-result-v1';
+
+interface LocalDataUiCopy {
+  title: string;
+  intro: string;
+  inventory: string;
+  refresh: string;
+  category: string;
+  location: string;
+  schema: string;
+  sizeCount: string;
+  dateRange: string;
+  network: string;
+  clearability: string;
+  actions: string;
+  rebuildIndex: string;
+  quotaScope: string;
+  clearQuota: string;
+  clearAdvice: string;
+  resetUi: string;
+  resetSharing: string;
+  clearByok: string;
+  clearAll: string;
+  loading: string;
+  unavailable: string;
+  bytes: string;
+  items: string;
+  sourceExclusions: string;
+}
+
+function localDataUiCopy(locale: string): LocalDataUiCopy {
+  if (locale === 'zh-CN') {
+    return {
+      title: '本地数据与隐私控制',
+      intro: '清单只显示类别、非敏感位置类型和汇总元数据；不会显示路径、账号指纹、设置值或日志内容。',
+      inventory: '本地数据清单',
+      refresh: '刷新清单',
+      category: '类别',
+      location: '位置类型',
+      schema: 'Schema',
+      sizeCount: '约占用 / 数量',
+      dateRange: '最早 / 最新',
+      network: '可能的网络交互',
+      clearability: '清除方式',
+      actions: '安全清除与重建',
+      rebuildIndex: '重建 Codex 索引…',
+      quotaScope: '额度历史范围',
+      clearQuota: '清除所选额度历史…',
+      clearAdvice: '清除建议数据…',
+      resetUi: '重置界面状态…',
+      resetSharing: '重置分享偏好…',
+      clearByok: '清除 BYOK 密钥…',
+      clearAll: '清除全部插件派生数据…',
+      loading: '正在读取不含敏感值的本地清单…',
+      unavailable: '暂时无法读取本地数据清单。',
+      bytes: '字节',
+      items: '项',
+      sourceExclusions: '始终排除：',
+    };
+  }
+  return {
+    title: 'Local data and privacy controls',
+    intro: 'The inventory exposes categories, non-sensitive location classes, and aggregate metadata only—never paths, account fingerprints, setting values, or log content.',
+    inventory: 'Local data inventory',
+    refresh: 'Refresh inventory',
+    category: 'Category',
+    location: 'Location class',
+    schema: 'Schema',
+    sizeCount: 'Approx. size / count',
+    dateRange: 'Oldest / newest',
+    network: 'Possible network interaction',
+    clearability: 'Clearing route',
+    actions: 'Safe clearing and rebuild',
+    rebuildIndex: 'Rebuild Codex index…',
+    quotaScope: 'Quota-history scope',
+    clearQuota: 'Clear selected quota history…',
+    clearAdvice: 'Clear advice data…',
+    resetUi: 'Reset UI state…',
+    resetSharing: 'Reset sharing preferences…',
+    clearByok: 'Clear BYOK secret…',
+    clearAll: 'Clear all extension-derived data…',
+    loading: 'Reading a value-free local inventory…',
+    unavailable: 'The local data inventory is temporarily unavailable.',
+    bytes: 'bytes',
+    items: 'items',
+    sourceExclusions: 'Always excluded:',
+  };
+}
+
+interface CombinedHeatmapUiCopy {
+  eyebrow: string;
+  panelTitle: string;
+  description: string;
+  previewLabel: string;
+  privateBadge: string;
+  settingsLabel: string;
+  defaultTitle: string;
+  titleLabel: string;
+  rangeLabel: string;
+  last30: string;
+  last90: string;
+  year: string;
+  intensityLabel: string;
+  intensityQuantile: string;
+  intensityLogarithmic: string;
+  intensityLinear: string;
+  paletteLabel: string;
+  academicViolet: string;
+  claudeOrange: string;
+  codexBlue: string;
+  githubGreen: string;
+  customPalette: string;
+  customAccent: string;
+  privacyToggle: string;
+  privacyIncludes: string;
+  privacyExcludes: string;
+  updatePreview: string;
+  exportSvg: string;
+  copyMarkdown: string;
+  resetSharing: string;
+  resetComplete: string;
+  resetFailed: string;
+  markdownLabel: string;
+  noData: string;
+  activityDisclaimer: string;
+  combinedLabel: string;
+  processedTokensLabel: string;
+  svgFooterNote: string;
+}
+
+function combinedHeatmapIntensityUiCopy(locale: string): Pick<
+  CombinedHeatmapUiCopy,
+  'intensityLabel' | 'intensityQuantile' | 'intensityLogarithmic' | 'intensityLinear'
+> {
+  const copy: Record<string, [string, string, string, string]> = {
+    en: ['Intensity scale', 'Quantile', 'Logarithmic', 'Linear'],
+    'de-DE': ['Intensitätsskala', 'Quantil', 'Logarithmisch', 'Linear'],
+    'zh-TW': ['色階映射', '分位數', '對數', '線性'],
+    'zh-CN': ['色阶映射', '分位数', '对数', '线性'],
+    ja: ['強度スケール', '分位数', '対数', '線形'],
+    ko: ['강도 스케일', '분위수', '로그', '선형'],
+    'pt-BR': ['Escala de intensidade', 'Quantil', 'Logarítmica', 'Linear'],
+    id: ['Skala intensitas', 'Kuantil', 'Logaritmik', 'Linear'],
+  };
+  const [intensityLabel, intensityQuantile, intensityLogarithmic, intensityLinear] = copy[locale] ?? copy.en;
+  return { intensityLabel, intensityQuantile, intensityLogarithmic, intensityLinear };
+}
+
+function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
+  const intensity = combinedHeatmapIntensityUiCopy(locale);
+  if (locale === 'zh-CN') {
+    return {
+      ...intensity,
+      eyebrow: '分享工作台',
+      panelTitle: '综合活动热力图与分享卡',
+      description: '按本地自然日合并 Claude 与 Codex 的已处理 Token 活动量；默认强度不是成本。',
+      previewLabel: '实时预览',
+      privateBadge: '仅含隐私安全的日汇总',
+      settingsLabel: '卡片设置',
+      defaultTitle: 'Claude + Codex 本地活动',
+      titleLabel: '分享标题',
+      rangeLabel: '时间范围',
+      last30: '最近 30 天',
+      last90: '最近 90 天',
+      year: '最近一年',
+      paletteLabel: '热力图配色',
+      academicViolet: '学术紫',
+      claudeOrange: 'Claude 橙',
+      codexBlue: 'Codex 蓝',
+      githubGreen: 'GitHub 绿',
+      customPalette: '自定义',
+      customAccent: '自定义主色',
+      privacyToggle: '显示隐私预览',
+      privacyIncludes: '导出包含：自定义标题、日期范围，以及 Claude、Codex 和综合的每日已处理 Token 汇总。',
+      privacyExcludes: '明确排除：账号、项目、线程标题、本地路径和日志内容。',
+      updatePreview: '更新预览',
+      exportSvg: '导出 SVG…',
+      copyMarkdown: '复制 Markdown',
+      resetSharing: '重置分享偏好',
+      resetComplete: '分享偏好已重置。',
+      resetFailed: '无法完全重置分享偏好。',
+      markdownLabel: 'README / Markdown 引用片段',
+      noData: '所选时间范围内尚无本地活动。',
+      activityDisclaimer: '综合 Token 仅表示本地活动量，不代表生产率、订阅账单或两个 provider 的能力等价。',
+      combinedLabel: '综合',
+      processedTokensLabel: '已处理 Token',
+      svgFooterNote: '本地活动量 · 不代表生产率、账单或 provider 能力等价',
+    };
+  }
+  if (locale === 'zh-TW') {
+    return {
+      ...intensity,
+      eyebrow: '分享工作台',
+      panelTitle: '綜合活動熱力圖與分享卡',
+      description: '依本機自然日合併 Claude 與 Codex 的已處理 Token 活動量；預設強度不是成本。',
+      previewLabel: '即時預覽',
+      privateBadge: '僅含隱私安全的每日彙總',
+      settingsLabel: '卡片設定',
+      defaultTitle: 'Claude + Codex 本機活動',
+      titleLabel: '分享標題',
+      rangeLabel: '時間範圍',
+      last30: '最近 30 天',
+      last90: '最近 90 天',
+      year: '最近一年',
+      paletteLabel: '熱力圖配色',
+      academicViolet: '學術紫',
+      claudeOrange: 'Claude 橙',
+      codexBlue: 'Codex 藍',
+      githubGreen: 'GitHub 綠',
+      customPalette: '自訂',
+      customAccent: '自訂主色',
+      privacyToggle: '顯示隱私預覽',
+      privacyIncludes: '匯出包含：自訂標題、日期範圍，以及 Claude、Codex 和綜合的每日已處理 Token 彙總。',
+      privacyExcludes: '明確排除：帳號、專案、執行緒標題、本機路徑和記錄內容。',
+      updatePreview: '更新預覽',
+      exportSvg: '匯出 SVG…',
+      copyMarkdown: '複製 Markdown',
+      resetSharing: '重設分享偏好',
+      resetComplete: '分享偏好已重設。',
+      resetFailed: '無法完全重設分享偏好。',
+      markdownLabel: 'README / Markdown 引用片段',
+      noData: '所選時間範圍內尚無本機活動。',
+      activityDisclaimer: '綜合 Token 僅表示本機活動量，不代表生產力、訂閱帳單或兩個 provider 的能力等價。',
+      combinedLabel: '綜合',
+      processedTokensLabel: '已處理 Token',
+      svgFooterNote: '本機活動量 · 不代表生產力、帳單或 provider 能力等價',
+    };
+  }
+  if (locale === 'de-DE') {
+    return {
+      ...intensity,
+      eyebrow: 'Freigabe-Arbeitsbereich',
+      panelTitle: 'Kombinierte Aktivitäts-Heatmap und Freigabekarte',
+      description: 'Fasst die verarbeitete Token-Aktivität von Claude und Codex nach lokalem Kalendertag zusammen. Die Kosten sind nicht die Standardintensität.',
+      previewLabel: 'Live-Vorschau',
+      privateBadge: 'Nur datenschutzsichere Tagesaggregate',
+      settingsLabel: 'Karteneinstellungen',
+      defaultTitle: 'Claude + Codex lokale Aktivität',
+      titleLabel: 'Freigabetitel',
+      rangeLabel: 'Zeitraum',
+      last30: 'Letzte 30 Tage',
+      last90: 'Letzte 90 Tage',
+      year: 'Letztes Jahr',
+      paletteLabel: 'Heatmap-Farben',
+      academicViolet: 'Akademisches Violett',
+      claudeOrange: 'Claude Orange',
+      codexBlue: 'Codex Blau',
+      githubGreen: 'GitHub Grün',
+      customPalette: 'Benutzerdefiniert',
+      customAccent: 'Benutzerdefinierter Akzent',
+      privacyToggle: 'Datenschutzvorschau anzeigen',
+      privacyIncludes: 'Export enthält: den benutzerdefinierten Titel, den Zeitraum sowie die täglichen Claude-, Codex- und kombinierten Gesamtsummen der verarbeiteten Token.',
+      privacyExcludes: 'Ausdrücklich ausgeschlossen: Konten, Projekte, Thread-Titel, lokale Pfade und Protokollinhalte.',
+      updatePreview: 'Vorschau aktualisieren',
+      exportSvg: 'SVG exportieren…',
+      copyMarkdown: 'Markdown kopieren',
+      resetSharing: 'Freigabeeinstellungen zurücksetzen',
+      resetComplete: 'Freigabeeinstellungen wurden zurückgesetzt.',
+      resetFailed: 'Die Freigabeeinstellungen konnten nicht vollständig zurückgesetzt werden.',
+      markdownLabel: 'README-/Markdown-Ausschnitt',
+      noData: 'Im ausgewählten Zeitraum sind noch keine lokalen Aktivitätsdaten verfügbar.',
+      activityDisclaimer: 'Kombinierte Token beschreiben das lokale Aktivitätsvolumen, nicht Produktivität, Abonnementkosten oder die Gleichwertigkeit der Anbieterfähigkeiten.',
+      combinedLabel: 'Kombiniert',
+      processedTokensLabel: 'verarbeitete Token',
+      svgFooterNote: 'Lokales Aktivitätsvolumen · nicht Produktivität, Abrechnung oder Anbieter-Gleichwertigkeit',
+    };
+  }
+  if (locale === 'ja') {
+    return {
+      ...intensity,
+      eyebrow: '共有ワークスペース',
+      panelTitle: '統合アクティビティヒートマップと共有カード',
+      description: 'Claude と Codex の処理済みトークン活動をローカルの暦日単位で統合します。既定の強度はコストではありません。',
+      previewLabel: 'ライブプレビュー',
+      privateBadge: 'プライバシーに配慮した日次集計のみ',
+      settingsLabel: 'カード設定',
+      defaultTitle: 'Claude + Codex のローカルアクティビティ',
+      titleLabel: '共有タイトル',
+      rangeLabel: '期間',
+      last30: '過去30日間',
+      last90: '過去90日間',
+      year: '過去1年間',
+      paletteLabel: 'ヒートマップの配色',
+      academicViolet: 'アカデミックバイオレット',
+      claudeOrange: 'Claude オレンジ',
+      codexBlue: 'Codex ブルー',
+      githubGreen: 'GitHub グリーン',
+      customPalette: 'カスタム',
+      customAccent: 'カスタムアクセントカラー',
+      privacyToggle: 'プライバシープレビューを表示',
+      privacyIncludes: 'エクスポートに含まれるもの: カスタムタイトル、期間、Claude・Codex・統合の日次処理済みトークン合計。',
+      privacyExcludes: '明示的に除外されるもの: アカウント、プロジェクト、スレッドタイトル、ローカルパス、ログ内容。',
+      updatePreview: 'プレビューを更新',
+      exportSvg: 'SVG をエクスポート…',
+      copyMarkdown: 'Markdown をコピー',
+      resetSharing: '共有設定をリセット',
+      resetComplete: '共有設定をリセットしました。',
+      resetFailed: '共有設定を完全にリセットできませんでした。',
+      markdownLabel: 'README / Markdown スニペット',
+      noData: '選択した期間にはまだローカルアクティビティがありません。',
+      activityDisclaimer: '統合トークンはローカルの活動量を示すものであり、生産性、サブスクリプション料金、プロバイダー間の能力の等価性を表すものではありません。',
+      combinedLabel: '統合',
+      processedTokensLabel: '処理済みトークン',
+      svgFooterNote: 'ローカルの活動量 · 生産性、請求額、プロバイダー間の等価性を表すものではありません',
+    };
+  }
+  if (locale === 'ko') {
+    return {
+      ...intensity,
+      eyebrow: '공유 작업 공간',
+      panelTitle: '통합 활동 히트맵과 공유 카드',
+      description: 'Claude와 Codex의 처리된 토큰 활동을 로컬 달력 날짜 기준으로 통합합니다. 기본 강도는 비용이 아닙니다.',
+      previewLabel: '실시간 미리보기',
+      privateBadge: '개인정보를 보호하는 일별 집계만',
+      settingsLabel: '카드 설정',
+      defaultTitle: 'Claude + Codex 로컬 활동',
+      titleLabel: '공유 제목',
+      rangeLabel: '기간',
+      last30: '최근 30일',
+      last90: '최근 90일',
+      year: '최근 1년',
+      paletteLabel: '히트맵 색상',
+      academicViolet: '아카데믹 바이올렛',
+      claudeOrange: 'Claude 오렌지',
+      codexBlue: 'Codex 블루',
+      githubGreen: 'GitHub 그린',
+      customPalette: '사용자 지정',
+      customAccent: '사용자 지정 강조색',
+      privacyToggle: '개인정보 미리보기 표시',
+      privacyIncludes: '내보내기에 포함되는 항목: 사용자 지정 제목, 기간, Claude·Codex·통합 일별 처리된 토큰 합계.',
+      privacyExcludes: '명시적으로 제외되는 항목: 계정, 프로젝트, 스레드 제목, 로컬 경로, 로그 내용.',
+      updatePreview: '미리보기 업데이트',
+      exportSvg: 'SVG 내보내기…',
+      copyMarkdown: 'Markdown 복사',
+      resetSharing: '공유 환경설정 재설정',
+      resetComplete: '공유 환경설정이 재설정되었습니다.',
+      resetFailed: '공유 환경설정을 완전히 재설정하지 못했습니다.',
+      markdownLabel: 'README / Markdown 스니펫',
+      noData: '선택한 기간에는 아직 로컬 활동 데이터가 없습니다.',
+      activityDisclaimer: '통합 토큰은 로컬 활동량을 나타낼 뿐, 생산성이나 구독 결제액, 공급자 간 성능 등가성을 의미하지 않습니다.',
+      combinedLabel: '통합',
+      processedTokensLabel: '처리된 토큰',
+      svgFooterNote: '로컬 활동량 · 생산성, 청구액, 공급자 등가성을 의미하지 않음',
+    };
+  }
+  if (locale === 'pt-BR') {
+    return {
+      ...intensity,
+      eyebrow: 'Espaço de compartilhamento',
+      panelTitle: 'Mapa de calor de atividade combinado e cartão de compartilhamento',
+      description: 'Combina a atividade de tokens processados do Claude e do Codex por dia do calendário local. O custo não é a intensidade padrão.',
+      previewLabel: 'Prévia em tempo real',
+      privateBadge: 'Somente agregados diários que preservam a privacidade',
+      settingsLabel: 'Configurações do cartão',
+      defaultTitle: 'Atividade local do Claude + Codex',
+      titleLabel: 'Título do compartilhamento',
+      rangeLabel: 'Intervalo de datas',
+      last30: 'Últimos 30 dias',
+      last90: 'Últimos 90 dias',
+      year: 'Último ano',
+      paletteLabel: 'Cores do mapa de calor',
+      academicViolet: 'Violeta Acadêmico',
+      claudeOrange: 'Claude Laranja',
+      codexBlue: 'Codex Azul',
+      githubGreen: 'GitHub Verde',
+      customPalette: 'Personalizado',
+      customAccent: 'Cor de destaque personalizada',
+      privacyToggle: 'Mostrar prévia de privacidade',
+      privacyIncludes: 'A exportação inclui: o título personalizado, o intervalo de datas e os totais diários agregados de tokens processados do Claude, do Codex e combinados.',
+      privacyExcludes: 'Explicitamente excluído: contas, projetos, títulos de threads, caminhos locais e conteúdo de logs.',
+      updatePreview: 'Atualizar prévia',
+      exportSvg: 'Exportar SVG…',
+      copyMarkdown: 'Copiar Markdown',
+      resetSharing: 'Redefinir preferências de compartilhamento',
+      resetComplete: 'Preferências de compartilhamento redefinidas.',
+      resetFailed: 'Não foi possível redefinir totalmente as preferências de compartilhamento.',
+      markdownLabel: 'Trecho de README / Markdown',
+      noData: 'Ainda não há atividade local disponível no intervalo selecionado.',
+      activityDisclaimer: 'Os tokens combinados descrevem o volume de atividade local, não produtividade, cobrança da assinatura ou equivalência de capacidade entre provedores.',
+      combinedLabel: 'Combinado',
+      processedTokensLabel: 'tokens processados',
+      svgFooterNote: 'Volume de atividade local · não produtividade, cobrança ou equivalência entre provedores',
+    };
+  }
+  if (locale === 'id') {
+    return {
+      ...intensity,
+      eyebrow: 'Ruang kerja berbagi',
+      panelTitle: 'Heatmap aktivitas gabungan dan kartu berbagi',
+      description: 'Menggabungkan aktivitas token yang diproses oleh Claude dan Codex berdasarkan hari kalender lokal. Biaya bukan intensitas default.',
+      previewLabel: 'Pratinjau langsung',
+      privateBadge: 'Hanya agregat harian yang aman bagi privasi',
+      settingsLabel: 'Pengaturan kartu',
+      defaultTitle: 'Aktivitas lokal Claude + Codex',
+      titleLabel: 'Judul berbagi',
+      rangeLabel: 'Rentang tanggal',
+      last30: '30 hari terakhir',
+      last90: '90 hari terakhir',
+      year: '1 tahun terakhir',
+      paletteLabel: 'Warna heatmap',
+      academicViolet: 'Violet Akademik',
+      claudeOrange: 'Claude Oranye',
+      codexBlue: 'Codex Biru',
+      githubGreen: 'GitHub Hijau',
+      customPalette: 'Kustom',
+      customAccent: 'Aksen kustom',
+      privacyToggle: 'Tampilkan pratinjau privasi',
+      privacyIncludes: 'Ekspor mencakup: judul kustom, rentang tanggal, dan total harian token yang diproses (Claude, Codex, dan gabungan).',
+      privacyExcludes: 'Secara eksplisit dikecualikan: akun, proyek, judul thread, jalur lokal, dan konten log.',
+      updatePreview: 'Perbarui pratinjau',
+      exportSvg: 'Ekspor SVG…',
+      copyMarkdown: 'Salin Markdown',
+      resetSharing: 'Atur ulang preferensi berbagi',
+      resetComplete: 'Preferensi berbagi telah diatur ulang.',
+      resetFailed: 'Preferensi berbagi tidak dapat diatur ulang sepenuhnya.',
+      markdownLabel: 'Cuplikan README / Markdown',
+      noData: 'Belum ada aktivitas lokal yang tersedia dalam rentang yang dipilih.',
+      activityDisclaimer: 'Token gabungan menggambarkan volume aktivitas lokal, bukan produktivitas, tagihan langganan, atau kesetaraan kemampuan antar-provider.',
+      combinedLabel: 'Gabungan',
+      processedTokensLabel: 'token yang diproses',
+      svgFooterNote: 'Volume aktivitas lokal · bukan produktivitas, tagihan, atau kesetaraan provider',
+    };
+  }
+  return {
+    ...intensity,
+    eyebrow: 'Share studio',
+    panelTitle: 'Combined activity heatmap and share card',
+    description: 'Combines Claude and Codex processed-token activity by local calendar day. Cost is not the default intensity.',
+    previewLabel: 'Live preview',
+    privateBadge: 'Privacy-safe daily aggregates only',
+    settingsLabel: 'Card settings',
+    defaultTitle: 'Claude + Codex local activity',
+    titleLabel: 'Share title',
+    rangeLabel: 'Date range',
+    last30: 'Last 30 days',
+    last90: 'Last 90 days',
+    year: 'Last year',
+    paletteLabel: 'Heatmap colors',
+    academicViolet: 'Academic Violet',
+    claudeOrange: 'Claude Orange',
+    codexBlue: 'Codex Blue',
+    githubGreen: 'GitHub Green',
+    customPalette: 'Custom',
+    customAccent: 'Custom accent',
+    privacyToggle: 'Show privacy preview',
+    privacyIncludes: 'Export includes: the custom title, date range, and daily aggregate Claude, Codex, and combined processed-token totals.',
+    privacyExcludes: 'Explicitly excluded: accounts, projects, thread titles, local paths, and log content.',
+    updatePreview: 'Update preview',
+    exportSvg: 'Export SVG…',
+    copyMarkdown: 'Copy Markdown',
+    resetSharing: 'Reset sharing preferences',
+    resetComplete: 'Sharing preferences reset.',
+    resetFailed: 'Could not fully reset sharing preferences.',
+    markdownLabel: 'README / Markdown snippet',
+    noData: 'No local activity is available in the selected range yet.',
+    activityDisclaimer: 'Combined tokens describe local activity volume, not productivity, subscription billing, or provider capability equivalence.',
+    combinedLabel: 'Combined',
+    processedTokensLabel: 'processed tokens',
+    svgFooterNote: 'Local activity volume · not productivity, billing, or provider equivalence',
+  };
 }
 
 export class UsageWebviewProvider {
@@ -90,6 +623,10 @@ export class UsageWebviewProvider {
   private codexProgress: CodexRenderProgress | null = null;
   private providerSelectionInitialized = false;
   private hourlyDataCache: Map<string, { hour: string; data: UsageData }[]> = new Map();
+  private configuredDateTimeFormatter?: {
+    configuredTimeZone: string;
+    formatter: Intl.DateTimeFormat;
+  };
   private allRecords: any[] = [];
   private sessionBreakdown: SessionUsage[] = [];
   private projectBreakdown: ProjectGroup[] = [];
@@ -126,18 +663,52 @@ export class UsageWebviewProvider {
     fullNumbers: boolean;
     theme: string;
   };
+  private readonly localDataClientActionRequests = new Map<
+    string,
+    { resolve: (ok: boolean) => void; timeout: NodeJS.Timeout }
+  >();
   // Real quota utilisation (pushed asynchronously) for the workflow quota
   // guard banner; dismissal lasts for the lifetime of this window.
   private usageLimits: ClaudeApiUsageResponse | null = null;
   private claudeWeeklyQuotaHistory: WeeklyQuotaObservation[] = [];
   private quotaWarnDismissed: boolean = false;
-  // Set by extension.ts: runs the Usage Optimizer round-trip (model lives there
-  // with the config + OAuth client). Returns the optimised prompt + settings
-  // recommendation, or an error string.
-  public onOptimize?: (
+  // Extension-host hooks make the optimizer use the same prepare -> preview ->
+  // explicit send boundary as advice, without exposing keys to the webview.
+  public onPrepareOptimizerInvocation?: (
     draft: string,
-    options: { resolve: boolean; distil: boolean; aesthetic: boolean }
-  ) => Promise<{ prompt?: string; settings?: string; error?: string }>;
+    options: { resolve: boolean; distil: boolean; aesthetic: boolean },
+    sourceRevision: string,
+    consentGeneration: number,
+  ) => Promise<{ prepared?: PreparedAiInvocation; error?: string }>;
+  public onSendOptimizerInvocation?: (
+    prepared: PreparedAiInvocation,
+    expectedSourceRevision: string,
+    expectedConsentGeneration: number,
+  ) => Promise<PreparedOptimizerResult>;
+  /** Extension-host hooks keep API configuration and keys out of the webview. */
+  public onPrepareAdviceInvocation?: (
+    snapshot: PreparedAdviceSnapshot,
+    sourceRevision: string,
+    consentGeneration: number,
+  ) => PreparedAiInvocation;
+  public onSendAdviceInvocation?: (
+    prepared: PreparedAiInvocation,
+    references: StructuredAdviceReferences,
+    expectedSourceRevision: string,
+    expectedConsentGeneration: number,
+  ) => Promise<StructuredAdviceRequestResult>;
+  public onAiSurfaceClosed?: () => void;
+  public onAdviceDataCleared?: () => Promise<void>;
+  public onAdviceConsentWithdrawn?: () => Promise<void>;
+  public onRequestLocalDataInventory?: (
+    client: LocalDataClientSummary,
+  ) => Promise<LocalDataInventory>;
+  public onRunLocalDataAction?: (
+    action: LocalDataAction,
+    quotaScopeToken?: string,
+  ) => Promise<LocalDataActionResult>;
+  public onResetSharingPreferences?: () => Promise<void>;
+  public onLocalDataClientReady?: () => void;
   // Shared settings store + a callback to let extension.ts re-apply config when
   // the user edits a setting in the dashboard's ⚙ Settings tab. Both are set by
   // extension.ts right after construction.
@@ -154,9 +725,68 @@ export class UsageWebviewProvider {
     prompt?: string;
     settings?: string;
     error?: string;
+    snapshotId?: string;
+    previewBody?: string;
+    previewSha256?: string;
+    previewBytes?: number;
+    /** Random opaque run ID; never derived from the draft or model output. */
+    adviceId?: string;
   } | null = null;
+  private preparedOptimizerRequests = new Map<
+    string,
+    {
+      prepared: PreparedAiInvocation;
+      draft: string;
+      sourceRevision: string;
+      consentGeneration: number;
+    }
+  >();
+  private optimizerConsentGeneration = 0;
+  /**
+   * Experimental v2.3.1 state. Raw prompt samples never enter rendered HTML:
+   * they stay in the provider state until one explicit sealed-snapshot request.
+   */
+  private adviceEffectivenessStates: AdviceEffectivenessProviderStates = {};
+  private preparedAdviceSnapshots = new Map<
+    string,
+    {
+      provider: AdviceEffectivenessProvider;
+      snapshot: PreparedAdviceSnapshot;
+      invocation: PreparedAiInvocation;
+      sourceRevision: string;
+      consentGeneration: number;
+      references: StructuredAdviceReferences;
+    }
+  >();
+  private adviceConsentGeneration = 0;
+  private adviceConsentWritesPending = 0;
+  private adviceLocalState: AdviceLocalState = createClosedAdviceLocalState();
+  private adviceLocalStateStatus: 'loading' | 'ready' | 'degraded' = 'loading';
+  private adviceLocalStateGeneration = 0;
+  private adviceLocalStateWrite: Promise<void> = Promise.resolve();
+  private adviceComparisonProductionRevision = '';
 
-  constructor(private context: vscode.ExtensionContext) {}
+  constructor(private context: vscode.ExtensionContext) {
+    const storage = this.adviceStateStorage();
+    if (!storage) {
+      this.adviceLocalStateStatus = 'degraded';
+      return;
+    }
+    void loadAndMigrateAdviceLocalState(storage).then((loaded) => {
+      this.adviceLocalState = loaded.value;
+      this.adviceLocalStateStatus = loaded.ok ? 'ready' : 'degraded';
+      this.scheduleAdviceComparisonProduction();
+      if (this.panel) {
+        this.updateWebview();
+      }
+    }).catch(() => {
+      this.adviceLocalState = createClosedAdviceLocalState();
+      this.adviceLocalStateStatus = 'degraded';
+      if (this.panel) {
+        this.updateWebview();
+      }
+    });
+  }
 
   /** Read a moved/core setting through the shared store, with a fallback. */
   private setting<T>(key: string, fallback: T): T {
@@ -167,9 +797,796 @@ export class UsageWebviewProvider {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
-  show(): void {
+  private adviceStateStorage(): AdviceLocalStateStorage | undefined {
+    const state = (this.context as Partial<vscode.ExtensionContext>).globalState;
+    if (!state || typeof state.get !== 'function' || typeof state.update !== 'function') {
+      return undefined;
+    }
+    return state;
+  }
+
+  private adviceExperimentEnabled(): boolean {
+    return this.setting<boolean>('advice.effectiveness.enabled', false);
+  }
+
+  /**
+   * Serialize every persisted advice mutation through one writer. The mutation
+   * is derived from the latest committed state only when its turn starts, so a
+   * delayed consent, feedback, comparison, or clear write cannot resurrect an
+   * older snapshot over a newer user decision.
+   */
+  private enqueueAdviceLocalStateWrite(
+    mutate: (current: AdviceLocalState) => AdviceLocalState | undefined,
+  ): Promise<
+    | { ok: true; changed: boolean; value: AdviceLocalState }
+    | { ok: false }
+  > {
+    const operation = this.adviceLocalStateWrite.then(async () => {
+      const storage = this.adviceStateStorage();
+      if (!storage || this.adviceLocalStateStatus !== 'ready') {
+        return { ok: false as const };
+      }
+      let next: AdviceLocalState | undefined;
+      try {
+        next = mutate(this.adviceLocalState);
+      } catch {
+        return { ok: false as const };
+      }
+      if (!next) {
+        return { ok: true as const, changed: false, value: this.adviceLocalState };
+      }
+      const saved = await saveAdviceLocalState(storage, next);
+      if (!saved.ok) {
+        this.adviceLocalStateStatus = 'degraded';
+        return { ok: false as const };
+      }
+      this.adviceLocalState = saved.value;
+      return { ok: true as const, changed: true, value: saved.value };
+    });
+    this.adviceLocalStateWrite = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
+  private adviceProviderState(value: unknown): AdviceEffectivenessProviderState | undefined {
+    if (!this.adviceExperimentEnabled() || (value !== 'claude' && value !== 'codex')) {
+      return undefined;
+    }
+    return this.adviceEffectivenessStates[value];
+  }
+
+  private postAdviceMessage(message: Record<string, unknown>): void {
+    void this.panel?.webview.postMessage(message);
+  }
+
+  private clearPreparedAdviceSnapshots(provider?: AdviceEffectivenessProvider): void {
+    if (!provider) {
+      this.preparedAdviceSnapshots.clear();
+      return;
+    }
+    for (const [snapshotId, value] of this.preparedAdviceSnapshots) {
+      if (value.provider === provider) {
+        this.preparedAdviceSnapshots.delete(snapshotId);
+      }
+    }
+  }
+
+  /** Opaque content revision; no path/session/title is retained or exposed. */
+  private adviceSourceRevision(state: AdviceEffectivenessProviderState): string {
+    const safeShape = {
+      provider: state.provider,
+      aggregate: state.aggregate,
+      observations: state.contract.observations.map((item) => ({
+        id: item.id,
+        metric: item.metric,
+        value: item.value,
+        unit: item.unit,
+        method: item.method,
+        sourceId: item.sourceId,
+      })),
+      evidence: state.contract.evidence.map((item) => ({
+        id: item.id,
+        observationIds: item.observationIds,
+        strength: item.strength,
+      })),
+      sourceQuality: state.contract.provenance.sources.map((source) => ({
+        id: source.id,
+        confidence: source.confidence,
+        qualityFlags: source.qualityFlags,
+        window: source.window,
+      })),
+      // Prompt text remains host-only. Its digest merely invalidates a preview
+      // if the separately consented sample set changes before send.
+      promptSampleDigest: createHash('sha256')
+        .update(state.promptSamples.map((sample) => sample.text).join('\u0000'), 'utf8')
+        .digest('hex'),
+      userContextDigest: createHash('sha256')
+        .update(state.userContext ?? '', 'utf8')
+        .digest('hex'),
+    };
+    return `advice-${createHash('sha256')
+      .update(JSON.stringify(safeShape), 'utf8')
+      .digest('hex')}`;
+  }
+
+  private async handleAdviceConsentMessage(message: Record<string, unknown>): Promise<void> {
+    const providerState = this.adviceProviderState(message.provider);
+    const aggregateConsent = message.aggregateConsent;
+    const promptSampleConsent = message.promptSampleConsent;
+    const stateGeneration = this.adviceLocalStateGeneration;
+    if (
+      !providerState ||
+      providerState.provider !== 'claude' ||
+      !providerState.remotePreviewEligible ||
+      !providerState.aggregate ||
+      (aggregateConsent !== 'explicit' && aggregateConsent !== 'not-granted') ||
+      (promptSampleConsent !== 'explicit' && promptSampleConsent !== 'not-granted') ||
+      (promptSampleConsent === 'explicit' && aggregateConsent !== 'explicit') ||
+      (promptSampleConsent === 'explicit' &&
+        providerState.promptSamples.length === 0 &&
+        !providerState.userContext?.trim()) ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      !this.adviceStateStorage()
+    ) {
+      this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
+      return;
+    }
+    const withdrawn =
+      (this.adviceLocalState.aggregateConsent === 'explicit' && aggregateConsent === 'not-granted') ||
+      (this.adviceLocalState.promptSampleConsent === 'explicit' && promptSampleConsent === 'not-granted');
+    // Revocation takes effect on receipt, not after a potentially slow disk write.
+    // A counter also covers overlapping consent changes in the shared writer queue.
+    this.adviceConsentWritesPending += 1;
+    this.adviceConsentGeneration += 1;
+    this.clearPreparedAdviceSnapshots(providerState.provider);
+    const cancellation = withdrawn
+      ? Promise.resolve().then(() => this.onAdviceConsentWithdrawn?.()).then(() => true, () => false)
+      : Promise.resolve(true);
+    try {
+      const saved = await this.enqueueAdviceLocalStateWrite((current) => {
+        if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
+        return {
+          ...current,
+          featureMode: 'enabled',
+          aggregateConsent,
+          promptSampleConsent,
+        };
+      });
+      const cancelled = await cancellation;
+      if (!cancelled) this.adviceLocalStateStatus = 'degraded';
+      if (!saved.ok || !saved.changed || !cancelled) {
+        this.postAdviceMessage({ command: 'adviceConsentResult', ok: false, provider: message.provider });
+        return;
+      }
+      this.postAdviceMessage({
+        command: 'adviceConsentResult',
+        ok: true,
+        provider: providerState.provider,
+        aggregateConsent: saved.value.aggregateConsent,
+        promptSampleConsent: saved.value.promptSampleConsent,
+      });
+    } finally {
+      this.adviceConsentWritesPending -= 1;
+    }
+  }
+
+  private handlePrepareAdviceSnapshotMessage(message: Record<string, unknown>): void {
+    const providerState = this.adviceProviderState(message.provider);
+    if (!providerState) {
+      this.postAdviceMessage({ command: 'adviceSnapshotResult', ok: false, provider: message.provider });
+      return;
+    }
+    const aggregate = message.aggregateConsent;
+    const promptSamples = message.promptSampleConsent;
+    if (
+      (aggregate !== 'explicit' && aggregate !== 'not-granted') ||
+      (promptSamples !== 'explicit' && promptSamples !== 'not-granted') ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      this.adviceConsentWritesPending > 0 ||
+      aggregate !== this.adviceLocalState.aggregateConsent ||
+      (promptSamples === 'explicit' && this.adviceLocalState.promptSampleConsent !== 'explicit')
+    ) {
+      this.postAdviceMessage({ command: 'adviceSnapshotResult', ok: false, provider: providerState.provider });
+      return;
+    }
+    const result = prepareAdviceSnapshot(providerState, {
+      aggregate,
+      promptSamples,
+    });
+    if (!result.ok) {
+      this.postAdviceMessage({
+        command: 'adviceSnapshotResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: result.reason,
+      });
+      return;
+    }
+    let invocation: PreparedAiInvocation;
+    const sourceRevision = this.adviceSourceRevision(providerState);
+    try {
+      if (!this.onPrepareAdviceInvocation) {
+        throw new Error('AI preparation is unavailable');
+      }
+      invocation = this.onPrepareAdviceInvocation(
+        result.value,
+        sourceRevision,
+        this.adviceConsentGeneration,
+      );
+    } catch {
+      this.postAdviceMessage({
+        command: 'adviceSnapshotResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: 'invalid-evidence',
+      });
+      return;
+    }
+    const preview = previewAiInvocation(invocation);
+    this.clearPreparedAdviceSnapshots(providerState.provider);
+    const snapshotId = `snapshot-${randomBytes(12).toString('hex')}`;
+    this.preparedAdviceSnapshots.set(snapshotId, {
+      provider: providerState.provider,
+      snapshot: result.value,
+      invocation,
+      sourceRevision,
+      consentGeneration: this.adviceConsentGeneration,
+      references: {
+        observationIds: providerState.contract.observations.map((item) => item.id),
+        evidenceIds: providerState.contract.evidence.map((item) => item.id),
+      },
+    });
+    this.postAdviceMessage({
+      command: 'adviceSnapshotResult',
+      ok: true,
+      snapshotId,
+      provider: providerState.provider,
+      contentType: preview.contentType,
+      dataMode: preview.dataMode,
+      promptSampleCount: result.value.preview.promptSampleCount,
+      utf8Bytes: preview.utf8Bytes,
+      sha256: preview.sha256,
+      body: preview.body,
+    });
+  }
+
+  private async handleSendAdviceSnapshotMessage(message: Record<string, unknown>): Promise<void> {
+    const snapshotId = message.snapshotId;
+    const providerState = this.adviceProviderState(message.provider);
+    const stored = typeof snapshotId === 'string'
+      ? this.preparedAdviceSnapshots.get(snapshotId)
+      : undefined;
+    if (
+      !providerState ||
+      !stored ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      this.adviceConsentWritesPending > 0 ||
+      this.adviceLocalState.aggregateConsent !== 'explicit' ||
+      stored.provider !== providerState.provider ||
+      stored.sourceRevision !== this.adviceSourceRevision(providerState) ||
+      stored.consentGeneration !== this.adviceConsentGeneration ||
+      !this.onSendAdviceInvocation
+    ) {
+      this.postAdviceMessage({
+        command: 'adviceSendResult',
+        ok: false,
+        provider: message.provider,
+        reason: 'stale-preview',
+      });
+      return;
+    }
+    const result = await this.onSendAdviceInvocation(
+      stored.invocation,
+      stored.references,
+      stored.sourceRevision,
+      stored.consentGeneration,
+    );
+    if (
+      this.preparedAdviceSnapshots.get(snapshotId as string) !== stored ||
+      stored.sourceRevision !== this.adviceSourceRevision(providerState) ||
+      stored.consentGeneration !== this.adviceConsentGeneration
+    ) {
+      this.postAdviceMessage({
+        command: 'adviceSendResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: 'stale-preview',
+      });
+      return;
+    }
+    if (!result.ok) {
+      this.postAdviceMessage({
+        command: 'adviceSendResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: result.code,
+      });
+      return;
+    }
+    const next = createAdviceContract({
+      adviceId: providerState.contract.adviceId,
+      observations: providerState.contract.observations,
+      evidence: providerState.contract.evidence,
+      recommendations: result.value.recommendations,
+      privacy: {
+        dataMode: stored.invocation.dataMode === 'aggregates-with-prompt-samples'
+          ? 'aggregates-with-prompt-samples'
+          : stored.invocation.dataMode === 'aggregates-with-personalization'
+            ? 'aggregates-with-personalization'
+            : 'aggregates-only',
+        promptSampleConsent: stored.invocation.dataMode === 'aggregates-only'
+          ? 'not-granted'
+          : 'explicit',
+        promptSampleCount: stored.snapshot.prepared.promptSampleCount,
+        feedbackStorage: 'local-only',
+      },
+      provenance: {
+        ...providerState.contract.provenance,
+        generatedBy: { kind: 'remote-model' },
+        generatedAt: new Date().toISOString(),
+      },
+    });
+    if (!next.ok) {
+      this.postAdviceMessage({
+        command: 'adviceSendResult',
+        ok: false,
+        provider: providerState.provider,
+        reason: 'invalid-schema',
+      });
+      return;
+    }
+    providerState.contract = next.value;
+    this.preparedAdviceSnapshots.delete(snapshotId as string);
+    this.postAdviceMessage({
+      command: 'adviceSendResult',
+      ok: true,
+      provider: providerState.provider,
+      recommendationCount: next.value.recommendations.length,
+    });
+    this.updateWebview();
+  }
+
+  public async clearAdviceLocalData(): Promise<boolean> {
+    const storage = this.adviceStateStorage();
+    if (!storage) {
+      return false;
+    }
+    this.adviceLocalStateGeneration += 1;
+    this.adviceConsentGeneration += 1;
+    this.clearPreparedAdviceSnapshots();
+    this.adviceComparisonProductionRevision = '';
+    const write = this.adviceLocalStateWrite.then(async () => {
+      const cleared = createClearedAdviceLocalState();
+      try {
+        // Removing the current key is the user-visible privacy guarantee. The
+        // in-memory enabled/closed surface remains usable until reload, while a
+        // later mutation must queue after this removal before recreating state.
+        await storage.update(ADVICE_LOCAL_STATE_KEY, undefined);
+        this.adviceLocalState = cleared;
+        this.adviceLocalStateStatus = 'ready';
+        return { ok: true };
+      } catch {
+        return { ok: false };
+      }
+    });
+    this.adviceLocalStateWrite = write.then(() => undefined, () => undefined);
+    const cancelled = Promise.resolve(this.onAdviceDataCleared?.()).catch(() => undefined);
+    const saved = await write;
+    await cancelled;
+    if (!saved.ok) {
+      return false;
+    }
+    this.updateWebview();
+    return true;
+  }
+
+  public adviceLocalDataInventorySummary(): {
+    approximateBytes: number | null;
+    itemCount: number;
+    oldestAt: number | null;
+    newestAt: number | null;
+  } {
+    const state = this.adviceLocalState;
+    const timestamps = [
+      ...state.feedback.flatMap((item) => [item.updatedAtEpochMs, item.appliedAtEpochMs]),
+      ...state.suppression.flatMap((item) => [item.updatedAtEpochMs, item.snoozedUntilEpochMs]),
+      ...state.comparablePairs.map((item) => item.recordedAtEpochMs),
+      ...state.comparisonResults.map((item) => item.recordedAtEpochMs),
+    ];
+    const range = finiteTimestampRange(timestamps);
+    return {
+      approximateBytes: approximateJsonBytes(state),
+      itemCount:
+        state.feedback.length +
+        state.suppression.length +
+        state.comparablePairs.length +
+        state.comparisonResults.length,
+      ...range,
+    };
+  }
+
+  public requestLocalDataInventoryRefresh(): void {
+    this.panel?.webview.postMessage({ command: 'requestLocalDataInventoryClient' });
+  }
+
+  private settleLocalDataClientAction(requestId: string, ok: boolean): void {
+    const pending = this.localDataClientActionRequests.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timeout);
+    this.localDataClientActionRequests.delete(requestId);
+    pending.resolve(ok);
+  }
+
+  /**
+   * Apply Webview-owned deletion with an acknowledgement. Host-side success is
+   * not reported until the live panel confirms its exact allowlists ran.
+   */
+  public requestClientLocalDataAction(action: LocalDataClientAction): Promise<boolean> {
+    const panel = this.panel;
+    if (!panel) return Promise.resolve(false);
+    const requestId = randomBytes(12).toString('hex');
+    return new Promise<boolean>((resolve) => {
+      const timeout = setTimeout(
+        () => this.settleLocalDataClientAction(requestId, false),
+        2_000,
+      );
+      this.localDataClientActionRequests.set(requestId, { resolve, timeout });
+      void Promise.resolve(panel.webview.postMessage({
+        command: 'localDataClientAction',
+        action,
+        requestId,
+      })).then((delivered) => {
+        if (!delivered) this.settleLocalDataClientAction(requestId, false);
+      }).catch(() => this.settleLocalDataClientAction(requestId, false));
+    });
+  }
+
+  public clearSharingRuntimeState(): void {
+    this.lastShareCardSvg = undefined;
+    this.lastShareCardConfig = undefined;
+  }
+
+  private async handleClearAdviceLocalDataMessage(): Promise<void> {
+    const ok = await this.clearAdviceLocalData();
+    this.postAdviceMessage({ command: 'adviceClearResult', ok });
+  }
+
+  private async handleAdviceFeedbackMessage(message: Record<string, unknown>): Promise<void> {
+    const optimizerTarget =
+      message.provider === 'optimizer' &&
+      this.setting<boolean>('advice.optimizer.enabled', false) &&
+      typeof this.optimizerState?.adviceId === 'string' &&
+      this.optimizerState.adviceId === message.adviceId &&
+      message.recommendationId === OPTIMIZER_FEEDBACK_RECOMMENDATION_ID &&
+      typeof this.optimizerState.prompt === 'string' &&
+      this.optimizerState.prompt.length > 0;
+    const providerState = optimizerTarget
+      ? undefined
+      : this.adviceProviderState(message.provider);
+    const stateGeneration = this.adviceLocalStateGeneration;
+    const adviceId = message.adviceId;
+    const recommendationId = message.recommendationId;
+    const kind = message.kind;
+    const recommendation = providerState?.contract.recommendations.find(
+      (candidate) => candidate.id === recommendationId,
+    );
+    const targetAdviceId = optimizerTarget
+      ? this.optimizerState!.adviceId as string
+      : providerState?.contract.adviceId;
+    const targetRecommendationId = optimizerTarget
+      ? OPTIMIZER_FEEDBACK_RECOMMENDATION_ID
+      : recommendation?.id;
+    const responseIdentity =
+      typeof targetAdviceId === 'string' &&
+      typeof targetRecommendationId === 'string' &&
+      targetAdviceId === adviceId &&
+      targetRecommendationId === recommendationId
+        ? { adviceId: targetAdviceId, recommendationId: targetRecommendationId }
+        : {};
+    if (
+      (!optimizerTarget && !providerState) ||
+      targetAdviceId !== adviceId ||
+      targetRecommendationId !== recommendationId ||
+      (kind !== 'helpful' && kind !== 'not-helpful' && kind !== 'applied') ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      !this.adviceStateStorage()
+    ) {
+      this.postAdviceMessage({
+        command: 'adviceFeedbackResult',
+        ok: false,
+        provider: message.provider,
+        ...responseIdentity,
+      });
+      return;
+    }
+    const updatedAtEpochMs = Date.now();
+    let mutationAccepted = true;
+    const saved = await this.enqueueAdviceLocalStateWrite((current) => {
+      if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
+      const changed = upsertAdviceLocalFeedback(current, {
+        adviceId: targetAdviceId as string,
+        recommendationId: targetRecommendationId as string,
+        kind,
+        updatedAtEpochMs,
+      });
+      if (!changed.ok) {
+        mutationAccepted = false;
+        return undefined;
+      }
+      const changedFeedback = changed.value.feedback.find(
+        (item) => item.adviceId === adviceId && item.recommendationId === recommendationId,
+      );
+      return kind === 'applied' && changedFeedback?.applied !== 'applied'
+        ? {
+            ...changed.value,
+            featureMode: 'enabled' as const,
+            comparablePairs: changed.value.comparablePairs.filter(
+              (pair) => pair.adviceId !== adviceId || pair.recommendationId !== recommendationId,
+            ),
+            comparisonResults: changed.value.comparisonResults.filter(
+              (result) => result.recommendationId !== recommendationId,
+            ),
+          }
+        : { ...changed.value, featureMode: 'enabled' as const };
+    });
+    if (!saved.ok) {
+      this.postAdviceMessage({
+        command: 'adviceFeedbackResult',
+        ok: false,
+        provider: message.provider,
+        ...responseIdentity,
+      });
+      return;
+    }
+    if (!saved.changed || !mutationAccepted) {
+      this.postAdviceMessage({
+        command: 'adviceFeedbackResult',
+        ok: false,
+        provider: message.provider,
+        ...responseIdentity,
+      });
+      return;
+    }
+    if (kind === 'applied' && !optimizerTarget) {
+      this.adviceComparisonProductionRevision = '';
+      this.scheduleAdviceComparisonProduction();
+    }
+    const feedback = saved.value.feedback.find(
+      (item) => item.adviceId === adviceId && item.recommendationId === recommendationId,
+    );
+    this.postAdviceMessage({
+      command: 'adviceFeedbackResult',
+      ok: true,
+      provider: message.provider,
+      adviceId,
+      recommendationId,
+      rating: feedback?.rating ?? 'unrated',
+      applied: feedback?.applied ?? 'not-applied',
+    });
+  }
+
+  private async handleAdviceSnoozeMessage(message: Record<string, unknown>): Promise<void> {
+    const optimizerTarget =
+      message.provider === 'optimizer' &&
+      this.setting<boolean>('advice.optimizer.enabled', false) &&
+      typeof this.optimizerState?.adviceId === 'string' &&
+      this.optimizerState.adviceId === message.adviceId &&
+      message.recommendationId === OPTIMIZER_FEEDBACK_RECOMMENDATION_ID;
+    const providerState = optimizerTarget ? undefined : this.adviceProviderState(message.provider);
+    const adviceId = message.adviceId;
+    const recommendationId = message.recommendationId;
+    const targetAdviceId = optimizerTarget ? this.optimizerState!.adviceId : providerState?.contract.adviceId;
+    const targetRecommendationId = optimizerTarget
+      ? OPTIMIZER_FEEDBACK_RECOMMENDATION_ID
+      : providerState?.contract.recommendations.find((item) => item.id === recommendationId)?.id;
+    const valid =
+      (optimizerTarget || Boolean(providerState)) &&
+      typeof adviceId === 'string' &&
+      typeof recommendationId === 'string' &&
+      targetAdviceId === adviceId &&
+      targetRecommendationId === recommendationId &&
+      this.adviceLocalStateStatus === 'ready' &&
+      Boolean(this.adviceStateStorage());
+    const response = { command: 'adviceSnoozeResult', provider: message.provider, adviceId, recommendationId };
+    if (!valid) {
+      this.postAdviceMessage({ ...response, ok: false });
+      return;
+    }
+    const stateGeneration = this.adviceLocalStateGeneration;
+    const now = Date.now();
+    const resume = message.mode === 'resume';
+    let mutationAccepted = true;
+    const saved = await this.enqueueAdviceLocalStateWrite((current) => {
+      if (stateGeneration !== this.adviceLocalStateGeneration) return undefined;
+      const changed = resume
+        ? resumeAdviceRecommendation(current, {
+            provider: optimizerTarget ? 'optimizer' : message.provider as 'claude' | 'codex',
+            surface: optimizerTarget ? 'optimizer' : 'advice',
+            recommendationId: targetRecommendationId as string,
+          })
+        : snoozeAdviceRecommendation(current, {
+            provider: optimizerTarget ? 'optimizer' : message.provider as 'claude' | 'codex',
+            surface: optimizerTarget ? 'optimizer' : 'advice',
+            recommendationId: targetRecommendationId as string,
+            updatedAtEpochMs: now,
+            snoozedUntilEpochMs: now + ADVICE_SNOOZE_DURATION_MS,
+          });
+      if (!changed.ok) {
+        mutationAccepted = false;
+        return undefined;
+      }
+      return { ...changed.value, featureMode: 'enabled' as const };
+    });
+    if (!saved.ok || !saved.changed || !mutationAccepted) {
+      this.postAdviceMessage({ ...response, ok: false });
+      return;
+    }
+    const until = adviceRecommendationSnoozedUntil(saved.value, {
+      provider: optimizerTarget ? 'optimizer' : message.provider as 'claude' | 'codex',
+      surface: optimizerTarget ? 'optimizer' : 'advice',
+      recommendationId: targetRecommendationId as string,
+      nowEpochMs: now,
+    });
+    this.postAdviceMessage({ ...response, ok: true, snoozedUntilEpochMs: until });
+    this.updateWebview();
+  }
+
+  private async handlePrepareOptimizerMessage(message: Record<string, unknown>): Promise<void> {
+    if (!this.setting<boolean>('advice.optimizer.enabled', false)) {
+      this.discardPreparedOptimizer();
+      this.postAdviceMessage({ command: 'optimizePreviewResult', ok: false, error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    const draft = typeof message.draft === 'string' ? message.draft : '';
+    const options = {
+      resolve: message.resolve === true,
+      distil: message.distil === true,
+      aesthetic: message.aesthetic === true,
+    };
+    // An explicit rerun is an active user decision: it re-opens the stable
+    // optimizer recommendation scope without changing its independent feedback.
+    if (this.adviceLocalStateStatus === 'ready' && this.adviceStateStorage()) {
+      await this.enqueueAdviceLocalStateWrite((current) => {
+        const resumed = resumeAdviceRecommendation(current, {
+          provider: 'optimizer',
+          surface: 'optimizer',
+          recommendationId: OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
+        });
+        return resumed.ok ? resumed.value : undefined;
+      });
+    }
+    this.optimizerConsentGeneration += 1;
+    this.preparedOptimizerRequests.clear();
+    const sourceRevision = `optimizer-${createHash('sha256')
+      .update(JSON.stringify({ draft, options }), 'utf8')
+      .digest('hex')}`;
+    const consentGeneration = this.optimizerConsentGeneration;
+    const baseState = { draft, ...options };
+    if (!this.onPrepareOptimizerInvocation) {
+      this.optimizerState = { ...baseState, error: 'Optimizer is not available.' };
+      this.postAdviceMessage({ command: 'optimizePreviewResult', ok: false, error: 'Optimizer is not available.' });
+      return;
+    }
+    const result = await this.onPrepareOptimizerInvocation(
+      draft,
+      options,
+      sourceRevision,
+      consentGeneration,
+    );
+    if (consentGeneration !== this.optimizerConsentGeneration) {
+      this.postAdviceMessage({ command: 'optimizePreviewResult', ok: false, error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    if (!result.prepared) {
+      this.optimizerState = { ...baseState, error: result.error ?? '' };
+      this.postAdviceMessage({ command: 'optimizePreviewResult', ok: false, error: result.error ?? '' });
+      return;
+    }
+    const preview = previewAiInvocation(result.prepared);
+    const snapshotId = `optimizer-${randomBytes(12).toString('hex')}`;
+    this.preparedOptimizerRequests.set(snapshotId, {
+      prepared: result.prepared,
+      draft,
+      sourceRevision,
+      consentGeneration,
+    });
+    this.optimizerState = {
+      ...baseState,
+      snapshotId,
+      previewBody: preview.body,
+      previewSha256: preview.sha256,
+      previewBytes: preview.utf8Bytes,
+    };
+    this.postAdviceMessage({
+      command: 'optimizePreviewResult',
+      ok: true,
+      snapshotId,
+      contentType: preview.contentType,
+      dataMode: preview.dataMode,
+      body: preview.body,
+      sha256: preview.sha256,
+      utf8Bytes: preview.utf8Bytes,
+    });
+  }
+
+  private async handleSendOptimizerMessage(message: Record<string, unknown>): Promise<void> {
+    if (!this.setting<boolean>('advice.optimizer.enabled', false)) {
+      this.discardPreparedOptimizer();
+      this.postAdviceMessage({ command: 'optimizeResult', error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    const snapshotId = typeof message.snapshotId === 'string' ? message.snapshotId : '';
+    const stored = this.preparedOptimizerRequests.get(snapshotId);
+    if (
+      !stored ||
+      !this.onSendOptimizerInvocation ||
+      stored.consentGeneration !== this.optimizerConsentGeneration ||
+      message.draft !== stored.draft
+    ) {
+      this.postAdviceMessage({ command: 'optimizeResult', error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    const result = await this.onSendOptimizerInvocation(
+      stored.prepared,
+      stored.sourceRevision,
+      stored.consentGeneration,
+    );
+    if (
+      this.preparedOptimizerRequests.get(snapshotId) !== stored ||
+      stored.consentGeneration !== this.optimizerConsentGeneration
+    ) {
+      this.postAdviceMessage({ command: 'optimizeResult', error: I18n.t.popup.adviceEffectiveness.strictOutputRejected });
+      return;
+    }
+    this.preparedOptimizerRequests.delete(snapshotId);
+    if (!result.ok) {
+      const error = I18n.t.popup.adviceEffectiveness.strictOutputRejected;
+      this.optimizerState = this.optimizerState
+        ? { ...this.optimizerState, error }
+        : null;
+      this.postAdviceMessage({ command: 'optimizeResult', error });
+      return;
+    }
+    this.optimizerState = this.optimizerState
+      ? {
+          draft: this.optimizerState.draft,
+          resolve: this.optimizerState.resolve,
+          distil: this.optimizerState.distil,
+          aesthetic: this.optimizerState.aesthetic,
+          prompt: result.value.prompt,
+          settings: result.value.settings,
+          adviceId: `advice-optimizer-${randomBytes(12).toString('hex')}`,
+        }
+      : null;
+    this.postAdviceMessage({
+      command: 'optimizeResult',
+      ...result.value,
+      adviceId: this.optimizerState?.adviceId,
+      recommendationId: OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
+    });
+  }
+
+  private discardPreparedOptimizer(): void {
+    this.optimizerConsentGeneration += 1;
+    this.preparedOptimizerRequests.clear();
+    if (this.optimizerState) {
+      const { draft, resolve, distil, aesthetic } = this.optimizerState;
+      this.optimizerState = { draft, resolve, distil, aesthetic };
+    }
+  }
+
+  show(tab?: string): void {
+    if (tab) {
+      this.currentTab = tab;
+      if (tab === 'settings' && this.currentProvider === 'compare') {
+        this.currentProvider = this.providerAvailability.claude ? 'claude' : 'codex';
+      }
+    }
     if (this.panel) {
       this.panel.reveal();
+      this.updateWebview();
       return;
     }
 
@@ -180,6 +1597,12 @@ export class UsageWebviewProvider {
 
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      for (const requestId of [...this.localDataClientActionRequests.keys()]) {
+        this.settleLocalDataClientAction(requestId, false);
+      }
+      this.clearPreparedAdviceSnapshots();
+      this.discardPreparedOptimizer();
+      this.onAiSurfaceClosed?.();
       // Force a fresh render into the next panel (the lastHtml guard must not
       // suppress the first paint after the panel was closed and reopened).
       this.lastHtml = '';
@@ -199,12 +1622,208 @@ export class UsageWebviewProvider {
         case 'getAdvice':
           vscode.commands.executeCommand('claudeCodeUsage.getAdvice');
           break;
+        case 'updateAdviceConsent':
+          await this.handleAdviceConsentMessage(message as Record<string, unknown>);
+          break;
+        case 'prepareAdviceSnapshot':
+          this.handlePrepareAdviceSnapshotMessage(message as Record<string, unknown>);
+          break;
+        case 'sendAdviceSnapshot':
+          await this.handleSendAdviceSnapshotMessage(message as Record<string, unknown>);
+          break;
+        case 'discardAdviceSnapshot': {
+          const provider = message.provider;
+          if (provider === 'claude' || provider === 'codex') {
+            this.clearPreparedAdviceSnapshots(provider);
+          }
+          break;
+        }
+        case 'recordAdviceFeedback':
+          await this.handleAdviceFeedbackMessage(message as Record<string, unknown>);
+          break;
+        case 'snoozeAdvice':
+          await this.handleAdviceSnoozeMessage(message as Record<string, unknown>);
+          break;
+        case 'clearAdviceLocalData':
+          await this.handleClearAdviceLocalDataMessage();
+          break;
+        case 'localDataClientReady':
+          this.onLocalDataClientReady?.();
+          break;
+        case 'requestLocalDataInventory': {
+          const summary = message.clientSummary as Partial<LocalDataClientSummary> | undefined;
+          const clientSummary: LocalDataClientSummary = {
+            uiPreferenceKeys: Number.isInteger(summary?.uiPreferenceKeys) &&
+              Number(summary?.uiPreferenceKeys) >= 0
+              ? Number(summary?.uiPreferenceKeys)
+              : 0,
+            webviewStateFields: Number.isInteger(summary?.webviewStateFields) &&
+              Number(summary?.webviewStateFields) >= 0
+              ? Number(summary?.webviewStateFields)
+              : 0,
+            sharingPreferenceKeys: Number.isInteger(summary?.sharingPreferenceKeys) &&
+              Number(summary?.sharingPreferenceKeys) >= 0
+              ? Number(summary?.sharingPreferenceKeys)
+              : 0,
+          };
+          try {
+            const inventory = await this.onRequestLocalDataInventory?.(clientSummary);
+            this.panel?.webview.postMessage({
+              command: 'localDataInventoryResult',
+              ok: inventory !== undefined,
+              inventory,
+            });
+          } catch {
+            this.panel?.webview.postMessage({
+              command: 'localDataInventoryResult',
+              ok: false,
+            });
+          }
+          break;
+        }
+        case 'runLocalDataAction': {
+          if (!isLocalDataAction(message.action) || !this.onRunLocalDataAction) {
+            this.panel?.webview.postMessage({
+              command: 'localDataActionResult',
+              result: { ok: false, message: 'Unsupported local-data action.' },
+            });
+            break;
+          }
+          const token = typeof message.quotaScopeToken === 'string'
+            ? message.quotaScopeToken
+            : undefined;
+          try {
+            const result = await this.onRunLocalDataAction(message.action, token);
+            this.panel?.webview.postMessage({
+              command: 'localDataActionResult',
+              result,
+            });
+          } catch {
+            this.panel?.webview.postMessage({
+              command: 'localDataActionResult',
+              result: { ok: false, message: 'The local-data action could not be completed.' },
+            });
+          }
+          break;
+        }
+        case 'localDataClientActionAck': {
+          if (typeof message.requestId === 'string') {
+            this.settleLocalDataClientAction(
+              message.requestId,
+              message.ok === true,
+            );
+          }
+          break;
+        }
         case 'exportHeatmap':
           vscode.commands.executeCommand('claudeCodeUsage.exportHeatmap');
           break;
         case 'publishHeatmap':
           vscode.commands.executeCommand('claudeCodeUsage.publishHeatmapToGitHub');
           break;
+        case 'previewCombinedHeatmap': {
+          if (!this.panel) {
+            break;
+          }
+          try {
+            const artifact = this.buildCombinedHeatmapArtifact(
+              message.range,
+              message.title,
+              message.palette,
+              message.customAccent,
+              message.intensityMode,
+            );
+            this.panel.webview.postMessage({
+              command: 'combinedHeatmapResult',
+              svg: artifact.svg,
+              markdown: artifact.markdown,
+              filename: artifact.filename,
+              hasData: artifact.hasData,
+            });
+          } catch (error) {
+            this.panel.webview.postMessage({
+              command: 'combinedHeatmapResult',
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          break;
+        }
+        case 'exportCombinedHeatmap': {
+          const copy = combinedHeatmapUiCopy(I18n.getLocale());
+          let artifact: ReturnType<UsageWebviewProvider['buildCombinedHeatmapArtifact']>;
+          try {
+            artifact = this.buildCombinedHeatmapArtifact(
+              message.range,
+              message.title,
+              message.palette,
+              message.customAccent,
+              message.intensityMode,
+            );
+          } catch (error) {
+            vscode.window.showErrorMessage(`Combined heatmap export failed: ${error instanceof Error ? error.message : String(error)}`);
+            break;
+          }
+          if (!artifact.hasData) {
+            vscode.window.showWarningMessage(copy.noData);
+            break;
+          }
+          const uri = await vscode.window.showSaveDialog({
+            defaultUri: vscode.Uri.file(path.join(os.homedir(), artifact.filename)),
+            filters: { 'SVG image': ['svg'] },
+            saveLabel: copy.exportSvg.replace('…', ''),
+          });
+          if (!uri) {
+            break;
+          }
+          try {
+            await vscode.workspace.fs.writeFile(uri, Buffer.from(artifact.svg, 'utf8'));
+            vscode.window.showInformationMessage(`Combined activity SVG exported: ${path.basename(uri.fsPath)}`);
+          } catch (error) {
+            vscode.window.showErrorMessage(`Combined heatmap export failed: ${error instanceof Error ? error.message : String(error)}`);
+          }
+          break;
+        }
+        case 'copyCombinedHeatmapMarkdown': {
+          try {
+            const artifact = this.buildCombinedHeatmapArtifact(
+              message.range,
+              message.title,
+              message.palette,
+              message.customAccent,
+              message.intensityMode,
+            );
+            await vscode.env.clipboard.writeText(artifact.markdown);
+            this.panel?.webview.postMessage({ command: 'combinedHeatmapMarkdownCopied', ok: true });
+          } catch (error) {
+            this.panel?.webview.postMessage({
+              command: 'combinedHeatmapMarkdownCopied',
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          break;
+        }
+        case 'resetCombinedHeatmapPreferences': {
+          try {
+            if (this.onResetSharingPreferences) {
+              await this.onResetSharingPreferences();
+            } else {
+              await this.context.globalState.update('ccu.heatmapRepo', undefined);
+              await this.context.globalState.update('ccu.heatmapPath', undefined);
+              this.clearSharingRuntimeState();
+            }
+            this.panel?.webview.postMessage({
+              command: 'combinedHeatmapPreferencesReset',
+              ok: true,
+            });
+          } catch {
+            this.panel?.webview.postMessage({
+              command: 'combinedHeatmapPreferencesReset',
+              ok: false,
+            });
+          }
+          break;
+        }
         case 'buildShareCard': {
           // On-demand preview: build the SVG from the panel's config and send
           // it back for injection (no full re-render).
@@ -419,26 +2038,15 @@ export class UsageWebviewProvider {
           if (!this.panel) {
             break;
           }
-          const draft = String(message.draft || '');
-          const opts = {
-            resolve: !!message.resolve,
-            distil: !!message.distil,
-            aesthetic: !!message.aesthetic,
-          };
-          // Persist the inputs immediately so a refresh mid-request keeps them.
-          this.optimizerState = { draft, ...opts };
-          let result: { prompt?: string; settings?: string; error?: string };
-          if (this.onOptimize) {
-            result = await this.onOptimize(draft, opts);
-          } else {
-            result = { error: 'Optimizer is not available.' };
-          }
-          // Persist the result too, so re-rendering the webview (auto-refresh)
-          // restores it instead of wiping a prompt the user is still reading.
-          this.optimizerState = { draft, ...opts, ...result };
-          if (this.panel) {
-            this.panel.webview.postMessage({ command: 'optimizeResult', ...result });
-          }
+          await this.handlePrepareOptimizerMessage(message as Record<string, unknown>);
+          break;
+        }
+        case 'sendOptimizerRequest': {
+          await this.handleSendOptimizerMessage(message as Record<string, unknown>);
+          break;
+        }
+        case 'discardOptimizerRequest': {
+          this.discardPreparedOptimizer();
           break;
         }
         case 'getAttribution': {
@@ -559,6 +2167,7 @@ export class UsageWebviewProvider {
       codex: providerAvailability.codex,
       codexData: providerAvailability.codexData ?? providerAvailability.codex,
     };
+    this.scheduleAdviceComparisonProduction();
     if (!this.providerSelectionInitialized) {
       this.currentProvider = defaultDashboardProvider(
         providerAvailability.claude,
@@ -584,8 +2193,45 @@ export class UsageWebviewProvider {
   updateCodexProgress(progress: CodexRenderProgress): void {
     this.codexProgress = progress;
     if (this.panel && this.currentProvider === 'codex') {
-      this.updateWebview();
+      void this.panel.webview.postMessage({
+        command: 'codexIndexProgress',
+        text: this.codexProgressText(progress),
+      });
     }
+  }
+
+  /**
+   * Receive privacy-reviewed provider contracts from the extension host. This
+   * deliberately does not trigger a render: syncProviderUi immediately follows
+   * it with updateProviderData, so one data refresh still produces one paint.
+   */
+  updateAdviceEffectivenessData(states: AdviceEffectivenessProviderStates): void {
+    for (const provider of ['claude', 'codex'] as const) {
+      const previous = this.adviceEffectivenessStates[provider];
+      const next = states[provider];
+      if (!previous || !next) {
+        this.clearPreparedAdviceSnapshots(provider);
+        continue;
+      }
+      const unchanged =
+        this.adviceSourceRevision(previous) === this.adviceSourceRevision(next);
+      if (!unchanged) {
+        this.clearPreparedAdviceSnapshots(provider);
+        continue;
+      }
+      // Keep a strictly parsed remote recommendation across ordinary refreshes
+      // of the same materialized source revision. Evidence remains host-owned.
+      if (previous.contract.provenance.generatedBy.kind === 'remote-model') {
+        next.contract = previous.contract;
+      }
+    }
+    this.adviceEffectivenessStates = states;
+  }
+
+  invalidatePreparedAiRequests(): void {
+    this.adviceConsentGeneration += 1;
+    this.clearPreparedAdviceSnapshots();
+    this.discardPreparedOptimizer();
   }
 
   setLoading(loading: boolean): void {
@@ -671,6 +2317,11 @@ export class UsageWebviewProvider {
   }
 
   private getWebviewContent(): string {
+    // Data/privacy controls must remain reachable even when neither provider
+    // has logs yet or a refresh is in progress.
+    if (this.currentTab === 'settings' && this.currentProvider !== 'compare') {
+      return this.getMainContent();
+    }
     if (this.isLoading) {
       return this.getLoadingContent();
     }
@@ -703,7 +2354,7 @@ export class UsageWebviewProvider {
       </head>
       <body>
         <div class="container">
-          <div class="loading">
+          <div class="loading" role="status" aria-live="polite">
             <div class="spinner"></div>
             <p>${I18n.t.statusBar.loading}</p>
           </div>
@@ -725,7 +2376,7 @@ export class UsageWebviewProvider {
       </head>
       <body>
         <div class="container">
-          <div class="error">
+          <div class="error" role="alert">
             <h2>${I18n.t.statusBar.error}</h2>
             <p>${this.error}</p>
             <button onclick="refresh()">${I18n.t.popup.refresh}</button>
@@ -749,7 +2400,7 @@ export class UsageWebviewProvider {
       </head>
       <body>
         <div class="container">
-          <div class="no-data">
+          <div class="no-data" role="status" aria-live="polite">
             <h2>${I18n.t.statusBar.noData}</h2>
             <p>${I18n.t.popup.noDataMessage}</p>
             <div class="actions">
@@ -786,6 +2437,135 @@ export class UsageWebviewProvider {
     return html + '</nav>';
   }
 
+  private buildCombinedHeatmapArtifact(
+    rangeInput: unknown,
+    titleInput: unknown,
+    paletteInput: unknown = 'academicViolet',
+    customAccentInput: unknown = '#4f2f87',
+    intensityModeInput: unknown = 'quantile',
+  ): {
+    range: CombinedHeatmapRange;
+    title: string;
+    endDateISO: string;
+    filename: string;
+    markdown: string;
+    svg: string;
+    hasData: boolean;
+  } {
+    const copy = combinedHeatmapUiCopy(I18n.getLocale());
+    const range = normalizeCombinedHeatmapRange(rangeInput);
+    const title = sanitizeCombinedHeatmapTitle(titleInput, copy.defaultTitle);
+    const palette = normalizeCombinedHeatmapPalette(paletteInput);
+    const customAccent = normalizeCombinedHeatmapAccent(customAccentInput);
+    const intensityMode = normalizeCombinedHeatmapIntensityMode(intensityModeInput);
+    const timeZone = I18n.getTimezone();
+    const endDateISO = dayKeyInZone(new Date(), timeZone);
+    if (!endDateISO) {
+      throw new Error('Could not resolve the configured timezone date.');
+    }
+    const claudeDaily = ClaudeDataLoader.getDailyUsageMap(this.allRecords ?? [], timeZone);
+    const daily = mergeCombinedDailyUsage(
+      claudeDailyPointsFromUsage(claudeDaily),
+      codexDailyPointsFromUsage(this.codexView?.daily ?? []),
+    );
+    const selected = selectCombinedHeatmapWindow(daily, range, endDateISO);
+    const filename = combinedHeatmapFilename(range, endDateISO);
+    return {
+      range,
+      title,
+      endDateISO,
+      filename,
+      markdown: combinedHeatmapMarkdown(filename, title),
+      svg: renderCombinedHeatmapSvg(daily, {
+        range,
+        endDateISO,
+        title,
+        palette,
+        customAccent,
+        intensityMode,
+        labels: {
+          combined: copy.combinedLabel,
+          processedTokens: copy.processedTokensLabel,
+          footerNote: copy.svgFooterNote,
+        },
+      }),
+      hasData: selected.totals.combinedProcessed > 0,
+    };
+  }
+
+  private renderCombinedHeatmapPanel(): string {
+    const copy = combinedHeatmapUiCopy(I18n.getLocale());
+    const artifact = this.buildCombinedHeatmapArtifact('year', copy.defaultTitle);
+    const preview = artifact.hasData
+      ? artifact.svg
+      : '<p class="table-hint">' + this.escapeHtml(copy.noData) + '</p>';
+    const paletteChoice = (
+      value: string,
+      label: string,
+      colors: string[],
+      checked = false,
+    ): string => '<label class="combined-palette-choice">' +
+      '<input type="radio" name="combinedHeatmapPalette" value="' + value + '"' + (checked ? ' checked' : '') +
+      ' onchange="toggleCombinedCustomAccent()">' +
+      '<span class="combined-palette-swatch" aria-hidden="true">' +
+      colors.map((color) => '<i style="background:' + color + '"></i>').join('') + '</span>' +
+      '<span>' + this.escapeHtml(label) + '</span></label>';
+    const palettes =
+      paletteChoice('academicViolet', copy.academicViolet, ['#eee8f8', '#bca5e6', '#8668c7', '#4f2f87'], true) +
+      paletteChoice('claudeOrange', copy.claudeOrange, ['#fff1e8', '#fadcc9', '#e07d4f', '#c85a2b']) +
+      paletteChoice('codexBlue', copy.codexBlue, ['#eff6ff', '#93c5fd', '#3b82f6', '#1d4ed8']) +
+      paletteChoice('githubGreen', copy.githubGreen, ['#dafbe1', '#6fdd8b', '#2da44e', '#116329']) +
+      paletteChoice('custom', copy.customPalette, ['#eee8f8', '#bca5e6', '#8668c7', '#4f2f87']);
+    return '<section class="heatmap-panel combined-heatmap-panel" aria-labelledby="combinedHeatmapHeading">' +
+      '<header class="combined-share-header"><div>' +
+      '<span class="combined-share-eyebrow">' + this.escapeHtml(copy.eyebrow) + '</span>' +
+      '<h2 id="combinedHeatmapHeading">' + this.escapeHtml(copy.panelTitle) + '</h2>' +
+      '<p>' + this.escapeHtml(copy.description) + '</p></div>' +
+      '<span class="combined-private-badge">◆ ' + this.escapeHtml(copy.privateBadge) + '</span></header>' +
+      '<div class="combined-share-layout">' +
+      '<div class="combined-preview-column">' +
+      '<div class="combined-preview-toolbar"><strong>' + this.escapeHtml(copy.previewLabel) + '</strong>' +
+      '<span id="combinedHeatmapStatus" role="status" aria-live="polite"></span></div>' +
+      '<div id="combinedHeatmapPreview" class="heatmap-svg combined-heatmap-preview" role="region" tabindex="0" aria-label="' + this.escapeHtml(copy.previewLabel) + '">' + preview + '</div>' +
+      '<p class="combined-activity-disclaimer">' + this.escapeHtml(copy.activityDisclaimer) + '</p>' +
+      '</div>' +
+      '<aside class="combined-config-card" aria-label="' + this.escapeHtml(copy.settingsLabel) + '">' +
+      '<h3>' + this.escapeHtml(copy.settingsLabel) + '</h3>' +
+      '<div class="combined-heatmap-controls">' +
+      '<label class="sc-field" for="combinedHeatmapTitle"><span>' + this.escapeHtml(copy.titleLabel) + '</span>' +
+      '<input type="text" id="combinedHeatmapTitle" maxlength="80" value="' + this.escapeHtml(artifact.title) + '" data-default-value="' + this.escapeHtml(artifact.title) + '"></label>' +
+      '<label class="sc-field" for="combinedHeatmapRange"><span>' + this.escapeHtml(copy.rangeLabel) + '</span>' +
+      '<select id="combinedHeatmapRange" data-default-value="year">' +
+      '<option value="30d">' + this.escapeHtml(copy.last30) + '</option>' +
+      '<option value="90d">' + this.escapeHtml(copy.last90) + '</option>' +
+      '<option value="year" selected>' + this.escapeHtml(copy.year) + '</option>' +
+      '</select></label>' +
+      '<label class="sc-field" for="combinedHeatmapIntensityMode"><span>' + this.escapeHtml(copy.intensityLabel) + '</span>' +
+      '<select id="combinedHeatmapIntensityMode" data-default-value="quantile">' +
+      '<option value="quantile" selected>' + this.escapeHtml(copy.intensityQuantile) + '</option>' +
+      '<option value="logarithmic">' + this.escapeHtml(copy.intensityLogarithmic) + '</option>' +
+      '<option value="linear">' + this.escapeHtml(copy.intensityLinear) + '</option>' +
+      '</select></label></div>' +
+      '<fieldset class="combined-palette-fieldset"><legend>' + this.escapeHtml(copy.paletteLabel) + '</legend>' +
+      '<div class="combined-palette-options">' + palettes + '</div>' +
+      '<label class="combined-custom-accent" for="combinedHeatmapCustomAccent"><span>' + this.escapeHtml(copy.customAccent) + '</span>' +
+      '<input type="color" id="combinedHeatmapCustomAccent" value="#4f2f87" disabled></label></fieldset>' +
+      '<label class="sc-check combined-privacy-toggle"><input type="checkbox" id="combinedHeatmapPrivacy" checked onchange="toggleCombinedHeatmapPrivacy(true)"> ' +
+      this.escapeHtml(copy.privacyToggle) + '</label>' +
+      '<div id="combinedHeatmapPrivacyPreview" class="combined-privacy-preview" role="note">' +
+      '<p>✓ ' + this.escapeHtml(copy.privacyIncludes) + '</p>' +
+      '<p>✓ ' + this.escapeHtml(copy.privacyExcludes) + '</p></div>' +
+      '<div class="share-actions combined-share-actions">' +
+      '<button class="btn-primary btn-small" onclick="generateCombinedHeatmapPreview()">' + this.escapeHtml(copy.updatePreview) + '</button>' +
+      '<button class="btn-secondary btn-small" onclick="exportCombinedHeatmap()">' + this.escapeHtml(copy.exportSvg) + '</button>' +
+      '<button class="btn-secondary btn-small" onclick="copyCombinedHeatmapMarkdown()">' + this.escapeHtml(copy.copyMarkdown) + '</button>' +
+      '<button class="btn-secondary btn-small" onclick="resetCombinedHeatmapPreferences()">' + this.escapeHtml(copy.resetSharing) + '</button></div>' +
+      '</aside></div>' +
+      '<details class="combined-output-panel"><summary>' + this.escapeHtml(copy.markdownLabel) + '</summary>' +
+      '<textarea id="combinedHeatmapMarkdown" class="combined-markdown" rows="2" readonly aria-label="' + this.escapeHtml(copy.markdownLabel) + '">' + this.escapeHtml(artifact.markdown) + '</textarea>' +
+      '</details></section>';
+  }
+
   private renderCodexCompare(): string {
     const claude = this.allTimeData;
     const updatedAt = Date.now();
@@ -793,14 +2573,12 @@ export class UsageWebviewProvider {
       I18n.getLocale(),
       I18n.getTimezone(),
     );
-    const codexTotals = (this.codexView?.projects ?? []).reduce(
-      (total, project) => ({
-        input: total.input + project.scope.total.input,
-        output: total.output + project.scope.total.output,
-        cache: total.cache + project.scope.total.cachedInput,
-      }),
-      { input: 0, output: 0, cache: 0 },
-    );
+    const codexAllTime = this.codexView?.allTime.total;
+    const codexTotals = {
+      input: codexAllTime?.input ?? 0,
+      output: codexAllTime?.output ?? 0,
+      cache: codexAllTime?.cachedInput ?? 0,
+    };
     const copy = I18n.t.providers.codex;
     const card = (
       label: string,
@@ -816,7 +2594,11 @@ export class UsageWebviewProvider {
       '<span><span class="model-stat-label">' + this.escapeHtml(copy.cachedInput) + '</span><strong>' + I18n.formatNumber(cache) + '</strong></span>' +
       '<span><span class="model-stat-label">' + this.escapeHtml(copy.output) + '</span><strong>' + I18n.formatNumber(output) + '</strong></span>' +
       '</div></article>';
-    return '<section class="usage-summary">' +
+    const sharingWorkspace = this.setting<boolean>('enableShareCard', true)
+      ? this.renderCombinedHeatmapPanel()
+      : '';
+    return sharingWorkspace +
+      '<section class="usage-summary">' +
       '<p class="model-details"><strong>' + this.escapeHtml(copy.indexedAllTime) + '</strong> · ' +
       this.escapeHtml(copy.updatedAt) + ': ' + this.escapeHtml(formatters.formatDateTime(updatedAt)) + '</p>' +
       '<div class="summary-grid">' +
@@ -876,7 +2658,7 @@ export class UsageWebviewProvider {
     // Keep the navigation familiar across providers. Codex still renders the
     // provider-native "Recent task" heading and aggregation inside this tab.
     const today = I18n.t.popup.today;
-    const thisMonth = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.thisMonth;
+    const thisMonth = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.last30days;
     const allTime = provider === 'codex' ? codexCopy.allTime : I18n.t.popup.allTime;
     const sessions = provider === 'codex' ? codexCopy.sessions : I18n.t.popup.sessions;
     const projects = provider === 'codex' ? codexCopy.projects : I18n.t.popup.projects;
@@ -895,18 +2677,35 @@ export class UsageWebviewProvider {
     const workflowsActive = this.currentTab === 'workflows' ? 'active' : '';
     const settingsActive = this.currentTab === 'settings' ? 'active' : '';
 
+    const dashboardTab = (name: string, label: string, active: string): string => {
+      const selected = active === 'active';
+      return '<button id="tab-' + name + '" class="tab ' + active +
+        '" role="tab" data-dashboard-tab="' + name + '" aria-controls="' + name +
+        '" aria-selected="' + selected + '" tabindex="' + (selected ? '0' : '-1') +
+        '" onclick="showTab(\'' + name + '\')">' + this.escapeHtml(label) + '</button>';
+    };
+    const dashboardPanel = (name: string, active: string, content: string): string =>
+      '<div id="' + name + '" class="tab-content ' + active + '" role="tabpanel" ' +
+      'aria-labelledby="tab-' + name + '"' + (active === 'active' ? '' : ' hidden') + '>' +
+      content + '</div>';
+
     // The Content tab is hidden when content analysis is disabled via
     // claudeCodeUsage.enableContentAnalysis (the analyser returned null).
     const contentEnabled = provider === 'codex'
       ? Boolean(this.codexView && this.setting<boolean>('codex.optimization.enabled', true))
       : this.contentAnalysis !== null;
     const contentTabButton = contentEnabled
-      ? '<button id="tab-content" class="tab ' + contentActive +
-        '" onclick="showTab(\'content\')">' + contentTab + '</button>'
+      ? dashboardTab('content', contentTab, contentActive)
       : '';
     const contentTabContent = contentEnabled
-      ? '<div id="content" class="tab-content ' + contentActive + '">' + this.renderContentData(provider) +
-        (provider === 'claude' ? this.renderCacheWarmth() + this.renderInsights() + this.renderCostliestMessages() : '') + '</div>'
+      ? dashboardPanel(
+          'content',
+          contentActive,
+          this.renderContentData(provider) +
+            (provider === 'claude'
+              ? this.renderCacheWarmth() + this.renderInsights() + this.renderCostliestMessages()
+              : ''),
+        )
       : '';
 
     return (
@@ -949,123 +2748,31 @@ export class UsageWebviewProvider {
       `<div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">` +
       this.renderQuotaBanner(provider) +
       `
-          <div class="tabs">
-            <button id="tab-today" class="tab ` +
-      todayActive +
-      `" onclick="showTab('today')">` +
-      today +
-      `</button>
-            <button id="tab-month" class="tab ` +
-      monthActive +
-      `" onclick="showTab('month')">` +
-      thisMonth +
-      `</button>
-            <button id="tab-all" class="tab ` +
-      allActive +
-      `" onclick="showTab('all')">` +
-      allTime +
-      `</button>
-            <button id="tab-sessions" class="tab ` +
-      sessionsActive +
-      `" onclick="showTab('sessions')">` +
-      sessions +
-      `</button>
-            <button id="tab-projects" class="tab ` +
-      projectsActive +
-      `" onclick="showTab('projects')">` +
-      projects +
-      `</button>
-            ` +
+          <div class="tabs" role="tablist" aria-label="${this.escapeHtml(title)}">
+            ` + dashboardTab('today', today, todayActive) +
+      dashboardTab('month', thisMonth, monthActive) +
+      dashboardTab('all', allTime, allActive) +
+      dashboardTab('sessions', sessions, sessionsActive) +
+      dashboardTab('projects', projects, projectsActive) +
       contentTabButton +
-      `
-            ` +
-      (provider === 'claude' ? `<button id="tab-branches" class="tab ` +
-      branchesActive +
-      `" onclick="showTab('branches')">` +
-      branchesTab +
-      `</button>
-            <button id="tab-workflows" class="tab ` +
-      workflowsActive +
-      `" onclick="showTab('workflows')">` +
-      workflowsTab +
-      `</button>` : '') +
-      `
-            <button id="tab-settings" class="tab ` +
-      settingsActive +
-      `" onclick="showTab('settings')">` +
-      settingsTab +
-      `</button>
+      (provider === 'claude'
+        ? dashboardTab('branches', branchesTab, branchesActive) +
+          dashboardTab('workflows', workflowsTab, workflowsActive)
+        : '') +
+      dashboardTab('settings', settingsTab, settingsActive) + `
           </div>
 
-          <div id="today" class="tab-content ` +
-      todayActive +
-      `">
-            ` +
-      this.renderTodayData(provider) +
-      `
-          </div>
-
-          <div id="month" class="tab-content ` +
-      monthActive +
-      `">
-            ` +
-      this.renderMonthData(provider) +
-      `
-          </div>
-
-          <div id="all" class="tab-content ` +
-      allActive +
-      `">
-            ` +
-      this.renderAllTimeData(provider) +
-      `
-          </div>
-
-          <div id="sessions" class="tab-content ` +
-      sessionsActive +
-      `">
-            ` +
-      this.renderSessionData(provider) +
-      `
-          </div>
-
-          <div id="projects" class="tab-content ` +
-      projectsActive +
-      `">
-            ` +
-      this.renderProjectData(provider) +
-      `
-          </div>
-
-          ` +
+          ` + dashboardPanel('today', todayActive, this.renderTodayData(provider)) +
+      dashboardPanel('month', monthActive, this.renderMonthData(provider)) +
+      dashboardPanel('all', allActive, this.renderAllTimeData(provider)) +
+      dashboardPanel('sessions', sessionsActive, this.renderSessionData(provider)) +
+      dashboardPanel('projects', projectsActive, this.renderProjectData(provider)) +
       contentTabContent +
-      `
-
-          ` +
-      (provider === 'claude' ? `<div id="branches" class="tab-content ` +
-      branchesActive +
-      `">
-            ` +
-      this.renderBranchData() +
-      `
-          </div>
-
-          <div id="workflows" class="tab-content ` +
-      workflowsActive +
-      `">
-            ` +
-      this.renderWorkflowData() +
-      `
-          </div>` : '') +
-      `
-
-          <div id="settings" class="tab-content ` +
-      settingsActive +
-      `">
-            ` +
-      this.renderSettingsPanel(provider) +
-      `
-          </div>
+      (provider === 'claude'
+        ? dashboardPanel('branches', branchesActive, this.renderBranchData()) +
+          dashboardPanel('workflows', workflowsActive, this.renderWorkflowData())
+        : '') +
+      dashboardPanel('settings', settingsActive, this.renderSettingsPanel(provider)) + `
         </div>
         </div>
         <script>` +
@@ -1079,9 +2786,9 @@ export class UsageWebviewProvider {
 
   /**
    * The ⚙ Settings tab: every setting, grouped, editable in place. Core
-   * settings (language / dataDirectory / advice.apiKey) still write to VS Code
-   * config; the rest write to the dashboard-managed store. Setting labels/help
-   * are English (technical); group headers + chrome are localised.
+   * settings (language / dataDirectory) still write to VS Code config; secrets
+   * go to SecretStorage and the rest use the dashboard-managed store. Setting
+   * labels/help are English (technical); group headers + chrome are localised.
    */
   private renderSettingsPanel(provider: SettingProvider): string {
     const t = I18n.t.popup;
@@ -1117,6 +2824,41 @@ export class UsageWebviewProvider {
     }
     html += '</div>';
     return html;
+  }
+
+  private renderLocalDataControls(): string {
+    const copy = localDataUiCopy(I18n.getLocale());
+    const esc = (value: string): string => this.escapeHtml(value);
+    return (
+      '<section class="settings-group local-data-controls" aria-labelledby="localDataTitle">' +
+      '<h3 id="localDataTitle">' + esc(copy.title) + '</h3>' +
+      '<p class="table-hint">' + esc(copy.intro) + '</p>' +
+      '<div class="local-data-heading"><h4>' + esc(copy.inventory) + '</h4>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="requestLocalDataInventory()">' +
+      esc(copy.refresh) + '</button></div>' +
+      '<div class="table-wrap local-data-table-wrap" role="region" tabindex="0" aria-label="' +
+      esc(copy.inventory) + '"><table class="data-table local-data-table">' +
+      '<thead><tr><th>' + esc(copy.category) + '</th><th>' + esc(copy.location) + '</th>' +
+      '<th>' + esc(copy.schema) + '</th><th>' + esc(copy.sizeCount) + '</th>' +
+      '<th>' + esc(copy.dateRange) + '</th><th>' + esc(copy.network) + '</th>' +
+      '<th>' + esc(copy.clearability) + '</th></tr></thead>' +
+      '<tbody id="localDataInventoryBody"><tr><td colspan="7" class="table-hint">' +
+      esc(copy.loading) + '</td></tr></tbody></table></div>' +
+      '<p id="localDataExclusions" class="table-hint"></p>' +
+      '<div class="local-data-heading"><h4>' + esc(copy.actions) + '</h4></div>' +
+      '<div class="local-data-actions" role="group" aria-label="' + esc(copy.actions) + '">' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'rebuild-codex-index\')">' + esc(copy.rebuildIndex) + '</button>' +
+      '<label class="local-data-scope-label" for="localDataQuotaScope">' + esc(copy.quotaScope) + '</label>' +
+      '<select id="localDataQuotaScope" aria-label="' + esc(copy.quotaScope) + '"></select>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'clear-quota-history\')">' + esc(copy.clearQuota) + '</button>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'clear-advice-data\')">' + esc(copy.clearAdvice) + '</button>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'reset-ui-state\')">' + esc(copy.resetUi) + '</button>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'reset-sharing-preferences\')">' + esc(copy.resetSharing) + '</button>' +
+      '<button class="btn-secondary btn-small" type="button" onclick="runLocalDataAction(\'clear-byok-secret\')">' + esc(copy.clearByok) + '</button>' +
+      '<button class="btn-secondary btn-small local-data-danger" type="button" onclick="runLocalDataAction(\'clear-all-derived-data\')">' + esc(copy.clearAll) + '</button>' +
+      '</div><p id="localDataActionStatus" class="table-hint" role="status" aria-live="polite"></p>' +
+      '</section>'
+    );
   }
 
   /** One row in the settings panel: label + help + the right input control. The
@@ -1190,6 +2932,9 @@ export class UsageWebviewProvider {
         '" value="' +
         esc(String(it.value)) +
         '"' +
+        (it.secret
+          ? ' autocomplete="new-password" placeholder="' + (it.configured ? '••••••••' : '') + '"'
+          : '') +
         onCh('string') +
         '>';
     }
@@ -1244,13 +2989,20 @@ export class UsageWebviewProvider {
               ? copy.unlimited
               : limit.state === 'missing'
                 ? copy.limitMissing
-                : `${I18n.formatNumber(limit.usedPercent ?? 0)}% ${copy.used}`;
+                : `${I18n.formatNumber(limit.usedPercent ?? 0)}% ${copy.used} · ` +
+                  `${I18n.formatNumber(limit.remainingPercent ?? Math.max(0, 100 - (limit.usedPercent ?? 0)))}% ${copy.remaining}`;
             const reset = limit.resetsAt && limit.state === 'current'
               ? '<div class="model-details">' + this.escapeHtml(copy.resets) + ': ' +
-                this.escapeHtml(formatters.formatDateTime(limit.resetsAt)) + '</div>'
+                this.escapeHtml(formatters.formatDateTime(limit.resetsAt)) + ' · ' +
+                this.escapeHtml(formatters.formatRelativeTime(limit.resetsAt, Date.now())) + '</div>'
+              : '';
+            const observed = limit.observedAt
+              ? '<div class="model-details">' + this.escapeHtml(copy.lastObserved) + ': ' +
+                this.escapeHtml(formatters.formatDateTime(limit.observedAt)) + ' · ' +
+                this.escapeHtml(copy.localLogNotLive) + '</div>'
               : '';
             return '<div class="summary-item"><div class="label">' + this.escapeHtml(label) +
-              '</div><div class="value">' + this.escapeHtml(value) + '</div>' + reset + '</div>';
+              '</div><div class="value">' + this.escapeHtml(value) + '</div>' + reset + observed + '</div>';
           }).join('') + '</div></div>'
         : '';
       const qualityFlags = view.qualityFlags.length > 0
@@ -1279,7 +3031,25 @@ export class UsageWebviewProvider {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
 
-    const todaySummary = this.renderUsageData(this.todayData, provider) + this.renderTodayInsights(provider);
+    const todayHasActivity = this.todayData.messageCount > 0 ||
+      this.todayData.totalInputTokens > 0 ||
+      this.todayData.totalOutputTokens > 0 ||
+      this.todayData.totalCacheCreationTokens > 0 ||
+      this.todayData.totalCacheReadTokens > 0;
+    const latestActivityDate = this.dailyDataForMonth.reduce<string | undefined>(
+      (latest, row) => latest === undefined || row.date > latest ? row.date : latest,
+      undefined,
+    );
+    const emptyRangeHint = todayHasActivity
+      ? ''
+      : '<p class="table-hint range-empty-hint"><strong>' +
+        this.escapeHtml(I18n.t.popup.today) + ':</strong> 0' +
+        (latestActivityDate
+          ? ' · ' + this.escapeHtml(I18n.t.popup.lastActive) + ': ' +
+            this.escapeHtml(this.formatDate(latestActivityDate))
+          : '') + '</p>';
+    const todaySummary = emptyRangeHint + this.renderUsageData(this.todayData, provider) +
+      this.renderTodayInsights(provider);
 
     let hourlyBreakdown = '';
     if (this.hourlyDataForToday.length > 0) {
@@ -1389,9 +3159,22 @@ export class UsageWebviewProvider {
   }
 
   private renderCodexTodayHourly(view: CodexUsageView): string {
-    const rows = view.todayHourly;
-    const coverage = view.todayCoverage;
-    if (rows.length === 0 && coverage.complete) {
+    return this.renderCodexHourlyBreakdown(
+      view.todayHourly,
+      view.todayCoverage,
+    );
+  }
+
+  private renderCodexHourlyBreakdown(
+    rows: CodexHourlyUsageView[],
+    coverage: {
+      indexedFiles: number;
+      totalFiles: number;
+      complete: boolean;
+    },
+    day?: string,
+  ): string {
+    if (rows.length === 0 && coverage.complete && !day) {
       return '';
     }
     const copy = I18n.t.providers.codex;
@@ -1409,10 +3192,10 @@ export class UsageWebviewProvider {
       '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
       '</div>';
     const chart = rows.length > 0
-      ? '<div class="chart-content" id="codexTodayHourlyChart">' +
+      ? '<div class="chart-content"' + (day ? '' : ' id="codexTodayHourlyChart"') + '>' +
         this.renderCodexHourlyChart(rows) + '</div>' +
         this.renderCompositionChart(
-          rows.map((row) => ({ label: row.hour, data: row.total })),
+          rows.map((row) => ({ label: row.label, data: row.total })),
           'codex',
         )
       : '<div class="no-chart-data">' + this.escapeHtml(copy.noDailyData) + '</div>';
@@ -1425,7 +3208,7 @@ export class UsageWebviewProvider {
         '<th>' + this.escapeHtml(copy.output) + '</th><th>' + this.escapeHtml(copy.reasoning) + '</th>' +
         '<th>' + this.escapeHtml(copy.threads) + '</th></tr></thead><tbody>' +
         rows.map((row) =>
-          '<tr><td class="date-cell">' + this.escapeHtml(row.hour) + '</td>' +
+          '<tr><td class="date-cell">' + this.escapeHtml(row.label) + '</td>' +
           '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
           (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
@@ -1437,8 +3220,15 @@ export class UsageWebviewProvider {
           '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
         ).join('') + '</tbody></table></div>'
       : '';
-    return '<div class="daily-breakdown" data-codex-time-series data-codex-today-hourly>' +
-      '<h3>' + this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '</h3>' + partial + tabs + chart + table + '</div>';
+    const heading = day
+      ? '<h4>' + this.escapeHtml(this.formatDate(day)) + ' · ' +
+        this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '</h4>'
+      : '<h3>' + this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '</h3>';
+    return '<div class="' + (day ? 'hourly-breakdown' : 'daily-breakdown') +
+      '" data-codex-time-series' + (day
+        ? ' data-codex-materialized-hours="true" data-date="' + this.escapeHtml(day) + '"'
+        : ' data-codex-today-hourly') + '>' +
+      heading + partial + tabs + chart + table + '</div>';
   }
 
   /** Opt-in (showEfficiency) efficiency chips appended to a usage summary:
@@ -1490,7 +3280,10 @@ export class UsageWebviewProvider {
               totalBytes: coverage.totalBytes,
             }
           : null;
-    const details = progress ? ' · ' + this.renderCodexProgressText(progress) : '';
+    const details = progress
+      ? ' · <span data-codex-index-progress-text>' +
+        this.renderCodexProgressText(progress) + '</span>'
+      : '';
     const subtotal = indexedSubtotal
       ? '<strong>' + this.escapeHtml(copy.indexedSubtotal) + '</strong> · '
       : '';
@@ -1504,14 +3297,18 @@ export class UsageWebviewProvider {
       ? copy.indexingInProgress
       : copy.noRecentTask;
     const progress = this.codexLoading && this.codexProgress
-      ? '<p class="model-details">' +
-        this.renderCodexProgressText(this.codexProgress) + '</p>'
+      ? '<p class="model-details"><span data-codex-index-progress-text>' +
+        this.renderCodexProgressText(this.codexProgress) + '</span></p>'
       : '';
     return '<div class="no-data"><p>' + this.escapeHtml(message) + '</p>' +
       progress + '</div>';
   }
 
   private renderCodexProgressText(progress: CodexRenderProgress): string {
+    return this.escapeHtml(this.codexProgressText(progress));
+  }
+
+  private codexProgressText(progress: CodexRenderProgress): string {
     const copy = I18n.t.providers.codex;
     const exactCount = new Intl.NumberFormat(I18n.getLocale(), {
       maximumFractionDigits: 0,
@@ -1528,13 +3325,16 @@ export class UsageWebviewProvider {
       I18n.getLocale(),
       I18n.getTimezone(),
     );
-    return this.escapeHtml(copy.indexedLogEntries) + ': ' +
+    const reason = progress.reason
+      ? copy.indexingReasons[progress.reason] + ' · '
+      : '';
+    return reason + copy.indexedLogEntries + ': ' +
       exactCount.format(progress.scannedFiles) + '/' +
       exactCount.format(progress.totalFiles) +
       (progress.totalFiles > 0 ? ' (' + completedPercent + '%)' : '') + ' · ' +
-      this.escapeHtml(copy.indexedStorage) + ': ' +
-      this.escapeHtml(formatters.formatBytes(progress.indexedBytes)) + '/' +
-      this.escapeHtml(formatters.formatBytes(progress.totalBytes));
+      copy.indexedStorage + ': ' +
+      formatters.formatBytes(progress.indexedBytes) + '/' +
+      formatters.formatBytes(progress.totalBytes);
   }
 
   private renderUsageData(
@@ -1565,10 +3365,11 @@ export class UsageWebviewProvider {
         equivalentRows,
         scope.total.processed,
       );
-      const pricingCoverage = new Intl.NumberFormat(I18n.getLocale(), {
+      const pricingCoverageFormatter = new Intl.NumberFormat(I18n.getLocale(), {
         style: 'percent',
         maximumFractionDigits: 0,
-      }).format(equivalent.pricingCoverage);
+      });
+      const pricingCoverage = pricingCoverageFormatter.format(equivalent.pricingCoverage);
       const equivalentHelp = copy.apiEquivalentCostHelp.replace(
         '{coverage}',
         pricingCoverage,
@@ -1588,7 +3389,9 @@ export class UsageWebviewProvider {
         '<span class="legend-item"><span class="legend-dot ' + className + '"></span>' +
         this.escapeHtml(label) + ' ' + I18n.formatNumber(value) + '</span>';
       const compositionHtml = '<div class="cost-composition"><div class="cost-comp-head">' +
-        this.escapeHtml(copy.tokenComposition) + '</div><div class="cost-comp-bar">' +
+        '<span>' + this.escapeHtml(copy.tokenComposition) + '</span>' +
+        '<strong>' + this.escapeHtml(copy.fresh) + ' ' +
+        I18n.formatNumber(composition.uncachedUsage) + '</strong></div><div class="cost-comp-bar">' +
         '<div class="cost-comp-seg seg-input" style="width:' + width(composition.freshInput) + '"></div>' +
         '<div class="cost-comp-seg seg-cache-read" style="width:' + width(composition.cachedInput) + '"></div>' +
         '<div class="cost-comp-seg seg-output" style="width:' + width(composition.output) + '"></div>' +
@@ -1602,15 +3405,36 @@ export class UsageWebviewProvider {
       const dimension = (
         title: string,
         rows: Array<{ key: string; totals: CodexMetricTotals }>,
+        showEquivalentPrice: boolean,
       ): string => {
         if (rows.length === 0) {
           return '';
         }
         return '<div class="model-breakdown"><div class="section-header"><h3>' +
-          this.escapeHtml(title) + '</h3></div><div class="model-list">' + rows.map((row, index) =>
-            '<details class="model-item"' + (index === 0 ? ' open' : '') + '><summary class="model-header">' +
-            '<span class="model-name">' + this.escapeHtml(row.key) + '</span><span class="model-cost">' +
-            I18n.formatNumber(row.totals.fresh) + ' ' + this.escapeHtml(copy.fresh) + '</span></summary>' +
+          this.escapeHtml(title) + '</h3></div><div class="model-list">' + rows.map((row, index) => {
+          let headline: string;
+          if (showEquivalentPrice) {
+            const rowEquivalent = summarizeEquivalentUsage([
+              equivalentUsageFromProviderTokens(0, row.key, {
+                inputTotal: row.totals.input,
+                cachedInput: row.totals.cachedInput,
+                outputTotal: row.totals.output,
+                reasoningOutput: row.totals.reasoning,
+              }),
+            ], row.totals.processed);
+            const rowCoverage = pricingCoverageFormatter.format(rowEquivalent.pricingCoverage);
+            const rowHelp = copy.apiEquivalentCostHelp.replace('{coverage}', rowCoverage);
+            headline = '<span class="model-metric model-cost" title="' +
+              this.escapeHtml(rowHelp) + '">' +
+              this.escapeHtml(rowEquivalent.pricedTokens > 0
+                ? I18n.formatCurrency(rowEquivalent.equivalentUsd)
+                : '—') + '</span>';
+          } else {
+            headline = '<span class="model-metric">' + I18n.formatNumber(row.totals.fresh) + ' ' +
+              this.escapeHtml(copy.fresh) + '</span>';
+          }
+          return '<details class="model-item"' + (index === 0 ? ' open' : '') + '><summary class="model-header">' +
+            '<span class="model-name">' + this.escapeHtml(row.key) + '</span>' + headline + '</summary>' +
             '<div class="model-details model-details-stacked">' +
             '<span><span class="model-stat-label">' + this.escapeHtml(copy.processed) + '</span><strong>' +
             I18n.formatNumber(row.totals.processed) + '</strong></span>' +
@@ -1619,8 +3443,8 @@ export class UsageWebviewProvider {
             '<span><span class="model-stat-label">' + this.escapeHtml(copy.output) + '</span><strong>' +
             I18n.formatNumber(row.totals.output) + '</strong></span>' +
             '<span><span class="model-stat-label">' + this.escapeHtml(copy.reasoning) + '</span><strong>' +
-            I18n.formatNumber(row.totals.reasoning) + '</strong></span></div></details>',
-          ).join('') + '</div></div>';
+            I18n.formatNumber(row.totals.reasoning) + '</strong></span></div></details>';
+        }).join('') + '</div></div>';
       };
       return '<div class="usage-summary">' +
         this.renderCodexIndexedSubtotal(scope.indexedSubtotal) +
@@ -1637,7 +3461,7 @@ export class UsageWebviewProvider {
         metric(copy.output, scope.total.output) +
         metric(copy.reasoning, scope.total.reasoning) +
         '</div>' + compositionHtml + '</div>' +
-        dimension(copy.models, scope.models) + dimension(copy.efforts, scope.efforts);
+        dimension(copy.models, scope.models, true) + dimension(copy.efforts, scope.efforts, false);
     }
     if (!data) {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
@@ -1811,7 +3635,7 @@ export class UsageWebviewProvider {
           '<span class="model-name">' +
           this.escapeHtml(model) +
           '</span>' +
-          '<span class="model-cost">' +
+          '<span class="model-metric model-cost">' +
           I18n.formatCurrency(modelData.cost) +
           '</span>' +
           '</summary>' +
@@ -1866,8 +3690,28 @@ export class UsageWebviewProvider {
           '<th>' + this.escapeHtml(copy.fresh) + '</th><th>' + this.escapeHtml(copy.input) + '</th>' +
           '<th>' + this.escapeHtml(copy.cachedInput) + '</th><th>' + this.escapeHtml(copy.output) + '</th>' +
           '<th>' + this.escapeHtml(copy.reasoning) + '</th><th>' + this.escapeHtml(copy.threads) + '</th>' +
-          '</tr></thead><tbody>' + rows.map((row) =>
-            '<tr><td class="date-cell">' + this.escapeHtml(row.day) + '</td>' +
+          '<th></th></tr></thead><tbody>' + rows.map((row) => {
+            const hourly = view.last30DaysHourlyByDay[row.day];
+            const canExpand = hourly !== undefined;
+            const dayCoverage = view.hourlyCoverage.days[row.day] ?? view.hourlyCoverage;
+            const day = this.escapeHtml(row.day);
+            const detailButton = canExpand
+              ? '<button class="detail-button" data-codex-hourly-toggle data-date="' + day + '" ' +
+                'onclick="toggleCodexHourlyDetail(\'' + day + '\')" aria-expanded="false" ' +
+                'aria-controls="codex-hourly-detail-' + day + '" title="' +
+                this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '">' +
+                '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">' +
+                '<path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>' +
+                '</svg></button>'
+              : '';
+            const detailRow = canExpand
+              ? '<tr class="hourly-detail-row" data-codex-hourly-detail-row data-date="' + day +
+                '" style="display: none;"><td colspan="10"><div class="hourly-detail-container" ' +
+                'id="codex-hourly-detail-' + day + '" data-loaded="true">' +
+                this.renderCodexHourlyBreakdown(hourly, dayCoverage, row.day) +
+                '</div></td></tr>'
+              : '';
+            return '<tr class="daily-row" data-date="' + day + '"><td class="date-cell">' + day + '</td>' +
             '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
             (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
@@ -1876,8 +3720,9 @@ export class UsageWebviewProvider {
             '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
-            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
-          ).join('') + '</tbody></table></div></div>';
+            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td>' +
+            '<td class="detail-cell">' + detailButton + '</td></tr>' + detailRow;
+          }).join('') + '</tbody></table></div></div>';
       return this.renderUsageData(null, provider, view.last30Days) + breakdown;
     }
     if (!this.monthData) {
@@ -1943,8 +3788,10 @@ export class UsageWebviewProvider {
                   <td class="number-cell">${this.formatPercent(this.cacheHitRate(data))}</td>
                   <td class="number-cell">${I18n.formatNumber(data.messageCount)}</td>
                   <td class="detail-cell">
-                    <button class="detail-button" onclick="toggleHourlyDetail('${date}')" title="${I18n.t.popup.hourlyBreakdown}">
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <button class="detail-button" onclick="toggleHourlyDetail('${date}')"
+                      aria-expanded="false" aria-controls="hourly-detail-${date}"
+                      title="${this.escapeHtml(I18n.t.popup.hourlyBreakdown)}">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
                         <path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
                       </svg>
                     </button>
@@ -1953,7 +3800,7 @@ export class UsageWebviewProvider {
                 <tr class="hourly-detail-row" data-date="${date}" style="display: none;">
                   <td colspan="9">
                     <div class="hourly-detail-container" id="hourly-detail-${date}">
-                      <div class="loading-indicator">載入中...</div>
+                      <div class="loading-indicator">${this.escapeHtml(I18n.t.statusBar.loading)}</div>
                     </div>
                   </td>
                 </tr>
@@ -2024,7 +3871,9 @@ export class UsageWebviewProvider {
       const daily = ClaudeDataLoader.getDailyUsageMap(this.allRecords, I18n.getTimezone());
       heatmapPanel =
         '<div class="heatmap-panel"><h3>Token heatmap</h3>' +
-        '<div class="heatmap-svg">' + renderHeatmapSvg(daily) + '</div>' +
+        '<div class="heatmap-svg">' + renderHeatmapSvg(daily, {
+          endDateISO: dayKeyInZone(new Date(), I18n.getTimezone()),
+        }) + '</div>' +
         '<div class="share-actions">' +
         '<button class="btn-secondary btn-small" onclick="exportHeatmap()">Export as SVG…</button>' +
         '<button class="btn-secondary btn-small" onclick="publishHeatmap()">Publish to GitHub…</button>' +
@@ -2088,8 +3937,10 @@ export class UsageWebviewProvider {
                   <td class="number-cell">${this.formatPercent(this.cacheHitRate(data))}</td>
                   <td class="number-cell">${I18n.formatNumber(data.messageCount)}</td>
                   <td class="detail-cell">
-                    <button class="detail-button" onclick="toggleMonthlyDetail('${date}')" title="顯示每日詳細資料">
-                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+                    <button class="detail-button" onclick="toggleMonthlyDetail('${date}')"
+                      aria-expanded="false" aria-controls="monthly-detail-${date}"
+                      title="${this.escapeHtml(I18n.t.popup.dailyBreakdown)}">
+                      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
                         <path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
                       </svg>
                     </button>
@@ -2098,7 +3949,7 @@ export class UsageWebviewProvider {
                 <tr class="monthly-detail-row" data-date="${date}" style="display: none;">
                   <td colspan="9">
                     <div class="monthly-detail-container" id="monthly-detail-${date}">
-                      <div class="loading-indicator">載入中...</div>
+                      <div class="loading-indicator">${this.escapeHtml(I18n.t.statusBar.loading)}</div>
                     </div>
                   </td>
                 </tr>
@@ -2204,7 +4055,9 @@ export class UsageWebviewProvider {
     };
     const confidenceLabel = (point: WeeklyValuePoint): string => {
       if (point.boundaryUncertain) {
-        return `${copy.usageOnly} · ${copy.boundaryApproximate}`;
+        return point.fullEquivalentUsd === null
+          ? `${copy.usageOnly} · ${copy.boundaryApproximate}`
+          : `${copy.low} · ${copy.boundaryApproximate}`;
       }
       switch (point.confidence) {
         case 'high': return copy.high;
@@ -2278,27 +4131,23 @@ export class UsageWebviewProvider {
     ).join('');
     return '<div class="daily-breakdown"><div class="section-header"><h3>' + heading +
       '</h3></div><p class="table-hint">' + notes + '</p>' + chart +
-      '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+      '<details class="weekly-value-details"><summary>' + this.escapeHtml(copy.periodDetails) +
+      '</summary><div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
       '<th>' + this.escapeHtml(copy.period) + '</th><th>' + this.escapeHtml(copy.usedValue) + '</th>' +
       '<th>' + this.escapeHtml(copy.utilization) + '</th><th>' + this.escapeHtml(copy.fullValue) + '</th>' +
       '<th>' + this.escapeHtml(copy.unusedValue) + '</th><th>' + this.escapeHtml(copy.confidence) + '</th>' +
       '<th>' + this.escapeHtml(copy.pricingCoverage) + '</th></tr></thead><tbody>' +
-      tableRows + '</tbody></table></div></div>';
+      tableRows + '</tbody></table></div></details></div>';
   }
 
-  /** The "Share card" panel (All tab). Off by default (`enableShareCard`); when
-   * on, a config form — range / scope / which metrics — with a Generate button.
+  /** The "Share card" panel (All tab). On by default (`enableShareCard`); when
+   * enabled, a config form — range / scope / which metrics — with a Generate button.
    * The preview is built on demand (no per-keystroke re-render), and export uses
    * the same config. Privacy-safe: built from buildShareCardData, aggregate only. */
   private renderShareCardPanel(): string {
     const esc = (s: string): string => this.escapeHtml(s);
-    if (!this.setting<boolean>('enableShareCard', false)) {
-      // Off by default, but leave a discoverable pointer.
-      return (
-        '<div class="share-panel"><h3>Share card</h3>' +
-        '<p class="table-hint">Turn on <b>Enable usage share card</b> in <a href="#" onclick="openSettings();return false;">⚙ Settings</a> to build a one-page, shareable summary of your usage.</p>' +
-        '</div>'
-      );
+    if (!this.setting<boolean>('enableShareCard', true)) {
+      return '';
     }
     if (!this.allRecords || this.allRecords.length === 0) {
       return '';
@@ -2533,6 +4382,7 @@ export class UsageWebviewProvider {
           '<span data-session-detail-item><span class="model-stat-label">' + this.escapeHtml(label) +
           '</span><strong title="' + this.escapeHtml(value) + '">' + this.escapeHtml(value) + '</strong></span>';
         const mainRow = '<tr class="sort-row" data-session-row data-sort-time="' + session.observedAt + '" ' +
+          'data-day-key="' + this.escapeHtml(this.configuredDateTimeParts(new Date(session.observedAt)).dayKey) + '" ' +
           'data-sort-session="' + this.escapeHtml(title.toLowerCase()) + '" ' +
           'data-sort-project="' + this.escapeHtml(project.toLowerCase()) + '" ' +
           'data-sort-role="' + this.escapeHtml(session.role) + '" ' +
@@ -2648,6 +4498,7 @@ export class UsageWebviewProvider {
       rows +=
         '<tr class="sort-row' + (foreign ? ' session-foreign' : '') + '"' +
         ' data-sort-time="' + s.startTime.getTime() + '"' +
+        ' data-day-key="' + this.escapeHtml(this.configuredDateTimeParts(s.startTime).dayKey) + '"' +
         ' data-models="' + this.escapeHtml(rowModels.join('|').toLowerCase()) + '"' +
         ' data-sort-session="' + this.escapeHtml(fullName.toLowerCase()) + '"' +
         ' data-sort-project="' + this.escapeHtml((s.projectName || '').toLowerCase()) + '"' +
@@ -2768,29 +4619,66 @@ export class UsageWebviewProvider {
     );
   }
 
+  private formatAdviceSnoozeDate(value: number): string {
+    const date = new Date(value);
+    if (isNaN(date.getTime())) {
+      return '';
+    }
+    return date.toLocaleDateString(I18n.getLocale(), I18n.dateFormatOptions());
+  }
+
   /** Reading-friendly date/time: "Today HH:MM", "Yesterday HH:MM", "MM-DD HH:MM" or "YYYY-MM-DD". */
-  private formatDateTime(date: Date): string {
+  private formatDateTime(date: Date, now: Date = new Date()): string {
     if (!date || isNaN(date.getTime()) || date.getTime() === 0) {
       return '-';
     }
-    const now = new Date();
-    const pad = (n: number): string => String(n).padStart(2, '0');
-    const hm = pad(date.getHours()) + ':' + pad(date.getMinutes());
-    const sameDay = (a: Date, b: Date): boolean =>
-      a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-    const yesterday = new Date(now);
-    yesterday.setDate(yesterday.getDate() - 1);
+    const { dayKey, hm } = this.configuredDateTimeParts(date);
+    const todayKey = this.configuredDateTimeParts(now).dayKey;
+    const [yesterdayKey] = rollingDayKeysFromDayKey(todayKey, 2);
 
-    if (sameDay(date, now)) {
+    if (dayKey === todayKey) {
       return I18n.t.popup.today + ' ' + hm;
     }
-    if (sameDay(date, yesterday)) {
+    if (dayKey === yesterdayKey) {
       return I18n.t.popup.yesterday + ' ' + hm;
     }
-    if (date.getFullYear() === now.getFullYear()) {
-      return pad(date.getMonth() + 1) + '-' + pad(date.getDate()) + ' ' + hm;
+    if (dayKey.slice(0, 4) === todayKey.slice(0, 4)) {
+      return dayKey.slice(5) + ' ' + hm;
     }
-    return date.getFullYear() + '-' + pad(date.getMonth() + 1) + '-' + pad(date.getDate());
+    return dayKey;
+  }
+
+  private configuredDateTimeParts(date: Date): { dayKey: string; hm: string } {
+    if (!date || isNaN(date.getTime())) {
+      return { dayKey: '', hm: '' };
+    }
+    const configuredTimeZone = I18n.getTimezone();
+    if (!this.configuredDateTimeFormatter ||
+        this.configuredDateTimeFormatter.configuredTimeZone !== configuredTimeZone) {
+      this.configuredDateTimeFormatter = {
+        configuredTimeZone,
+        formatter: new Intl.DateTimeFormat('en-CA', {
+          year: 'numeric',
+          month: '2-digit',
+          day: '2-digit',
+          hour: '2-digit',
+          minute: '2-digit',
+          hourCycle: 'h23',
+          timeZone: resolveTimeZone(configuredTimeZone),
+        }),
+      };
+    }
+    const parts = this.configuredDateTimeFormatter.formatter.formatToParts(date);
+    const value = (type: string): string => parts.find((part) => part.type === type)?.value ?? '';
+    const year = value('year');
+    const month = value('month');
+    const day = value('day');
+    const hour = value('hour');
+    const minute = value('minute');
+    return {
+      dayKey: year && month && day ? `${year}-${month}-${day}` : '',
+      hm: hour && minute ? `${hour}:${minute}` : '',
+    };
   }
 
   /** USD per-1M-token rate, trimmed of trailing zeros for compact display. */
@@ -3200,30 +5088,32 @@ export class UsageWebviewProvider {
    * diagnostic — it tells whether the provider reuses the prompt cache across
    * a workflow's agents (see the hint line / V2.1-WORKFLOW-SPEC §Phase 2).
    */
-  private renderWorkflowData(): string {
+  private renderWorkflowData(now: Date = new Date()): string {
     if (!this.workflowBreakdown || this.workflowBreakdown.length === 0) {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
 
     const t = I18n.t.popup;
 
-    // Summary strip: workflow count + cost this calendar month, and that
-    // cost's share of the month's total spend.
-    const now = new Date();
-    const thisMonth = this.workflowBreakdown.filter(
-      (w) => w.endTime.getFullYear() === now.getFullYear() && w.endTime.getMonth() === now.getMonth()
+    // The middle dashboard scope is Today plus the preceding 29 configured-zone
+    // civil dates. Match that exact range and classify runs by their displayed
+    // start time so the numerator and rolling-30-day denominator reconcile.
+    const timeZone = I18n.getTimezone();
+    const rollingDays = new Set(rollingDayKeys(now.getTime(), timeZone, 30));
+    const recentWorkflows = this.workflowBreakdown.filter(
+      (w) => rollingDays.has(this.configuredDateTimeParts(w.startTime).dayKey)
     );
-    const monthWorkflowCost = thisMonth.reduce(
+    const rollingWorkflowCost = recentWorkflows.reduce(
       (sum, w) => sum + w.data.totalCost + (w.orchestration ? w.orchestration.totalCost : 0),
       0
     );
-    const monthTotalCost = this.monthData ? this.monthData.totalCost : 0;
-    const monthShare = monthTotalCost > 0 ? monthWorkflowCost / monthTotalCost : null;
+    const rollingTotalCost = this.monthData ? this.monthData.totalCost : 0;
+    const rollingShare = rollingTotalCost > 0 ? rollingWorkflowCost / rollingTotalCost : null;
     const summaryStrip =
       '<p class="table-hint">' +
-      t.workflowsThisMonth + ': ' + thisMonth.length +
-      ' · ' + I18n.formatCurrency(monthWorkflowCost) +
-      (monthShare !== null ? ' · ' + this.formatPercent(monthShare) + ' ' + t.workflowCostShare : '') +
+      t.workflowsLast30Days + ': ' + recentWorkflows.length +
+      ' · ' + I18n.formatCurrency(rollingWorkflowCost) +
+      (rollingShare !== null ? ' · ' + this.formatPercent(rollingShare) + ' ' + t.workflowLast30DaysCostShare : '') +
       '</p>';
 
     let rows = '';
@@ -3550,6 +5440,638 @@ export class UsageWebviewProvider {
     );
   }
 
+  private codexComparisonModelFamily(model: string): 'opus' | 'sonnet' | 'haiku' | 'fable' | 'other' {
+    const value = model.toLowerCase();
+    if (value.includes('opus')) return 'opus';
+    if (value.includes('sonnet')) return 'sonnet';
+    if (value.includes('haiku')) return 'haiku';
+    if (value.includes('fable')) return 'fable';
+    return 'other';
+  }
+
+  private codexComparisonEffort(
+    effort: string,
+  ): 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'unknown' {
+    const value = effort.toLowerCase();
+    return value === 'low' || value === 'medium' || value === 'high' || value === 'xhigh' ||
+      value === 'max' || value === 'ultra'
+      ? value
+      : 'unknown';
+  }
+
+  /**
+   * Project the existing bounded Codex view into numeric task aggregates. The
+   * rootTaskViewKey is used transiently only to join already-materialized child
+   * rows; it has no destination in the returned or persisted representation.
+   */
+  private codexComparableTaskProjections(): CodexComparableTaskProjection[] {
+    const view = this.codexView;
+    if (!view) return [];
+    interface Group {
+      hasRoot: boolean;
+      observedAtEpochMs: number;
+      processed: number;
+      fresh: number;
+      childFresh: number;
+      approvalReviewerFresh: number;
+      patchCalls: number;
+      toolCalls: number;
+      postPatchToolCalls: number;
+      taskCompleteCount: number;
+      modelFamilies: Set<'opus' | 'sonnet' | 'haiku' | 'fable' | 'other'>;
+      efforts: Set<'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'unknown'>;
+    }
+    const groups = new Map<string, Group>();
+    for (const thread of view.recentThreads.slice(0, 1_000)) {
+      const current = groups.get(thread.rootTaskViewKey) ?? {
+        hasRoot: false,
+        observedAtEpochMs: 0,
+        processed: 0,
+        fresh: 0,
+        childFresh: 0,
+        approvalReviewerFresh: 0,
+        patchCalls: 0,
+        toolCalls: 0,
+        postPatchToolCalls: 0,
+        taskCompleteCount: 0,
+        modelFamilies: new Set<'opus' | 'sonnet' | 'haiku' | 'fable' | 'other'>(),
+        efforts: new Set<'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'unknown'>(),
+      };
+      current.hasRoot ||= thread.role === 'root';
+      current.observedAtEpochMs = Math.max(current.observedAtEpochMs, thread.observedAt);
+      current.processed += Math.max(0, thread.total.processed);
+      current.fresh += Math.max(0, thread.total.fresh);
+      if (thread.role === 'subagent') current.childFresh += Math.max(0, thread.total.fresh);
+      if (thread.role === 'approval-reviewer') {
+        current.approvalReviewerFresh += Math.max(0, thread.total.fresh);
+      }
+      current.patchCalls += Math.max(0, thread.structural.patchCalls);
+      current.toolCalls += Math.max(0, thread.structural.toolCalls);
+      current.postPatchToolCalls += Math.max(0, thread.structural.postPatchToolCalls);
+      current.taskCompleteCount += Math.max(0, thread.structural.taskCompleteCount);
+      for (const model of thread.models) {
+        current.modelFamilies.add(this.codexComparisonModelFamily(model));
+      }
+      for (const effort of thread.efforts) {
+        current.efforts.add(this.codexComparisonEffort(effort));
+      }
+      groups.set(thread.rootTaskViewKey, current);
+    }
+    const qualityFlags = view.qualityFlags.map((item) => item.flag);
+    return [...groups.values()]
+      .filter((group) => group.hasRoot)
+      .map((group) => ({
+        observedAtEpochMs: group.observedAtEpochMs,
+        total: { processed: group.processed, fresh: group.fresh },
+        structural: {
+          patchCalls: group.patchCalls,
+          toolCalls: group.toolCalls,
+          postPatchToolCalls: group.postPatchToolCalls,
+          taskCompleteCount: group.taskCompleteCount,
+        },
+        childFreshShare: group.fresh > 0 ? group.childFresh / group.fresh : 0,
+        approvalReviewerFreshShare:
+          group.fresh > 0 ? group.approvalReviewerFresh / group.fresh : 0,
+        modelFamilies: [...group.modelFamilies].sort(),
+        efforts: [...group.efforts].sort(),
+        coverage: {
+          complete: view.coverage.complete,
+          identityComplete: view.coverage.identity.complete,
+          qualityFlags: [...qualityFlags],
+        },
+      }))
+      .sort((left, right) => left.observedAtEpochMs - right.observedAtEpochMs);
+  }
+
+  private adviceComparablePairSampleKey(pair: StoredComparablePair): string {
+    return JSON.stringify({
+      recommendationId: pair.recommendationId,
+      recommendationVersion: pair.recommendationVersion,
+      context: pair.context,
+      metric: pair.metric,
+      quality: pair.quality,
+      evidence: pair.evidence,
+      recordedAtEpochMs: pair.recordedAtEpochMs,
+    });
+  }
+
+  private adviceComparablePairCohortKey(pair: StoredComparablePair): string {
+    return JSON.stringify({
+      context: pair.context,
+      metric: {
+        name: pair.metric.name,
+        unit: pair.metric.unit,
+        direction: pair.metric.direction,
+      },
+    });
+  }
+
+  /** Pure state projection used by the production writer and focused tests. */
+  private materializeAdviceComparisonState(
+    _now: number = Date.now(),
+    baseState: AdviceLocalState = this.adviceLocalState,
+  ): AdviceLocalState {
+    const providerState = this.adviceEffectivenessStates.codex;
+    if (
+      !this.adviceExperimentEnabled() ||
+      !providerState ||
+      !this.codexView ||
+      this.adviceLocalStateStatus !== 'ready'
+    ) {
+      return baseState;
+    }
+    const tasks = this.codexComparableTaskProjections();
+    let next = baseState;
+    for (const recommendation of providerState.contract.recommendations) {
+      if (!isComparableCodexRecommendationId(recommendation.id)) continue;
+      const applied = [...next.feedback]
+        .filter(
+          (item) =>
+            item.applied === 'applied' &&
+            item.recommendationId === recommendation.id &&
+            item.adviceId.startsWith('advice-codex-'),
+        )
+        .sort(
+          (left, right) =>
+            (right.appliedAtEpochMs ?? right.updatedAtEpochMs) -
+              (left.appliedAtEpochMs ?? left.updatedAtEpochMs) ||
+            right.adviceId.localeCompare(left.adviceId),
+        )[0];
+      if (!applied) continue;
+      const built = buildAppliedComparablePairs({
+        adviceId: applied.adviceId,
+        recommendationId: recommendation.id,
+        recommendationVersion: CODEX_LOCAL_RECOMMENDATION_VERSION,
+        appliedAtEpochMs: applied.appliedAtEpochMs ?? applied.updatedAtEpochMs,
+        tasks,
+      });
+      if (!built.ok) continue;
+      const existingSamples = new Set(
+        next.comparablePairs.map((pair) => this.adviceComparablePairSampleKey(pair)),
+      );
+      for (const pair of built.pairs) {
+        const sampleKey = this.adviceComparablePairSampleKey(pair);
+        if (existingSamples.has(sampleKey)) continue;
+        const appended = appendStoredComparablePair(next, pair);
+        if (!appended.ok) continue;
+        next = appended.value;
+        existingSamples.add(sampleKey);
+      }
+
+      const criterion = recommendation.successCriteria.find(
+        (item) =>
+          item.target.kind === 'relative-change' &&
+          item.direction === 'decrease' &&
+          item.qualityGuardrail.rubricId === 'task-quality-rubric-v1',
+      );
+      if (!criterion) continue;
+      const lineage = next.comparablePairs.filter(
+        (pair) =>
+          pair.context.provider === 'codex' &&
+          pair.recommendationId === recommendation.id &&
+          pair.recommendationVersion === CODEX_LOCAL_RECOMMENDATION_VERSION &&
+          pair.context.measurementProfileVersion === CODEX_COMPARISON_MEASUREMENT_PROFILE_VERSION,
+      );
+      const cohorts = new Map<string, StoredComparablePair[]>();
+      for (const pair of lineage) {
+        const key = this.adviceComparablePairCohortKey(pair);
+        const cohort = cohorts.get(key) ?? [];
+        cohort.push(pair);
+        cohorts.set(key, cohort);
+      }
+      for (const pairs of cohorts.values()) {
+        const first = pairs[0];
+        const frozen = buildAdviceComparisonResultEnvelope({
+          provider: 'codex',
+          recommendationId: recommendation.id,
+          recommendationVersion: CODEX_LOCAL_RECOMMENDATION_VERSION,
+          measurementProfileVersion: CODEX_COMPARISON_MEASUREMENT_PROFILE_VERSION,
+          cohort: {
+            scope: first.context.scope,
+            taskKind: first.context.taskKind,
+            complexityBand: first.context.complexityBand,
+            modelFamily: first.context.modelFamily,
+            effort: first.context.effort,
+            metricDefinitionVersion: first.context.metricDefinitionVersion,
+            qualityRubricId: first.context.qualityRubricId,
+            metric: {
+              name: first.metric.name,
+              unit: first.metric.unit,
+              direction: first.metric.direction,
+            },
+          },
+          guardrail: {
+            minComparablePairs: criterion.minimumComparableTasks,
+            minRelativeImprovement: criterion.target.value,
+            minAfterQualityScore: criterion.qualityGuardrail.minimumScore,
+            maxMeanQualityRegression: criterion.qualityGuardrail.maximumRegression,
+            allowedQualityFlags: [],
+            qualityRubricId: criterion.qualityGuardrail.rubricId,
+          },
+          pairs,
+          recordedAtEpochMs: Math.max(...pairs.map((pair) => pair.recordedAtEpochMs)),
+        });
+        if (
+          !frozen.ok ||
+          next.comparisonResults.some(
+            (result) => result.comparisonId === frozen.value.comparisonId,
+          )
+        ) {
+          continue;
+        }
+        const appended = appendAdviceComparisonResult(next, frozen.value);
+        if (appended.ok) next = appended.value;
+      }
+    }
+    return next;
+  }
+
+  private currentAdviceComparisonProductionRevision(): string {
+    const view = this.codexView;
+    const safe = {
+      enabled: this.adviceExperimentEnabled(),
+      stateStatus: this.adviceLocalStateStatus,
+      applied: this.adviceLocalState.feedback
+        .filter((item) => item.applied === 'applied')
+        .map((item) => ({
+          adviceId: item.adviceId,
+          recommendationId: item.recommendationId,
+          appliedAtEpochMs: item.appliedAtEpochMs ?? item.updatedAtEpochMs,
+        })),
+      comparablePairCount: this.adviceLocalState.comparablePairs.length,
+      comparisonResultCount: this.adviceLocalState.comparisonResults.length,
+      codex: view
+        ? {
+            indexedFiles: view.coverage.indexedFiles,
+            indexedBytes: view.coverage.indexedBytes,
+            complete: view.coverage.complete,
+            identityComplete: view.coverage.identity.complete,
+            totalThreadCount: view.totalThreadCount,
+            lastActiveAt: view.lastTaskIdentity?.lastActiveAt ?? 0,
+            lastTaskTotal: view.lastTask?.total,
+            lastTaskStructural: view.lastTask?.structural,
+            qualityFlags: view.qualityFlags,
+          }
+        : null,
+    };
+    return createHash('sha256').update(JSON.stringify(safe), 'utf8').digest('hex');
+  }
+
+  private scheduleAdviceComparisonProduction(): void {
+    if (
+      !this.adviceExperimentEnabled() ||
+      this.adviceLocalStateStatus !== 'ready' ||
+      !this.codexView ||
+      !this.adviceStateStorage()
+    ) {
+      return;
+    }
+    const revision = this.currentAdviceComparisonProductionRevision();
+    if (revision === this.adviceComparisonProductionRevision) return;
+    this.adviceComparisonProductionRevision = revision;
+    void this.enqueueAdviceLocalStateWrite((current) => {
+      const next = this.materializeAdviceComparisonState(Date.now(), current);
+      if (
+        next.comparablePairs.length === current.comparablePairs.length &&
+        next.comparisonResults.length === current.comparisonResults.length
+      ) {
+        return undefined;
+      }
+      return next;
+    })
+      .then((saved) => {
+        if (!saved.ok) {
+          if (this.adviceComparisonProductionRevision === revision) {
+            this.adviceComparisonProductionRevision = '';
+          }
+          return;
+        }
+        this.adviceComparisonProductionRevision =
+          this.currentAdviceComparisonProductionRevision();
+        if (saved.changed && this.panel) this.updateWebview();
+      })
+      .catch(() => {
+        if (this.adviceComparisonProductionRevision === revision) {
+          this.adviceComparisonProductionRevision = '';
+        }
+      });
+  }
+
+  private adviceComparison(
+    state: AdviceEffectivenessProviderState,
+    recommendationId: string | undefined,
+  ): {
+    status:
+      | 'evidence-insufficient'
+      | 'quality-guardrail-failed'
+      | 'improved'
+      | 'no-demonstrated-improvement';
+    comparablePairs: number;
+    minimumComparablePairs: number;
+  } {
+    const minimumComparablePairs = state.contract.recommendations
+      .find((item) => item.id === recommendationId)
+      ?.successCriteria[0]?.minimumComparableTasks ?? 5;
+    if (!recommendationId) {
+      return { status: 'evidence-insufficient', comparablePairs: 0, minimumComparablePairs };
+    }
+    const recommendationVersion = state.provider === 'codex' &&
+      isComparableCodexRecommendationId(recommendationId)
+      ? CODEX_LOCAL_RECOMMENDATION_VERSION
+      : undefined;
+    const frozen = this.adviceLocalState.comparisonResults
+      .filter(
+        (item) =>
+          item.provider === state.provider &&
+          item.recommendationId === recommendationId &&
+          (!recommendationVersion || item.recommendationVersion === recommendationVersion),
+      )
+      .sort(
+        (left, right) =>
+          right.sample.pairCount - left.sample.pairCount ||
+          right.recordedAtEpochMs - left.recordedAtEpochMs ||
+          right.comparisonId.localeCompare(left.comparisonId),
+      )[0];
+    if (frozen) {
+      return {
+        status: frozen.result.status,
+        comparablePairs: frozen.sample.pairCount,
+        minimumComparablePairs: frozen.guardrail.minComparablePairs,
+      };
+    }
+    const comparablePairs = this.adviceLocalState.comparablePairs.filter(
+      (pair) =>
+        pair.context.provider === state.provider &&
+        pair.recommendationId === recommendationId &&
+        (!recommendationVersion || pair.recommendationVersion === recommendationVersion),
+    ).length;
+    return { status: 'evidence-insufficient', comparablePairs, minimumComparablePairs };
+  }
+
+  /**
+   * Hidden v2.3.1 candidate surface. It extends the existing Advice /
+   * Recommendations cards instead of creating a third experience. Machine
+   * summaries and prompt samples are intentionally never rendered here.
+   */
+  private renderAdviceEffectivenessBody(provider: AdviceEffectivenessProvider): string {
+    if (!this.adviceExperimentEnabled()) {
+      return '';
+    }
+    const t = I18n.t.popup.adviceEffectiveness;
+    const state = this.adviceEffectivenessStates[provider];
+    const html = (value: string): string => this.escapeHtml(value);
+    const replace = (template: string, key: string, value: string): string =>
+      template.replace(`{${key}}`, value);
+    const percent = (value: number): string =>
+      `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+    const contract = state?.contract;
+    const recommendations = contract?.recommendations ?? [];
+    const observations: string[] = [];
+    let limitationText = t.qualityGuardrailPending;
+
+    if (state && provider === 'claude') {
+      const byMetric = new Map(state.contract.observations.map((item) => [item.metric, item]));
+      const longSession = byMetric.get('long-session-share');
+      const largeContext = byMetric.get('large-context-share');
+      const framework = byMetric.get('framework-overhead-share');
+      if (longSession && typeof longSession.value === 'number') {
+        observations.push(replace(t.longSessionSignal, 'share', percent(longSession.value)));
+      }
+      if (largeContext && typeof largeContext.value === 'number') {
+        observations.push(replace(t.largeContextSignal, 'share', percent(largeContext.value)));
+      }
+      if (framework && typeof framework.value === 'number') {
+        observations.push(replace(t.frameworkOverheadSignal, 'share', percent(framework.value)));
+      }
+      limitationText = `${t.elapsedTimeProxy} ${t.qualityGuardrailPending}`;
+    } else if (state && provider === 'codex') {
+      const copy = I18n.t.providers.codex;
+      for (const recommendation of recommendations) {
+        const kind = recommendation.id.replace('recommendation-codex-', '') as
+          keyof typeof copy.insightObservations;
+        if (Object.prototype.hasOwnProperty.call(copy.insightObservations, kind)) {
+          const observation = copy.insightObservations[kind];
+          if (!observations.includes(observation)) observations.push(observation);
+        }
+      }
+      limitationText = `${copy.structuralProxy} ${t.qualityGuardrailPending}`;
+    }
+    if (observations.length === 0) {
+      observations.push(t.noEvidenceAdvice);
+    }
+
+    const evidenceText = state
+      ? `${t.source}: ${provider === 'claude' ? 'Claude' : 'Codex'} · ${t.evidence}: ${state.contract.evidence.length}`
+      : t.noEvidenceAdvice;
+    const bodyId = `advice-effectiveness-${provider}`;
+    const step = (index: number, label: string, content: string): string =>
+      '<li><span class="advice-step-marker" aria-hidden="true">' + index + '</span>' +
+      '<div><strong>' + html(label) + '</strong><p>' + content + '</p></div></li>';
+    const feedbackFor = (recommendation: AdviceRecommendation, suppressed = false): string => {
+      if (!state) return '';
+      const feedback = this.adviceLocalState.feedback.find(
+        (item) =>
+          item.adviceId === state.contract.adviceId &&
+          item.recommendationId === recommendation.id,
+      );
+      const snoozedUntil = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+        provider,
+        surface: 'advice',
+        recommendationId: recommendation.id,
+        nowEpochMs: Date.now(),
+      });
+      const disabled = this.adviceLocalStateStatus !== 'ready' ? ' disabled' : '';
+      const button = (
+        kind: 'helpful' | 'not-helpful' | 'applied',
+        label: string,
+        selected: boolean,
+      ): string =>
+        '<button type="button" class="advice-feedback-button' + (selected ? ' is-selected' : '') + '"' +
+        ' data-advice-action="feedback" data-provider="' + provider + '"' +
+        ' data-advice-id="' + html(state.contract.adviceId) + '"' +
+        ' data-recommendation-id="' + html(recommendation.id) + '"' +
+        ' data-feedback-kind="' + kind + '" aria-pressed="' + String(selected) + '"' + disabled + '>' +
+        '<span aria-hidden="true">' + (selected ? '✓' : '○') + '</span> ' + html(label) + '</button>';
+      return (
+        '<div class="advice-feedback-section">' +
+        '<h5>' + html(t.feedbackTitle) + '</h5>' +
+        '<div class="advice-feedback-group" role="group" aria-label="' + html(t.feedbackTitle) + '">' +
+        (suppressed ? '' :
+          button('helpful', t.helpful, feedback?.rating === 'helpful') +
+          button('not-helpful', t.notHelpful, feedback?.rating === 'not-helpful') +
+          button('applied', t.applied, feedback?.applied === 'applied')) +
+        '<button type="button" class="advice-feedback-button" data-advice-action="snooze"' +
+        ' data-provider="' + provider + '" data-advice-id="' + html(state.contract.adviceId) +
+        '" data-recommendation-id="' + html(recommendation.id) + '" data-snooze-mode="' +
+        (snoozedUntil ? 'resume' : 'snooze') + '"' + disabled + '>' +
+        html(snoozedUntil ? t.resume : t.snooze) + '</button>' +
+        '</div>' +
+        '<p class="advice-local-note">' + html(t.feedbackLocalOnly) + '</p>' +
+        (snoozedUntil
+          ? '<p class="advice-local-note">' + html(t.snoozedUntil.replace('{date}', this.formatAdviceSnoozeDate(snoozedUntil))) + '</p>'
+          : '') +
+        '<p class="advice-inline-status" data-advice-feedback-status="' + provider + '"' +
+        ' data-advice-id="' + html(state.contract.adviceId) + '"' +
+        ' data-recommendation-id="' + html(recommendation.id) + '" aria-live="polite"></p>' +
+        '</div>'
+      );
+    };
+    const recommendationCopy = (
+      recommendation: AdviceRecommendation,
+    ): { recommendation: string; action: string } => {
+      if (provider === 'claude') {
+        return { recommendation: t.clearBoundaryRecommendation, action: t.clearBoundaryAction };
+      }
+      const copy = I18n.t.providers.codex;
+      const kind = recommendation.id.replace('recommendation-codex-', '') as keyof typeof copy.insightTips;
+      return {
+        recommendation: t.codexLocalRecommendation,
+        action: Object.prototype.hasOwnProperty.call(copy.insightTips, kind)
+          ? copy.insightTips[kind]
+          : t.noEvidenceAdvice,
+      };
+    };
+    const activeRecommendations = state
+      ? recommendations.filter((recommendation) => !adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+          provider,
+          surface: 'advice',
+          recommendationId: recommendation.id,
+          nowEpochMs: Date.now(),
+        }))
+      : [];
+    const suppressedRecommendations = state
+      ? recommendations.filter((recommendation) => !activeRecommendations.includes(recommendation))
+      : [];
+    const recommendationHtml = state && activeRecommendations.length > 0
+      ? activeRecommendations.map((recommendation) => {
+          const copy = recommendationCopy(recommendation);
+          const comparison = this.adviceComparison(state, recommendation.id);
+          const resultText = comparison.status === 'quality-guardrail-failed'
+            ? t.qualityGuardrailFailed
+            : comparison.status === 'improved'
+              ? t.improved
+              : comparison.status === 'no-demonstrated-improvement'
+                ? t.noDemonstratedImprovement
+                : t.insufficientEvidence;
+          const pairText = replace(
+            t.comparablePairs,
+            'count',
+            String(comparison.comparablePairs),
+          );
+          const minimumText = replace(
+            t.minimumComparablePairs,
+            'minimum',
+            String(comparison.minimumComparablePairs),
+          );
+          return (
+            '<div class="advice-recommendation-boundary" data-advice-recommendation="' +
+            html(recommendation.id) + '">' +
+            '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
+            step(3, t.recommendation, html(copy.recommendation)) +
+            step(4, t.action, html(copy.action)) +
+            step(
+              5,
+              t.result,
+              html(resultText) + '<br><span class="advice-step-caveat">' +
+                html(pairText + ' · ' + minimumText) + '</span>',
+            ) +
+            '</ol>' + feedbackFor(recommendation) + '</div>'
+          );
+        }).join('') + suppressedRecommendations.map((recommendation) => {
+          const until = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+            provider,
+            surface: 'advice',
+            recommendationId: recommendation.id,
+            nowEpochMs: Date.now(),
+          });
+          return '<details class="advice-recommendation-snoozed" data-advice-recommendation="' +
+            html(recommendation.id) + '"><summary>' + html(t.snoozedUntil.replace(
+              '{date}',
+              until ? this.formatAdviceSnoozeDate(until) : '',
+            )) + '</summary>' + feedbackFor(recommendation, true) + '</details>';
+        }).join('')
+      : state && suppressedRecommendations.length > 0
+        ? suppressedRecommendations.map((recommendation) => {
+            const until = adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+              provider,
+              surface: 'advice',
+              recommendationId: recommendation.id,
+              nowEpochMs: Date.now(),
+            });
+            return '<details class="advice-recommendation-snoozed" data-advice-recommendation="' +
+              html(recommendation.id) + '"><summary>' + html(t.snoozedUntil.replace(
+                '{date}',
+                until ? this.formatAdviceSnoozeDate(until) : '',
+              )) + '</summary>' + feedbackFor(recommendation, true) + '</details>';
+          }).join('')
+      : '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
+        step(3, t.recommendation, html(t.noEvidenceAdvice)) +
+        step(4, t.action, html(t.noEvidenceAdvice)) +
+        step(5, t.result, html(t.insufficientEvidence)) +
+        '</ol>';
+
+    let payloadHtml = '<p class="advice-local-note">' + html(t.codexPreviewUnavailable) + '</p>';
+    if (state?.provider === 'claude' && state.remotePreviewEligible && state.aggregate) {
+      const ready = this.adviceLocalStateStatus === 'ready';
+      const aggregateChecked = ready && this.adviceLocalState.aggregateConsent === 'explicit';
+      const promptAvailable = state.promptSamples.length > 0 || Boolean(state.userContext?.trim());
+      const promptChecked =
+        aggregateChecked && promptAvailable && this.adviceLocalState.promptSampleConsent === 'explicit';
+      const aggregateDisabled = ready ? '' : ' disabled';
+      const promptDisabled = ready && aggregateChecked && promptAvailable ? '' : ' disabled';
+      const previewDisabled = ready && aggregateChecked ? '' : ' disabled';
+      payloadHtml =
+        '<div class="advice-payload-section">' +
+        '<h5>' + html(t.payloadTitle) + '</h5>' +
+        '<p class="advice-local-note">' + html(t.payloadDescription) + '</p>' +
+        '<fieldset class="advice-consent" data-advice-consent="' + provider + '">' +
+        '<legend>' + html(t.payloadTitle) + '</legend>' +
+        '<label><input type="checkbox" data-advice-consent-kind="aggregate" data-provider="' + provider + '"' +
+        (aggregateChecked ? ' checked' : '') + aggregateDisabled + '> <span><strong>' +
+        html(t.aggregateConsentLabel) + '</strong><small>' + html(t.aggregateConsentHelp) + '</small></span></label>' +
+        '<label><input type="checkbox" data-advice-consent-kind="prompt" data-provider="' + provider + '"' +
+        ' data-prompt-available="' + String(promptAvailable) + '"' +
+        (promptChecked ? ' checked' : '') + promptDisabled + '> <span><strong>' +
+        html(t.promptConsentLabel) + '</strong><small>' +
+        html(t.promptConsentHelp + ' ' + replace(
+          t.promptWindowHelp,
+          'days',
+          String(state.aggregate.windowDays),
+        )) + '</small></span></label>' +
+        '</fieldset>' +
+        '<div class="advice-payload-actions"><button type="button" class="btn-secondary btn-small"' +
+        ' data-advice-action="preview" data-provider="' + provider + '"' + previewDisabled + '>' +
+        html(t.previewPayload) + '</button><span>' + html(t.noNetworkTransport) + '</span></div>' +
+        '<p class="advice-inline-status" data-advice-consent-status="' + provider + '" aria-live="polite"></p>' +
+        '<details class="advice-payload-preview" data-advice-preview="' + provider + '" hidden>' +
+        '<summary><span>' + html(t.payloadTitle) + '</span><span class="advice-seal-stamp">SHA-256</span></summary>' +
+        '<div class="advice-payload-meta" aria-live="polite">' +
+        '<span data-advice-preview-content-type></span><span data-advice-preview-mode></span><span data-advice-preview-bytes></span>' +
+        '<span data-advice-preview-count></span><code data-advice-preview-digest></code></div>' +
+        '<pre tabindex="0" data-advice-preview-body aria-label="' + html(t.payloadTitle) + '"></pre>' +
+        '<div class="advice-payload-actions"><button type="button" class="btn-primary btn-small"' +
+        ' data-advice-action="send" data-provider="' + provider + '" disabled>' +
+        html(t.sendPreparedRequest) + '</button></div>' +
+        '</details></div>';
+    }
+
+    return (
+      '<section class="advice-effectiveness-body" data-advice-provider="' + provider + '" aria-labelledby="' + bodyId + '">' +
+      '<div class="advice-effectiveness-heading"><h4 id="' + bodyId + '">' + html(t.title) +
+      ' <span class="exp-pill">v2.3.1</span></h4><p>' + html(t.description) + '</p></div>' +
+      '<p class="advice-candidate-note">' + html(t.candidateNotice) + '</p>' +
+      '<ol class="advice-spine" aria-label="' + html(t.spineLabel) + '">' +
+      step(1, t.observation, observations.map((item) => html(item)).join('<br>')) +
+      step(2, t.evidence, html(evidenceText) + '<br><span class="advice-step-caveat">' + html(limitationText) + '</span>') +
+      '</ol>' +
+      recommendationHtml + payloadHtml +
+      '<div class="advice-local-data-actions"><button type="button" class="btn-secondary btn-small"' +
+      ' data-advice-action="clear" data-provider="' + provider + '">' +
+      html(t.clearLocalData) + '</button></div>' +
+      '</section>'
+    );
+  }
+
   /**
    * Prominent "AI advice" card at the top of the Content tab (Phase 9a). The
    * advice button used to live in the content-analysis header; this gives it a
@@ -3567,6 +6089,7 @@ export class UsageWebviewProvider {
       '</div>' +
       '<button class="btn-primary" onclick="getAdvice()">' + t.getAdvice + '</button>' +
       '</div>' +
+      this.renderAdviceEffectivenessBody('claude') +
       '</div>'
     );
   }
@@ -3574,12 +6097,13 @@ export class UsageWebviewProvider {
   /**
    * Usage Optimizer card (Phase 9c). Default OFF — until the user opts in via
    * settings it shows only a description + an "enable" button. When enabled it
-   * exposes a textarea + toggles; the round-trip runs in extension.ts via the
-   * onOptimize hook (consent modal lives there). The result skeleton is baked
+   * exposes a textarea + toggles; preparation and explicit sending run through
+   * the same sealed-request hooks as advice. The result skeleton is baked
    * in (hidden) so the webview JS only fills text — no labels passed to JS.
    */
   private renderOptimizerCard(): string {
     const t = I18n.t.popup;
+    const ai = t.adviceEffectiveness;
     const enabled = this.setting<boolean>('advice.optimizer.enabled', false);
     // Shared header: icon badge + title (with an "experimental" pill) + purpose.
     const head = (action: string): string =>
@@ -3595,7 +6119,7 @@ export class UsageWebviewProvider {
 
     if (!enabled) {
       return (
-        '<div class="action-card">' +
+        '<div class="action-card" data-advice-provider="optimizer">' +
         head(
           '<button class="btn-secondary btn-small" onclick="showTab(\'settings\')">' +
             t.optimizerEnableBtn +
@@ -3610,12 +6134,112 @@ export class UsageWebviewProvider {
     const draftVal = st ? this.escapeHtml(st.draft) : '';
     const hasResult = !!(st && (st.prompt || st.settings));
     const hasErr = !!(st && st.error);
+    const hasPreview = !!(
+      st && st.snapshotId && st.previewBody && st.previewSha256 && st.previewBytes !== undefined
+    );
+    const optimizerAdviceId = st?.adviceId ?? '';
+    const optimizerFeedback = optimizerAdviceId
+      ? this.adviceLocalState.feedback.find(
+          (item) =>
+            item.adviceId === optimizerAdviceId &&
+            item.recommendationId === OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
+        )
+      : undefined;
+    const optimizerSnoozedUntil = optimizerAdviceId
+      ? adviceRecommendationSnoozedUntil(this.adviceLocalState, {
+          provider: 'optimizer',
+          surface: 'optimizer',
+          recommendationId: OPTIMIZER_FEEDBACK_RECOMMENDATION_ID,
+          nowEpochMs: Date.now(),
+        })
+      : null;
+    const feedbackDisabled =
+      !optimizerAdviceId || this.adviceLocalStateStatus !== 'ready' ? ' disabled' : '';
+    const feedbackButton = (
+      kind: 'helpful' | 'not-helpful' | 'applied',
+      label: string,
+      selected: boolean,
+    ): string =>
+      '<button type="button" class="advice-feedback-button' + (selected ? ' is-selected' : '') + '"' +
+      ' data-advice-action="feedback" data-provider="optimizer"' +
+      ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '"' +
+      ' data-recommendation-id="' + OPTIMIZER_FEEDBACK_RECOMMENDATION_ID + '"' +
+      ' data-feedback-kind="' + kind + '" aria-pressed="' + String(selected) + '"' +
+      feedbackDisabled + '><span aria-hidden="true">' + (selected ? '✓' : '○') +
+      '</span> ' + this.escapeHtml(label) + '</button>';
+    const optimizerFeedbackHtml =
+      '<div id="optFeedback" class="advice-feedback-section" style="display:' +
+      (hasResult && optimizerAdviceId ? '' : 'none') + '">' +
+      '<h5>' + this.escapeHtml(ai.feedbackTitle) + '</h5>' +
+      '<div class="advice-feedback-group" role="group" aria-label="' +
+      this.escapeHtml(ai.feedbackTitle) + '">' +
+      feedbackButton('helpful', ai.helpful, optimizerFeedback?.rating === 'helpful') +
+      feedbackButton('not-helpful', ai.notHelpful, optimizerFeedback?.rating === 'not-helpful') +
+      feedbackButton('applied', ai.applied, optimizerFeedback?.applied === 'applied') +
+      '<button type="button" class="advice-feedback-button" data-advice-action="snooze" data-provider="optimizer"' +
+      ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '" data-recommendation-id="' +
+      OPTIMIZER_FEEDBACK_RECOMMENDATION_ID + '" data-snooze-mode="' +
+      (optimizerSnoozedUntil ? 'resume' : 'snooze') + '"' + feedbackDisabled + '>' +
+      this.escapeHtml(optimizerSnoozedUntil ? ai.resume : ai.snooze) + '</button>' +
+      '</div><p class="advice-local-note">' + this.escapeHtml(ai.feedbackLocalOnly) + '</p>' +
+      (optimizerSnoozedUntil
+        ? '<p class="advice-local-note">' + this.escapeHtml(ai.snoozedUntil.replace('{date}', this.formatAdviceSnoozeDate(optimizerSnoozedUntil))) + '</p>'
+        : '') +
+      '<p class="advice-inline-status" data-advice-feedback-status="optimizer"' +
+      ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '"' +
+      ' data-recommendation-id="' + OPTIMIZER_FEEDBACK_RECOMMENDATION_ID +
+      '" aria-live="polite"></p></div>';
+    const optimizerSnoozedHtml = optimizerSnoozedUntil && optimizerAdviceId
+      ? '<div class="advice-recommendation-snoozed" role="status">' +
+        '<p class="advice-local-note">' + this.escapeHtml(ai.snoozedUntil.replace(
+          '{date}',
+          this.formatAdviceSnoozeDate(optimizerSnoozedUntil),
+        )) + '</p>' +
+        '<button type="button" class="advice-feedback-button" data-advice-action="snooze" data-provider="optimizer"' +
+        ' data-advice-id="' + this.escapeHtml(optimizerAdviceId) + '" data-recommendation-id="' +
+        OPTIMIZER_FEEDBACK_RECOMMENDATION_ID + '" data-snooze-mode="resume"' + feedbackDisabled + '>' +
+        this.escapeHtml(ai.resume) + '</button></div>'
+      : '';
+    const optimizerResultHtml = optimizerSnoozedUntil
+      ? ''
+      : '<div id="optResult" class="opt-result" style="display:' + (hasResult ? '' : 'none') + '">' +
+        '<h4 class="opt-subhead">' + t.optimizerPromptHeading + '</h4>' +
+        '<div class="opt-output"><pre id="optPrompt">' +
+        (st && st.prompt ? this.escapeHtml(st.prompt) : '') + '</pre>' +
+        '<button class="opt-copy" data-copy="' + this.escapeHtml(t.optimizerCopy) +
+        '" data-copied="' + this.escapeHtml(t.optimizerCopied) +
+        '" title="' + this.escapeHtml(t.optimizerCopy) + '" onclick="copyOptPrompt(this)">' +
+        '<span class="opt-copy-ico">⧉</span><span class="opt-copy-lbl">' +
+        this.escapeHtml(t.optimizerCopy) + '</span></button></div>' +
+        '<h4 class="opt-subhead">' + t.optimizerSettingsHeading + '</h4>' +
+        '<div id="optSettings" class="opt-settings" data-raw="' +
+        (st && st.settings ? this.escapeHtml(st.settings) : '') + '">' +
+        (st && st.settings ? this.escapeHtml(st.settings) : '') + '</div>' +
+        optimizerFeedbackHtml + '</div>';
+    const optimizerPreviewHtml = optimizerSnoozedUntil
+      ? ''
+      : '<details id="optPreview" class="advice-payload-preview"' + (hasPreview ? ' open' : '') +
+        ' style="display:' + (hasPreview ? '' : 'none') + '" data-snapshot-id="' +
+        (hasPreview ? this.escapeHtml(st!.snapshotId as string) : '') + '">' +
+        '<summary><span>' + this.escapeHtml(ai.payloadTitle) +
+        '</span><span class="advice-seal-stamp">SHA-256</span></summary>' +
+        '<div class="advice-payload-meta"><span id="optPreviewBytes">' +
+        (hasPreview ? this.escapeHtml(ai.payloadBytes.replace('{bytes}', String(st!.previewBytes))) : '') +
+        '</span><code id="optPreviewDigest">' +
+        (hasPreview ? this.escapeHtml(`SHA-256 ${st!.previewSha256}`) : '') +
+        '</code></div><pre id="optPreviewBody" tabindex="0">' +
+        (hasPreview ? this.escapeHtml(st!.previewBody as string) : '') +
+        '</pre><div class="advice-payload-actions"><button type="button" class="btn-primary btn-small"' +
+        ' id="optSendBtn" onclick="sendOptimizer()"' + (hasPreview ? '' : ' disabled') + '>' +
+        this.escapeHtml(ai.sendPreparedRequest) +
+        '</button><span>' + this.escapeHtml(ai.noNetworkTransport) + '</span></div></details>';
     const lens = (id: string, label: string, hint: string, on?: boolean): string =>
       '<label title="' + this.escapeHtml(hint) + '"><input type="checkbox" id="' + id + '"' +
       ck(on) + '> ' + this.escapeHtml(label) + '</label>';
     return (
-      '<div class="action-card">' +
+      '<div class="action-card" data-advice-provider="optimizer">' +
       head('') +
+      optimizerSnoozedHtml +
       '<p class="action-card-howto">' + t.optimizerHowto + '</p>' +
       '<textarea id="optDraft" class="opt-input" rows="4" placeholder="' +
       this.escapeHtml(t.optimizerPlaceholder) + '">' + draftVal + '</textarea>' +
@@ -3624,26 +6248,14 @@ export class UsageWebviewProvider {
       lens('optDistil', t.optimizerDistil, t.optimizerDistilHint, st?.distil) +
       lens('optAesthetic', t.optimizerAesthetic, t.optimizerAestheticHint, st?.aesthetic) +
       '<button class="btn-primary" id="optRunBtn" data-run="' +
-      this.escapeHtml(t.optimizerRun) + '" data-running="' +
+      this.escapeHtml(ai.previewPayload) + '" data-running="' +
       this.escapeHtml(t.optimizerRunning) + '" onclick="runOptimizer()">' +
-      t.optimizerRun + '</button>' +
+      ai.previewPayload + '</button>' +
       '</div>' +
       '<div id="optError" class="opt-error" style="display:' + (hasErr ? '' : 'none') + '">' +
       (hasErr ? this.escapeHtml(st!.error as string) : '') + '</div>' +
-      '<div id="optResult" class="opt-result" style="display:' + (hasResult ? '' : 'none') + '">' +
-      '<h4 class="opt-subhead">' + t.optimizerPromptHeading + '</h4>' +
-      '<div class="opt-output"><pre id="optPrompt">' +
-      (st && st.prompt ? this.escapeHtml(st.prompt) : '') + '</pre>' +
-      '<button class="opt-copy" data-copy="' + this.escapeHtml(t.optimizerCopy) +
-      '" data-copied="' + this.escapeHtml(t.optimizerCopied) +
-      '" title="' + this.escapeHtml(t.optimizerCopy) + '" onclick="copyOptPrompt(this)">' +
-      '<span class="opt-copy-ico">⧉</span><span class="opt-copy-lbl">' +
-      this.escapeHtml(t.optimizerCopy) + '</span></button></div>' +
-      '<h4 class="opt-subhead">' + t.optimizerSettingsHeading + '</h4>' +
-      '<div id="optSettings" class="opt-settings" data-raw="' +
-      (st && st.settings ? this.escapeHtml(st.settings) : '') + '">' +
-      (st && st.settings ? this.escapeHtml(st.settings) : '') + '</div>' +
-      '</div>' +
+      optimizerPreviewHtml +
+      optimizerResultHtml +
       '</div>'
     );
   }
@@ -4010,7 +6622,8 @@ export class UsageWebviewProvider {
         : '<p class="table-hint">' + this.escapeHtml(copy.recommendationPartial) + '</p>';
       return '<div class="action-card"><div class="action-card-head"><span class="action-icon">✨</span>' +
         '<div class="action-card-titles"><h3>' + this.escapeHtml(copy.optimization) + '</h3>' +
-        '<p class="action-card-desc">' + this.escapeHtml(copy.structuralProxy) + '</p></div></div></div>' +
+        '<p class="action-card-desc">' + this.escapeHtml(copy.structuralProxy) + '</p></div></div>' +
+        this.renderAdviceEffectivenessBody('codex') + '</div>' +
         '<div class="daily-breakdown"><div class="section-header"><h3>' +
         this.escapeHtml(copy.behavior + ' · ' + copy.last30Days) + '</h3></div>' +
         partial + behaviorSummary + insightHtml + '</div>';
@@ -4193,7 +6806,9 @@ export class UsageWebviewProvider {
       // click-to-expand that month's per-day composition (reuses the table's
       // month-detail round-trip).
       const colOpen = provider === 'claude' && it.key
-        ? '<div class="hc-col hc-col-clickable" onclick="toggleMonthlyDetail(\'' + it.key + '\')" title="' +
+        ? '<div class="hc-col hc-col-clickable" data-date="' + this.escapeHtml(it.key) +
+          '" role="button" tabindex="0" aria-expanded="false" aria-controls="monthly-detail-' +
+          this.escapeHtml(it.key) + '" onclick="toggleMonthlyDetail(\'' + it.key + '\')" title="' +
           this.escapeHtml(it.label) + ' — ' + I18n.formatNumber(total) + '">'
         : '<div class="hc-col">';
       bars +=
@@ -4351,7 +6966,10 @@ export class UsageWebviewProvider {
     provider: SettingProvider = 'claude',
   ): string {
     if (sortedData.length === 0) {
-      return '<div class="no-chart-data">No data available</div>';
+      const message = provider === 'codex'
+        ? I18n.t.providers.codex.noDailyData
+        : I18n.t.statusBar.noData;
+      return '<div class="no-chart-data" role="status">' + this.escapeHtml(message) + '</div>';
     }
     if (provider === 'codex') {
       const rows = sortedData as Array<{
@@ -4371,9 +6989,14 @@ export class UsageWebviewProvider {
         const cost = data.apiEquivalent;
         const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
         const costLabel = cost.pricedTokens > 0 ? I18n.formatCurrency(cost.equivalentUsd) : '—';
+        const hasHourlyDetail = !monthly && Object.prototype.hasOwnProperty.call(
+          this.codexView?.last30DaysHourlyByDay ?? {},
+          date,
+        );
         return '<div class="hc-col" data-date="' + this.escapeHtml(date) + '">' +
           '<div class="hc-barval">' + costLabel + '</div>' +
-          '<div class="chart-bar cost-bar cost-stacked" style="height:' + height + 'px" ' +
+          '<div class="chart-bar cost-bar cost-stacked' + (hasHourlyDetail ? ' clickable' : '') +
+          '" style="height:' + height + 'px" ' +
           'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
           'data-input="' + data.total.processed + '" data-output="' + data.total.fresh + '" ' +
           'data-cache-creation="' + data.total.output + '" data-cache-read="' + data.total.reasoning + '" ' +
@@ -4457,7 +7080,8 @@ export class UsageWebviewProvider {
    */
   private renderCodexHourlyChart(rows: CodexHourlyUsageView[]): string {
     if (rows.length === 0) {
-      return '<div class="no-chart-data">No data available</div>';
+      return '<div class="no-chart-data" role="status">' +
+        this.escapeHtml(I18n.t.providers.codex.noDailyData) + '</div>';
     }
     const maxCost = Math.max(...rows.map((row) => row.apiEquivalent.equivalentUsd), 0);
     const hasPricedCost = rows.some((row) => row.apiEquivalent.pricedTokens > 0);
@@ -4482,7 +7106,7 @@ export class UsageWebviewProvider {
         this.codexCostStackHtml(cost, height) + '</div></div>';
     }).join('');
     const labels = rows.map((row) =>
-      '<div class="hc-xlabel">' + this.escapeHtml(row.hour) + '</div>'
+      '<div class="hc-xlabel">' + this.escapeHtml(row.label) + '</div>'
     ).join('');
     return '<div class="hc-wrap"><div class="hc-yaxis">' +
       '<span class="hc-yval">' + costAxisLabel(maxCost) + '</span>' +
@@ -4496,7 +7120,8 @@ export class UsageWebviewProvider {
 
   private renderHourlyChart(): string {
     if (this.hourlyDataForToday.length === 0) {
-      return '<div class="no-chart-data">No data available</div>';
+      return '<div class="no-chart-data" role="status">' +
+        this.escapeHtml(I18n.t.statusBar.noData) + '</div>';
     }
 
     const sortedData = [...this.hourlyDataForToday].sort((a, b) => a.hour.localeCompare(b.hour));
@@ -4562,13 +7187,39 @@ export class UsageWebviewProvider {
 
   private getStyles(): string {
     return `
+      :root {
+        color-scheme: light dark;
+        --ccu-space-1: 4px;
+        --ccu-space-2: 8px;
+        --ccu-space-3: 12px;
+        --ccu-space-4: 16px;
+        --ccu-space-5: 20px;
+        --ccu-space-6: 24px;
+        --ccu-radius-control: 4px;
+        --ccu-radius-panel: 8px;
+        --ccu-radius-lg: 12px;
+        --ccu-border: var(--vscode-panel-border, rgba(127, 127, 127, 0.35));
+        /* Description text must retain 4.5:1 in both Light+ and Dark+. Some
+           input/editor-widget surfaces are deliberately more contrasted than
+           ordinary text, so use the editor canvas and let the shared border
+           carry the raised-card hierarchy. */
+        --ccu-surface-raised: var(--vscode-editor-background);
+        --ccu-surface-subtle: var(--vscode-editorWidget-background, var(--vscode-input-background));
+        --ccu-surface-muted: var(--vscode-editorWidget-background, var(--vscode-input-background));
+        /* Dashboard figures follow VS Code's UI typography. The prior editor
+           monospace override made dense cards and tables feel visually foreign;
+           true code/Markdown fields opt into the editor font directly. */
+        --ccu-data-font: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+        --ccu-focus: var(--vscode-focusBorder, #007fd4);
+      }
+
       body {
         font-family: var(--vscode-font-family);
         font-size: var(--vscode-font-size);
         color: var(--vscode-foreground);
         background-color: var(--vscode-editor-background);
         margin: 0;
-        padding: 16px;
+        padding: var(--ccu-space-4);
       }
 
       .container {
@@ -4581,9 +7232,10 @@ export class UsageWebviewProvider {
         display: flex;
         justify-content: space-between;
         align-items: center;
-        margin-bottom: 16px;
-        border-bottom: 1px solid var(--vscode-panel-border);
-        padding-bottom: 16px;
+        gap: var(--ccu-space-4);
+        margin-bottom: var(--ccu-space-4);
+        border-bottom: 1px solid var(--ccu-border);
+        padding-bottom: var(--ccu-space-4);
       }
 
 
@@ -4594,17 +7246,29 @@ export class UsageWebviewProvider {
 
       .actions {
         display: flex;
-        gap: 8px;
+        justify-content: flex-end;
+        flex-wrap: wrap;
+        gap: var(--ccu-space-2);
       }
 
       button {
         background: var(--vscode-button-background);
         color: var(--vscode-button-foreground);
         border: none;
-        border-radius: 4px;
-        padding: 8px 12px;
+        border-radius: var(--ccu-radius-control);
+        padding: var(--ccu-space-2) var(--ccu-space-3);
         cursor: pointer;
         font-size: 12px;
+      }
+
+      button:focus-visible,
+      summary:focus-visible,
+      input:focus-visible,
+      select:focus-visible,
+      textarea:focus-visible,
+      [tabindex="0"]:focus-visible {
+        outline: 2px solid var(--ccu-focus);
+        outline-offset: 2px;
       }
 
       button:hover {
@@ -4908,6 +7572,44 @@ export class UsageWebviewProvider {
         transform: translateX(18px);
         background: #fff;
       }
+      .local-data-controls { margin-top: 26px; }
+      .local-data-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 12px 0 8px;
+      }
+      .local-data-heading h4 { margin: 0; font-size: 12px; }
+      .local-data-table-wrap { max-width: 100%; overflow-x: auto; }
+      .local-data-table { min-width: 920px; }
+      .local-data-table td { vertical-align: top; font-size: 11px; }
+      .local-data-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+      }
+      .local-data-actions select {
+        max-width: 260px;
+        min-width: 180px;
+        color: var(--vscode-dropdown-foreground);
+        background: var(--vscode-dropdown-background);
+        border: 1px solid var(--vscode-dropdown-border, var(--ccu-border));
+        border-radius: 4px;
+        padding: 4px 6px;
+      }
+      .local-data-scope-label { font-size: 11px; color: var(--vscode-descriptionForeground); }
+      .local-data-danger {
+        color: var(--vscode-errorForeground);
+        border-color: var(--vscode-errorForeground);
+      }
+      @media (max-width: 520px) {
+        .set-row { flex-direction: column; gap: 6px; }
+        .set-control, .set-control input, .set-control select, .set-control textarea { width: 100%; }
+        .local-data-actions { align-items: stretch; flex-direction: column; }
+        .local-data-actions > * { width: 100%; max-width: none; }
+      }
 
       /* Manual refresh is also the explicit accelerated Codex catch-up path. */
       .btn-refresh-now {
@@ -5038,16 +7740,24 @@ export class UsageWebviewProvider {
 
       .tabs {
         display: flex;
-        margin-bottom: 20px;
-        border-bottom: 1px solid var(--vscode-panel-border);
+        gap: var(--ccu-space-1);
+        max-width: 100%;
+        margin-bottom: var(--ccu-space-5);
+        border-bottom: 1px solid var(--ccu-border);
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: thin;
       }
 
       .tab {
+        flex: 0 0 auto;
         background: transparent;
         border: none;
-        padding: 8px 16px;
+        padding: var(--ccu-space-2) var(--ccu-space-4);
         cursor: pointer;
         border-bottom: 2px solid transparent;
+        white-space: nowrap;
         /* Explicit foreground colour — otherwise the inherited button
            foreground (white) becomes invisible on light themes. (Fixes
            upstream issue #11.) */
@@ -5070,21 +7780,25 @@ export class UsageWebviewProvider {
       }
 
       .usage-summary {
-        margin-bottom: 24px;
+        margin-bottom: var(--ccu-space-6);
       }
 
       .summary-grid {
         display: grid;
         grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-        gap: 12px;
+        gap: var(--ccu-space-3);
       }
 
       .summary-item {
-        text-align: center;
-        padding: 16px;
-        background: var(--vscode-input-background);
-        border-radius: 8px;
-        border: 1px solid var(--vscode-input-border);
+        display: flex;
+        min-height: 68px;
+        flex-direction: column;
+        justify-content: center;
+        text-align: left;
+        padding: var(--ccu-space-3) 14px;
+        background: var(--ccu-surface-raised);
+        border-radius: var(--ccu-radius-panel);
+        border: 1px solid var(--ccu-border);
       }
 
       .summary-item .label {
@@ -5096,6 +7810,8 @@ export class UsageWebviewProvider {
       .summary-item .value {
         font-size: 18px;
         font-weight: bold;
+        font-family: var(--ccu-data-font);
+        font-variant-numeric: tabular-nums;
       }
 
       .summary-item .value.cost {
@@ -5114,14 +7830,14 @@ export class UsageWebviewProvider {
       .model-list {
         display: flex;
         flex-direction: column;
-        gap: 12px;
+        gap: var(--ccu-space-3);
       }
 
       .model-item {
-        padding: 12px;
-        background: var(--vscode-input-background);
+        padding: var(--ccu-space-3);
+        background: var(--ccu-surface-raised);
         border-radius: 6px;
-        border: 1px solid var(--vscode-input-border);
+        border: 1px solid var(--ccu-border);
       }
 
       /* <details>/<summary> reset: remove the default triangle, position our own */
@@ -5145,7 +7861,10 @@ export class UsageWebviewProvider {
         display: flex;
         align-items: center;
         gap: 8px;
-        margin-bottom: 8px;
+        margin-bottom: 0;
+      }
+      details.model-item[open] > .model-header {
+        margin-bottom: var(--ccu-space-2);
       }
       /* Model name sits flush against the disclosure triangle on the left;
          the cost is pushed to the far right by margin-left:auto. Avoids the
@@ -5161,10 +7880,16 @@ export class UsageWebviewProvider {
         color: var(--vscode-symbolIcon-functionForeground);
       }
 
-      .model-cost {
+      .model-metric {
         font-weight: bold;
-        color: var(--vscode-charts-green);
+        color: var(--vscode-foreground);
         margin-left: auto;
+        font-family: var(--ccu-data-font);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .model-cost {
+        color: var(--vscode-charts-green);
       }
 
       .model-details {
@@ -5198,16 +7923,16 @@ export class UsageWebviewProvider {
 
       .chart-tabs {
         display: flex;
-        gap: 4px;
-        margin-bottom: 16px;
+        gap: var(--ccu-space-1);
+        margin-bottom: var(--ccu-space-4);
         flex-wrap: wrap;
       }
 
       .chart-tab {
         background: var(--vscode-button-secondaryBackground);
         color: var(--vscode-button-secondaryForeground);
-        border: 1px solid var(--vscode-input-border);
-        border-radius: 4px;
+        border: 1px solid var(--ccu-border);
+        border-radius: var(--ccu-radius-control);
         padding: 6px 12px;
         font-size: 11px;
         cursor: pointer;
@@ -5225,10 +7950,10 @@ export class UsageWebviewProvider {
       }
 
       .chart-container {
-        background: var(--vscode-input-background);
-        border: 1px solid var(--vscode-input-border);
-        border-radius: 8px;
-        padding: 16px;
+        background: var(--ccu-surface-subtle);
+        border: 1px solid var(--ccu-border);
+        border-radius: var(--ccu-radius-panel);
+        padding: var(--ccu-space-4);
         margin-bottom: 20px;
         height: 180px;
         overflow-x: auto;
@@ -5343,6 +8068,28 @@ export class UsageWebviewProvider {
         margin-top: 12px;
       }
 
+      .weekly-value-details {
+        margin-top: var(--ccu-space-3);
+        border-top: 1px solid var(--ccu-border);
+      }
+
+      .weekly-value-details > summary {
+        width: fit-content;
+        padding-top: var(--ccu-space-3);
+        color: var(--vscode-textLink-foreground);
+        cursor: pointer;
+        font-weight: 600;
+      }
+
+      .weekly-value-details > summary:focus-visible {
+        outline: 1px solid var(--ccu-focus);
+        outline-offset: 3px;
+      }
+
+      .range-empty-hint {
+        margin-bottom: var(--ccu-space-3);
+      }
+
       .daily-table {
         width: 100%;
         border-collapse: collapse;
@@ -5382,7 +8129,8 @@ export class UsageWebviewProvider {
 
       .number-cell {
         text-align: right;
-        font-family: var(--vscode-editor-font-family);
+        font-family: var(--ccu-data-font);
+        font-variant-numeric: tabular-nums;
         /* Keep figures on one line: compact (k/M) numbers fit the panel with no
          * horizontal scroll; full integer numbers overflow so the table (only)
          * scrolls, while the chart above keeps its own independent scroll. */
@@ -5445,6 +8193,9 @@ export class UsageWebviewProvider {
       .loading, .error, .no-data {
         text-align: center;
         padding: 40px 20px;
+        border: 1px dashed var(--ccu-border);
+        border-radius: var(--ccu-radius-panel);
+        background: var(--ccu-surface-raised);
       }
 
       .spinner {
@@ -5857,6 +8608,242 @@ export class UsageWebviewProvider {
       .heatmap-svg svg {
         display: block;
       }
+      .combined-heatmap-panel {
+        position: relative;
+        overflow: hidden;
+        padding: var(--ccu-space-5);
+        border: 1px solid var(--ccu-border);
+        border-left: 4px solid var(--vscode-charts-purple, #4f2f87);
+        border-radius: var(--ccu-radius-lg);
+        background: var(--ccu-surface-raised);
+      }
+      .combined-share-header {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--ccu-space-4);
+        margin-bottom: var(--ccu-space-5);
+      }
+      .combined-share-header h2 {
+        margin: 3px 0 5px;
+      }
+      .combined-share-header p {
+        max-width: 760px;
+        margin: 0;
+        color: var(--vscode-descriptionForeground);
+        line-height: 1.5;
+      }
+      .combined-share-eyebrow {
+        color: var(--vscode-charts-purple, #8668c7);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+      .combined-private-badge {
+        flex: 0 0 auto;
+        padding: 5px 9px;
+        border: 1px solid var(--ccu-border);
+        border-radius: 999px;
+        background: var(--ccu-surface-subtle);
+        color: var(--vscode-foreground);
+        font-size: 10px;
+        white-space: nowrap;
+      }
+      .combined-share-layout {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        gap: var(--ccu-space-4);
+        align-items: start;
+      }
+      .combined-preview-column,
+      .combined-config-card {
+        min-width: 0;
+      }
+      .combined-preview-toolbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 24px;
+        margin-bottom: var(--ccu-space-2);
+        color: var(--vscode-descriptionForeground);
+        font-size: 11px;
+      }
+      .combined-preview-toolbar strong {
+        color: var(--vscode-foreground);
+        font-size: 12px;
+      }
+      .combined-config-card {
+        padding: var(--ccu-space-4);
+        border: 1px solid var(--ccu-border);
+        border-radius: var(--ccu-radius-panel);
+        background: var(--ccu-surface-subtle);
+      }
+      .combined-config-card h3 {
+        margin: 0 0 var(--ccu-space-3);
+        font-size: 13px;
+      }
+      .combined-config-card .sc-field > span {
+        color: var(--vscode-foreground);
+      }
+      .combined-heatmap-controls {
+        display: grid;
+        grid-template-columns: minmax(0, 2fr) repeat(2, minmax(160px, 0.8fr));
+        gap: var(--ccu-space-3);
+        margin-bottom: var(--ccu-space-4);
+      }
+      .combined-heatmap-controls .sc-field input,
+      .combined-heatmap-controls .sc-field select {
+        box-sizing: border-box;
+        width: 100%;
+        min-height: 30px;
+        padding: 5px 8px;
+        border: 1px solid var(--vscode-input-border, var(--ccu-border));
+        border-radius: var(--ccu-radius-control);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground, var(--vscode-foreground));
+        font-family: var(--vscode-font-family);
+      }
+      .combined-palette-fieldset {
+        min-width: 0;
+        margin: 0 0 var(--ccu-space-4);
+        padding: var(--ccu-space-3) 0 0;
+        border: 0;
+        border-top: 1px solid var(--ccu-border);
+      }
+      .combined-palette-fieldset legend {
+        padding: 0 6px 0 0;
+        color: var(--vscode-foreground);
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+      }
+      .combined-palette-options {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+      }
+      .combined-palette-choice {
+        display: grid;
+        grid-template-columns: 14px minmax(42px, 1fr);
+        gap: 4px 6px;
+        align-items: center;
+        padding: 7px;
+        border: 1px solid var(--ccu-border);
+        border-radius: 6px;
+        background: var(--ccu-surface-raised);
+        cursor: pointer;
+        font-size: 10px;
+      }
+      .combined-palette-choice:has(input:checked) {
+        border-color: var(--vscode-focusBorder);
+        box-shadow: inset 0 0 0 1px var(--vscode-focusBorder);
+      }
+      .combined-palette-choice input {
+        grid-column: 1;
+        grid-row: 1;
+        margin: 0;
+      }
+      .combined-palette-swatch {
+        grid-column: 2;
+        grid-row: 2;
+        display: flex;
+        height: 7px;
+        overflow: hidden;
+        border-radius: 999px;
+      }
+      .combined-palette-choice > span:last-child {
+        grid-column: 2;
+        grid-row: 1;
+        min-width: 0;
+        line-height: 1.25;
+      }
+      .combined-palette-swatch i {
+        flex: 1 1 0;
+      }
+      .combined-custom-accent {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--ccu-space-2);
+        margin-top: var(--ccu-space-2);
+        color: var(--vscode-foreground);
+        font-size: 11px;
+      }
+      .combined-custom-accent input {
+        width: 42px;
+        height: 26px;
+        padding: 2px;
+        border: 1px solid var(--ccu-border);
+        border-radius: 5px;
+        background: var(--vscode-input-background);
+      }
+      .combined-privacy-toggle {
+        width: fit-content;
+        margin-bottom: var(--ccu-space-2);
+      }
+      .combined-privacy-preview {
+        padding: var(--ccu-space-2) var(--ccu-space-3);
+        border-left: 3px solid var(--vscode-testing-iconPassed, #2ea043);
+        border-radius: var(--ccu-radius-control);
+        background: var(--ccu-surface-muted);
+        color: var(--vscode-foreground);
+        font-size: 10px;
+        line-height: 1.4;
+      }
+      .combined-privacy-preview p {
+        margin: 3px 0;
+      }
+      .combined-activity-disclaimer {
+        margin: var(--ccu-space-2) var(--ccu-space-1) 0;
+        color: var(--vscode-descriptionForeground);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .combined-share-actions {
+        margin-top: var(--ccu-space-3);
+        padding-top: var(--ccu-space-3);
+        border-top: 1px solid var(--ccu-border);
+      }
+      .combined-output-panel {
+        margin-top: var(--ccu-space-4);
+        border-top: 1px solid var(--ccu-border);
+        padding-top: var(--ccu-space-3);
+      }
+      .combined-output-panel summary {
+        width: fit-content;
+        cursor: pointer;
+        color: var(--vscode-descriptionForeground);
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .combined-markdown {
+        width: 100%;
+        min-height: 46px;
+        margin-top: var(--ccu-space-2);
+        resize: vertical;
+        box-sizing: border-box;
+        border: 1px solid var(--vscode-input-border, var(--ccu-border));
+        border-radius: var(--ccu-radius-control);
+        padding: var(--ccu-space-2);
+        background: var(--vscode-input-background);
+        color: var(--vscode-input-foreground, var(--vscode-foreground));
+        font-family: var(--vscode-editor-font-family, ui-monospace, monospace);
+      }
+      .combined-heatmap-preview {
+        margin: 0;
+        padding: var(--ccu-space-3);
+        border-radius: var(--ccu-radius-panel);
+        background: var(--vscode-editor-background);
+      }
+      .combined-heatmap-preview svg {
+        width: 100%;
+        max-width: none;
+        height: auto;
+        border-radius: 12px;
+        box-shadow: 0 8px 26px rgba(24, 16, 36, 0.18);
+      }
 
       /* Clickable month bars in the all-time composition chart (drill to daily). */
       .hc-col-clickable {
@@ -5874,9 +8861,19 @@ export class UsageWebviewProvider {
       }
 
       .cost-comp-head {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 4px 12px;
         font-size: 12px;
         color: var(--vscode-descriptionForeground);
         margin-bottom: 6px;
+      }
+
+      .cost-comp-head strong {
+        color: var(--vscode-foreground);
+        font-weight: 600;
       }
 
       .cost-comp-bar {
@@ -6404,10 +9401,17 @@ export class UsageWebviewProvider {
         gap: 6px;
         margin: 4px 0 18px;
         padding-bottom: 10px;
-        border-bottom: 1px solid var(--vscode-panel-border);
+        max-width: 100%;
+        border-bottom: 1px solid var(--ccu-border);
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: thin;
       }
       .provider-tab {
-        border: 1px solid var(--vscode-panel-border);
+        flex: 0 0 auto;
+        white-space: nowrap;
+        border: 1px solid var(--ccu-border);
         border-radius: 999px;
         padding: 5px 13px;
         background: transparent;
@@ -6418,6 +9422,332 @@ export class UsageWebviewProvider {
         background: var(--vscode-button-background);
         color: var(--vscode-button-foreground);
         border-color: var(--vscode-button-background);
+      }
+
+      .advice-effectiveness-body {
+        margin-top: 13px;
+        padding-top: 14px;
+        border-top: 1px solid var(--vscode-panel-border);
+        background: var(--vscode-editor-background);
+        min-width: 0;
+      }
+      .advice-effectiveness-heading h4,
+      .advice-feedback-section h5,
+      .advice-payload-section h5 {
+        margin: 0;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .advice-effectiveness-heading h4 {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .advice-effectiveness-heading p,
+      .advice-candidate-note,
+      .advice-local-note,
+      .advice-inline-status {
+        margin: 4px 0 0;
+        color: var(--vscode-descriptionForeground);
+        font-size: 11px;
+        line-height: 1.45;
+      }
+      .advice-candidate-note {
+        margin-top: 7px;
+      }
+      .advice-spine {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 10px;
+        list-style: none;
+        margin: 14px 0 12px;
+        padding: 0;
+      }
+      .advice-spine::before {
+        content: "";
+        position: absolute;
+        z-index: 0;
+        left: 10%;
+        right: 10%;
+        top: 13px;
+        height: 1px;
+        background: var(--vscode-textLink-foreground);
+      }
+      .advice-spine li {
+        position: relative;
+        z-index: 1;
+        min-width: 0;
+      }
+      .advice-step-marker {
+        display: flex;
+        width: 26px;
+        height: 26px;
+        margin: 0 auto 7px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--vscode-textLink-foreground);
+        border-radius: 999px;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-textLink-foreground);
+        font-size: 10px;
+        font-weight: 700;
+      }
+      .advice-spine li > div {
+        text-align: center;
+      }
+      .advice-spine strong {
+        font-size: 11px;
+      }
+      .advice-spine p {
+        margin: 3px 0 0;
+        color: var(--vscode-descriptionForeground);
+        font-size: 10.5px;
+        line-height: 1.4;
+        overflow-wrap: anywhere;
+      }
+      .advice-step-caveat {
+        font-size: 10px;
+      }
+      .advice-feedback-section,
+      .advice-payload-section {
+        margin-top: 12px;
+        padding-top: 11px;
+        border-top: 1px solid var(--vscode-panel-border);
+      }
+      .advice-feedback-group {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+        margin-top: 7px;
+      }
+      .advice-feedback-button {
+        padding: 4px 9px;
+        border: 1px solid var(--vscode-button-secondaryBackground, var(--vscode-panel-border));
+        border-radius: 999px;
+        background: transparent;
+        color: var(--vscode-foreground);
+        cursor: pointer;
+        font-size: 11px;
+      }
+      .advice-feedback-button.is-selected {
+        border-width: 2px;
+        border-color: var(--vscode-focusBorder);
+        font-weight: 600;
+      }
+      .advice-feedback-button:disabled,
+      .advice-consent input:disabled {
+        opacity: 0.55;
+        cursor: default;
+      }
+      .advice-feedback-button:focus-visible,
+      .advice-consent input:focus-visible,
+      .advice-payload-actions button:focus-visible,
+      .advice-payload-preview summary:focus-visible,
+      .advice-payload-preview pre:focus-visible {
+        outline: 2px solid var(--vscode-focusBorder);
+        outline-offset: 2px;
+      }
+      .advice-consent {
+        display: grid;
+        gap: 8px;
+        margin: 9px 0 0;
+        padding: 10px;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 6px;
+      }
+      .advice-consent legend {
+        padding: 0 5px;
+        color: var(--vscode-descriptionForeground);
+        font-size: 10px;
+      }
+      .advice-consent label {
+        display: flex;
+        align-items: flex-start;
+        gap: 8px;
+        cursor: pointer;
+      }
+      .advice-consent input {
+        flex: 0 0 auto;
+        margin-top: 2px;
+      }
+      .advice-consent label span {
+        display: grid;
+        gap: 2px;
+        min-width: 0;
+      }
+      .advice-consent label strong,
+      .advice-consent label small {
+        font-size: 11px;
+        line-height: 1.4;
+      }
+      .advice-consent label small {
+        color: var(--vscode-descriptionForeground);
+      }
+      .advice-payload-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 9px;
+      }
+      .advice-payload-actions span {
+        color: var(--vscode-descriptionForeground);
+        font-size: 10.5px;
+      }
+      .advice-payload-preview {
+        margin-top: 9px;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 6px;
+        overflow: hidden;
+      }
+      .advice-payload-preview summary {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+        padding: 7px 9px;
+        cursor: pointer;
+        background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+        font-size: 11px;
+        font-weight: 600;
+      }
+      .advice-seal-stamp {
+        flex: 0 0 auto;
+        padding: 1px 5px;
+        border: 1px solid var(--vscode-textLink-foreground);
+        border-radius: 3px;
+        color: var(--vscode-textLink-foreground);
+        font-family: var(--vscode-editor-font-family, monospace);
+        font-size: 9px;
+        letter-spacing: 0.4px;
+      }
+      .advice-payload-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 5px 10px;
+        padding: 8px 9px 0;
+        color: var(--vscode-descriptionForeground);
+        font-size: 10px;
+      }
+      .advice-payload-meta code {
+        flex-basis: 100%;
+        color: var(--vscode-foreground);
+        overflow-wrap: anywhere;
+      }
+      .advice-payload-preview pre {
+        max-height: 280px;
+        margin: 8px 9px 9px;
+        padding: 9px;
+        overflow: auto;
+        border: 1px solid var(--vscode-panel-border);
+        border-radius: 4px;
+        background: var(--vscode-textCodeBlock-background, var(--vscode-editor-background));
+        color: var(--vscode-editor-foreground, var(--vscode-foreground));
+        font-family: var(--vscode-editor-font-family, monospace);
+        font-size: 10px;
+        line-height: 1.45;
+        white-space: pre;
+      }
+      @media (max-width: 800px) {
+        .combined-share-layout {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .combined-heatmap-controls {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .combined-palette-options {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .combined-heatmap-preview svg {
+          width: auto;
+          max-width: none;
+        }
+        .action-card-head {
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+        .advice-spine {
+          grid-template-columns: minmax(0, 1fr);
+          gap: 9px;
+          padding-left: 0;
+        }
+        .advice-spine::before {
+          left: 13px;
+          right: auto;
+          top: 13px;
+          bottom: 13px;
+          width: 1px;
+          height: auto;
+        }
+        .advice-spine li {
+          display: grid;
+          grid-template-columns: 26px minmax(0, 1fr);
+          gap: 9px;
+        }
+        .advice-step-marker {
+          margin: 0;
+        }
+        .advice-spine li > div {
+          text-align: left;
+        }
+      }
+      @media (max-width: 480px) {
+        body {
+          padding: var(--ccu-space-3);
+        }
+        header {
+          align-items: flex-start;
+          gap: var(--ccu-space-3);
+        }
+        h1 {
+          padding-top: 3px;
+          font-size: 18px;
+        }
+        .actions {
+          gap: var(--ccu-space-1);
+        }
+        .actions button {
+          padding: 7px 9px;
+        }
+        .summary-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+          gap: var(--ccu-space-2);
+        }
+        .summary-item {
+          min-height: 58px;
+          padding: 10px var(--ccu-space-3);
+        }
+        .summary-item .value {
+          font-size: 17px;
+        }
+        .tabs {
+          margin-bottom: var(--ccu-space-4);
+        }
+        .combined-heatmap-panel {
+          padding: var(--ccu-space-3);
+        }
+        .combined-share-header {
+          flex-direction: column;
+          gap: var(--ccu-space-2);
+        }
+        .combined-private-badge {
+          white-space: normal;
+        }
+        .combined-heatmap-controls {
+          grid-template-columns: minmax(0, 1fr);
+        }
+        .combined-palette-options {
+          grid-template-columns: minmax(0, 1fr);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        *, *::before, *::after {
+          scroll-behavior: auto !important;
+          animation-duration: 0.01ms !important;
+          animation-iteration-count: 1 !important;
+          transition-duration: 0.01ms !important;
+        }
       }
       .sr-only {
         position: absolute;
@@ -6437,6 +9767,7 @@ export class UsageWebviewProvider {
     return `
 // Get VSCode API
 const vscode = acquireVsCodeApi();
+const __adviceCopy = ${JSON.stringify(I18n.t.popup.adviceEffectiveness)};
 
 function ccuReadUiState() {
   try { return vscode.getState() || {}; } catch (e) { return {}; }
@@ -6448,6 +9779,30 @@ function ccuWriteUiState(key, value) {
     vscode.setState(st);
   } catch (e) {}
 }
+async function ccuVerifyCanonicalPreview(body, sha256, utf8Bytes) {
+  if (
+    typeof body !== 'string' ||
+    typeof sha256 !== 'string' ||
+    !/^[a-f0-9]{64}$/.test(sha256) ||
+    !Number.isInteger(utf8Bytes) ||
+    utf8Bytes < 0
+  ) { return false; }
+  try {
+    var encoded = new TextEncoder().encode(body);
+    if (encoded.byteLength !== utf8Bytes || !globalThis.crypto || !globalThis.crypto.subtle) {
+      return false;
+    }
+    var digest = await globalThis.crypto.subtle.digest('SHA-256', encoded);
+    var hex = Array.prototype.map.call(new Uint8Array(digest), function(byte) {
+      return byte.toString(16).padStart(2, '0');
+    }).join('');
+    return hex === sha256;
+  } catch (e) {
+    return false;
+  }
+}
+var advicePreviewValidationGeneration = {};
+var optimizerPreviewValidationGeneration = 0;
 function ccuProviderName() {
   var selected = document.querySelector('.provider-tab[aria-selected="true"]');
   return selected ? (selected.getAttribute('data-provider') || selected.id.replace('provider-tab-', '')) : 'claude';
@@ -6457,6 +9812,71 @@ function ccuElementStateKey(element, kind) {
   var root = tab || document;
   var elements = Array.prototype.slice.call(root.querySelectorAll(kind === 'table' ? 'table' : '.daily-breakdown, .hourly-breakdown'));
   return ccuProviderName() + ':' + (tab ? tab.id : 'page') + ':' + kind + ':' + Math.max(0, elements.indexOf(element));
+}
+
+function adviceRoot(provider) {
+  if (provider === 'optimizer') {
+    return document.querySelector('.action-card[data-advice-provider="optimizer"]');
+  }
+  return document.querySelector('.advice-effectiveness-body[data-advice-provider="' + provider + '"]');
+}
+function adviceConsentElements(provider) {
+  var root = adviceRoot(provider);
+  return {
+    root: root,
+    aggregate: root ? root.querySelector('[data-advice-consent-kind="aggregate"]') : null,
+    prompt: root ? root.querySelector('[data-advice-consent-kind="prompt"]') : null,
+    previewButton: root ? root.querySelector('[data-advice-action="preview"]') : null,
+    sendButton: root ? root.querySelector('[data-advice-action="send"]') : null,
+    preview: root ? root.querySelector('[data-advice-preview]') : null,
+    consentStatus: root ? root.querySelector('[data-advice-consent-status]') : null,
+  };
+}
+function adviceSyncConsentControls(provider) {
+  var elements = adviceConsentElements(provider);
+  if (!elements.root || !elements.aggregate || !elements.prompt) { return; }
+  var promptAvailable = elements.prompt.getAttribute('data-prompt-available') === 'true';
+  elements.prompt.disabled = elements.aggregate.disabled || !elements.aggregate.checked || !promptAvailable;
+  if (elements.prompt.disabled) { elements.prompt.checked = false; }
+  if (elements.previewButton) {
+    elements.previewButton.disabled = elements.aggregate.disabled || !elements.aggregate.checked;
+  }
+}
+function adviceClearPreview(provider) {
+  var elements = adviceConsentElements(provider);
+  if (!elements.preview) { return; }
+  elements.preview.hidden = true;
+  elements.preview.open = false;
+  elements.preview.removeAttribute('data-snapshot-id');
+  if (elements.sendButton) {
+    elements.sendButton.disabled = true;
+    elements.sendButton.textContent = __adviceCopy.sendPreparedRequest;
+  }
+  var body = elements.preview.querySelector('[data-advice-preview-body]');
+  var digest = elements.preview.querySelector('[data-advice-preview-digest]');
+  var mode = elements.preview.querySelector('[data-advice-preview-mode]');
+  var contentType = elements.preview.querySelector('[data-advice-preview-content-type]');
+  var bytes = elements.preview.querySelector('[data-advice-preview-bytes]');
+  var count = elements.preview.querySelector('[data-advice-preview-count]');
+  if (body) { body.textContent = ''; }
+  if (digest) { digest.textContent = ''; }
+  if (mode) { mode.textContent = ''; }
+  if (contentType) { contentType.textContent = ''; }
+  if (bytes) { bytes.textContent = ''; }
+  if (count) { count.textContent = ''; }
+}
+function adviceSetConsentPending(provider, pending) {
+  var elements = adviceConsentElements(provider);
+  if (elements.aggregate) { elements.aggregate.disabled = !!pending; }
+  if (elements.prompt) { elements.prompt.disabled = !!pending; }
+  if (elements.previewButton) { elements.previewButton.disabled = true; }
+  if (!pending) { adviceSyncConsentControls(provider); }
+}
+function restoreAdviceEffectivenessState() {
+  document.querySelectorAll('.advice-effectiveness-body[data-advice-provider]').forEach(function(root) {
+    var provider = root.getAttribute('data-advice-provider');
+    if (provider) { adviceSyncConsentControls(provider); }
+  });
 }
 
 // Keep expanded <details data-persist> open across auto-refresh re-renders — a
@@ -6484,7 +9904,13 @@ function restorePersistedDetails() {
   } catch (e) {}
 }
 function clearPersistedDetails() {
-  try { var st = ccuReadUiState(); st.openDetails = []; vscode.setState(st); } catch (e) {}
+  try {
+    var st = ccuReadUiState();
+    st.openDetails = [];
+    st.claudeDrilldownDetails = {};
+    st.codexHourlyDetails = {};
+    vscode.setState(st);
+  } catch (e) {}
 }
 // 'toggle' doesn't bubble — listen in the capture phase.
 document.addEventListener('toggle', function(e){
@@ -6505,10 +9931,18 @@ function restoreUi() {
   restoreActiveTab();
   restoreSessionFilter();
   restorePersistedDetails();
+  restoreClaudeDrilldownDetails();
+  restoreCodexHourlyDetails();
+  restoreAdviceEffectivenessState();
   restoreSessionDetails();
   restoreTableSorts();
   restoreChartMetrics();
+  initializeChartDrilldowns();
+  initializeStatusRegions();
+  restoreCombinedHeatmapConfig();
+  requestLocalDataInventoryForVisibleSettings();
   restoreScrollPosition();
+  vscode.postMessage({ command: 'localDataClientReady' });
 }
 function ccuScrollStateKey() {
   var active = document.querySelector('.tab.active');
@@ -6531,14 +9965,28 @@ function restoreScrollPosition() {
     });
   });
 }
-var __ccuScrollFrame = 0;
-window.addEventListener('scroll', function() {
-  if (!__ccuUiReady || __ccuScrollFrame) { return; }
-  __ccuScrollFrame = requestAnimationFrame(function() {
-    __ccuScrollFrame = 0;
-    saveScrollPosition();
-  });
-}, { passive: true });
+var __ccuScrollSaveTimer = 0;
+var __ccuScrollDirty = false;
+function flushScrollPosition() {
+  if (__ccuScrollSaveTimer) {
+    clearTimeout(__ccuScrollSaveTimer);
+    __ccuScrollSaveTimer = 0;
+  }
+  if (!__ccuUiReady || !__ccuScrollDirty) { return; }
+  __ccuScrollDirty = false;
+  saveScrollPosition();
+}
+function scheduleScrollPositionSave() {
+  if (!__ccuUiReady) { return; }
+  __ccuScrollDirty = true;
+  if (__ccuScrollSaveTimer) { clearTimeout(__ccuScrollSaveTimer); }
+  __ccuScrollSaveTimer = setTimeout(flushScrollPosition, 180);
+}
+window.addEventListener('scroll', scheduleScrollPositionSave, { passive: true });
+window.addEventListener('pagehide', flushScrollPosition);
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'hidden') { flushScrollPosition(); }
+});
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreUi);
 } else {
@@ -6549,12 +9997,67 @@ if (document.readyState === 'loading') {
 // user's UI language and configured timezone (instead of the hardcoded zh-TW
 // that the original used in this script body).
 const __locale = ${JSON.stringify(I18n.getLocale())};
-const __tz = ${JSON.stringify(I18n.getTimezone())};
+const __tz = ${JSON.stringify(resolveTimeZone(I18n.getTimezone()))};
+const __combinedHeatmapCopy = ${JSON.stringify(combinedHeatmapUiCopy(I18n.getLocale()))};
+const __localDataCopy = ${JSON.stringify(localDataUiCopy(I18n.getLocale()))};
 const __dateOpts = (extra) => {
   const opts = Object.assign({}, extra || {});
   if (__tz) opts.timeZone = __tz;
   return opts;
 };
+// Usage date keys have already been bucketed in the configured timezone. Parse
+// their components and format a UTC-noon sentinel so neither the configured
+// zone nor the Webview host zone can roll a day/month label backwards.
+function ccuFormatUsageDateKey(value, extra, monthly) {
+  var raw = String(value || '');
+  var match = /^(\\d{4})-(\\d{2})(?:-(\\d{2}))?$/.exec(raw);
+  if (!match) { return raw; }
+  var year = Number(match[1]);
+  var month = Number(match[2]);
+  var day = Number(match[3] || 1);
+  var date = new Date(Date.UTC(year, month - 1, day, 12));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return raw;
+  }
+  var isMonthly = monthly === true || !match[3];
+  var options = isMonthly
+    ? { year: 'numeric', month: 'long' }
+    : Object.assign({}, extra || {});
+  options.timeZone = 'UTC';
+  return date.toLocaleDateString(__locale, options);
+}
+const __dayKeyFormatter = new Intl.DateTimeFormat('en-CA', __dateOpts({
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit'
+}));
+function ccuDayKey(value) {
+  var date = new Date(value);
+  if (isNaN(date.getTime())) { return ''; }
+  var parts = __dayKeyFormatter.formatToParts(date);
+  var year = '';
+  var month = '';
+  var day = '';
+  parts.forEach(function(part) {
+    if (part.type === 'year') { year = part.value; }
+    if (part.type === 'month') { month = part.value; }
+    if (part.type === 'day') { day = part.value; }
+  });
+  return year && month && day ? year + '-' + month + '-' + day : '';
+}
+function ccuRollingDaySet(count) {
+  var endKey = ccuDayKey(Date.now());
+  var match = /^(\\d{4})-(\\d{2})-(\\d{2})$/.exec(endKey);
+  var days = new Set();
+  if (!match || count <= 0) { return days; }
+  var end = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3])));
+  for (var offset = 0; offset < count; offset++) {
+    var cursor = new Date(end.getTime());
+    cursor.setUTCDate(cursor.getUTCDate() - offset);
+    days.add(cursor.toISOString().slice(0, 10));
+  }
+  return days;
+}
 
 // Define basic functions
 function showProvider(provider, tab) {
@@ -6601,6 +10104,134 @@ function exportHeatmap() {
 function publishHeatmap() {
   vscode.postMessage({ command: 'publishHeatmap' });
 }
+function combinedHeatmapReadConfig() {
+  var title = document.getElementById('combinedHeatmapTitle');
+  var range = document.getElementById('combinedHeatmapRange');
+  var intensityMode = document.getElementById('combinedHeatmapIntensityMode');
+  var privacy = document.getElementById('combinedHeatmapPrivacy');
+  var palette = document.querySelector('input[name="combinedHeatmapPalette"]:checked');
+  var customAccent = document.getElementById('combinedHeatmapCustomAccent');
+  return {
+    title: title ? title.value : __combinedHeatmapCopy.defaultTitle,
+    range: range ? range.value : 'year',
+    intensityMode: intensityMode ? intensityMode.value : 'quantile',
+    privacyPreview: privacy ? privacy.checked : true,
+    palette: palette ? palette.value : 'academicViolet',
+    customAccent: customAccent ? customAccent.value : '#4f2f87'
+  };
+}
+function combinedHeatmapSaveConfig(config) {
+  try {
+    localStorage.setItem('ccu.combinedHeatmap.title', config.title);
+    localStorage.setItem('ccu.combinedHeatmap.range', config.range);
+    localStorage.setItem('ccu.combinedHeatmap.intensityMode', config.intensityMode);
+    localStorage.setItem('ccu.combinedHeatmap.privacyPreview', config.privacyPreview ? 'true' : 'false');
+    localStorage.setItem('ccu.combinedHeatmap.palette', config.palette);
+    localStorage.setItem('ccu.combinedHeatmap.customAccent', config.customAccent);
+  } catch (e) {}
+}
+function toggleCombinedCustomAccent() {
+  var config = combinedHeatmapReadConfig();
+  var customAccent = document.getElementById('combinedHeatmapCustomAccent');
+  if (customAccent) { customAccent.disabled = config.palette !== 'custom'; }
+}
+function toggleCombinedHeatmapPrivacy(save) {
+  var config = combinedHeatmapReadConfig();
+  var preview = document.getElementById('combinedHeatmapPrivacyPreview');
+  if (preview) { preview.hidden = !config.privacyPreview; }
+  if (save) { combinedHeatmapSaveConfig(config); }
+}
+function restoreCombinedHeatmapConfig() {
+  var title = document.getElementById('combinedHeatmapTitle');
+  var range = document.getElementById('combinedHeatmapRange');
+  var intensityMode = document.getElementById('combinedHeatmapIntensityMode');
+  var privacy = document.getElementById('combinedHeatmapPrivacy');
+  var customAccent = document.getElementById('combinedHeatmapCustomAccent');
+  if (!title || !range || !intensityMode || !privacy || !customAccent) { return; }
+  var changed = false;
+  try {
+    var storedTitle = localStorage.getItem('ccu.combinedHeatmap.title');
+    var storedRange = localStorage.getItem('ccu.combinedHeatmap.range');
+    var storedIntensityMode = localStorage.getItem('ccu.combinedHeatmap.intensityMode');
+    var storedPrivacy = localStorage.getItem('ccu.combinedHeatmap.privacyPreview');
+    var storedPalette = localStorage.getItem('ccu.combinedHeatmap.palette');
+    var storedAccent = localStorage.getItem('ccu.combinedHeatmap.customAccent');
+    if (storedTitle) { title.value = storedTitle; changed = storedTitle !== title.getAttribute('data-default-value'); }
+    if (storedRange === '30d' || storedRange === '90d' || storedRange === 'year') {
+      range.value = storedRange;
+      changed = changed || storedRange !== range.getAttribute('data-default-value');
+    }
+    if (storedIntensityMode === 'quantile' || storedIntensityMode === 'logarithmic' || storedIntensityMode === 'linear') {
+      intensityMode.value = storedIntensityMode;
+      changed = changed || storedIntensityMode !== intensityMode.getAttribute('data-default-value');
+    }
+    if (storedPrivacy === 'false') { privacy.checked = false; }
+    if (['academicViolet', 'claudeOrange', 'codexBlue', 'githubGreen', 'custom'].indexOf(storedPalette) >= 0) {
+      var paletteInput = document.querySelector('input[name="combinedHeatmapPalette"][value="' + storedPalette + '"]');
+      if (paletteInput) { paletteInput.checked = true; }
+      changed = changed || storedPalette !== 'academicViolet';
+    }
+    if (storedAccent && /^#[0-9a-fA-F]{6}$/.test(storedAccent)) {
+      customAccent.value = storedAccent;
+      changed = changed || storedAccent.toLowerCase() !== '#4f2f87';
+    }
+  } catch (e) {}
+  toggleCombinedCustomAccent();
+  toggleCombinedHeatmapPrivacy(false);
+  if (changed) { generateCombinedHeatmapPreview(); }
+}
+function generateCombinedHeatmapPreview() {
+  var config = combinedHeatmapReadConfig();
+  combinedHeatmapSaveConfig(config);
+  var status = document.getElementById('combinedHeatmapStatus');
+  if (status) { status.textContent = __combinedHeatmapCopy.updatePreview + '…'; }
+  vscode.postMessage({ command: 'previewCombinedHeatmap', title: config.title, range: config.range, intensityMode: config.intensityMode, palette: config.palette, customAccent: config.customAccent });
+}
+function exportCombinedHeatmap() {
+  var config = combinedHeatmapReadConfig();
+  combinedHeatmapSaveConfig(config);
+  vscode.postMessage({ command: 'exportCombinedHeatmap', title: config.title, range: config.range, intensityMode: config.intensityMode, palette: config.palette, customAccent: config.customAccent });
+}
+function copyCombinedHeatmapMarkdown() {
+  var config = combinedHeatmapReadConfig();
+  combinedHeatmapSaveConfig(config);
+  vscode.postMessage({ command: 'copyCombinedHeatmapMarkdown', title: config.title, range: config.range, intensityMode: config.intensityMode, palette: config.palette, customAccent: config.customAccent });
+}
+function resetCombinedHeatmapPreferences() {
+  var title = document.getElementById('combinedHeatmapTitle');
+  var range = document.getElementById('combinedHeatmapRange');
+  var intensityMode = document.getElementById('combinedHeatmapIntensityMode');
+  var privacy = document.getElementById('combinedHeatmapPrivacy');
+  var customAccent = document.getElementById('combinedHeatmapCustomAccent');
+  try {
+    localStorage.removeItem('ccu.combinedHeatmap.title');
+    localStorage.removeItem('ccu.combinedHeatmap.range');
+    localStorage.removeItem('ccu.combinedHeatmap.intensityMode');
+    localStorage.removeItem('ccu.combinedHeatmap.privacyPreview');
+    localStorage.removeItem('ccu.combinedHeatmap.palette');
+    localStorage.removeItem('ccu.combinedHeatmap.customAccent');
+  } catch (e) {}
+  if (title) { title.value = __combinedHeatmapCopy.defaultTitle; }
+  if (range) { range.value = 'year'; }
+  if (intensityMode) { intensityMode.value = 'quantile'; }
+  if (privacy) { privacy.checked = true; }
+  var defaultPalette = document.querySelector('input[name="combinedHeatmapPalette"][value="academicViolet"]');
+  if (defaultPalette) { defaultPalette.checked = true; }
+  if (customAccent) { customAccent.value = '#4f2f87'; }
+  toggleCombinedCustomAccent();
+  toggleCombinedHeatmapPrivacy(false);
+  var status = document.getElementById('combinedHeatmapStatus');
+  if (status) { status.textContent = __combinedHeatmapCopy.resetSharing + '…'; }
+  vscode.postMessage({
+    command: 'previewCombinedHeatmap',
+    title: __combinedHeatmapCopy.defaultTitle,
+    range: 'year',
+    intensityMode: 'quantile',
+    palette: 'academicViolet',
+    customAccent: '#4f2f87'
+  });
+  vscode.postMessage({ command: 'resetCombinedHeatmapPreferences' });
+}
 function refresh() {
   vscode.postMessage({ command: 'refresh' });
 }
@@ -6630,14 +10261,166 @@ function resetAllSettings(keys) {
   vscode.postMessage({ command: 'resetAllSettings', keys: Array.isArray(keys) ? keys : undefined });
 }
 
+var __ccuUiPreferenceKeys = [
+  'ccu.activeTab',
+  'ccu.sessionFilter',
+  'ccu.sessionRange',
+  'ccu.sessionModel'
+];
+var __ccuSharingPreferenceKeys = [
+  'ccu.combinedHeatmap.title',
+  'ccu.combinedHeatmap.range',
+  'ccu.combinedHeatmap.intensityMode',
+  'ccu.combinedHeatmap.privacyPreview',
+  'ccu.combinedHeatmap.palette',
+  'ccu.combinedHeatmap.customAccent'
+];
+
+function ccuCountPresentLocalStorageKeys(keys) {
+  var count = 0;
+  try {
+    keys.forEach(function(key) {
+      if (localStorage.getItem(key) !== null) { count += 1; }
+    });
+  } catch (e) {}
+  return count;
+}
+
+function ccuLocalDataClientSummary() {
+  var state = ccuReadUiState();
+  return {
+    uiPreferenceKeys: ccuCountPresentLocalStorageKeys(__ccuUiPreferenceKeys),
+    webviewStateFields: state && typeof state === 'object' ? Object.keys(state).length : 0,
+    sharingPreferenceKeys: ccuCountPresentLocalStorageKeys(__ccuSharingPreferenceKeys)
+  };
+}
+
+function requestLocalDataInventory() {
+  if (!document.getElementById('localDataInventoryBody')) { return; }
+  vscode.postMessage({
+    command: 'requestLocalDataInventory',
+    clientSummary: ccuLocalDataClientSummary()
+  });
+}
+
+function requestLocalDataInventoryForVisibleSettings() {
+  var settings = document.getElementById('settings');
+  if (settings && !settings.hidden && settings.classList.contains('active')) {
+    requestLocalDataInventory();
+  }
+}
+
+function runLocalDataAction(action) {
+  var status = document.getElementById('localDataActionStatus');
+  if (status) { status.textContent = '…'; }
+  var scope = document.getElementById('localDataQuotaScope');
+  vscode.postMessage({
+    command: 'runLocalDataAction',
+    action: action,
+    quotaScopeToken: action === 'clear-quota-history' && scope ? scope.value : undefined
+  });
+}
+
+function ccuResetLocalStorageKeys(keys) {
+  try {
+    keys.forEach(function(key) { localStorage.removeItem(key); });
+    return keys.every(function(key) { return localStorage.getItem(key) === null; });
+  } catch (e) {
+    return false;
+  }
+}
+
+function ccuApplyLocalDataClientAction(action) {
+  var ok = true;
+  if (action === 'reset-ui-state' || action === 'clear-all-client-state') {
+    ok = ccuResetLocalStorageKeys(__ccuUiPreferenceKeys) && ok;
+    try {
+      vscode.setState({});
+      var state = vscode.getState();
+      ok = (state === undefined || state === null || Object.keys(state).length === 0) && ok;
+    } catch (e) {
+      ok = false;
+    }
+  }
+  if (action === 'reset-sharing-preferences' || action === 'clear-all-client-state') {
+    ok = ccuResetLocalStorageKeys(__ccuSharingPreferenceKeys) && ok;
+    restoreCombinedHeatmapConfig();
+  }
+  return ok;
+}
+
+function ccuLocalDataFormatSizeCount(row) {
+  var parts = [];
+  if (typeof row.approximateBytes === 'number' && isFinite(row.approximateBytes)) {
+    parts.push(new Intl.NumberFormat(__locale).format(row.approximateBytes) + ' ' + __localDataCopy.bytes);
+  }
+  if (typeof row.itemCount === 'number' && isFinite(row.itemCount)) {
+    parts.push(new Intl.NumberFormat(__locale).format(row.itemCount) + ' ' + __localDataCopy.items);
+  }
+  return parts.length ? parts.join(' · ') : '—';
+}
+
+function ccuLocalDataFormatDate(value) {
+  if (typeof value !== 'number' || !isFinite(value) || value < 0) { return '—'; }
+  try {
+    return new Intl.DateTimeFormat(__locale, __dateOpts({
+      year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit'
+    })).format(new Date(value));
+  } catch (e) { return '—'; }
+}
+
+function ccuRenderLocalDataInventory(inventory) {
+  var body = document.getElementById('localDataInventoryBody');
+  var exclusions = document.getElementById('localDataExclusions');
+  var select = document.getElementById('localDataQuotaScope');
+  if (!body || !inventory || inventory.schemaVersion !== 1 || !Array.isArray(inventory.rows)) { return false; }
+  while (body.firstChild) { body.removeChild(body.firstChild); }
+  inventory.rows.forEach(function(row) {
+    var tr = document.createElement('tr');
+    var values = [
+      row.category,
+      row.locationClass,
+      row.schema,
+      ccuLocalDataFormatSizeCount(row),
+      ccuLocalDataFormatDate(row.oldestAt) + ' / ' + ccuLocalDataFormatDate(row.newestAt),
+      row.networkInteraction,
+      row.clearability
+    ];
+    values.forEach(function(value) {
+      var td = document.createElement('td');
+      td.textContent = typeof value === 'string' ? value : '—';
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  if (exclusions) {
+    exclusions.textContent = __localDataCopy.sourceExclusions + ' ' +
+      (Array.isArray(inventory.exclusions) ? inventory.exclusions.join(' · ') : '');
+  }
+  if (select) {
+    while (select.firstChild) { select.removeChild(select.firstChild); }
+    (Array.isArray(inventory.quotaScopes) ? inventory.quotaScopes : []).forEach(function(scope) {
+      if (!scope || typeof scope.token !== 'string' || typeof scope.label !== 'string') { return; }
+      var option = document.createElement('option');
+      option.value = scope.token;
+      option.textContent = scope.label;
+      select.appendChild(option);
+    });
+  }
+  return true;
+}
+
 function runOptimizer() {
   var ta = document.getElementById('optDraft');
   var btn = document.getElementById('optRunBtn');
   if (!ta || !ta.value.trim()) { return; }
   var err = document.getElementById('optError');
   var res = document.getElementById('optResult');
+  var preview = document.getElementById('optPreview');
   if (err) { err.style.display = 'none'; }
   if (res) { res.style.display = 'none'; }
+  if (preview) { preview.style.display = 'none'; preview.removeAttribute('data-snapshot-id'); }
   if (btn) {
     btn.disabled = true;
     btn.textContent = btn.getAttribute('data-running') || '…';
@@ -6651,6 +10434,70 @@ function runOptimizer() {
   });
 }
 
+async function showOptimizerPreview(msg) {
+  var validationGeneration = ++optimizerPreviewValidationGeneration;
+  var btn = document.getElementById('optRunBtn');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = btn.getAttribute('data-run') || __adviceCopy.previewPayload;
+  }
+  var err = document.getElementById('optError');
+  var preview = document.getElementById('optPreview');
+  var body = document.getElementById('optPreviewBody');
+  var digest = document.getElementById('optPreviewDigest');
+  var bytes = document.getElementById('optPreviewBytes');
+  var send = document.getElementById('optSendBtn');
+  if (preview) { preview.style.display = 'none'; preview.removeAttribute('data-snapshot-id'); }
+  if (send) { send.disabled = true; send.textContent = __adviceCopy.sendPreparedRequest; }
+  if (!msg.ok) {
+    if (err && msg.error) { err.textContent = msg.error; err.style.display = ''; }
+    return;
+  }
+  var valid =
+    msg.ok === true &&
+    /^optimizer-[a-f0-9]{24}$/.test(msg.snapshotId || '') &&
+    typeof msg.body === 'string' &&
+    typeof msg.sha256 === 'string' && /^[a-f0-9]{64}$/.test(msg.sha256) &&
+    Number.isInteger(msg.utf8Bytes) && msg.utf8Bytes >= 0 &&
+    msg.contentType === 'application/json' &&
+    msg.dataMode === 'user-draft-only';
+  if (valid) {
+    valid = await ccuVerifyCanonicalPreview(msg.body, msg.sha256, msg.utf8Bytes);
+  }
+  if (validationGeneration !== optimizerPreviewValidationGeneration) { return; }
+  if (!preview || !valid) {
+    if (preview) { preview.style.display = 'none'; preview.removeAttribute('data-snapshot-id'); }
+    if (send) { send.disabled = true; send.textContent = __adviceCopy.sendPreparedRequest; }
+    if (err) {
+      err.textContent = __adviceCopy.strictOutputRejected;
+      err.style.display = '';
+    }
+    return;
+  }
+  if (err) { err.style.display = 'none'; }
+  preview.setAttribute('data-snapshot-id', msg.snapshotId);
+  preview.style.display = '';
+  preview.open = true;
+  if (body) { body.textContent = msg.body; }
+  if (digest) { digest.textContent = 'SHA-256 ' + msg.sha256; }
+  if (bytes) { bytes.textContent = __adviceCopy.payloadBytes.replace('{bytes}', String(msg.utf8Bytes)); }
+  if (send) { send.disabled = false; send.textContent = __adviceCopy.sendPreparedRequest; }
+}
+
+function sendOptimizer() {
+  var preview = document.getElementById('optPreview');
+  var send = document.getElementById('optSendBtn');
+  var draft = document.getElementById('optDraft');
+  var snapshotId = preview ? preview.getAttribute('data-snapshot-id') : '';
+  if (!draft || !/^optimizer-[a-f0-9]{24}$/.test(snapshotId || '')) { return; }
+  if (send) { send.disabled = true; send.textContent = __adviceCopy.sendingPreparedRequest; }
+  vscode.postMessage({
+    command: 'sendOptimizerRequest',
+    snapshotId: snapshotId,
+    draft: draft.value,
+  });
+}
+
 function showOptimizeResult(msg) {
   var btn = document.getElementById('optRunBtn');
   if (btn) {
@@ -6659,8 +10506,20 @@ function showOptimizeResult(msg) {
   }
   var err = document.getElementById('optError');
   var res = document.getElementById('optResult');
+  var preview = document.getElementById('optPreview');
+  if (preview) { preview.style.display = 'none'; preview.removeAttribute('data-snapshot-id'); }
   if (msg.error) {
     if (err) { err.textContent = msg.error; err.style.display = ''; }
+    return;
+  }
+  var validFeedbackTarget =
+    typeof msg.adviceId === 'string' && /^advice-optimizer-[a-f0-9]{24}$/.test(msg.adviceId) &&
+    msg.recommendationId === 'recommendation-optimizer-result-v1';
+  if (!validFeedbackTarget) {
+    if (err) {
+      err.textContent = __adviceCopy.strictOutputRejected;
+      err.style.display = '';
+    }
     return;
   }
   var promptEl = document.getElementById('optPrompt');
@@ -6671,6 +10530,20 @@ function showOptimizeResult(msg) {
     formatOptSettings();
   }
   if (res) { res.style.display = ''; }
+  var feedback = document.getElementById('optFeedback');
+  if (feedback) {
+    feedback.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+      button.setAttribute('data-advice-id', msg.adviceId);
+      button.disabled = false;
+      button.setAttribute('aria-pressed', 'false');
+      button.classList.remove('is-selected');
+      var marker = button.querySelector('[aria-hidden="true"]');
+      if (marker) { marker.textContent = '○'; }
+    });
+    var feedbackStatus = feedback.querySelector('[data-advice-feedback-status]');
+    if (feedbackStatus) { feedbackStatus.textContent = ''; }
+    feedback.style.display = '';
+  }
 }
 
 function copyOptPrompt(btn) {
@@ -6823,14 +10696,12 @@ function applySessionFilters() {
   var list = document.getElementById('sessionList');
   if (!list) { return; }
   var st = ccuSessState();
-  var now = Date.now();
-  var threshold = st.range === 'today' ? new Date().setHours(0, 0, 0, 0)
-    : st.range === '7' ? now - 7 * 86400000
-    : st.range === '30' ? now - 30 * 86400000
-    : 0;
+  var dayCount = st.range === 'today' ? 1 : st.range === '7' ? 7 : st.range === '30' ? 30 : 0;
+  var allowedDays = dayCount > 0 ? ccuRollingDaySet(dayCount) : null;
   list.querySelectorAll('tr.sort-row').forEach(function(tr) {
     var okProject = st.project === 'all' || !tr.classList.contains('session-foreign');
-    var okTime = st.range === 'all' || Number(tr.getAttribute('data-sort-time')) >= threshold;
+    var rowDay = tr.getAttribute('data-day-key') || ccuDayKey(Number(tr.getAttribute('data-sort-time')));
+    var okTime = !allowedDays || allowedDays.has(rowDay);
     var okModel = st.model === 'all' || (tr.getAttribute('data-models') || '').split('|').indexOf(st.model) !== -1;
     var visible = okProject && okTime && okModel;
     tr.style.display = visible ? '' : 'none';
@@ -6973,9 +10844,11 @@ function sortTable(table, key, th, restoring) {
   table.querySelectorAll('th.sortable').forEach(function(h) {
     h.removeAttribute('data-sortdir');
     h.classList.remove('sorted-asc', 'sorted-desc');
+    h.setAttribute('aria-sort', 'none');
   });
   th.setAttribute('data-sortdir', ascending ? 'asc' : 'desc');
   th.classList.add(ascending ? 'sorted-asc' : 'sorted-desc');
+  th.setAttribute('aria-sort', ascending ? 'ascending' : 'descending');
 
   units.sort(function(a, b) {
     var va = a.lead.getAttribute('data-sort-' + key);
@@ -7003,8 +10876,16 @@ function sortTable(table, key, th, restoring) {
     ccuWriteUiState('tableSorts', sorts);
   }
 }
+function initializeSortableHeaders(root) {
+  var scope = root || document;
+  scope.querySelectorAll('th.sortable').forEach(function(header) {
+    header.setAttribute('tabindex', '0');
+    if (!header.hasAttribute('aria-sort')) { header.setAttribute('aria-sort', 'none'); }
+  });
+}
 function restoreTableSorts(root) {
   var scope = root || document;
+  initializeSortableHeaders(scope);
   var sorts = ccuReadUiState().tableSorts || {};
   scope.querySelectorAll('table').forEach(function(table) {
     var saved = sorts[ccuElementStateKey(table, 'table')];
@@ -7018,9 +10899,16 @@ function restoreTableSorts(root) {
 
 function showTab(tabName, restoring) {
   try {
-    // Remove active from all tabs and contents
-    document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
-    document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+    // Keep the visual state and the WAI-ARIA tab contract in lockstep.
+    document.querySelectorAll('.tabs [role="tab"]').forEach(function(tab) {
+      tab.classList.remove('active');
+      tab.setAttribute('aria-selected', 'false');
+      tab.setAttribute('tabindex', '-1');
+    });
+    document.querySelectorAll('.tab-content[role="tabpanel"]').forEach(function(content) {
+      content.classList.remove('active');
+      content.hidden = true;
+    });
 
     // Add active to selected tab and content
     const selectedTab = document.getElementById('tab-' + tabName);
@@ -7028,7 +10916,10 @@ function showTab(tabName, restoring) {
 
     if (selectedTab && selectedContent) {
       selectedTab.classList.add('active');
+      selectedTab.setAttribute('aria-selected', 'true');
+      selectedTab.setAttribute('tabindex', '0');
       selectedContent.classList.add('active');
+      selectedContent.hidden = false;
 
       if (!restoring) {
         vscode.postMessage({ command: 'tabChanged', tab: tabName });
@@ -7036,6 +10927,7 @@ function showTab(tabName, restoring) {
         clearPersistedDetails();
         // Persist in localStorage too — survives the reload, restored before paint.
         try { localStorage.setItem('ccu.activeTab', tabName); } catch (e) {}
+        if (tabName === 'settings') { requestLocalDataInventory(); }
       }
     } else {
       console.error("Tab or content not found:", tabName);
@@ -7045,12 +10937,71 @@ function showTab(tabName, restoring) {
   }
 }
 
-function toggleHourlyDetail(date) {
+// The dashboard views use the same roving-tabindex keyboard contract as the
+// provider selector. A single-line scroll strip keeps the focused destination
+// visible at narrow widths without turning translated labels vertical.
+document.addEventListener('keydown', function(event) {
+  var tab = event.target && event.target.closest
+    ? event.target.closest('.tabs [role="tab"][data-dashboard-tab]')
+    : null;
+  if (!tab || ['ArrowLeft', 'ArrowRight', 'Home', 'End'].indexOf(event.key) === -1) { return; }
+  var tablist = tab.closest('.tabs[role="tablist"]');
+  if (!tablist) { return; }
+  var items = Array.prototype.slice.call(
+    tablist.querySelectorAll('[role="tab"][data-dashboard-tab]'),
+  );
+  var index = items.indexOf(tab);
+  if (index === -1 || items.length === 0) { return; }
+  if (event.key === 'Home') { index = 0; }
+  else if (event.key === 'End') { index = items.length - 1; }
+  else { index = (index + (event.key === 'ArrowRight' ? 1 : -1) + items.length) % items.length; }
+  event.preventDefault();
+  var next = items[index];
+  next.focus();
+  if (next.scrollIntoView) { next.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
+  showTab(next.getAttribute('data-dashboard-tab'));
+});
+
+function claudeDrilldownStateKey(detailRow, kind) {
+  const tab = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : null;
+  return 'claude:' + (tab ? tab.id : kind) + ':' + kind;
+}
+
+function persistClaudeDrilldown(detailRow, kind, date) {
+  if (!detailRow) { return; }
+  const details = ccuReadUiState().claudeDrilldownDetails || {};
+  const key = claudeDrilldownStateKey(detailRow, kind);
+  if (date) { details[key] = date; } else { delete details[key]; }
+  ccuWriteUiState('claudeDrilldownDetails', details);
+}
+
+function restoreClaudeDrilldownDetails() {
+  try {
+    const saved = ccuReadUiState().claudeDrilldownDetails || {};
+    document.querySelectorAll('.hourly-detail-row:not([data-codex-hourly-detail-row])').forEach(function(row) {
+      const date = row.getAttribute('data-date');
+      if (date && saved[claudeDrilldownStateKey(row, 'hourly')] === date) {
+        toggleHourlyDetail(date, true);
+      }
+    });
+    document.querySelectorAll('.monthly-detail-row').forEach(function(row) {
+      const date = row.getAttribute('data-date');
+      if (date && saved[claudeDrilldownStateKey(row, 'monthly')] === date) {
+        toggleMonthlyDetail(date, true);
+      }
+    });
+  } catch (e) {}
+}
+
+function toggleHourlyDetail(date, restoring) {
   try {
     const detailRow = document.querySelector('.hourly-detail-row[data-date="' + date + '"]');
     const button = document.querySelector('.daily-row[data-date="' + date + '"] .detail-button');
     const container = document.getElementById('hourly-detail-' + date);
-    const chartBar = document.querySelector('.chart-bar-container[data-date="' + date + '"] .chart-bar');
+    const chartBar = document.querySelector(
+      '.tab-content.active .hc-col[data-date="' + date + '"] .chart-bar.clickable, ' +
+      '.tab-content.active .chart-bar-container[data-date="' + date + '"] .chart-bar.clickable',
+    );
 
     if (detailRow && button && container) {
       const isExpanded = detailRow.style.display !== 'none' && detailRow.style.display !== '';
@@ -7062,11 +11013,13 @@ function toggleHourlyDetail(date) {
         // Show detail for this date
         detailRow.style.display = 'table-row';
         button.classList.add('expanded');
+        setChartDrilldownExpanded('hourly-detail-' + date, true);
 
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.add('selected');
         }
+        persistClaudeDrilldown(detailRow, 'hourly', date);
 
         // Request hourly data if not loaded
         if (!container.dataset.loaded) {
@@ -7077,16 +11030,20 @@ function toggleHourlyDetail(date) {
         // Scroll the newly-revealed detail into view — clicking a bar at the
         // top of the tab otherwise expands a detail far down the table that
         // the user never notices.
-        try { detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        if (!restoring) {
+          try { detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        }
       } else {
         // Hide detail
         detailRow.style.display = 'none';
         button.classList.remove('expanded');
+        setChartDrilldownExpanded('hourly-detail-' + date, false);
 
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.remove('selected');
         }
+        persistClaudeDrilldown(detailRow, 'hourly', '');
       }
 
     } else {
@@ -7095,6 +11052,98 @@ function toggleHourlyDetail(date) {
   } catch (error) {
     console.error("Error in toggleHourlyDetail:", error);
   }
+}
+
+function codexHourlyDetailElements(date) {
+  const detailRow = document.querySelector('[data-codex-hourly-detail-row][data-date="' + date + '"]');
+  const scope = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : document;
+  return {
+    detailRow: detailRow,
+    button: scope ? scope.querySelector('[data-codex-hourly-toggle][data-date="' + date + '"]') : null,
+    chartBar: scope ? scope.querySelector('.hc-col[data-date="' + date + '"] .chart-bar') : null,
+    scope: scope,
+  };
+}
+
+function codexHourlyDetailStateKey(detailRow) {
+  const tab = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : null;
+  return 'codex:' + (tab ? tab.id : 'month');
+}
+
+function persistCodexHourlyDetail(detailRow, date) {
+  if (!detailRow) { return; }
+  const details = ccuReadUiState().codexHourlyDetails || {};
+  const key = codexHourlyDetailStateKey(detailRow);
+  if (date) { details[key] = date; } else { delete details[key]; }
+  ccuWriteUiState('codexHourlyDetails', details);
+}
+
+function closeAllCodexHourlyDetails(scope) {
+  const root = scope || document;
+  root.querySelectorAll('[data-codex-hourly-detail-row]').forEach(function(row) {
+    row.style.display = 'none';
+  });
+  root.querySelectorAll('[data-codex-hourly-toggle]').forEach(function(button) {
+    button.classList.remove('expanded');
+    button.setAttribute('aria-expanded', 'false');
+  });
+  root.querySelectorAll('[data-codex-last30-daily] .chart-bar.selected').forEach(function(bar) {
+    bar.classList.remove('selected');
+  });
+  root.querySelectorAll('[aria-controls^="codex-hourly-detail-"]').forEach(function(control) {
+    control.setAttribute('aria-expanded', 'false');
+  });
+}
+
+function setCodexHourlyDetail(date, expanded, restoring) {
+  const elements = codexHourlyDetailElements(date);
+  if (!elements.detailRow || !elements.button) { return false; }
+  if (expanded) {
+    closeAllCodexHourlyDetails(elements.scope);
+    elements.detailRow.style.display = 'table-row';
+    elements.button.classList.add('expanded');
+    elements.button.setAttribute('aria-expanded', 'true');
+    setChartDrilldownExpanded('codex-hourly-detail-' + date, true);
+    if (elements.chartBar) { elements.chartBar.classList.add('selected'); }
+    persistCodexHourlyDetail(elements.detailRow, date);
+    if (!restoring) {
+      try { elements.detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+    }
+  } else {
+    elements.detailRow.style.display = 'none';
+    elements.button.classList.remove('expanded');
+    elements.button.setAttribute('aria-expanded', 'false');
+    setChartDrilldownExpanded('codex-hourly-detail-' + date, false);
+    if (elements.chartBar) { elements.chartBar.classList.remove('selected'); }
+    persistCodexHourlyDetail(elements.detailRow, '');
+  }
+  return true;
+}
+
+function toggleCodexHourlyDetail(date) {
+  try {
+    const elements = codexHourlyDetailElements(date);
+    if (!elements.detailRow || !elements.button) { return; }
+    setCodexHourlyDetail(
+      date,
+      elements.button.getAttribute('aria-expanded') !== 'true',
+      false,
+    );
+  } catch (error) {
+    console.error('Error in toggleCodexHourlyDetail:', error);
+  }
+}
+
+function restoreCodexHourlyDetails() {
+  try {
+    const saved = ccuReadUiState().codexHourlyDetails || {};
+    document.querySelectorAll('[data-codex-hourly-detail-row]').forEach(function(row) {
+      const date = row.getAttribute('data-date');
+      if (date && saved[codexHourlyDetailStateKey(row)] === date) {
+        setCodexHourlyDetail(date, true, true);
+      }
+    });
+  } catch (e) {}
 }
 
 function closeAllHourlyDetails() {
@@ -7109,20 +11158,27 @@ function closeAllHourlyDetails() {
 
   allButtons.forEach(function(btn) {
     btn.classList.remove('expanded');
+    btn.setAttribute('aria-expanded', 'false');
   });
 
   allChartBars.forEach(function(bar) {
     bar.classList.remove('selected');
   });
+  document.querySelectorAll('[aria-controls^="hourly-detail-"]').forEach(function(control) {
+    control.setAttribute('aria-expanded', 'false');
+  });
 
 }
 
-function toggleMonthlyDetail(monthDate) {
+function toggleMonthlyDetail(monthDate, restoring) {
   try {
     const detailRow = document.querySelector('.monthly-detail-row[data-date="' + monthDate + '"]');
     const button = document.querySelector('.daily-row[data-date="' + monthDate + '"] .detail-button');
     const container = document.getElementById('monthly-detail-' + monthDate);
-    const chartBar = document.querySelector('.chart-bar-container[data-date="' + monthDate + '"] .chart-bar');
+    const chartBar = document.querySelector(
+      '.tab-content.active .hc-col[data-date="' + monthDate + '"] .chart-bar.clickable, ' +
+      '.tab-content.active .chart-bar-container[data-date="' + monthDate + '"] .chart-bar.clickable',
+    );
 
     if (detailRow && button && container) {
       const isExpanded = detailRow.style.display !== 'none' && detailRow.style.display !== '';
@@ -7134,11 +11190,13 @@ function toggleMonthlyDetail(monthDate) {
         // Show detail for this month
         detailRow.style.display = 'table-row';
         button.classList.add('expanded');
+        setChartDrilldownExpanded('monthly-detail-' + monthDate, true);
 
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.add('selected');
         }
+        persistClaudeDrilldown(detailRow, 'monthly', monthDate);
 
         // Request monthly data if not loaded
         if (!container.dataset.loaded) {
@@ -7147,16 +11205,20 @@ function toggleMonthlyDetail(monthDate) {
         }
 
         // Scroll the newly-revealed detail into view (see toggleHourlyDetail).
-        try { detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        if (!restoring) {
+          try { detailRow.scrollIntoView({ behavior: 'smooth', block: 'center' }); } catch (e) {}
+        }
       } else {
         // Hide detail
         detailRow.style.display = 'none';
         button.classList.remove('expanded');
+        setChartDrilldownExpanded('monthly-detail-' + monthDate, false);
 
         // Update chart bar selection state
         if (chartBar) {
           chartBar.classList.remove('selected');
         }
+        persistClaudeDrilldown(detailRow, 'monthly', '');
       }
 
     } else {
@@ -7179,10 +11241,14 @@ function closeAllMonthlyDetails() {
 
   allButtons.forEach(function(btn) {
     btn.classList.remove('expanded');
+    btn.setAttribute('aria-expanded', 'false');
   });
 
   allChartBars.forEach(function(bar) {
     bar.classList.remove('selected');
+  });
+  document.querySelectorAll('[aria-controls^="monthly-detail-"]').forEach(function(control) {
+    control.setAttribute('aria-expanded', 'false');
   });
 
 }
@@ -7226,6 +11292,7 @@ window.refresh = refresh;
 window.openSettings = openSettings;
 window.refreshPricing = refreshPricing;
 window.getAdvice = getAdvice;
+window.sendOptimizer = sendOptimizer;
 window.toggleProjectGroup = toggleProjectGroup;
 window.sortTable = sortTable;
 window.dismissQuotaWarn = dismissQuotaWarn;
@@ -7240,9 +11307,365 @@ window.syncChartBarSelection = syncChartBarSelection;
 window.closeAllHourlyDetails = closeAllHourlyDetails;
 window.closeAllMonthlyDetails = closeAllMonthlyDetails;
 
+document.addEventListener('change', function(event) {
+  var input = event.target && event.target.closest
+    ? event.target.closest('[data-advice-consent-kind][data-provider]')
+    : null;
+  if (!input) { return; }
+  var provider = input.getAttribute('data-provider');
+  if (provider !== 'claude' && provider !== 'codex' && provider !== 'optimizer') { return; }
+  var elements = adviceConsentElements(provider);
+  if (!elements.aggregate || !elements.prompt) { return; }
+  if (!elements.aggregate.checked) { elements.prompt.checked = false; }
+  adviceSyncConsentControls(provider);
+  adviceClearPreview(provider);
+  vscode.postMessage({ command: 'discardAdviceSnapshot', provider: provider });
+  adviceSetConsentPending(provider, true);
+  vscode.postMessage({
+    command: 'updateAdviceConsent',
+    provider: provider,
+    aggregateConsent: elements.aggregate.checked ? 'explicit' : 'not-granted',
+    promptSampleConsent: elements.prompt.checked ? 'explicit' : 'not-granted',
+  });
+});
+
+document.addEventListener('input', function(event) {
+  var target = event.target;
+  if (!target || target.id !== 'optDraft') { return; }
+  var preview = document.getElementById('optPreview');
+  if (preview && preview.getAttribute('data-snapshot-id')) {
+    preview.style.display = 'none';
+    preview.removeAttribute('data-snapshot-id');
+    vscode.postMessage({ command: 'discardOptimizerRequest' });
+  }
+});
+
+document.addEventListener('click', function(event) {
+  var action = event.target && event.target.closest
+    ? event.target.closest('[data-advice-action][data-provider]')
+    : null;
+  if (!action) { return; }
+  var provider = action.getAttribute('data-provider');
+  if (provider !== 'claude' && provider !== 'codex' && provider !== 'optimizer') { return; }
+  if (action.getAttribute('data-advice-action') === 'preview') {
+    event.preventDefault();
+    var elements = adviceConsentElements(provider);
+    if (!elements.aggregate || !elements.prompt || !elements.aggregate.checked) { return; }
+    action.disabled = true;
+    if (elements.consentStatus) { elements.consentStatus.textContent = ''; }
+    vscode.postMessage({
+      command: 'prepareAdviceSnapshot',
+      provider: provider,
+      aggregateConsent: 'explicit',
+      promptSampleConsent: elements.prompt.checked ? 'explicit' : 'not-granted',
+    });
+    return;
+  }
+  if (action.getAttribute('data-advice-action') === 'send') {
+    event.preventDefault();
+    var sendElements = adviceConsentElements(provider);
+    var snapshotId = sendElements.preview
+      ? sendElements.preview.getAttribute('data-snapshot-id')
+      : null;
+    if (!snapshotId || !/^snapshot-[a-f0-9]{24}$/.test(snapshotId)) { return; }
+    action.disabled = true;
+    action.textContent = __adviceCopy.sendingPreparedRequest;
+    if (sendElements.consentStatus) {
+      sendElements.consentStatus.textContent = __adviceCopy.sendingPreparedRequest;
+    }
+    vscode.postMessage({
+      command: 'sendAdviceSnapshot',
+      provider: provider,
+      snapshotId: snapshotId,
+    });
+    return;
+  }
+  if (action.getAttribute('data-advice-action') === 'feedback') {
+    event.preventDefault();
+    var root = adviceRoot(provider);
+    if (!root) { return; }
+    var recommendationId = action.getAttribute('data-recommendation-id');
+    root.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+      if (button.getAttribute('data-recommendation-id') !== recommendationId) { return; }
+      button.disabled = true;
+    });
+    root.querySelectorAll('[data-advice-feedback-status]').forEach(function(status) {
+      if (
+        status.getAttribute('data-advice-id') === action.getAttribute('data-advice-id') &&
+        status.getAttribute('data-recommendation-id') === recommendationId
+      ) {
+        status.textContent = '';
+      }
+    });
+    vscode.postMessage({
+      command: 'recordAdviceFeedback',
+      provider: provider,
+      adviceId: action.getAttribute('data-advice-id'),
+      recommendationId: recommendationId,
+      kind: action.getAttribute('data-feedback-kind'),
+    });
+    return;
+  }
+  if (action.getAttribute('data-advice-action') === 'snooze') {
+    event.preventDefault();
+    action.disabled = true;
+    vscode.postMessage({
+      command: 'snoozeAdvice',
+      provider: provider,
+      adviceId: action.getAttribute('data-advice-id'),
+      recommendationId: action.getAttribute('data-recommendation-id'),
+      mode: action.getAttribute('data-snooze-mode') === 'resume' ? 'resume' : 'snooze',
+    });
+    return;
+  }
+  if (action.getAttribute('data-advice-action') === 'clear') {
+    event.preventDefault();
+    if (!window.confirm(__adviceCopy.clearLocalDataConfirm)) { return; }
+    action.disabled = true;
+    vscode.postMessage({ command: 'clearAdviceLocalData' });
+  }
+});
+
 // Handle messages from extension
-window.addEventListener('message', function(event) {
+window.addEventListener('message', async function(event) {
   const message = event.data;
+
+  if (
+    message.command === 'codexIndexProgress' &&
+    typeof message.text === 'string' &&
+    message.text.length <= 1024
+  ) {
+    document.querySelectorAll('[data-codex-index-progress-text]').forEach(function(element) {
+      element.textContent = message.text;
+    });
+  }
+
+  if (message.command === 'requestLocalDataInventoryClient') {
+    requestLocalDataInventory();
+  }
+
+  if (message.command === 'localDataClientAction') {
+    var localDataClientActionOk = false;
+    try {
+      localDataClientActionOk = ccuApplyLocalDataClientAction(message.action) === true;
+    } catch (e) {}
+    if (typeof message.requestId === 'string' && message.requestId.length > 0) {
+      vscode.postMessage({
+        command: 'localDataClientActionAck',
+        requestId: message.requestId,
+        ok: localDataClientActionOk
+      });
+    }
+    requestLocalDataInventory();
+  }
+
+  if (message.command === 'localDataInventoryResult') {
+    var inventoryBody = document.getElementById('localDataInventoryBody');
+    if (message.ok !== true || !ccuRenderLocalDataInventory(message.inventory)) {
+      if (inventoryBody) {
+        while (inventoryBody.firstChild) { inventoryBody.removeChild(inventoryBody.firstChild); }
+        var unavailableRow = document.createElement('tr');
+        var unavailableCell = document.createElement('td');
+        unavailableCell.colSpan = 7;
+        unavailableCell.className = 'table-hint';
+        unavailableCell.textContent = __localDataCopy.unavailable;
+        unavailableRow.appendChild(unavailableCell);
+        inventoryBody.appendChild(unavailableRow);
+      }
+    }
+  }
+
+  if (message.command === 'localDataActionResult') {
+    var localDataResult = message.result || {};
+    var localDataStatus = document.getElementById('localDataActionStatus');
+    if (localDataResult.clientAction) {
+      ccuApplyLocalDataClientAction(localDataResult.clientAction);
+    }
+    if (localDataStatus) {
+      localDataStatus.textContent = typeof localDataResult.message === 'string'
+        ? localDataResult.message
+        : __localDataCopy.unavailable;
+    }
+    requestLocalDataInventory();
+  }
+
+  if (message.command === 'adviceConsentResult') {
+    var consentProvider = message.provider;
+    var consentElements = adviceConsentElements(consentProvider);
+    if (consentElements.aggregate && consentElements.prompt) {
+      if (message.ok === true) {
+        consentElements.aggregate.checked = message.aggregateConsent === 'explicit';
+        consentElements.prompt.checked =
+          consentElements.aggregate.checked && message.promptSampleConsent === 'explicit';
+        adviceSetConsentPending(consentProvider, false);
+        if (consentElements.consentStatus) { consentElements.consentStatus.textContent = ''; }
+      } else {
+        consentElements.aggregate.checked = false;
+        consentElements.prompt.checked = false;
+        consentElements.aggregate.disabled = true;
+        consentElements.prompt.disabled = true;
+        if (consentElements.previewButton) { consentElements.previewButton.disabled = true; }
+        if (consentElements.consentStatus) {
+          consentElements.consentStatus.textContent = __adviceCopy.feedbackSaveFailed;
+        }
+      }
+    }
+  }
+
+  if (message.command === 'adviceSnapshotResult') {
+    var snapshotProvider = message.provider;
+    var snapshotValidationGeneration =
+      (advicePreviewValidationGeneration[snapshotProvider] || 0) + 1;
+    advicePreviewValidationGeneration[snapshotProvider] = snapshotValidationGeneration;
+    var snapshotElements = adviceConsentElements(snapshotProvider);
+    if (snapshotElements.previewButton) { snapshotElements.previewButton.disabled = false; }
+    adviceClearPreview(snapshotProvider);
+    var validSnapshot =
+      message.ok === true &&
+      typeof message.snapshotId === 'string' && /^snapshot-[a-f0-9]{24}$/.test(message.snapshotId) &&
+      typeof message.body === 'string' &&
+      typeof message.sha256 === 'string' && /^[a-f0-9]{64}$/.test(message.sha256) &&
+      Number.isInteger(message.utf8Bytes) && message.utf8Bytes >= 0 &&
+      Number.isInteger(message.promptSampleCount) && message.promptSampleCount >= 0 &&
+      message.contentType === 'application/json' &&
+      (message.dataMode === 'aggregates-only' ||
+        message.dataMode === 'aggregates-with-personalization' ||
+        message.dataMode === 'aggregates-with-prompt-samples');
+    if (validSnapshot) {
+      validSnapshot = await ccuVerifyCanonicalPreview(
+        message.body,
+        message.sha256,
+        message.utf8Bytes,
+      );
+    }
+    if (advicePreviewValidationGeneration[snapshotProvider] !== snapshotValidationGeneration) {
+      return;
+    }
+    if (!validSnapshot || !snapshotElements.preview) {
+      if (snapshotElements.consentStatus) {
+        snapshotElements.consentStatus.textContent = __adviceCopy.strictOutputRejected;
+      }
+    } else {
+      var preview = snapshotElements.preview;
+      var previewBody = preview.querySelector('[data-advice-preview-body]');
+      var previewDigest = preview.querySelector('[data-advice-preview-digest]');
+      var previewMode = preview.querySelector('[data-advice-preview-mode]');
+      var previewContentType = preview.querySelector('[data-advice-preview-content-type]');
+      var previewBytes = preview.querySelector('[data-advice-preview-bytes]');
+      var previewCount = preview.querySelector('[data-advice-preview-count]');
+      if (previewBody) { previewBody.textContent = message.body; }
+      if (previewDigest) { previewDigest.textContent = 'SHA-256 ' + message.sha256; }
+      if (previewContentType) { previewContentType.textContent = message.contentType; }
+      if (previewMode) {
+        previewMode.textContent = message.dataMode === 'aggregates-only'
+          ? __adviceCopy.aggregatesOnly
+          : message.dataMode === 'aggregates-with-personalization'
+            ? __adviceCopy.aggregatesWithPersonalization
+            : __adviceCopy.aggregatesWithPromptSamples;
+      }
+      if (previewBytes) {
+        previewBytes.textContent = __adviceCopy.payloadBytes.replace('{bytes}', String(message.utf8Bytes));
+      }
+      if (previewCount) {
+        previewCount.textContent = __adviceCopy.promptSamplesIncluded.replace(
+          '{count}',
+          String(message.promptSampleCount),
+        );
+      }
+      preview.setAttribute('data-snapshot-id', message.snapshotId);
+      preview.hidden = false;
+      preview.open = true;
+      if (snapshotElements.sendButton) {
+        snapshotElements.sendButton.disabled = false;
+        snapshotElements.sendButton.textContent = __adviceCopy.sendPreparedRequest;
+      }
+      if (snapshotElements.consentStatus) {
+        snapshotElements.consentStatus.textContent = __adviceCopy.noNetworkTransport;
+      }
+    }
+    adviceSyncConsentControls(snapshotProvider);
+  }
+
+  if (message.command === 'adviceSendResult') {
+    var sendProvider = message.provider;
+    var sendElements = adviceConsentElements(sendProvider);
+    if (message.ok === true) {
+      if (sendElements.consentStatus) {
+        sendElements.consentStatus.textContent = __adviceCopy.sentPreparedRequest;
+      }
+      adviceClearPreview(sendProvider);
+    } else {
+      if (sendElements.sendButton) {
+        sendElements.sendButton.disabled = false;
+        sendElements.sendButton.textContent = __adviceCopy.sendPreparedRequest;
+      }
+      if (sendElements.consentStatus) {
+        sendElements.consentStatus.textContent = __adviceCopy.strictOutputRejected;
+      }
+    }
+  }
+
+  if (message.command === 'adviceFeedbackResult') {
+    var feedbackProvider = message.provider;
+    var feedbackRoot = adviceRoot(feedbackProvider);
+    if (feedbackRoot) {
+      var feedbackStatus = null;
+      feedbackRoot.querySelectorAll('[data-advice-feedback-status]').forEach(function(status) {
+        if (
+          status.getAttribute('data-advice-id') === message.adviceId &&
+          status.getAttribute('data-recommendation-id') === message.recommendationId
+        ) {
+          feedbackStatus = status;
+        }
+      });
+      if (message.ok === true) {
+        feedbackRoot.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+          if (
+            button.getAttribute('data-advice-id') !== message.adviceId ||
+            button.getAttribute('data-recommendation-id') !== message.recommendationId
+          ) { return; }
+          var kind = button.getAttribute('data-feedback-kind');
+          var selected =
+            (kind === 'helpful' && message.rating === 'helpful') ||
+            (kind === 'not-helpful' && message.rating === 'not-helpful') ||
+            (kind === 'applied' && message.applied === 'applied');
+          button.disabled = false;
+          button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+          button.classList.toggle('is-selected', selected);
+          var marker = button.querySelector('[aria-hidden="true"]');
+          if (marker) { marker.textContent = selected ? '✓' : '○'; }
+        });
+        if (feedbackStatus) { feedbackStatus.textContent = __adviceCopy.feedbackLocalOnly; }
+      } else {
+        feedbackRoot.querySelectorAll('[data-advice-action="feedback"]').forEach(function(button) {
+          if (
+            button.getAttribute('data-advice-id') === message.adviceId &&
+            button.getAttribute('data-recommendation-id') === message.recommendationId
+          ) {
+            button.disabled = false;
+          }
+        });
+        if (feedbackStatus) { feedbackStatus.textContent = __adviceCopy.feedbackSaveFailed; }
+      }
+    }
+  }
+
+  if (message.command === 'adviceSnoozeResult' && message.ok !== true) {
+    document.querySelectorAll('[data-advice-action="snooze"]').forEach(function(button) {
+      if (
+        button.getAttribute('data-advice-id') === message.adviceId &&
+        button.getAttribute('data-recommendation-id') === message.recommendationId
+      ) {
+        button.disabled = false;
+      }
+    });
+  }
+
+  if (message.command === 'adviceClearResult' && message.ok !== true) {
+    document.querySelectorAll('[data-advice-action="clear"]').forEach(function(button) {
+      button.disabled = false;
+    });
+  }
 
   if (message.command === 'shareCardResult') {
     const prev = document.getElementById('scPreview');
@@ -7250,6 +11673,43 @@ window.addEventListener('message', function(event) {
       prev.innerHTML = message.error
         ? '<p class="table-hint">Could not build the card: ' + message.error + '</p>'
         : (message.svg || '');
+    }
+  }
+
+  if (message.command === 'combinedHeatmapResult') {
+    var combinedPreview = document.getElementById('combinedHeatmapPreview');
+    var combinedMarkdown = document.getElementById('combinedHeatmapMarkdown');
+    var combinedStatus = document.getElementById('combinedHeatmapStatus');
+    if (message.error) {
+      if (combinedStatus) { combinedStatus.textContent = String(message.error); }
+    } else {
+      if (combinedPreview) {
+        if (message.hasData) {
+          combinedPreview.innerHTML = message.svg || '';
+        } else {
+          combinedPreview.textContent = __combinedHeatmapCopy.noData;
+        }
+      }
+      if (combinedMarkdown) { combinedMarkdown.value = message.markdown || ''; }
+      if (combinedStatus) { combinedStatus.textContent = ''; }
+    }
+  }
+
+  if (message.command === 'combinedHeatmapMarkdownCopied') {
+    var copyStatus = document.getElementById('combinedHeatmapStatus');
+    if (copyStatus) {
+      copyStatus.textContent = message.ok
+        ? __combinedHeatmapCopy.copyMarkdown + ' ✓'
+        : String(message.error || 'Could not copy Markdown.');
+    }
+  }
+
+  if (message.command === 'combinedHeatmapPreferencesReset') {
+    var resetStatus = document.getElementById('combinedHeatmapStatus');
+    if (resetStatus) {
+      resetStatus.textContent = message.ok
+        ? __combinedHeatmapCopy.resetComplete
+        : __combinedHeatmapCopy.resetFailed;
     }
   }
 
@@ -7261,6 +11721,8 @@ window.addEventListener('message', function(event) {
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
       restoreChartMetrics(container);
+      initializeChartDrilldowns(container);
+      initializeStatusRegions(container);
     }
   }
 
@@ -7272,6 +11734,8 @@ window.addEventListener('message', function(event) {
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
       restoreChartMetrics(container);
+      initializeChartDrilldowns(container);
+      initializeStatusRegions(container);
     }
   }
 
@@ -7284,6 +11748,9 @@ window.addEventListener('message', function(event) {
 
   if (message.command === 'optimizeResult') {
     showOptimizeResult(message);
+  }
+  if (message.command === 'optimizePreviewResult') {
+    showOptimizerPreview(message);
   }
 });
 
@@ -7299,11 +11766,25 @@ function saveChartMetric(container, metric) {
   metrics[ccuChartStateKey(container)] = metric;
   ccuWriteUiState('chartMetrics', metrics);
 }
+function syncChartMetricState(container) {
+  var heading = container.querySelector(':scope > h3, :scope > h4, :scope > .section-header h3');
+  container.querySelectorAll(':scope > .chart-tabs').forEach(function(group) {
+    group.setAttribute('role', 'group');
+    if (heading && heading.textContent) { group.setAttribute('aria-label', heading.textContent.trim()); }
+  });
+  container.querySelectorAll('.chart-tab[data-metric]').forEach(function(item) {
+    item.setAttribute('aria-pressed', item.classList.contains('active') ? 'true' : 'false');
+  });
+}
 function applyChartMetric(container, metric, persist) {
   var tab = container.querySelector('.chart-tab[data-metric="' + metric + '"]');
   if (!tab) { return; }
-  container.querySelectorAll('.chart-tab').forEach(function(item) { item.classList.remove('active'); });
+  container.querySelectorAll('.chart-tab').forEach(function(item) {
+    item.classList.remove('active');
+    item.setAttribute('aria-pressed', 'false');
+  });
   tab.classList.add('active');
+  tab.setAttribute('aria-pressed', 'true');
   if (container.classList.contains('hourly-breakdown')) {
     var chartContent = container.querySelector('[id^="hourly-chart-"]');
     if (chartContent) { updateHourlyChart(chartContent.id.replace('hourly-chart-', ''), metric); }
@@ -7321,6 +11802,66 @@ function restoreChartMetrics(root) {
   containers.forEach(function(container) {
     var metric = metrics[ccuChartStateKey(container)];
     if (metric) { applyChartMetric(container, metric, false); }
+    else { syncChartMetricState(container); }
+  });
+}
+
+function chartDrilldownInfo(element) {
+  var holder = element && element.closest
+    ? element.closest('[data-date]')
+    : null;
+  var date = holder ? holder.getAttribute('data-date') : '';
+  if (!date) { return null; }
+  var containingTab = element && element.closest ? element.closest('.tab-content') : null;
+  var kind = containingTab && containingTab.id === 'all'
+    ? 'monthly'
+    : element.closest('[data-codex-last30-daily]')
+      ? 'codex-hourly'
+      : 'hourly';
+  var prefix = kind === 'monthly'
+    ? 'monthly-detail-'
+    : kind === 'codex-hourly'
+      ? 'codex-hourly-detail-'
+      : 'hourly-detail-';
+  return { date: date, kind: kind, controls: prefix + date };
+}
+function setChartDrilldownExpanded(controls, expanded) {
+  document.querySelectorAll('[aria-controls="' + controls + '"]').forEach(function(control) {
+    control.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  });
+}
+function activateChartDrilldown(element) {
+  var info = chartDrilldownInfo(element);
+  if (!info) { return; }
+  if (info.kind === 'monthly') { toggleMonthlyDetail(info.date); }
+  else if (info.kind === 'codex-hourly') { toggleCodexHourlyDetail(info.date); }
+  else { toggleHourlyDetail(info.date); }
+}
+function initializeChartDrilldowns(root) {
+  var scope = root || document;
+  scope.querySelectorAll('.chart-bar.clickable, .hc-col-clickable[data-date]').forEach(function(control) {
+    var info = chartDrilldownInfo(control);
+    if (!info || !document.getElementById(info.controls)) { return; }
+    control.setAttribute('role', 'button');
+    control.setAttribute('tabindex', '0');
+    control.setAttribute('aria-controls', info.controls);
+    var label = control.getAttribute('title') || info.date;
+    control.setAttribute('aria-label', label);
+    var detail = document.getElementById(info.controls);
+    var expanded = detail && detail.closest('tr')
+      ? getComputedStyle(detail.closest('tr')).display !== 'none'
+      : false;
+    control.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  });
+}
+function initializeStatusRegions(root) {
+  var scope = root || document;
+  scope.querySelectorAll('.loading, .no-data, .no-chart-data').forEach(function(region) {
+    region.setAttribute('role', 'status');
+    region.setAttribute('aria-live', 'polite');
+  });
+  scope.querySelectorAll('.error').forEach(function(region) {
+    region.setAttribute('role', 'alert');
   });
 }
 
@@ -7344,7 +11885,7 @@ document.addEventListener('click', function(event) {
     const metric = chartTab.dataset.metric;
 
     // Find the container and determine the context
-    const container = chartTab.closest('.daily-breakdown') || chartTab.closest('.hourly-breakdown');
+    const container = chartTab.closest('.daily-breakdown, .hourly-breakdown');
 
     if (container) {
       applyChartMetric(container, metric, true);
@@ -7354,24 +11895,29 @@ document.addEventListener('click', function(event) {
   // Handle chart bar clicks - only for clickable charts
   if (event.target.classList.contains('chart-bar') && event.target.classList.contains('clickable')) {
     event.preventDefault();
-    // Daily/monthly charts now use .hc-col; the JS-rendered drill-downs still
-    // use .chart-bar-container — support both.
-    const container = event.target.closest('.hc-col') || event.target.closest('.chart-bar-container');
-    if (container) {
-      const date = container.dataset.date;
-      if (date) {
-        // Determine if this is a monthly chart or daily chart based on current tab
-        const activeTab = document.querySelector('.tab.active');
-        if (activeTab && activeTab.id === 'tab-all') {
-          // This is in the "all time" tab, so it's a monthly chart
-          toggleMonthlyDetail(date);
-        } else {
-          // This is in the "month" tab, so it's a daily chart
-          toggleHourlyDetail(date);
-        }
-      }
-    }
+    activateChartDrilldown(event.target);
   }
+});
+
+document.addEventListener('keydown', function(event) {
+  var sortableTh = event.target && event.target.closest
+    ? event.target.closest('th.sortable')
+    : null;
+  if (!sortableTh || (event.key !== 'Enter' && event.key !== ' ')) { return; }
+  var table = sortableTh.closest('table');
+  var key = sortableTh.getAttribute('data-sortkey');
+  if (!table || !key) { return; }
+  event.preventDefault();
+  sortTable(table, key, sortableTh);
+});
+
+document.addEventListener('keydown', function(event) {
+  var control = event.target && event.target.closest
+    ? event.target.closest('.chart-bar.clickable[role="button"], .hc-col-clickable[role="button"]')
+    : null;
+  if (!control || (event.key !== 'Enter' && event.key !== ' ')) { return; }
+  event.preventDefault();
+  activateChartDrilldown(control);
 });
 
 function bindChartTabEvents(container) {
@@ -7391,7 +11937,7 @@ function handleChartTabClick(event) {
 
   const metric = this.dataset.metric;
   if (!metric) { return; }
-  const container = this.closest('.daily-breakdown') || this.closest('.hourly-breakdown');
+  const container = this.closest('.daily-breakdown, .hourly-breakdown');
 
   if (container) {
     applyChartMetric(container, metric, true);
@@ -7470,8 +12016,13 @@ function updateMainChart(metric, container) {
       // Hourly chart: tooltip shows the value only (the hour is on the x-axis).
       bar.title = valueWithHelp;
     } else if (date) {
-      const dateObj = new Date(date);
-      bar.title = dateObj.toLocaleDateString() + ': ' + valueWithHelp;
+      bar.title = ccuFormatUsageDateKey(date) + ': ' + valueWithHelp;
+    }
+    // Drill-down bars keep their accessible name synchronized with the
+    // currently selected metric; otherwise a keyboard user would continue to
+    // hear the initial cost value after switching to tokens or messages.
+    if (bar.getAttribute('role') === 'button' && bar.title) {
+      bar.setAttribute('aria-label', bar.title);
     }
 
     const barVal = container.querySelector('.hc-barval');
@@ -7598,7 +12149,7 @@ function renderHourlyData(hourlyData, date) {
   }
 
   let html = '<div class="hourly-breakdown">';
-  html += '<h4>' + new Date(date).toLocaleDateString(__locale, __dateOpts()) + ' ${I18n.t.popup.hourlyBreakdown}</h4>';
+  html += '<h4>' + ccuFormatUsageDateKey(date) + ' ${I18n.t.popup.hourlyBreakdown}</h4>';
 
   html += '<div class="chart-tabs">';
   html += '<button class="chart-tab active" data-metric="cost">${I18n.t.popup.cost}</button>';
@@ -7651,7 +12202,7 @@ function renderDailyData(dailyData, monthDate) {
   }
 
   let html = '<div class="daily-breakdown">';
-  html += '<h4>' + new Date(monthDate).toLocaleDateString(__locale, __dateOpts({ year: 'numeric', month: 'long' })) + ' ${I18n.t.popup.dailyBreakdown}</h4>';
+  html += '<h4>' + ccuFormatUsageDateKey(monthDate, null, true) + ' ${I18n.t.popup.dailyBreakdown}</h4>';
 
   html += '<div class="chart-tabs">';
   html += '<button class="chart-tab active" data-metric="cost">${I18n.t.popup.cost}</button>';
@@ -7671,7 +12222,7 @@ function renderDailyData(dailyData, monthDate) {
   // monthly composition the user clicked).
   html += compositionHtml(dailyData.map(function(item) {
     return {
-      label: new Date(item.date).toLocaleDateString(__locale, __dateOpts({ month: 'numeric', day: 'numeric' })),
+      label: ccuFormatUsageDateKey(item.date, { month: 'numeric', day: 'numeric' }),
       data: item.data
     };
   }));
@@ -7688,8 +12239,7 @@ function renderDailyData(dailyData, monthDate) {
   html += '</tr></thead><tbody>';
 
   dailyData.forEach(function(item) {
-    const dateObj = new Date(item.date);
-    const formattedDate = dateObj.toLocaleDateString(__locale, __dateOpts({ month: 'numeric', day: 'numeric' }));
+    const formattedDate = ccuFormatUsageDateKey(item.date, { month: 'numeric', day: 'numeric' });
 
     html += '<tr>';
     html += '<td class="date-cell">' + formattedDate + '</td>';
@@ -7717,7 +12267,7 @@ function renderDailyData(dailyData, monthDate) {
 // attributes so the in-place metric switcher (updateMainChart) can rebuild.
 function griddedChart(items, metric, opts) {
   if (!items || items.length === 0) {
-    return '<div class="no-chart-data">No data available</div>';
+    return '<div class="no-chart-data" role="status">${this.escapeHtml(I18n.t.statusBar.noData)}</div>';
   }
   const maxHeight = 120;
   function metricValue(d) {

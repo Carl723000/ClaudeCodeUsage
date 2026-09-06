@@ -1,13 +1,20 @@
 import { CodexProviderSnapshot } from './codexProvider';
 import {
   CodexFileAggregate,
+  CodexHourlyCoverage,
   CodexIndexCoverage,
   CodexPeriodCoverage,
   CodexRangeCoverage,
   CodexStructuralSummary,
   CodexTodayCoverage,
 } from './codexIndex';
-import { rollingDayKeysFromDayKey } from '../../dateKeys';
+import { formatHourLabel, rollingDayKeysFromDayKey } from '../../dateKeys';
+import {
+  CODEX_ROLLING_HOURLY_DAYS,
+  CodexDailySlice,
+  CODEX_PERIOD_LINEAGE_VERSION,
+  codexPeriodFitsAggregate,
+} from './codexPeriodIndex';
 import {
   freshInputPlusOutput,
   processedTokens,
@@ -132,12 +139,15 @@ export interface CodexPeriodUsageView {
 
 export interface CodexHourlyUsageView {
   hour: string;
+  label: string;
   total: CodexMetricTotals;
   apiEquivalent: EquivalentCostBreakdown;
   threads: number;
 }
 
 export interface CodexTokenComposition {
+  /** Uncached input plus output. Kept outside the stack because output is already a segment. */
+  uncachedUsage: number;
   freshInput: number;
   cachedInput: number;
   output: number;
@@ -170,6 +180,9 @@ export interface CodexUsageView {
   /** Exact, sparse current-day hours from the independently resumable sidecar. */
   todayHourly: CodexHourlyUsageView[];
   todayCoverage: CodexTodayCoverage;
+  /** Sparse data-day -> exact hour rows for the configured rolling window. */
+  last30DaysHourlyByDay: Record<string, CodexHourlyUsageView[]>;
+  hourlyCoverage: CodexHourlyCoverage;
   lastTask: CodexUsageScopeView | null;
   lastTaskIdentity: CodexTaskIdentityView | null;
   last7Days: CodexUsageScopeView;
@@ -196,7 +209,10 @@ export interface CodexUsageView {
   weeklyValueInputs?: WeeklyValueInputs;
 }
 
-const MAX_DAILY_ROWS = 90;
+// Keep one complete GitHub-style share-card year plus a small boundary margin.
+// The existing table can scroll this bounded view, while Compare reuses it
+// directly instead of rescanning source logs or creating a second cache.
+const MAX_DAILY_ROWS = 370;
 const MAX_RECENT_THREAD_ROWS = 1_000;
 const HIGH_EFFORTS = new Set(['high', 'xhigh', 'max', 'ultra']);
 
@@ -235,8 +251,10 @@ export function tokenComposition(
   const input = Math.max(0, total.input);
   const cachedInput = Math.min(input, Math.max(0, total.cachedInput));
   const output = Math.max(0, total.output);
+  const freshInput = Math.max(0, input - cachedInput);
   return {
-    freshInput: Math.max(0, input - cachedInput),
+    uncachedUsage: freshInput + output,
+    freshInput,
     cachedInput,
     output,
     reasoningWithinOutput: Math.min(output, Math.max(0, total.reasoning)),
@@ -282,6 +300,37 @@ function addBuckets(
     addTokens(current, tokens);
     target.set(key, current);
   }
+  const attributed = zeroTokens();
+  for (const [, tokens] of entries) {
+    addTokens(attributed, tokens);
+  }
+  const inputTotal = Math.max(0, fallback.inputTotal - attributed.inputTotal);
+  const outputTotal = Math.max(0, fallback.outputTotal - attributed.outputTotal);
+  const residual: ProviderTokenCounts = {
+    inputTotal,
+    cachedInput: Math.min(
+      inputTotal,
+      Math.max(0, (fallback.cachedInput ?? 0) - (attributed.cachedInput ?? 0)),
+    ),
+    outputTotal,
+    reasoningOutput: Math.min(
+      outputTotal,
+      Math.max(
+        0,
+        (fallback.reasoningOutput ?? 0) - (attributed.reasoningOutput ?? 0),
+      ),
+    ),
+  };
+  if (
+    residual.inputTotal > 0 ||
+    (residual.cachedInput ?? 0) > 0 ||
+    residual.outputTotal > 0 ||
+    (residual.reasoningOutput ?? 0) > 0
+  ) {
+    const unknown = target.get('unknown') ?? zeroTokens();
+    addTokens(unknown, residual);
+    target.set('unknown', unknown);
+  }
 }
 
 function bucketRows(
@@ -289,6 +338,14 @@ function bucketRows(
 ): Array<{ key: string; totals: CodexMetricTotals }> {
   return [...buckets.entries()]
     .map(([key, tokens]) => ({ key, totals: metrics(tokens) }))
+    .filter(({ totals }) =>
+      totals.processed > 0 ||
+      totals.fresh > 0 ||
+      totals.input > 0 ||
+      totals.cachedInput > 0 ||
+      totals.output > 0 ||
+      totals.reasoning > 0,
+    )
     .sort(
       (left, right) =>
         right.totals.processed - left.totals.processed ||
@@ -306,6 +363,39 @@ function apiEquivalentForBuckets(
     ),
     expectedTotalTokens,
   );
+}
+
+function fallbackPeriodSlice(total: ProviderTokenCounts): CodexDailySlice {
+  return {
+    total,
+    byModel: {},
+    byEffort: {},
+    structural: zeroStructural(),
+  };
+}
+
+/**
+ * Period sidecars are a configured-zone, model-aware projection. A legacy or
+ * currently rebuilding sidecar must not be allowed to inflate a range beyond
+ * the verified per-file all-time aggregate. The UTC-keyed all-time day map is
+ * a conservative temporary fallback until the zone-aware sidecar is rebuilt;
+ * it preserves totals without pretending to know model/day attribution.
+ */
+function periodSlicesForFile(
+  file: CodexFileAggregate,
+  timeZone: string,
+): Array<[string, CodexDailySlice]> {
+  if (
+    file.period?.timeZone === timeZone &&
+    (file.period.lineageVersion === undefined ||
+      file.period.lineageVersion === CODEX_PERIOD_LINEAGE_VERSION) &&
+    codexPeriodFitsAggregate(file.period, file.total)
+  ) {
+    return Object.entries(file.period.days);
+  }
+  return Object.entries(file.byDay)
+    .filter(([day]) => /^\d{4}-\d{2}-\d{2}$/.test(day))
+    .map(([day, total]) => [day, fallbackPeriodSlice(total)]);
 }
 
 function ratio(numerator: number, denominator: number): number {
@@ -394,10 +484,7 @@ function scopeFromPeriodDays(
   let approvalReviewerThreads = 0;
 
   for (const file of files) {
-    if (file.period?.timeZone !== timeZone) {
-      continue;
-    }
-    const slices = Object.entries(file.period.days)
+    const slices = periodSlicesForFile(file, timeZone)
       .filter(([day]) => selectedKeys.has(day))
       .map(([, slice]) => slice);
     if (slices.length === 0) {
@@ -474,10 +561,15 @@ function observedAt(file: CodexFileAggregate): number {
 function sortedBucketKeys(
   buckets: Record<string, ProviderTokenCounts>,
 ): string[] {
-  const rows = Object.entries(buckets);
-  if (rows.length === 0) {
+  const entries = Object.entries(buckets);
+  if (entries.length === 0) {
     return ['unknown'];
   }
+  const rows = entries.filter(([, tokens]) =>
+    processedTokens(tokens) > 0 ||
+    (tokens.cachedInput ?? 0) > 0 ||
+    (tokens.reasoningOutput ?? 0) > 0,
+  );
   return rows
     .sort(
       ([leftKey, left], [rightKey, right]) =>
@@ -502,10 +594,7 @@ function dailyRows(
     }
   >();
   for (const file of files) {
-    if (file.period?.timeZone !== timeZone) {
-      continue;
-    }
-    for (const [day, slice] of Object.entries(file.period.days)) {
+    for (const [day, slice] of periodSlicesForFile(file, timeZone)) {
       const row = days.get(day) ?? {
         tokens: zeroTokens(),
         models: new Map<string, ProviderTokenCounts>(),
@@ -556,10 +645,7 @@ function monthlyRows(
     }
   >();
   for (const file of files) {
-    if (file.period?.timeZone !== timeZone) {
-      continue;
-    }
-    for (const [day, slice] of Object.entries(file.period.days)) {
+    for (const [day, slice] of periodSlicesForFile(file, timeZone)) {
       const period = day.slice(0, 7);
       if (!/^\d{4}-\d{2}$/.test(period)) {
         continue;
@@ -576,7 +662,9 @@ function monthlyRows(
     }
   }
   return [...months.entries()]
-    .sort(([left], [right]) => right.localeCompare(left))
+    // Monthly history is a time series: keep the oldest month first so the
+    // chart, table, and screen-reader order all read chronologically.
+    .sort(([left], [right]) => left.localeCompare(right))
     .map(([period, row]) => {
       const total = metrics(row.tokens);
       return {
@@ -591,7 +679,7 @@ function monthlyRows(
     });
 }
 
-function todayHourlyRows(
+function hourlyRows(
   files: CodexFileAggregate[],
   day: string,
   timeZone: string,
@@ -605,10 +693,16 @@ function todayHourlyRows(
     }
   >();
   for (const file of files) {
-    if (file.today?.day !== day || file.today.timeZone !== timeZone) {
+    if (!file.today || file.today.timeZone !== timeZone) {
       continue;
     }
-    for (const [hour, slice] of Object.entries(file.today.hours)) {
+    const slices =
+      file.today.windowDays === CODEX_ROLLING_HOURLY_DAYS && file.today.days
+        ? file.today.days[day] ?? {}
+        : file.today.day === day
+          ? file.today.hours
+          : {};
+    for (const [hour, slice] of Object.entries(slices)) {
       if (!/^(?:[01]\d|2[0-3])$/.test(hour)) {
         continue;
       }
@@ -629,6 +723,7 @@ function todayHourlyRows(
       const total = metrics(row.tokens);
       return {
         hour,
+        label: formatHourLabel(hour),
         total,
         apiEquivalent: apiEquivalentForBuckets(row.models, total.processed),
         threads: row.threads.size,
@@ -706,10 +801,7 @@ function periodMembership(
   if (context.recentSessionKeys.has(sessionIdentityKey(file))) {
     result.push('recent');
   }
-  if (file.period?.timeZone !== context.timeZone) {
-    return result;
-  }
-  const days = Object.keys(file.period.days);
+  const days = periodSlicesForFile(file, context.timeZone).map(([day]) => day);
   if (days.some((day) => context.last7DayKeys.has(day))) {
     result.push('7d');
   }
@@ -726,9 +818,9 @@ function dayMembership(
   file: CodexFileAggregate,
   context: CodexThreadPeriodContext,
 ): string[] {
-  return file.period?.timeZone === context.timeZone
-    ? Object.keys(file.period.days).sort()
-    : [];
+  return periodSlicesForFile(file, context.timeZone)
+    .map(([day]) => day)
+    .sort();
 }
 
 function recentThreadRows(
@@ -933,6 +1025,18 @@ export function buildCodexUsageView(
   const periodCoverage = snapshot.coverage.period;
   const last7DayKeys = rollingDayKeysFromDayKey(periodCoverage.asOfDay, 7);
   const last30DayKeys = rollingDayKeysFromDayKey(periodCoverage.asOfDay, 30);
+  const hourlyCoverage = snapshot.hourlyCoverage ??
+    snapshot.coverage.hourly ?? {
+      timeZone: periodCoverage.timeZone,
+      asOfDay: periodCoverage.asOfDay,
+      windowDays: CODEX_ROLLING_HOURLY_DAYS,
+      indexedFiles: 0,
+      totalFiles: 0,
+      indexedBytes: 0,
+      totalBytes: 0,
+      complete: false,
+      days: {},
+    };
   const periodContext: CodexThreadPeriodContext = {
     recentSessionKeys: new Set(recent.map(sessionIdentityKey)),
     last7DayKeys: new Set(last7DayKeys),
@@ -982,6 +1086,14 @@ export function buildCodexUsageView(
   );
   const allTime = scope(snapshot.files, aggregateIndexIncomplete);
   const daily = dailyRows(snapshot.files, periodCoverage.timeZone);
+  const last30DaysHourlyByDay = Object.fromEntries(
+    last30DayKeys.flatMap((day) => {
+      const rows = hourlyRows(snapshot.files, day, periodCoverage.timeZone);
+      return rows.length > 0 || (hourlyCoverage.days[day]?.totalFiles ?? 0) > 0
+        ? [[day, rows]]
+        : [];
+    }),
+  );
   const taskRoot = taskRootFile(recent);
   const taskIdentityFile = taskRoot ?? fallbackTaskIdentityFile(recent);
   const sourceLimits = snapshot.limits.length > 0
@@ -1020,12 +1132,14 @@ export function buildCodexUsageView(
 
   return {
     today: todayScope,
-    todayHourly: todayHourlyRows(
+    todayHourly: hourlyRows(
       snapshot.files,
       periodCoverage.asOfDay,
       periodCoverage.timeZone,
     ),
     todayCoverage: snapshot.coverage.today,
+    last30DaysHourlyByDay,
+    hourlyCoverage,
     lastTask: recentScope,
     lastTaskIdentity: recent.length > 0
       ? {

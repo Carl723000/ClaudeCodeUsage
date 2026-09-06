@@ -23,7 +23,7 @@ export interface CodexRawTokenCounts {
 }
 
 export interface CodexParserState {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   fileKey: string;
   sessionKey: string;
   treeKey?: string;
@@ -63,7 +63,10 @@ export function createCodexParserState(
   fileKey: string,
 ): CodexParserState {
   return {
-    schemaVersion: 3,
+    // Version 4 invalidates v2.3.0's schema-3 parser snapshots after the
+    // request-level token attribution rules changed. The outer persisted
+    // index remains schema 3; only each file's parser semantics are rebuilt.
+    schemaVersion: 4,
     fileKey,
     sessionKey: fileKey,
     identityLocked: false,
@@ -161,14 +164,41 @@ function componentDelta(
   current: CodexRawTokenCounts,
   previous: CodexRawTokenCounts,
 ): ProviderTokenCounts {
+  const inputTotal = Math.max(0, current.inputTokens - previous.inputTokens);
+  const outputTotal = Math.max(0, current.outputTokens - previous.outputTokens);
   return {
-    inputTotal: current.inputTokens - previous.inputTokens,
-    cachedInput: current.cachedInputTokens - previous.cachedInputTokens,
-    outputTotal: current.outputTokens - previous.outputTokens,
-    reasoningOutput:
-      current.reasoningOutputTokens - previous.reasoningOutputTokens,
-    sourceTotal: current.totalTokens - previous.totalTokens,
+    inputTotal,
+    cachedInput: Math.min(
+      inputTotal,
+      Math.max(0, current.cachedInputTokens - previous.cachedInputTokens),
+    ),
+    outputTotal,
+    reasoningOutput: Math.min(
+      outputTotal,
+      Math.max(
+        0,
+        current.reasoningOutputTokens - previous.reasoningOutputTokens,
+      ),
+    ),
+    sourceTotal: inputTotal + outputTotal,
   };
+}
+
+function componentDeltaNeedsClamp(
+  current: CodexRawTokenCounts,
+  previous: CodexRawTokenCounts,
+): boolean {
+  const inputTotal = Math.max(0, current.inputTokens - previous.inputTokens);
+  const cachedInput = Math.max(
+    0,
+    current.cachedInputTokens - previous.cachedInputTokens,
+  );
+  const outputTotal = Math.max(0, current.outputTokens - previous.outputTokens);
+  const reasoningOutput = Math.max(
+    0,
+    current.reasoningOutputTokens - previous.reasoningOutputTokens,
+  );
+  return cachedInput > inputTotal || reasoningOutput > outputTotal;
 }
 
 function containedHighWater(
@@ -315,9 +345,8 @@ function parseTurnContext(
   const model = Object.prototype.hasOwnProperty.call(entry.payload, 'model')
     ? sanitizeCodexMetadataLabel(entry.payload.model)
     : state.model;
-  const effort = Object.prototype.hasOwnProperty.call(entry.payload, 'effort')
-    ? sanitizeCodexMetadataLabel(entry.payload.effort)
-    : state.effort;
+  const effortEvidence = explicitReasoningEffort(entry.payload);
+  const effort = effortEvidence.present ? effortEvidence.value : state.effort;
   return {
     state: {
       ...state,
@@ -326,6 +355,68 @@ function parseTurnContext(
     },
     events: [],
   };
+}
+
+const CODEX_REASONING_EFFORTS = new Set([
+  'none',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+  'ultra',
+]);
+
+function normalizedReasoningEffort(value: unknown): string | undefined {
+  const label = sanitizeCodexMetadataLabel(value)?.toLowerCase();
+  return label && CODEX_REASONING_EFFORTS.has(label) ? label : undefined;
+}
+
+function explicitReasoningEffort(payload: JsonObject): {
+  present: boolean;
+  value?: string;
+} {
+  const raw: unknown[] = [];
+  const collect = (object: JsonObject | undefined, key: string): void => {
+    if (object && Object.prototype.hasOwnProperty.call(object, key)) {
+      raw.push(object[key]);
+    }
+  };
+  collect(payload, 'effort');
+  const collaborationMode = isObject(payload.collaboration_mode)
+    ? payload.collaboration_mode
+    : undefined;
+  const collaborationSettings = collaborationMode &&
+    isObject(collaborationMode.settings)
+    ? collaborationMode.settings
+    : undefined;
+  collect(collaborationSettings, 'reasoning_effort');
+  const threadSettings = isObject(payload.thread_settings)
+    ? payload.thread_settings
+    : undefined;
+  collect(threadSettings, 'reasoning_effort');
+  const threadCollaboration = threadSettings &&
+    isObject(threadSettings.collaboration_mode)
+    ? threadSettings.collaboration_mode
+    : undefined;
+  const threadCollaborationSettings = threadCollaboration &&
+    isObject(threadCollaboration.settings)
+    ? threadCollaboration.settings
+    : undefined;
+  collect(threadCollaborationSettings, 'reasoning_effort');
+  const item = isObject(payload.item) ? payload.item : undefined;
+  collect(item, 'reasoning_effort');
+  if (raw.length === 0) {
+    return { present: false };
+  }
+  const normalized = raw.map(normalizedReasoningEffort);
+  const values = new Set(
+    normalized.filter((value): value is string => value !== undefined),
+  );
+  return normalized.some((value) => value === undefined) || values.size !== 1
+    ? { present: true }
+    : { present: true, value: [...values][0] };
 }
 
 function nestedObject(
@@ -524,8 +615,20 @@ function parseTokenCount(
     : last
       ? exactTokenCounts(last)
       : componentDelta(nextHighWater!, previous);
+  const componentClamped = Boolean(
+    !duplicate && !last && nextHighWater &&
+    componentDeltaNeedsClamp(nextHighWater, previous),
+  );
+  const flaggedState = componentClamped
+    ? withFlag(
+        regressed ? withFlag(state, 'counter-regression') : state,
+        'component-delta-clamped',
+      )
+    : regressed
+      ? withFlag(state, 'counter-regression')
+      : state;
   let nextState: CodexParserState = {
-    ...(regressed ? withFlag(state, 'counter-regression') : state),
+    ...flaggedState,
     ...(nextHighWater ? { highWater: nextHighWater } : {}),
     previousSnapshotSignature: signature,
   };
@@ -582,14 +685,18 @@ export function parseCodexLine(
     if (!isObject(entry.payload)) {
       return { state: withFlag(state, 'invalid-event-payload'), events: [] };
     }
+    const effortEvidence = explicitReasoningEffort(entry.payload);
+    const eventState = effortEvidence.present
+      ? { ...state, effort: effortEvidence.value }
+      : state;
     if (stringField(entry.payload, 'type') === 'token_count') {
-      return parseTokenCount(entry, entry.payload, state, pseudonymize);
+      return parseTokenCount(entry, entry.payload, eventState, pseudonymize);
     }
     if (stringField(entry.payload, 'type') === 'task_started') {
-      return { state, events: [], lineageBoundary: true };
+      return { state: eventState, events: [], lineageBoundary: true };
     }
     return {
-      state,
+      state: eventState,
       events: [],
       structural: structuralFromEventMessage(entry, entry.payload),
     };

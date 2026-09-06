@@ -4,6 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { WindowActivityGate } from '../refreshPolicy';
+import { ResourceOwnershipRegistry } from '../resourceOwnership';
 
 type ExtensionModule = typeof import('../extension');
 
@@ -33,7 +34,14 @@ function loadExtensionModule(): ExtensionModule {
 const { ClaudeCodeUsageExtension } = loadExtensionModule();
 
 function bareExtension(): any {
-  return Object.create(ClaudeCodeUsageExtension.prototype) as any;
+  const extension = Object.create(ClaudeCodeUsageExtension.prototype) as any;
+  extension.resourceOwnership = new ResourceOwnershipRegistry();
+  extension.codexWatcherLeases = new Map();
+  extension.pendingResourceStops = new Set();
+  extension.resourceStopFailure = null;
+  extension.codexWatcherGeneration = 0;
+  extension.disposed = false;
+  return extension;
 }
 
 test('Claude watcher refresh stays Claude-only while manual refresh updates both providers', async () => {

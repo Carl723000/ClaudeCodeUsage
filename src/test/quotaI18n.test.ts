@@ -126,3 +126,30 @@ test('every settings-catalog key has a label in every non-English locale', () =>
   }
   assert.deepEqual(missing, [], `untranslated setting labels: ${missing.join(', ')}`);
 });
+
+test('BYOK privacy copy points every locale to SecretStorage, not plaintext settings', () => {
+  for (const lang of LOCALES) {
+    withLanguage(lang, () => {
+      const text = lang === 'en'
+        ? (() => {
+            const src = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'settings.ts'), 'utf8');
+            const match = src.match(/key: 'advice\.apiKey',[\s\S]*?help: '([^']+)'/);
+            return { help: match?.[1] ?? '' };
+          })()
+        : I18n.settingText('advice.apiKey');
+      assert.match(text.help ?? '', /SecretStorage/, `${lang}: BYOK help must name SecretStorage`);
+      assert.doesNotMatch(
+        I18n.t.popup.adviceDemoNotice,
+        /claudeCodeUsage\.advice\.apiKey/,
+        `${lang}: demo must not direct users to the retired plaintext setting`,
+      );
+      assert.ok(I18n.t.popup.secretMigrationFailed.length > 20, `${lang}: needs migration failure copy`);
+      assert.ok(I18n.t.popup.secretMigrationWorkspace.length > 20, `${lang}: needs workspace migration copy`);
+      assert.doesNotMatch(
+        I18n.t.popup.secretMigrationFailed + I18n.t.popup.secretMigrationWorkspace,
+        /\$\{|apiKey\}|\.message/,
+        `${lang}: failure copy must be fixed and never interpolate a provider error`,
+      );
+    });
+  }
+});

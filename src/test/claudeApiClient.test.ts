@@ -27,7 +27,11 @@ function loadApiModule(): ApiModule {
   }
 }
 
-const { ClaudeApiClient, resolveClaudeProfile } = loadApiModule();
+const {
+  ClaudeApiClient,
+  claudeQuotaIdentitySignal,
+  resolveClaudeProfile,
+} = loadApiModule();
 const tempRoots: string[] = [];
 
 after(() => {
@@ -68,6 +72,43 @@ test('the default profile retains the macOS Keychain fallback', () => {
   assert.equal(resolved.allowKeychainFallback, true);
 });
 
+test('quota identity follows refresh-token continuity without exposing the token', () => {
+  const first = claudeQuotaIdentitySignal('machine-salt', 'refresh-token-a');
+  const repeated = claudeQuotaIdentitySignal('machine-salt', 'refresh-token-a');
+  const rotated = claudeQuotaIdentitySignal('machine-salt', 'refresh-token-b');
+
+  assert.equal(first, repeated);
+  assert.notEqual(first, rotated);
+  assert.equal(first.includes('refresh-token-a'), false);
+});
+
+test('successful quota fetch records only the safe account continuity signal', async () => {
+  const client = new ClaudeApiClient(null, undefined, 'machine-salt') as any;
+  client.getValidCredentials = async () => ({
+    claudeAiOauth: {
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      expiresAt: Date.now() + 60_000,
+    },
+  });
+  client.callUsageApi = async () => ({
+    status: 200,
+    body: JSON.stringify({
+      seven_day: {
+        utilization: 25,
+        resets_at: '2026-09-07T03:24:00.000Z',
+      },
+    }),
+  });
+
+  assert.ok(await client.fetchUsageLimits());
+  assert.equal(
+    client.getLastQuotaIdentitySignal(),
+    claudeQuotaIdentitySignal('machine-salt', 'refresh-token'),
+  );
+  assert.equal(client.getLastQuotaIdentitySignal().includes('refresh-token'), false);
+});
+
 test('a custom profile without a credentials file never falls back to Keychain', async () => {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-profile-'));
   tempRoots.push(profile);
@@ -100,4 +141,34 @@ test('refreshed credentials are written back to the selected profile', async () 
 
   const stored = JSON.parse(fs.readFileSync(path.join(profile, '.credentials.json'), 'utf8'));
   assert.deepEqual(stored, credentials);
+});
+
+test('quota fetch forwards caller cancellation through the active request', async () => {
+  const client = new ClaudeApiClient(null) as any;
+  const controller = new AbortController();
+  let observedSignal: AbortSignal | undefined;
+  client.getValidCredentials = async () => ({
+    claudeAiOauth: {
+      accessToken: 'test-access',
+      refreshToken: 'test-refresh',
+      expiresAt: Date.now() + 60_000,
+    },
+  });
+  client.callUsageApi = (_token: string, signal?: AbortSignal) =>
+    new Promise((_resolve, reject) => {
+      observedSignal = signal;
+      signal?.addEventListener(
+        'abort',
+        () => reject(new Error('Request cancelled')),
+        { once: true },
+      );
+    });
+
+  const pending = client.fetchUsageLimits(controller.signal);
+  await Promise.resolve();
+  controller.abort();
+
+  assert.equal(await pending, null);
+  assert.strictEqual(observedSignal, controller.signal);
+  assert.equal(observedSignal?.aborted, true);
 });

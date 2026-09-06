@@ -177,3 +177,9 @@ Co-authored-by: OpenAI Codex <215057067+openai-codex[bot]@users.noreply.github.c
 ```
 - comment-only 的受控 first-pass automation 与 maintainer-only 的高权限 mention
   workflow 必须保持分离。
+
+## Codex 工具适配
+
+浏览器操作使用当前可用的 Codex browser／computer-use 工具；原文中的 Claude MCP
+工具名称只描述操作意图，不能直接调用。提问按当前模式使用可用工具；Git 操作仍须
+获得当次明确授权。

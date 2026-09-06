@@ -84,6 +84,49 @@ test('partial period coverage disables unreliable session membership ranges', ()
   });
 });
 
+test('an inflated period sidecar falls back to the verified daily aggregate', () => {
+  const snapshot = snapshotFixture();
+  const file = snapshot.files[0];
+  const safeDay = Object.keys(file.byDay)[0];
+  const safeDailyTotal = file.byDay[safeDay];
+  file.period = {
+    ...file.period!,
+    days: {
+      [safeDay]: {
+        ...file.period!.days[safeDay],
+        total: {
+          inputTotal: 10_000_000_000,
+          outputTotal: 5_000_000_000,
+        },
+      },
+    },
+  };
+  snapshot.files = [file];
+  snapshot.total = { ...file.total };
+
+  const view = buildCodexUsageView(snapshot, NOW);
+  const daily = view.daily.find((row) => row.day === safeDay);
+
+  assert.equal(
+    daily?.total.processed,
+    safeDailyTotal.inputTotal + safeDailyTotal.outputTotal,
+  );
+  assert.equal(
+    view.allTime.total.processed,
+    file.total.inputTotal + file.total.outputTotal,
+  );
+  assert.equal(view.last30Days.total.processed <= view.allTime.total.processed, true);
+  assert.deepEqual(daily?.apiEquivalent, {
+    equivalentUsd: 0,
+    freshInputUsd: 0,
+    cachedInputUsd: 0,
+    outputUsd: 0,
+    pricedTokens: 0,
+    totalTokens: safeDailyTotal.inputTotal + safeDailyTotal.outputTotal,
+    pricingCoverage: 0,
+  });
+});
+
 test('index backfill quality warning follows index convergence', () => {
   const snapshot = snapshotFixture();
   const incomplete = buildCodexUsageView(snapshot, NOW);
@@ -415,6 +458,18 @@ test('daily and monthly Codex rows retain exact-model API-equivalent cost and co
       },
     },
   };
+  // The period projection is now required to be a subset of the verified
+  // file aggregate. Keep this synthetic cost fixture internally consistent so
+  // it exercises pricing rather than the corrupted-period fallback.
+  file.total = {
+    inputTotal: 5_000_000,
+    // Both period days are part of this file's verified aggregate. Keep the
+    // cache bucket consistent as well so the test exercises pricing rather
+    // than the corrupted-period fallback.
+    cachedInput: 2_000_000,
+    outputTotal: 2_500_000,
+    reasoningOutput: 1_750_000,
+  };
   snapshot.files = [file];
 
   const view = buildCodexUsageView(snapshot, NOW);
@@ -436,24 +491,66 @@ test('daily and monthly Codex rows retain exact-model API-equivalent cost and co
 
 test('Today is a calendar-day scope with exact sparse hourly cost and token composition', () => {
   const snapshot = snapshotFixture();
-  for (const [index, file] of snapshot.files.slice(0, 2).entries()) {
-    const slice = file.period!.days['2026-07-20'];
-    const hour = index === 0 ? '10' : '11';
+  for (const [index, file] of snapshot.files.slice(0, 3).entries()) {
+    const day = index < 2 ? '2026-07-20' : '2026-07-10';
+    const slice = file.period!.days[day];
+    const hours = index === 0
+      ? {
+          '10': {
+            total: {
+              inputTotal: 250,
+              cachedInput: 200,
+              outputTotal: 50,
+              reasoningOutput: 30,
+              sourceTotal: 300,
+            },
+            byModel: {
+              'gpt-5.6-sol': {
+                inputTotal: 250,
+                cachedInput: 200,
+                outputTotal: 50,
+                reasoningOutput: 30,
+                sourceTotal: 300,
+              },
+            },
+          },
+          '11': {
+            total: {
+              inputTotal: 250,
+              cachedInput: 200,
+              outputTotal: 50,
+              reasoningOutput: 30,
+              sourceTotal: 300,
+            },
+            byModel: {
+              'gpt-5.6-sol': {
+                inputTotal: 250,
+                cachedInput: 200,
+                outputTotal: 50,
+                reasoningOutput: 30,
+                sourceTotal: 300,
+              },
+            },
+          },
+        }
+      : {
+          [index === 1 ? '11' : '09']: {
+            total: { ...slice.total },
+            byModel: Object.fromEntries(
+              Object.entries(slice.byModel).map(([model, tokens]) => [
+                model,
+                { ...tokens },
+              ]),
+            ),
+          },
+        };
     file.today = {
       day: '2026-07-20',
       timeZone: 'UTC',
       indexedThrough: file.period!.indexedThrough,
-      hours: {
-        [hour]: {
-          total: { ...slice.total },
-          byModel: Object.fromEntries(
-            Object.entries(slice.byModel).map(([model, tokens]) => [
-              model,
-              { ...tokens },
-            ]),
-          ),
-        },
-      },
+      windowDays: 30,
+      days: { [day]: hours },
+      hours: day === '2026-07-20' ? hours : {},
     };
   }
   snapshot.coverage.today = {
@@ -465,17 +562,64 @@ test('Today is a calendar-day scope with exact sparse hourly cost and token comp
     totalBytes: 2,
     complete: true,
   };
+  const hourlyCoverage = {
+    timeZone: 'UTC',
+    asOfDay: '2026-07-20',
+    windowDays: 30,
+    indexedFiles: 3,
+    totalFiles: 3,
+    indexedBytes: 3,
+    totalBytes: 3,
+    complete: true,
+    days: {
+      '2026-07-10': {
+        day: '2026-07-10',
+        indexedFiles: 1,
+        totalFiles: 1,
+        indexedBytes: 1,
+        totalBytes: 1,
+        complete: true,
+      },
+      '2026-07-20': {
+        day: '2026-07-20',
+        indexedFiles: 2,
+        totalFiles: 2,
+        indexedBytes: 2,
+        totalBytes: 2,
+        complete: true,
+      },
+    },
+  };
+  snapshot.coverage.hourly = hourlyCoverage;
+  snapshot.hourlyCoverage = hourlyCoverage;
 
   const view = buildCodexUsageView(snapshot, NOW);
 
   assert.equal(view.today.total.processed, 1_200);
   assert.equal(view.today.threads, 2);
   assert.deepEqual(view.todayHourly.map((row) => row.hour), ['10', '11']);
-  assert.equal(view.todayHourly[0].total.processed, 600);
-  assert.equal(view.todayHourly[0].apiEquivalent.equivalentUsd, 0.0037);
+  assert.deepEqual(view.todayHourly.map((row) => row.label), ['10:00', '11:00']);
+  assert.equal(view.todayHourly[0].total.processed, 300);
+  assert.equal(view.todayHourly[0].apiEquivalent.equivalentUsd, 0.00185);
   assert.equal(view.todayHourly[0].apiEquivalent.pricingCoverage, 1);
   assert.equal(view.todayHourly[0].threads, 1);
   assert.equal(view.todayCoverage.complete, true);
+  assert.equal(view.last30DaysHourlyByDay['2026-07-10'][0].hour, '09');
+  assert.equal(view.last30DaysHourlyByDay['2026-07-10'][0].label, '09:00');
+  assert.equal(view.last30DaysHourlyByDay['2026-07-10'][0].threads, 1);
+  assert.equal(view.hourlyCoverage.days['2026-07-10'].complete, true);
+
+  const hourlyProcessed = view.todayHourly.reduce(
+    (sum, row) => sum + row.total.processed,
+    0,
+  );
+  const hourlyThreads = view.todayHourly.reduce(
+    (sum, row) => sum + row.threads,
+    0,
+  );
+  assert.equal(hourlyProcessed, view.today.total.processed);
+  assert.equal(hourlyThreads, 3);
+  assert.equal(view.today.threads, 2);
 });
 
 test('rolling scopes stay anchored to snapshot coverage across Hong Kong midnight', () => {
@@ -659,9 +803,12 @@ test('all-time, monthly, and behavior views stay provider-native', () => {
 
   assert.equal(view.allTime.total.processed, 1_560);
   assert.equal(view.allTime.total.fresh, 640);
-  assert.equal(view.monthly[0].period, '2026-07');
-  assert.equal(view.monthly[0].total.processed, 1_440);
-  assert.equal(view.monthly[0].threads, 3);
+  assert.deepEqual(
+    view.monthly.map((row) => row.period),
+    ['2026-06', '2026-07'],
+  );
+  assert.equal(view.monthly[1].total.processed, 1_440);
+  assert.equal(view.monthly[1].threads, 3);
   assert.equal(view.last7DaysDaily.length, 7);
   assert.equal(view.last7DaysDaily[0].day, '2026-07-14');
   assert.equal(view.last7DaysDaily[6].day, '2026-07-20');
@@ -682,6 +829,108 @@ test('all-time, monthly, and behavior views stay provider-native', () => {
   assert.equal(view.behaviorScopes.last7Days.childFreshShare, 0.5);
   assert.equal(view.behaviorScopes.last30Days.approvalReviewerFreshShare, 140 / 540);
   assert.equal(view.behaviorScopes.allTime.childFreshShare, view.behavior.childFreshShare);
+});
+
+test('v2.3.1 acceptance fixture keeps non-negative ranges monotonic and reconciled', () => {
+  const view = buildCodexUsageView(snapshotFixture(), NOW);
+  const monthProcessed = view.monthly.reduce(
+    (sum, row) => sum + row.total.processed,
+    0,
+  );
+  const allDailyProcessed = view.daily.reduce(
+    (sum, row) => sum + row.total.processed,
+    0,
+  );
+  const last30DailyProcessed = view.last30DaysDaily.reduce(
+    (sum, row) => sum + row.total.processed,
+    0,
+  );
+  const last30ModelProcessed = view.last30Days.models.reduce(
+    (sum, row) => sum + row.totals.processed,
+    0,
+  );
+  const last30EffortProcessed = view.last30Days.efforts.reduce(
+    (sum, row) => sum + row.totals.processed,
+    0,
+  );
+
+  assert.equal(view.today.total.processed >= 0, true);
+  assert.equal(view.today.total.processed <= view.last30Days.total.processed, true);
+  assert.equal(view.last30Days.total.processed <= view.allTime.total.processed, true);
+  assert.equal(monthProcessed, view.allTime.total.processed);
+  assert.equal(allDailyProcessed, view.allTime.total.processed);
+  assert.equal(last30DailyProcessed, view.last30Days.total.processed);
+  assert.equal(last30ModelProcessed, view.last30Days.total.processed);
+  assert.equal(last30EffortProcessed, view.last30Days.total.processed);
+  assert.deepEqual(
+    view.monthly.map((row) => row.period),
+    [...view.monthly.map((row) => row.period)].sort(),
+  );
+});
+
+test('monthly rows remain chronological across a year boundary', () => {
+  const snapshot = snapshotFixture();
+  snapshot.files = snapshot.files.slice(0, 2);
+  const days = ['2026-01-01', '2025-12-31'];
+  snapshot.files.forEach((file, index) => {
+    const day = days[index];
+    file.byDay = { [day]: { ...file.total } };
+    file.period = {
+      ...file.period!,
+      days: {
+        [day]: {
+          ...Object.values(file.period!.days)[0],
+          total: { ...file.total },
+        },
+      },
+    };
+  });
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.deepEqual(view.monthly.map((row) => row.period), [
+    '2025-12',
+    '2026-01',
+  ]);
+});
+
+test('daily activity view retains a complete leap-year share window plus boundary margin', () => {
+  const snapshot = snapshotFixture();
+  const file = structuredClone(snapshot.files[0]);
+  const byDay = Object.fromEntries(
+    Array.from({ length: 371 }, (_, offset) => {
+      const day = new Date(NOW);
+      day.setUTCHours(0, 0, 0, 0);
+      day.setUTCDate(day.getUTCDate() - offset);
+      return [day.toISOString().slice(0, 10), {
+        inputTotal: 1,
+        cachedInput: 0,
+        outputTotal: 0,
+        reasoningOutput: 0,
+        sourceTotal: 1,
+      }];
+    }),
+  );
+  file.total = {
+    inputTotal: 371,
+    cachedInput: 0,
+    outputTotal: 0,
+    reasoningOutput: 0,
+    sourceTotal: 371,
+  };
+  file.byDay = byDay;
+  file.byModel = { 'gpt-5.6-sol': { ...file.total } };
+  file.byEffort = { high: { ...file.total } };
+  file.period = undefined;
+  snapshot.files = [file];
+  snapshot.total = { ...file.total };
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.daily.length, 370);
+  assert.equal(view.daily[0].day, '2026-07-20');
+  assert.equal(view.daily[view.daily.length - 1]?.day, '2025-07-16');
+  assert.equal(view.daily.some((row) => row.day === '2025-07-15'), false);
 });
 
 test('behavior exposes patch and tool call proxies without file or command claims', () => {
@@ -711,6 +960,7 @@ test('token composition partitions processed tokens without counting reasoning t
       reasoning: 60,
     }),
     {
+      uncachedUsage: 200,
       freshInput: 100,
       cachedInput: 400,
       output: 100,
@@ -815,6 +1065,52 @@ test('missing model and effort values are grouped as unknown', () => {
 
   assert.equal(view.last7Days.models.find((row) => row.key === 'unknown')?.totals.processed, 600);
   assert.equal(view.last7Days.efforts.find((row) => row.key === 'unknown')?.totals.processed, 600);
+});
+
+test('partial effort buckets attribute every residual component to unknown', () => {
+  const snapshot = snapshotFixture();
+  const file = snapshot.files[0];
+  const partial = {
+    inputTotal: 100,
+    cachedInput: 60,
+    outputTotal: 20,
+    reasoningOutput: 10,
+  };
+  file.byEffort = { high: partial };
+  const periodDay = file.period?.days['2026-07-20'];
+  assert.ok(periodDay);
+  periodDay.byEffort = { high: partial };
+
+  const view = buildCodexUsageView(snapshot, NOW);
+  const unknown = view.last7Days.efforts.find((row) => row.key === 'unknown');
+  const effortProcessed = view.last7Days.efforts.reduce(
+    (sum, row) => sum + row.totals.processed,
+    0,
+  );
+
+  assert.equal(unknown?.totals.processed, 480);
+  assert.equal(unknown?.totals.cachedInput, 340);
+  assert.equal(unknown?.totals.reasoning, 50);
+  assert.equal(effortProcessed, view.last7Days.total.processed);
+});
+
+test('zero-value unknown effort buckets stay out of every rendered scope', () => {
+  const snapshot = snapshotFixture();
+  for (const file of snapshot.files) {
+    file.byEffort.unknown = { inputTotal: 0, outputTotal: 0 };
+    for (const day of Object.values(file.period?.days ?? {})) {
+      day.byEffort.unknown = { inputTotal: 0, outputTotal: 0 };
+    }
+  }
+
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.allTime.efforts.some((row) => row.key === 'unknown'), false);
+  assert.equal(view.last30Days.efforts.some((row) => row.key === 'unknown'), false);
+  assert.equal(
+    view.recentThreads.some((row) => row.efforts.includes('unknown')),
+    false,
+  );
 });
 
 test('incomplete session timestamps never invent a multi-year duration', () => {

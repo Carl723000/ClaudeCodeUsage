@@ -13,7 +13,9 @@ import {
 //   - language        (UI language; people sync this)
 //   - dataDirectory   (machine-specific path a power user may script)
 //   - codex.dataDirectory (optional machine-specific Codex home)
-//   - advice.apiKey   (a secret some keep in their synced settings)
+// API keys are deliberately absent from settings.json/globalState. The
+// dashboard writes them to VS Code SecretStorage and never receives a stored
+// value back from the extension host.
 //
 // The catalog below drives BOTH the read/write plumbing and the dashboard
 // panel rendering, so adding a setting is a one-line change here.
@@ -22,7 +24,7 @@ import {
 // panel chrome — group headers, buttons, notes — is localised via i18n.
 
 export type SettingType = 'boolean' | 'number' | 'enum' | 'string';
-export type SettingStorage = 'config' | 'state';
+export type SettingStorage = 'config' | 'state' | 'secret';
 export type SettingGroup = 'general' | 'providers' | 'features' | 'statusBar' | 'data' | 'advice';
 export type SettingProvider = 'claude' | 'codex';
 
@@ -58,6 +60,7 @@ export function settingAppliesToProvider(
 // globalState key prefix for moved settings — namespaced to avoid colliding
 // with other globalState entries (consent flags, dismissals, …).
 const STATE_PREFIX = 'ccu.setting.';
+const SECRET_PREFIX = 'claudeCodeUsage.secret.';
 const MIGRATION_FLAG = 'ccu.settingsMigrated.v1';
 // V2.2: one-shot conversion of the old double-negative pauseDashboardRefresh to
 // the positive dashboardAutoRefresh. Its own flag so it runs even for users who
@@ -68,6 +71,40 @@ const AUTOREFRESH_MIGRATION_FLAG = 'ccu.migrated.dashboardAutoRefresh';
 // caps itself, so a setting naming one model could no longer describe the thing
 // it controls. Own flag so it runs regardless of the earlier migrations.
 const SCOPED_WEEKLY_MIGRATION_FLAG = 'ccu.migrated.showScopedWeekly';
+
+// Exact configuration/globalState names used by released predecessors but no
+// longer present in SETTINGS. They are migration inputs, never a prefix-based
+// deletion rule.
+const RETIRED_SETTING_KEYS = [
+  'fileWatching',
+  'pauseDashboardRefresh',
+  'showOpusWeekly',
+  'advice.backend',
+  'advice.subscriptionModel',
+] as const;
+
+export type SettingsSecretMigrationErrorCode =
+  | 'legacy-secret-conflict'
+  | 'workspace-secret-requires-manual-migration'
+  | 'secret-storage-unavailable'
+  | 'secret-storage-failed';
+
+/** A fixed-code error that can never carry the secret or provider error text. */
+export class SettingsSecretMigrationError extends Error {
+  constructor(readonly code: SettingsSecretMigrationErrorCode) {
+    super(`settings-secret-migration:${code}`);
+    this.name = 'SettingsSecretMigrationError';
+  }
+}
+
+export class SettingsLocalDataClearError extends Error {
+  readonly code = 'legacy-configuration-requires-manual-removal' as const;
+
+  constructor(readonly keys: readonly string[]) {
+    super('settings-local-data-clear:legacy-configuration-requires-manual-removal');
+    this.name = 'SettingsLocalDataClearError';
+  }
+}
 
 // Timezone dropdown ('' = system default). A dropdown (not free text) means an
 // invalid value can never be entered (#51). Rather than dump all ~400 IANA
@@ -311,11 +348,12 @@ export const SETTINGS: SettingDef[] = [
   {
     key: 'enableShareCard',
     type: 'boolean',
-    default: false,
+    default: true,
     storage: 'state',
     group: 'features',
-    label: 'Enable usage share card',
-    help: 'Off by default. When on, the All tab gets a configurable "Share card" — pick a range (week / month / year / a specific month), a scope (overall / a project / a session) and which metrics to show, then generate a one-page SVG to share. Only aggregate numbers leave your machine, and only when you export.',
+    label: 'Enable sharing workspace',
+    help: 'On by default. Show the Compare sharing workspace and provider share card. Turn it off to hide sharing UI; exporting still requires an explicit action.',
+    providers: ['claude', 'codex'],
   },
   {
     key: 'showCostliestMessages',
@@ -397,7 +435,7 @@ export const SETTINGS: SettingDef[] = [
     storage: 'state',
     group: 'statusBar',
     label: 'Codex status metric',
-    help: 'Uncached usage, processed tokens, or output tokens.',
+    help: "Today's uncached usage, processed tokens, or output tokens.",
     enumValues: ['fresh', 'processed', 'output'],
     enumLabels: ['Uncached', 'Processed', 'Output'],
     providers: ['codex'],
@@ -568,20 +606,27 @@ export const SETTINGS: SettingDef[] = [
   },
 
   // --- AI advice & Optimizer ---
-  // NOTE: the 'subscription' backend (call Anthropic with the Claude Code OAuth
-  // session, no API key) is intentionally NOT shipped in this version. Anthropic
-  // returns 403 "Request not allowed" for that gray-area use of the OAuth token
-  // (it only succeeds by routing around the TLS-fingerprint gate via curl), so
-  // it is too fragile/inappropriate for a public extension. The transport code
-  // stays in advisor.ts, dormant, to re-enable if direct calls become allowed.
+  {
+    key: 'advice.effectiveness.enabled',
+    type: 'boolean',
+    default: false,
+    storage: 'state',
+    group: 'advice',
+    label: 'Enable AI advice effectiveness preview',
+    help: 'Off by default. Shows local evidence, an optional exact BYOK request preview/send flow, local feedback, and comparable-task results. Previewing never sends; sending requires a separate click.',
+    providers: ['claude', 'codex'],
+  },
+  // Claude Code OAuth/subscription credentials remain quota-only. AI requests
+  // have no dormant subscription transport: both surfaces require an exact
+  // Prepared preview plus a separate Send click through configured BYOK.
   {
     key: 'advice.apiKey',
     type: 'string',
     default: '',
-    storage: 'config',
+    storage: 'secret',
     group: 'advice',
     label: 'API key',
-    help: 'For the api backend. Stays in VS Code settings.',
+    help: 'Bring-your-own key for the configured endpoint. It is stored in VS Code SecretStorage and is never sent to the dashboard or placed in a preview body.',
     secret: true,
   },
   {
@@ -627,7 +672,7 @@ export const SETTINGS: SettingDef[] = [
     default: 30,
     storage: 'state',
     group: 'advice',
-    label: 'Prompt sample window (days)',
+    label: 'Evidence and prompt window (days)',
     min: 1,
     max: 365,
   },
@@ -638,7 +683,7 @@ export const SETTINGS: SettingDef[] = [
     storage: 'state',
     group: 'advice',
     label: 'Personal/project context',
-    help: 'Optional background; adds a "Personalised" section.',
+    help: 'Optional free text. It may leave the machine only with separate prompt-personalization consent and appears verbatim in the exact request preview.',
     multiline: true,
   },
   {
@@ -648,8 +693,29 @@ export const SETTINGS: SettingDef[] = [
     storage: 'state',
     group: 'advice',
     label: 'Enable Usage Optimizer',
-    help: 'Show the opt-in Optimizer card on the Content tab.',
+    help: 'Show the opt-in Optimizer card on the Content tab. Its user-draft-only request is previewed before a separate Send action.',
   },
+];
+
+/** Exact globalState entries owned by the current catalog or known releases. */
+export const OWNED_SETTING_GLOBAL_STATE_KEYS: readonly string[] = [
+  ...SETTINGS
+    .filter((definition) => definition.storage === 'state' || definition.storage === 'secret')
+    .map((definition) => STATE_PREFIX + definition.key),
+  ...RETIRED_SETTING_KEYS.map((key) => STATE_PREFIX + key),
+];
+
+/** Only these still-registered configuration keys may be updated through VS Code. */
+export const REGISTERED_CONFIGURATION_SETTING_KEYS: readonly string[] = SETTINGS
+  .filter((definition) => definition.storage === 'config')
+  .map((definition) => definition.key);
+
+/** Current and released keys inspected before a local-data clear. */
+export const KNOWN_CONFIGURATION_SETTING_KEYS: readonly string[] = [
+  ...new Set([
+    ...SETTINGS.map((definition) => definition.key),
+    ...RETIRED_SETTING_KEYS,
+  ]),
 ];
 
 const BY_KEY: Map<string, SettingDef> = new Map(SETTINGS.map((d) => [d.key, d]));
@@ -657,14 +723,139 @@ const BY_KEY: Map<string, SettingDef> = new Map(SETTINGS.map((d) => [d.key, d]))
 /** A snapshot of one setting for the webview panel: definition + current value. */
 export interface SettingView extends SettingDef {
   value: boolean | number | string;
+  /** Secret values never cross into the webview; it receives only this bit. */
+  configured?: boolean;
 }
 
 /**
- * Read/write layer over the two stores. Core settings live in VS Code config;
- * the rest live in globalState. Both are addressed by the same dotted key.
+ * Read/write layer over VS Code configuration, globalState, and SecretStorage.
+ * All entries are addressed by the same dotted catalog key.
  */
 export class SettingsStore {
+  private readonly secretValues = new Map<string, string>();
+
   constructor(private context: vscode.ExtensionContext) {}
+
+  private secretKey(key: string): string {
+    return SECRET_PREFIX + key;
+  }
+
+  /**
+   * Load secrets before the extension starts. Legacy plaintext values migrate
+   * only after SecretStorage succeeds, then are removed from globalState and
+   * the old global configuration entry. This method is idempotent.
+   */
+  async initializeSecrets(): Promise<void> {
+    const secrets = this.context.secrets;
+    if (!secrets) {
+      throw new SettingsSecretMigrationError('secret-storage-unavailable');
+    }
+    try {
+      const rootConfiguration = this.cfg();
+      for (const def of SETTINGS) {
+        if (def.storage !== 'secret') {
+          continue;
+        }
+        const storageKey = this.secretKey(def.key);
+        let value = await secrets.get(storageKey);
+        const legacyStateKey = STATE_PREFIX + def.key;
+        const legacyState = this.context.globalState.get<unknown>(legacyStateKey);
+        const inspected = rootConfiguration.inspect<unknown>(def.key);
+        const folderScopes = (vscode.workspace.workspaceFolders ?? []).map((folder) => {
+          const configuration = vscode.workspace.getConfiguration('claudeCodeUsage', folder.uri);
+          return {
+            configuration,
+            value: configuration.inspect<unknown>(def.key)?.workspaceFolderValue,
+          };
+        });
+        const legacyScopes = [
+          legacyState,
+          inspected?.globalValue,
+          inspected?.workspaceValue,
+          ...folderScopes.map((scope) => scope.value),
+        ];
+        const strings = legacyScopes
+          .filter((candidate): candidate is string => typeof candidate === 'string')
+          .map((candidate) => candidate.trim())
+          .filter((candidate) => candidate !== '');
+
+        const configurationPlaintext = [
+          inspected?.globalValue,
+          inspected?.workspaceValue,
+          ...folderScopes.map((scope) => scope.value),
+        ].some((candidate) =>
+          typeof candidate === 'string' && candidate.trim() !== '',
+        );
+        if (configurationPlaintext) {
+          // `advice.apiKey` is intentionally no longer registered. VS Code
+          // refuses programmatic updates to unregistered settings, so an
+          // automatic migration could copy the secret yet leave plaintext in
+          // settings.json. Require explicit manual removal instead.
+          throw new SettingsSecretMigrationError(
+            'workspace-secret-requires-manual-migration',
+          );
+        }
+
+        if (!value) {
+          const machineCandidates = [legacyState, inspected?.globalValue]
+            .filter((candidate): candidate is string => typeof candidate === 'string')
+            .map((candidate) => candidate.trim())
+            .filter((candidate) => candidate !== '');
+          const distinctMachineCandidates = [...new Set(machineCandidates)];
+          if (distinctMachineCandidates.length > 1) {
+            throw new SettingsSecretMigrationError('legacy-secret-conflict');
+          }
+          const machineCandidate = distinctMachineCandidates[0];
+          const workspaceCandidates = [
+            inspected?.workspaceValue,
+            ...folderScopes.map((scope) => scope.value),
+          ].filter((candidate): candidate is string => typeof candidate === 'string');
+
+          if (!machineCandidate && workspaceCandidates.some((candidate) => candidate.trim() !== '')) {
+            // A global SecretStorage slot cannot safely preserve a workspace-
+            // specific key. Leave the plaintext untouched and ask the user to
+            // migrate it explicitly instead of selecting one folder silently.
+            throw new SettingsSecretMigrationError('workspace-secret-requires-manual-migration');
+          }
+          if (
+            machineCandidate &&
+            workspaceCandidates.some((candidate) => candidate.trim() !== machineCandidate)
+          ) {
+            throw new SettingsSecretMigrationError('legacy-secret-conflict');
+          }
+          if (machineCandidate) {
+            // A second Extension Host may have completed the same machine-wide
+            // migration after our first read. Re-read before writing; all safe
+            // automatic candidates are already required to be identical.
+            const concurrentValue = await secrets.get(storageKey);
+            if (concurrentValue) {
+              value = concurrentValue;
+            } else {
+              await secrets.store(storageKey, machineCandidate);
+              value = machineCandidate;
+            }
+          }
+        }
+
+        // Delete legacy entries only when a secure value is present, or when
+        // every explicit legacy entry is empty. This prevents a partial
+        // migration from destroying the only recoverable credential.
+        if (value || strings.length === 0) {
+          if (legacyState !== undefined) {
+            await this.context.globalState.update(legacyStateKey, undefined);
+          }
+        }
+        if (value) {
+          this.secretValues.set(def.key, value);
+        }
+      }
+    } catch (error) {
+      if (error instanceof SettingsSecretMigrationError) {
+        throw error;
+      }
+      throw new SettingsSecretMigrationError('secret-storage-failed');
+    }
+  }
 
   private cfg(): vscode.WorkspaceConfiguration {
     return vscode.workspace.getConfiguration('claudeCodeUsage');
@@ -679,6 +870,9 @@ export class SettingsStore {
     if (def.storage === 'config') {
       return this.cfg().get<T>(def.key, def.default as unknown as T);
     }
+    if (def.storage === 'secret') {
+      return (this.secretValues.get(def.key) ?? def.default) as unknown as T;
+    }
     return this.context.globalState.get<T>(STATE_PREFIX + def.key, def.default as unknown as T);
   }
 
@@ -691,6 +885,15 @@ export class SettingsStore {
     const coerced = this.coerce(def, value);
     if (def.storage === 'config') {
       await this.cfg().update(def.key, coerced, vscode.ConfigurationTarget.Global);
+    } else if (def.storage === 'secret') {
+      const secret = String(coerced).trim();
+      if (secret === '') {
+        await this.context.secrets.delete(this.secretKey(def.key));
+        this.secretValues.delete(def.key);
+      } else {
+        await this.context.secrets.store(this.secretKey(def.key), secret);
+        this.secretValues.set(def.key, secret);
+      }
     } else {
       await this.context.globalState.update(STATE_PREFIX + def.key, coerced);
     }
@@ -704,8 +907,149 @@ export class SettingsStore {
     }
     if (def.storage === 'config') {
       await this.cfg().update(def.key, undefined, vscode.ConfigurationTarget.Global);
+    } else if (def.storage === 'secret') {
+      await this.context.secrets.delete(this.secretKey(def.key));
+      this.secretValues.delete(def.key);
     } else {
       await this.context.globalState.update(STATE_PREFIX + def.key, undefined);
+    }
+  }
+
+  private explicitConfigurationScopes(key: string): Array<{
+    configuration: vscode.WorkspaceConfiguration;
+    target: vscode.ConfigurationTarget;
+  }> {
+    const scopes: Array<{
+      configuration: vscode.WorkspaceConfiguration;
+      target: vscode.ConfigurationTarget;
+    }> = [];
+    const root = this.cfg();
+    const rootValues = root.inspect<unknown>(key);
+    if (rootValues?.globalValue !== undefined) {
+      scopes.push({ configuration: root, target: vscode.ConfigurationTarget.Global });
+    }
+    const workspaceOpen = vscode.workspace.workspaceFile !== undefined ||
+      (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+    if (workspaceOpen && rootValues?.workspaceValue !== undefined) {
+      scopes.push({ configuration: root, target: vscode.ConfigurationTarget.Workspace });
+    }
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      const configuration = vscode.workspace.getConfiguration('claudeCodeUsage', folder.uri);
+      if (configuration.inspect<unknown>(key)?.workspaceFolderValue !== undefined) {
+        scopes.push({
+          configuration,
+          target: vscode.ConfigurationTarget.WorkspaceFolder,
+        });
+      }
+    }
+    return scopes;
+  }
+
+  private preflightConfigurationClear(keys: readonly string[]): void {
+    const registered = new Set(REGISTERED_CONFIGURATION_SETTING_KEYS);
+    const blocked = keys.filter((key) =>
+      !registered.has(key) && this.explicitConfigurationScopes(key).length > 0,
+    );
+    if (blocked.length > 0) {
+      // VS Code rejects updates to keys no longer registered by the current
+      // manifest. Stop before deleting SecretStorage/globalState so the user
+      // never receives a misleading partial-clear success.
+      throw new SettingsLocalDataClearError([...new Set(blocked)].sort());
+    }
+  }
+
+  private async clearRegisteredConfigurationScopes(key: string): Promise<void> {
+    for (const scope of this.explicitConfigurationScopes(key)) {
+      await scope.configuration.update(key, undefined, scope.target);
+    }
+  }
+
+  private async clearOwnedSetting(def: SettingDef): Promise<void> {
+    if (def.storage === 'state') {
+      await this.context.globalState.update(STATE_PREFIX + def.key, undefined);
+    } else if (def.storage === 'secret') {
+      await this.context.secrets.delete(this.secretKey(def.key));
+      this.secretValues.delete(def.key);
+      // Released development builds briefly used the state slot as a
+      // plaintext migration source. Remove only this exact key.
+      await this.context.globalState.update(STATE_PREFIX + def.key, undefined);
+    }
+    if (def.storage === 'config') {
+      await this.clearRegisteredConfigurationScopes(def.key);
+    }
+  }
+
+  private async verifyOwnedSettingsCleared(definitions: readonly SettingDef[]): Promise<void> {
+    for (const definition of definitions) {
+      if (
+        (definition.storage === 'state' || definition.storage === 'secret') &&
+        this.context.globalState.get(STATE_PREFIX + definition.key) !== undefined
+      ) {
+        throw new Error('settings-local-data-clear:state-postcondition-failed');
+      }
+      if (
+        definition.storage === 'secret' &&
+        await this.context.secrets.get(this.secretKey(definition.key)) !== undefined
+      ) {
+        throw new Error('settings-local-data-clear:secret-postcondition-failed');
+      }
+      if (
+        definition.storage === 'config' &&
+        this.explicitConfigurationScopes(definition.key).length > 0
+      ) {
+        throw new Error('settings-local-data-clear:configuration-postcondition-failed');
+      }
+    }
+  }
+
+  /** Clear a bounded subset of catalogued settings from every visible scope. */
+  async resetOwnedSettings(keys: readonly string[]): Promise<void> {
+    const definitions = keys.map((key) => {
+      const definition = BY_KEY.get(key);
+      if (!definition) throw new Error(`Unknown setting: ${key}`);
+      return definition;
+    });
+    this.preflightConfigurationClear(definitions.map((definition) => definition.key));
+    for (const def of definitions) {
+      await this.clearOwnedSetting(def);
+    }
+    await this.verifyOwnedSettingsCleared(definitions);
+  }
+
+  /** Clear the secret and every exact plaintext migration location we can inspect. */
+  async clearByokOwnedData(): Promise<void> {
+    await this.resetOwnedSettings(['advice.apiKey']);
+  }
+
+  /** Reset both host-side feature toggles owned by sharing/heatmap UI. */
+  async resetSharingOwnedData(): Promise<void> {
+    await this.resetOwnedSettings(['showHeatmap', 'enableShareCard']);
+  }
+
+  preflightResetAllOwnedData(): void {
+    this.preflightConfigurationClear(KNOWN_CONFIGURATION_SETTING_KEYS);
+  }
+
+  /**
+   * Clear the exact settings catalog from globalState, SecretStorage, and all
+   * currently inspectable configuration scopes. This is intentionally an
+   * allowlist; it never deletes arbitrary `claudeCodeUsage` configuration.
+   */
+  async resetAllOwnedData(): Promise<void> {
+    this.preflightResetAllOwnedData();
+    for (const def of SETTINGS) {
+      await this.clearOwnedSetting(def);
+    }
+    // Retired names are migration inputs, not an invitation to prefix-delete
+    // unknown future settings.
+    for (const key of RETIRED_SETTING_KEYS) {
+      await this.context.globalState.update(STATE_PREFIX + key, undefined);
+    }
+    await this.verifyOwnedSettingsCleared(SETTINGS);
+    for (const key of RETIRED_SETTING_KEYS) {
+      if (this.context.globalState.get(STATE_PREFIX + key) !== undefined) {
+        throw new Error('settings-local-data-clear:retired-state-postcondition-failed');
+      }
     }
   }
 
@@ -736,7 +1080,13 @@ export class SettingsStore {
 
   /** Catalog + current values, for rendering the dashboard settings panel. */
   snapshot(): SettingView[] {
-    return SETTINGS.map((def) => ({ ...def, value: this.get(def.key) }));
+    return SETTINGS.map((def) => def.storage === 'secret'
+      ? {
+          ...def,
+          value: '',
+          configured: this.secretValues.has(def.key),
+        }
+      : { ...def, value: this.get(def.key) });
   }
 
   /**

@@ -4,14 +4,226 @@ All notable changes to this fork compared to upstream
 [`ClaudeCodeUsage/ClaudeCodeUsage`](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage) (last
 upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangelog.com).
 
+## [2.3.1] — Unreleased
+
+### Added
+- **GPT-6 Astra and Claude Fable 5.1 pricing** — exact model IDs now use their
+  current official Standard API rates and context windows: `gpt-6-astra`
+  (1.05M context) and `claude-fable-5-1` / `claude-mythos-5-1` (1M context).
+  Fable 5.1's model-specific cache-read rate is `$0.25 / MTok`; historical
+  Fable 5 pricing remains unchanged. GPT-6 requests above 272K input receive a
+  request-wide surcharge from OpenAI, but local aggregate logs cannot prove
+  that per-request boundary, so the API-equivalent estimate deliberately uses
+  the standard short-context rate and keeps the existing request-level-pricing
+  disclaimer.
+- **AWS Bedrock in-region Claude pricing (#95)** — an opt-in Claude pricing
+  backend covers Opus 4.5–5, Sonnet 4.5–5, and Haiku 4.5 with separate
+  5-minute/1-hour cache-write and cache-read rates. Switching backends
+  invalidates cached Claude cost aggregates so unchanged local logs are
+  repriced immediately. Sonnet 5 uses the standard in-region rate that applies
+  after its launch promotion ended on 2026-08-31. Thanks to
+  [@akapti](https://github.com/akapti) for the contribution.
+- **Combined activity heatmap and private sharing** — Compare now leads with a
+  Claude + Codex calendar heatmap built from the existing provider daily
+  aggregates. Its preview-first share studio exports deterministic local SVG, a
+  privacy-safe card, and a copyable Markdown snippet with configurable title,
+  30/90-day or yearly range, and an explicit privacy preview. The default
+  Academic Violet ramp follows the project-profile visual reference, quantile
+  bands keep isolated peaks from flattening ordinary days, and the mapping can
+  be switched locally between quantile, logarithmic, and linear modes. Four
+  curated or one custom accent palette can be selected. Claude-only and
+  Codex-only histories remain useful; no second log scan or statistics cache is
+  introduced.
+- **Durable quota observation history** — versioned, atomically written,
+  bounded observations keep provider, machine-local anonymous account epoch,
+  observation/reset time, used/remaining fraction, window identity, source,
+  confidence, and quality flags. Window-ID changes, reset-time changes, and
+  significant usage rollbacks preserve irregular and same-day reset events.
+- **Observed weekly allowance estimates** — every valid observation in a
+  coherent window contributes `priced used equivalent / used fraction`; robust
+  aggregation weights price/log coverage, boundary quality, attribution, and
+  recency. Total estimates never fall below confirmed usage, unused estimates
+  never go negative, and a coherent current or completed window exposes both as
+  a subscription-durability estimate. If later logs overrun a stale observation,
+  the full value remains a low-confidence lower bound while unused is withheld
+  instead of showing a false zero. Unattributed or approximate windows are
+  labelled low confidence. Even when local Codex quota series overlap, the
+  current period uses the latest real observation for a clearly labelled
+  low-confidence blended total/unused estimate; ambiguous completed periods
+  stay used-only.
+- **Evidence-backed advice loop** — the default-off feature keeps local
+  observations, evidence, recommendations, actions, local helpful/not-helpful/
+  applied feedback, and guarded comparable-task results in one surface. When
+  reliable comparable work is unavailable, it says that the evidence is
+  insufficient instead of manufacturing an improvement claim.
+- **Exact BYOK preview and explicit send** — aggregate-only is the default.
+  Prompt personalization has separate consent. The complete Anthropic or
+  OpenAI-compatible request body is prepared once, previewed with its byte count
+  and SHA-256, and only the same canonical bytes can be sent after a second user
+  click. Claude Code OAuth credentials are never used for generative requests.
+- **Versioned local comparison evidence** — sanitized task pairs and frozen
+  comparison-result envelopes retain only coarse provider, cohort, metric,
+  quality, coverage, and version fields. Prompt text, response text, paths,
+  session identifiers, and task bodies have no persistence field.
+- **Bounded local advice snooze** — each recommendation can be paused for seven
+  days (up to thirty days), moved out of the default summary, and shown again
+  on demand or after expiry; ratings and applied feedback remain independent.
+- **Thirty-day Codex hourly drill-down** — every populated date in the rolling
+  30-day view can expand from the already-indexed sparse date/hour sidecar.
+  Clicking a date reads zero JSONL bodies; the 31st day is evicted, and Claude
+  and Codex use the configured timezone and shared `HH:00` labels.
+
+### Changed
+- **Refreshed release documentation** — all seven README editions now show the
+  current Claude Today, Codex overview, collapsed weekly details, and vertical
+  sharing studio. Captures use the production renderer with disclosed synthetic
+  fixtures; a repeatable capture script keeps screenshot provenance explicit.
+- **Shared dashboard system** — Claude and Codex now reuse the same density,
+  headings, disclosure controls, chart/table framing, empty states, focus
+  treatment, responsive navigation, and light/dark design tokens while keeping
+  provider-specific metric labels and meanings. Dashboard figures use the VS
+  Code UI font again; monospace remains limited to code and copyable snippets.
+- **Preview-first sharing layout** — the combined heatmap now occupies the full
+  reading width and Card settings sit directly below it. Weekly period tables
+  are collapsed by default so the trend chart remains primary. The sharing
+  workspace is enabled by default and one Settings toggle hides all sharing UI.
+- **Concise plugin settings** — the verbose local-data inventory and destructive
+  privacy-control panel no longer renders inside the dashboard. The authoritative
+  inventory, retention boundaries, and clear paths remain in the repository's
+  `LOCAL-DATA.md` files.
+- **Aligned Codex status bar** — the main Codex item now uses configured-zone
+  Today instead of Recent task. Its compact quota percentage means remaining
+  allowance; the tooltip and warning colour continue to use observed utilisation
+  with Claude's progress bars, thresholds, reset columns, and line wrapping.
+- **Chronological month views** — Codex monthly charts and tables render
+  oldest-first in every range.
+- **Explicit Codex uncached composition** — the Token composition summary now
+  surfaces uncached usage (uncached input + output) while retaining the
+  non-overlapping uncached-input / cached-input / output stack; reasoning stays
+  a disclosed subset of output.
+- **System-reminder prompt filtering remains intentional** — framework reminder
+  messages are excluded from user-input counts; token and cost totals are unchanged.
+- **One AI request boundary** — the former Get AI Advice command and Usage
+  Optimizer now enter the same preview, explicit-send, cancellation, strict
+  response parsing, and local-state boundary. The optimizer still sends only
+  the draft pasted by the user and keeps its copyable result format.
+- **Resumable Codex historical work** — first-use and migration work records its
+  progress, failure streak, next eligible time, and pause reason. Successful
+  work continues without an artificial delay; failure or no progress cannot be
+  hot-looped by ordinary refreshes, and restart resumes from a safe checkpoint.
+- **Unified resource ownership** — timers, watchers, workers, network requests,
+  and backfills expose their creator, stop conditions, and actual disposal to
+  lifecycle tests. A bounded first-index exception may finish after focus loss,
+  but disable, explicit cancellation, and extension disposal still stop it.
+- **Safer Codex rolling totals and reset history** — recent 7/30-day views no
+  longer trust an inflated or still-rebuilding period sidecar; they use the
+  verified daily aggregate until the configured-zone projection catches up.
+  The existing index pass also captures compact quota observations without
+  polling, credentials, or a second scanner.
+
+### Fixed
+- **One-time v2.3.0 Codex token-semantics migration** — the per-file parser
+  state now carries a new semantics version. Existing schema-3 indexes request
+  one bounded, resumable rebuild instead of retaining pre-fix request
+  attribution indefinitely; completed files survive partial checkpoints.
+- **Account-aware quota confidence** — a reset boundary may remain useful for
+  deterministic weekly alignment across anonymous Codex epochs, but crossing
+  an account/profile fingerprint can no longer erase `account-ambiguous`.
+  Current-window total and unused estimates remain available at low confidence.
+- **Deterministic scroll debounce test** — continuous-scroll coverage now emits
+  one synchronous gesture and advances only the fake clock, removing a race
+  between animation frames and the 180 ms persistence timer.
+- **Immediate advice-consent revocation** — withdrawing aggregate or prompt
+  consent immediately invalidates prepared previews and cancels active advice
+  requests, without waiting for local storage. New previews/sends stay blocked
+  until all consent writes settle; persistence failures stay closed. Unrelated
+  user-draft Optimizer requests are not cancelled. Already transmitted bytes
+  cannot be recalled.
+- **Claude watcher failures fall back safely** — asynchronous `fs.watch`
+  errors (for example, an exhausted watch-handle limit) are now handled after
+  registration, close the owned watcher cleanly, and leave normal polling
+  active instead of escaping through the Extension Host.
+- **Timezone-stable chart date labels** — daily and monthly usage keys no
+  longer roll back a day or month when a chart metric changes or a drill-down
+  renders in a Webview host/configured timezone west of UTC. Bare monthly keys
+  also render as the intended month instead of `Invalid Date`.
+- **Configured-zone advice snooze dates** — Advice and Optimizer now format a
+  snooze expiry with the selected UI locale and configured timezone instead of
+  whichever timezone happens to host the Extension process.
+- **Configured-zone rolling ranges** — the Claude provider heatmap now ends on
+  today in the configured timezone. Share Card 7-day, 30-day, and yearly scopes,
+  plus Usage tracking and AI-advice 7-day/30-day attribution, use exact
+  civil-date windows instead of fixed millisecond cutoffs. Claude and Codex
+  session range filters now follow those same Today/7-day/30-day date keys.
+  Claude session, project, branch, and workflow timestamps also use the
+  configured timezone for their clock and Today/Yesterday/year labels.
+  Activity near UTC boundaries is no longer omitted or pulled from an adjacent
+  local day.
+- **Complete Share studio localization** — the active Compare sharing workspace
+  now carries complete German, Japanese, Korean, Brazilian Portuguese, and
+  Indonesian copy instead of silently falling back to English. A repository
+  coverage guard keeps all eight supported locales aligned when copy fields
+  change.
+- **Hardened Codex thread-title path redaction** — runtime titles now mask POSIX
+  absolute paths even when a path is attached directly to a colon or other
+  punctuation (for example, `3:/Users/name`), preventing local usernames and
+  filesystem locations from reaching dashboard text or screenshots.
+- **Claude chart drill-down reload parity** — expanded day-to-hour and
+  month-to-day rows now survive a Webview reload, re-request their lazy detail
+  data, and retain selected/ARIA state. Chart controls derive their drill-down
+  kind from their own tab instead of whichever tab happened to be active while
+  the page initialized; an intentional tab switch still clears expansions.
+- **Claude rolling-range regression** — Claude's middle dashboard tab now uses
+  Today plus the preceding 29 configured-zone calendar dates instead of the
+  current calendar month. The Workflows summary now uses the same rolling range,
+  classifies runs by their configured-zone start date, and compares against the
+  matching 30-day total. The monthly-cost status-bar option remains a calendar
+  month, and an empty Today view identifies the latest recent activity date.
+- **Reconciled 30-day Codex statistics** — “Last 30 days” is the configured
+  timezone's current calendar date plus the preceding 29 dates. The view is
+  projected from verified daily aggregates, so Today ≤ Last 30 days ≤ All time,
+  daily/monthly/model/effort totals reconcile, and repeated refresh/reindex does
+  not accumulate duplicate thread or historical-file usage.
+- **Reasoning-effort normalization** — current, legacy, nested, missing, and
+  invalid structured variants are normalized without guessing from a model
+  name. Non-zero unknown usage is visible with an explanation; zero-value
+  unknown rows are omitted.
+- **Duplicate share rows fail safely** — identical provider/date rows are
+  idempotent, conflicting duplicates block export, and absent dates render as
+  zero in the selected range.
+- **Smooth Codex dashboard scrolling** — scroll position is persisted once
+  after a gesture instead of serializing Webview state on every animation
+  frame. Live first-index progress now patches its status text in place rather
+  than rebuilding the complete dashboard DOM every 250 ms, so active indexing
+  no longer interrupts scrolling or disclosure state.
+- **Per-model API-equivalent headlines** — Codex model disclosures now follow
+  Claude's visual meaning: the green value is an exact-model API-equivalent
+  price with pricing-coverage help. Unknown models remain visibly unpriced, and
+  effort disclosures keep their uncached-token value in neutral text.
+- **OpenAI reasoning-effort requests** — OpenAI-compatible request bodies now
+  send `reasoning_effort` without the unsupported top-level `thinking`
+  parameter, fixing [#94](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/94).
+  Thanks to [@aaroncvan](https://github.com/aaroncvan) for the report and
+  [@Alex668866](https://github.com/Alex668866) for the precise diagnosis.
+
+### Privacy and packaging
+- Disabled or unconsented advice adds no timer, watcher, worker, network request,
+  log scan, or hidden Webview render relative to v2.3.0. There are no default or
+  background AI requests.
+- Combined exports contain only title, date range, daily aggregate totals,
+  provider labels, and caveats—never accounts, fingerprints, projects, threads,
+  paths, prompts, or log content. Local SVG/Markdown needs no account permission.
+- Direct GitHub publication remains an explicit, exact-destination action. It
+  requests only `public_repo`, verifies a public repository and default branch,
+  previews create/overwrite, and stores owner/repository/path only after success.
+  Release validation uses mocks and performs no real repository write.
+- Dormant migration/experiment modules and internal v2.3.1 review documents are
+  explicitly excluded from the VSIX. The human-controlled publish workflow
+  stamps package metadata from the reviewed `v2.3.1` release tag.
+
 ## [2.3.0] — Unreleased
 
 ### Fixed
-- **AWS Bedrock in-region Claude pricing** — the selectable Bedrock table now
-  covers Claude Opus 4.5, 4.6, 4.7, 4.8, Sonnet 4.5, Sonnet 4.6, Sonnet 5,
-  Opus 5, and Haiku 4.5, including separate 5-minute and 1-hour cache-write
-  rates. Changing the pricing backend invalidates the incremental cost
-  aggregate so existing logs are recalculated immediately.
 - **Codex Today is now the configured calendar day** — the first Codex tab now
   pairs its day total with exact hourly API-equivalent cost and a separate
   token-composition view. Its additive schema-3 current-day sidecar scans only
@@ -24,16 +236,19 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Weekly API-equivalent periods no longer overlap or double-count usage** —
   the newest valid official reset observation anchors one sequence of unique
   `[start, reset)` weekly buckets, so each local usage event contributes to
-  exactly one period. Any overlapping, non-aligned future reset is treated as a
-  conflict even when its series name differs; it cannot create an additional
+  exactly one period. A genuinely different quota series with an overlapping,
+  non-aligned future reset is treated as a conflict; same-series observations
+  remain one low-confidence series rather than creating an additional
   "current" row. Codex usage is persisted in daily slices, so a slice that
   crosses an official intraday reset remains counted once but marks the affected
-  period as a boundary approximation and suppresses total / unused allowance
-  inference. This display-only correction does not change the index schema or
-  trigger a rebuild. Historical Codex periods are always used-value-only; only
-  the newest current period may infer a total when its reset is unambiguous and
-  its indexed usage can be attributed to one observation source. Current unused
-  value remains withheld, and ambiguous multi-sign-in usage stays used-only.
+  period as a boundary approximation and lowers confidence on any full
+  allowance estimate. Drifted reset observations are mapped by observation time
+  to the corresponding display bucket. This display-only correction does not
+  change the index schema or trigger a rebuild. Same-series Codex observations
+  can estimate historical as well as current full values from all eligible local
+  files; current unused value remains withheld, historical unused value requires
+  a full estimate, and genuinely different quota series or missing evidence stays
+  used-only.
 - **Claude changed-file refreshes no longer reread the full corpus (#87)** —
   the production refresh path now keeps an exact in-memory per-file index,
   reads only a verified append tail, and rebuilds only affected files for
@@ -96,10 +311,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   views now calculate historical used API-equivalent value directly from local
   token logs. One valid observed reset anchors unique, non-overlapping weekly
   buckets; without one, usage-only rows use Monday-to-Monday UTC calendar weeks.
-  Codex historical periods, boundary-approximate daily slices, conflicting reset
-  sequences, and usage that cannot be assigned to one observed sign-in remain
-  used-value-only. Only an unambiguous newest current period with single-source
-  attribution may infer a total allowance; its unused value is still withheld.
+  Codex account-wide observations can decorate historical and current buckets;
+  reset drift is mapped by observation time, while source ambiguity and boundary
+  slices lower confidence. Genuinely conflicting quota series and periods with
+  no usable observation remain used-value-only. Current unused value is still
+  withheld, while historical unused value is shown only when a full estimate is
+  available.
   Current official API prices are applied consistently and each period includes
   model-price coverage. This remains an estimate, not a bill or an official
   subscription price. The panel is enabled by default and can be hidden with

@@ -1,4 +1,4 @@
-import { test, expect, openClaude, openCodex } from './support/app.mjs';
+import { test, expect, openClaude, openCodex, openCompare } from './support/app.mjs';
 
 const locales = ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'];
 
@@ -9,12 +9,34 @@ async function pageWidths(page) {
   }));
 }
 
+async function expectPageToFitViewport(page) {
+  const widths = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+    body: document.body.scrollWidth,
+  }));
+  expect(widths.document, widths).toBeLessThanOrEqual(widths.viewport);
+  expect(widths.body, widths).toBeLessThanOrEqual(widths.viewport);
+}
+
+async function expectSingleLineNavigation(page, selector) {
+  const layout = await page.locator(selector).evaluateAll((items) => items.map((item) => ({
+    text: item.textContent?.trim() ?? '',
+    whiteSpace: getComputedStyle(item).whiteSpace,
+    clientHeight: item.clientHeight,
+    scrollHeight: item.scrollHeight,
+  })));
+  expect(layout.length).toBeGreaterThan(0);
+  expect(layout.every((item) =>
+    item.whiteSpace === 'nowrap' && item.scrollHeight <= item.clientHeight + 1), layout).toBe(true);
+}
+
 async function expectTableToFit(table) {
   const layout = await table.evaluate((element) => {
     const scroller = element.closest('.daily-table-container');
     return {
       container: scroller ? { clientWidth: scroller.clientWidth, scrollWidth: scroller.scrollWidth } : null,
-      clippedHeaders: Array.from(element.querySelectorAll('thead th'))
+      clippedHeaders: Array.from(element.querySelectorAll(':scope > thead > tr > th'))
         .filter((header) => header.scrollWidth > header.clientWidth)
         .map((header) => ({
           text: header.textContent?.trim() ?? '',
@@ -64,17 +86,29 @@ for (const locale of locales) {
   test(`${locale} shared Codex shell fits a 360px viewport`, async ({ page }) => {
     await openCodex(page, { locale, width: 360, height: 800 });
     await expect(page.locator('html')).toHaveAttribute('lang', locale);
-    const codexWidths = await pageWidths(page);
+    await expectPageToFitViewport(page);
+    await expectSingleLineNavigation(page, '.provider-tabs .provider-tab');
+    await expectSingleLineNavigation(page, '.tabs .tab');
 
-    for (const tab of ['month', 'sessions', 'projects', 'content', 'settings']) {
+    for (const tab of ['month', 'all', 'sessions', 'projects', 'content', 'settings']) {
       await page.locator(`#tab-${tab}`).click();
       await expect(page.locator(`#${tab}`)).toBeVisible();
+      await expectPageToFitViewport(page);
     }
 
     await openClaude(page, { locale, width: 360, height: 800 });
-    const claudeWidths = await pageWidths(page);
-    expect(codexWidths.document).toBeLessThanOrEqual(claudeWidths.document);
-    expect(codexWidths.body).toBeLessThanOrEqual(claudeWidths.body);
+    await expectPageToFitViewport(page);
+    await expectSingleLineNavigation(page, '.provider-tabs .provider-tab');
+    await expectSingleLineNavigation(page, '.tabs .tab');
+    for (const tab of ['month', 'all', 'sessions', 'projects', 'branches', 'workflows', 'settings']) {
+      await page.locator(`#tab-${tab}`).click();
+      await expect(page.locator(`#${tab}`)).toBeVisible();
+      await expectPageToFitViewport(page);
+    }
+
+    await openCompare(page, { locale, width: 360, height: 800 });
+    await expectPageToFitViewport(page);
+    await expectSingleLineNavigation(page, '.provider-tabs .provider-tab');
   });
 }
 
@@ -159,10 +193,10 @@ for (const locale of ['en', 'de-DE']) {
   test(`${locale} Codex daily and session tables fit at 1280px`, async ({ page }) => {
     await openCodex(page, { locale, width: 1280, height: 900 });
     await page.locator('#tab-month').click();
-    const dailyTable = page.locator('#month .daily-breakdown .daily-table');
+    const dailyTable = page.locator('#month [data-codex-last30-daily] > .daily-table-container > .daily-table');
     await expect(dailyTable).toBeVisible();
-    await expect(dailyTable.locator('thead th')).toHaveCount(9);
-    await expect(dailyTable.locator('thead th').nth(1)).toContainText('API');
+    await expect(dailyTable.locator(':scope > thead > tr > th')).toHaveCount(10);
+    await expect(dailyTable.locator(':scope > thead > tr > th').nth(1)).toContainText('API');
     await expectTableToFit(dailyTable);
 
     await page.locator('#tab-sessions').click();
@@ -197,8 +231,11 @@ test('Codex 30-day charts scroll horizontally without widening the dashboard', a
 
   const breakdown = page.locator('#month [data-codex-last30-daily]');
   await expect(breakdown).toBeVisible();
-  await expect(breakdown.locator('.chart-tab.active')).toHaveAttribute('data-metric', 'cost');
-  const chartScrollers = breakdown.locator('.hc-scroll');
+  await expect(breakdown.locator(':scope > .chart-tabs .chart-tab.active'))
+    .toHaveAttribute('data-metric', 'cost');
+  const chartScrollers = breakdown.locator(
+    ':scope > .chart-content .hc-scroll, :scope > .composition-chart .hc-scroll',
+  );
   await expect(chartScrollers).toHaveCount(2);
 
   const viewportWidth = page.viewportSize()?.width ?? 720;
@@ -234,9 +271,10 @@ test('Codex 30-day charts scroll horizontally without widening the dashboard', a
     expect(visibleRightEdge).toBe(true);
   }
 
-  const tableScroller = breakdown.locator('.daily-table-container');
-  await expect(tableScroller.locator('thead th')).toHaveCount(9);
-  await expect(tableScroller.locator('thead th').nth(1)).toHaveText('API-equivalent cost');
+  const tableScroller = breakdown.locator(':scope > .daily-table-container');
+  await expect(tableScroller.locator(':scope > table > thead > tr > th')).toHaveCount(10);
+  await expect(tableScroller.locator(':scope > table > thead > tr > th').nth(1))
+    .toHaveText('API-equivalent cost');
   const tableBefore = await tableScroller.evaluate((element) => ({
     clientWidth: element.clientWidth,
     scrollWidth: element.scrollWidth,

@@ -31,7 +31,10 @@ import {
   CodexRuntimeManifestEntry,
   scanCodexManifest,
 } from '../providers/codex/codexManifest';
-import { CodexFilePassPool } from '../providers/codex/codexFilePassPool';
+import {
+  CodexFilePassPool,
+  CodexFilePassWorkerLike,
+} from '../providers/codex/codexFilePassPool';
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 import { parseCodexLine } from '../providers/codex/codexParser';
 
@@ -47,7 +50,8 @@ test('corrupt index trailing data is preserved and rebuilt from an empty index',
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-corrupt-'));
   try {
     const indexPath = path.join(root, 'codex-index.json');
-    const original = `${JSON.stringify(createEmptyCodexIndex('UTC'))},"cachedInput":1}`;
+    const originalIndex = createEmptyCodexIndex('UTC');
+    const original = `${JSON.stringify(originalIndex)},"cachedInput":1}`;
     const recoveries: Array<{ reason: string }> = [];
     await writeFile(indexPath, original, 'utf8');
 
@@ -58,6 +62,7 @@ test('corrupt index trailing data is preserved and rebuilt from an empty index',
     );
 
     assert.equal(loaded.schemaVersion, 3);
+    assert.notEqual(loaded.indexGeneration, originalIndex.indexGeneration);
     assert.equal(loaded.coverage.period.timeZone, 'Asia/Hong_Kong');
     assert.deepEqual(recoveries, [{ reason: 'invalid-json' }]);
     await assert.rejects(readFile(indexPath, 'utf8'), { code: 'ENOENT' });
@@ -84,6 +89,7 @@ test('unsupported index schema is quarantined with its distinct recovery reason'
     );
 
     assert.equal(loaded.schemaVersion, 3);
+    assert.ok((loaded.indexGeneration ?? 0) > 1);
     assert.deepEqual(recoveries, [{ reason: 'unsupported-schema' }]);
     const backups = await corruptIndexBackups(root);
     assert.equal(backups.length, 1);
@@ -114,6 +120,23 @@ test('valid and missing indexes do not report recovery while I/O errors still fa
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('timezone migration advances the independent index generation', async () => {
+  const initial = createEmptyCodexIndex('UTC');
+  assert.equal(initial.indexGeneration, 1);
+  const updated = await updateCodexIndexRaw(initial, persistableManifest([]), {
+    salt: SALT,
+    timeZone: 'Asia/Hong_Kong',
+    now: () => Date.parse('2026-08-30T00:00:00.000Z'),
+  });
+  assert.equal(updated.index.indexGeneration, 2);
+  const warm = await updateCodexIndexRaw(updated.index, persistableManifest([]), {
+    salt: SALT,
+    timeZone: 'Asia/Hong_Kong',
+    now: () => Date.parse('2026-08-30T00:00:00.000Z'),
+  });
+  assert.equal(warm.index.indexGeneration, 2);
 });
 
 test('concurrent atomic saves use independent temporary files', async () => {
@@ -159,7 +182,7 @@ test('schema-3 reload preserves only bounded pseudonymous replay evidence', asyn
     const index = createEmptyCodexIndex('UTC');
     const contribution = dedupContribution(fileKey, 'sessions');
     contribution.parserState = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       fileKey,
       sessionKey: fileKey,
       role: 'root',
@@ -192,7 +215,7 @@ test('schema-3 reload preserves only bounded pseudonymous replay evidence', asyn
     const replayState = loaded.files[fileKey].parserState;
     const savedSources = Object.keys(replayState.snapshotSignaturesBySource ?? {});
 
-    assert.equal(replayState.schemaVersion, 3);
+    assert.equal(replayState.schemaVersion, 4);
     assert.equal(savedSources.length, 32);
     assert.ok(savedSources.includes(sourceKey));
     assert.equal(savedSources.includes('raw-account@example.invalid'), false);
@@ -238,7 +261,7 @@ test('schema-3 reload preserves only bounded pseudonymous replay evidence', asyn
   }
 });
 
-test('schema-3 index with pre-last-usage parser state requests one rescan', async () => {
+test('schema-3 index with v2.3.0 parser semantics requests one rescan', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-token-migration-'));
   try {
     const indexPath = path.join(root, 'codex-index.json');
@@ -247,7 +270,7 @@ test('schema-3 index with pre-last-usage parser state requests one rescan', asyn
     const contribution = dedupContribution(fileKey, 'sessions');
     contribution.parserState = {
       ...contribution.parserState,
-      schemaVersion: 2,
+      schemaVersion: 3,
       fileKey,
       sessionKey: fileKey,
     };
@@ -311,7 +334,7 @@ test('token semantics rescan preserves completed files across a partial checkpoi
     for (const contribution of Object.values(legacy.files)) {
       contribution.parserState = {
         ...contribution.parserState,
-        schemaVersion: 2,
+        schemaVersion: 3,
       };
     }
     await writeFile(indexPath, JSON.stringify(legacy), 'utf8');
@@ -454,7 +477,7 @@ test('index load and save fail closed for unsafe metadata labels and bucket keys
       offset: 100,
       discardingOversizedLine: false,
       parserState: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         fileKey,
         sessionKey,
         agentNickname: unsafe.posix,
@@ -723,6 +746,39 @@ function tokenLine(input: number, output: number, timestamp: string): string {
   });
 }
 
+function tokenLineWithWeeklyLimit(
+  input: number,
+  output: number,
+  timestamp: string,
+  resetAt: string,
+  usedPercent: number,
+): string {
+  return JSON.stringify({
+    timestamp,
+    type: 'event_msg',
+    payload: {
+      type: 'token_count',
+      info: {
+        total_token_usage: {
+          input_tokens: input,
+          cached_input_tokens: Math.floor(input / 2),
+          output_tokens: output,
+          reasoning_output_tokens: Math.floor(output / 2),
+          total_tokens: input + output,
+        },
+      },
+      rate_limits: {
+        limit_id: 'codex',
+        secondary: {
+          used_percent: usedPercent,
+          window_minutes: 7 * 24 * 60,
+          resets_at: resetAt,
+        },
+      },
+    },
+  });
+}
+
 function structuralLine(
   timestamp: string,
   type: 'event_msg' | 'response_item',
@@ -774,6 +830,153 @@ function chunkingIo(chunkBytes: number): CodexIndexIo {
     },
   };
 }
+
+test('weekly quota history retains separate resets after the source file is removed', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-quota-history-'));
+  try {
+    const indexPath = path.join(root, 'codex-index.json');
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'quota-history.jsonl'),
+      [
+        sessionLine('quota-history'),
+        contextLine(),
+        tokenLineWithWeeklyLimit(
+          100,
+          20,
+          '2026-08-28T08:00:00.000Z',
+          '2026-08-28T11:00:00.000Z',
+          18,
+        ),
+        tokenLineWithWeeklyLimit(
+          200,
+          40,
+          '2026-08-30T04:00:00.000Z',
+          '2026-08-30T07:00:00.000Z',
+          42,
+        ),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const now = Date.parse('2026-08-31T12:00:00.000Z');
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+    });
+
+    assert.deepEqual(
+      cold.index.quotaHistory?.map(({ resetAt, usedPercent }) => ({ resetAt, usedPercent })),
+      [
+        { resetAt: Date.parse('2026-08-28T11:00:00.000Z'), usedPercent: 18 },
+        { resetAt: Date.parse('2026-08-30T07:00:00.000Z'), usedPercent: 42 },
+      ],
+    );
+
+    await saveCodexIndexAtomic(indexPath, {
+      ...cold.index,
+      quotaHistory: cold.index.quotaHistory?.map((observation) => ({
+        ...observation,
+        account: 'must-not-persist',
+      })) as any,
+    });
+    const reloaded = await loadCodexIndex(indexPath, 'UTC');
+    assert.deepEqual(
+      reloaded.quotaHistory?.map(({ resetAt, usedPercent }) => ({ resetAt, usedPercent })),
+      [
+        { resetAt: Date.parse('2026-08-28T11:00:00.000Z'), usedPercent: 18 },
+        { resetAt: Date.parse('2026-08-30T07:00:00.000Z'), usedPercent: 42 },
+      ],
+    );
+    assert.doesNotMatch(await readFile(indexPath, 'utf8'), /must-not-persist/);
+
+    const removed = await updateCodexIndex(
+      reloaded,
+      persistableManifest([]),
+      { salt: SALT, timeZone: 'UTC', now: () => now },
+    );
+    assert.equal(removed.bodyReads, 0);
+    assert.deepEqual(
+      removed.index.quotaHistory?.map(({ resetAt, usedPercent }) => ({ resetAt, usedPercent })),
+      [
+        { resetAt: Date.parse('2026-08-28T11:00:00.000Z'), usedPercent: 18 },
+        { resetAt: Date.parse('2026-08-30T07:00:00.000Z'), usedPercent: 42 },
+      ],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy indexed quota projections seed reset history once without rereading bodies', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-quota-seed-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'quota-seed.jsonl'),
+      [
+        sessionLine('quota-seed'),
+        contextLine(),
+        tokenLineWithWeeklyLimit(
+          100,
+          20,
+          '2026-08-30T04:00:00.000Z',
+          '2026-08-30T07:00:00.000Z',
+          42,
+        ),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const now = Date.parse('2026-08-31T12:00:00.000Z');
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+    });
+    const legacy = structuredClone(cold.index);
+    delete legacy.quotaHistory;
+    for (const contribution of Object.values(legacy.files)) {
+      // Model an older complete schema-3 index: it has the last observed
+      // limit projection, but predates the neutral reset-history cache.
+      delete contribution.quotaHistory;
+    }
+
+    const io = trackingIo();
+    const seeded = await updateCodexIndex(legacy, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+      io,
+    });
+
+    assert.equal(seeded.bodyReads, 0);
+    assert.equal(io.bodyReads.size, 0);
+    assert.deepEqual(
+      seeded.index.quotaHistory?.map(({ resetAt, usedPercent }) => ({ resetAt, usedPercent })),
+      [{ resetAt: Date.parse('2026-08-30T07:00:00.000Z'), usedPercent: 42 }],
+    );
+    assert.equal(seeded.indexChanged, true);
+
+    const warmIo = trackingIo();
+    const warm = await updateCodexIndex(seeded.index, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+      io: warmIo,
+    });
+    assert.equal(warm.indexChanged, false);
+    assert.equal(warm.bodyReads, 0);
+    assert.equal(warmIo.bodyReads.size, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test('fully indexed unchanged corpus returns a warm no-op without body reads', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-noop-'));
@@ -877,20 +1080,154 @@ test('cold and append scans maintain a sparse exact current-day hourly sidecar',
       total: { inputTotal: 999, rawResponse: 'today-secret-hour' },
       byModel: {},
     };
+    caller.files[key].aggregate.today.days['2026-07-21']['02'].total.promptBody =
+      'rolling-secret-total';
+    caller.files[key].aggregate.today.days.notADay = {
+      '02': {
+        total: { inputTotal: 999, rawResponse: 'rolling-secret-day' },
+        byModel: {},
+      },
+    };
     await saveCodexIndexAtomic(indexPath, caller);
     const persisted = await readFile(indexPath, 'utf8');
-    assert.doesNotMatch(persisted, /today-secret/);
+    assert.doesNotMatch(persisted, /today-secret|rolling-secret/);
     const reloaded = await loadCodexIndex(indexPath, 'Asia/Hong_Kong');
     assert.equal(reloaded.files[key].aggregate.today?.day, '2026-07-21');
+    assert.equal(reloaded.files[key].aggregate.today?.windowDays, 30);
     assert.deepEqual(Object.keys(reloaded.files[key].aggregate.today!.hours), ['00', '02']);
+    assert.deepEqual(
+      Object.keys(reloaded.files[key].aggregate.today?.days ?? {}),
+      ['2026-07-21'],
+    );
     assert.equal(reloaded.files[key].aggregate.today?.hours['02'].total.inputTotal, 50);
     assert.equal((reloaded.files[key].aggregate.today?.hours['02'] as any).byEffort, undefined);
+    const reloadIo = trackingIo();
+    const warmReload = await updateCodexIndex(reloaded, await scanCodexManifest(root, SALT), {
+      salt: SALT,
+      timeZone: 'Asia/Hong_Kong',
+      now: () => now,
+      io: reloadIo,
+    });
+    assert.equal(warmReload.bodyReads, 0);
+    assert.equal(reloadIo.bodyReads.size, 0);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test('an old schema-3 index backfills today only from canonical files known to contain that day', async () => {
+test('rolling hourly sidecar keeps 30 configured-zone days and evicts day 31 without rereading JSONL', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-rolling-hours-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'rolling-hours.jsonl'),
+      [
+        tokenLine(100, 20, '2026-06-30T08:05:00.000Z'),
+        tokenLine(200, 40, '2026-07-01T09:05:00.000Z'),
+        tokenLine(300, 60, '2026-07-15T10:05:00.000Z'),
+        tokenLine(400, 80, '2026-07-30T11:05:00.000Z'),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const first = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => Date.parse('2026-07-30T12:00:00.000Z'),
+    });
+    const key = manifest.files[0].fileKey;
+    const sidecar = first.index.files[key].aggregate.today!;
+
+    assert.equal(sidecar.windowDays, 30);
+    assert.deepEqual(Object.keys(sidecar.days ?? {}).sort(), [
+      '2026-07-01',
+      '2026-07-15',
+      '2026-07-30',
+    ]);
+    assert.equal(sidecar.days?.['2026-07-01']['09'].total.inputTotal, 100);
+    assert.equal(sidecar.days?.['2026-07-30']['11'].total.outputTotal, 20);
+    assert.equal(sidecar.days?.['2026-06-30'], undefined);
+    assert.equal(first.index.coverage.hourly?.complete, true);
+
+    const io = trackingIo();
+    const rolled = await updateCodexIndex(first.index, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => Date.parse('2026-07-31T12:00:00.000Z'),
+      io,
+    });
+    const rolledSidecar = rolled.index.files[key].aggregate.today!;
+
+    assert.equal(rolled.bodyReads, 0);
+    assert.equal(io.bodyReads.size, 0);
+    assert.equal(rolledSidecar.day, '2026-07-31');
+    assert.deepEqual(Object.keys(rolledSidecar.days ?? {}).sort(), [
+      '2026-07-15',
+      '2026-07-30',
+    ]);
+    assert.deepEqual(rolledSidecar.hours, {});
+    assert.equal(rolled.index.coverage.hourly?.asOfDay, '2026-07-31');
+    assert.equal(rolled.index.coverage.hourly?.complete, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy one-day schema-3 sidecars receive one targeted rolling migration', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-rolling-legacy-'));
+  try {
+    const now = Date.parse('2026-07-20T12:00:00.000Z');
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(
+      path.join(sessions, 'legacy-hours.jsonl'),
+      [
+        tokenLine(100, 20, '2026-07-05T08:00:00.000Z'),
+        tokenLine(200, 40, '2026-07-20T09:00:00.000Z'),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    const manifest = await scanCodexManifest(root, SALT);
+    const current = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+    });
+    const key = manifest.files[0].fileKey;
+    const legacy = structuredClone(current.index) as any;
+    const modern = legacy.files[key].aggregate.today;
+    legacy.files[key].aggregate.today = {
+      day: modern.day,
+      timeZone: modern.timeZone,
+      indexedThrough: modern.indexedThrough,
+      hours: modern.hours,
+    };
+    delete legacy.coverage.hourly;
+    const io = trackingIo();
+
+    const migrated = await updateCodexIndex(legacy, manifest, {
+      salt: SALT,
+      timeZone: 'UTC',
+      now: () => now,
+      io,
+    });
+
+    assert.deepEqual(io.fileKeysRead, [key]);
+    assert.equal(migrated.index.files[key].aggregate.today?.windowDays, 30);
+    assert.deepEqual(
+      Object.keys(migrated.index.files[key].aggregate.today?.days ?? {}).sort(),
+      ['2026-07-05', '2026-07-20'],
+    );
+    assert.equal(migrated.index.coverage.hourly?.complete, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('an old schema-3 index targets canonical files that intersect the rolling hour window', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-today-targeted-'));
   try {
     const today = Date.parse('2026-07-21T04:00:00.000Z');
@@ -908,6 +1245,11 @@ test('an old schema-3 index backfills today only from canonical files known to c
     await writeFile(
       path.join(sessions, 'old.jsonl'),
       `${tokenLine(300, 60, '2026-07-19T18:05:00.000Z')}\n`,
+      'utf8',
+    );
+    await writeFile(
+      path.join(sessions, 'outside-window.jsonl'),
+      `${tokenLine(400, 80, '2026-06-01T18:05:00.000Z')}\n`,
       'utf8',
     );
     const manifest = await scanCodexManifest(root, SALT);
@@ -932,17 +1274,29 @@ test('an old schema-3 index backfills today only from canonical files known to c
     const todayKeys = manifest.files.filter((entry) =>
       cold.index.files[entry.fileKey].aggregate.period?.days['2026-07-21']
     ).map((entry) => entry.fileKey);
-    const todayKey = io.fileKeysRead[0];
-    const oldKey = manifest.files.find((entry) =>
-      !cold.index.files[entry.fileKey].aggregate.period?.days['2026-07-21']
+    const todayKey = todayKeys.find((key) => io.bodyReads.has(key))!;
+    const recentKey = manifest.files.find((entry) =>
+      cold.index.files[entry.fileKey].aggregate.period?.days['2026-07-20']
+    )!.fileKey;
+    const outsideKey = manifest.files.find((entry) =>
+      cold.index.files[entry.fileKey].aggregate.period?.days['2026-06-02']
     )!.fileKey;
 
     assert.equal(rebuilt.index.schemaVersion, 3);
-    assert.deepEqual(io.fileKeysRead, [todayKey]);
+    assert.deepEqual(new Set(io.fileKeysRead), new Set([todayKey, recentKey]));
     assert.equal(todayKeys.length, 2);
     assert.equal(todayKeys.filter((key) => io.bodyReads.has(key)).length, 1);
-    assert.equal(io.bodyReads.has(oldKey), false);
+    assert.equal(io.bodyReads.has(recentKey), true);
+    assert.equal(io.bodyReads.has(outsideKey), false);
     assert.equal(rebuilt.index.files[todayKey].aggregate.today?.hours['02'].total.inputTotal, 100);
+    assert.equal(
+      rebuilt.index.files[recentKey].aggregate.today?.days?.['2026-07-20']['02']
+        .total.inputTotal,
+      300,
+    );
+    assert.equal(rebuilt.index.coverage.hourly?.indexedFiles, 2);
+    assert.equal(rebuilt.index.coverage.hourly?.totalFiles, 2);
+    assert.equal(rebuilt.index.coverage.hourly?.complete, true);
     assert.deepEqual(rebuilt.index.coverage.today, {
       timeZone: 'Asia/Hong_Kong',
       day: '2026-07-21',
@@ -1184,6 +1538,16 @@ test('timezone changes rebuild the current civil day and then stay warm without 
     assert.equal(hongKong.index.files[key].aggregate.today?.timeZone, 'Asia/Hong_Kong');
     assert.equal(hongKong.index.files[key].aggregate.today?.hours['00'].total.inputTotal, 50);
     assert.equal(hongKong.index.files[key].aggregate.today?.hours['15'], undefined);
+    assert.equal(
+      hongKong.index.files[key].aggregate.today?.days?.['2026-07-20']['23']
+        .total.inputTotal,
+      100,
+    );
+    assert.equal(
+      hongKong.index.files[key].aggregate.today?.days?.['2026-07-21']['00']
+        .total.inputTotal,
+      50,
+    );
     assert.equal(hongKong.index.coverage.today.complete, true);
 
     const warmIo = trackingIo();
@@ -1361,6 +1725,57 @@ test('parallel file passes preserve the exact sequential index across every back
   } finally {
     await rm(root, { recursive: true, force: true });
   }
+});
+
+test('file-pass pool disposal waits for workers removed by a failed batch to terminate', async () => {
+  let finishTerminate!: (code: number) => void;
+  const termination = new Promise<number>((resolve) => {
+    finishTerminate = resolve;
+  });
+  let terminateCalls = 0;
+  const worker = {
+    postMessage: () => undefined,
+    on: () => worker,
+    terminate: () => {
+      terminateCalls += 1;
+      return termination;
+    },
+  } as CodexFilePassWorkerLike;
+  const pool = new CodexFilePassPool(1, () => worker);
+  const running = pool.run(
+    [{ taskId: 'aggregate-only-test' } as any],
+    async () => undefined,
+  );
+  (pool as any).failActive(new Error('synthetic batch failure'));
+  await assert.rejects(running, /synthetic batch failure/);
+
+  let disposalSettled = false;
+  const disposal = pool.dispose().then(() => {
+    disposalSettled = true;
+  });
+  await Promise.resolve();
+  assert.equal(terminateCalls, 1);
+  assert.equal(disposalSettled, false);
+
+  finishTerminate(0);
+  await disposal;
+  assert.equal(disposalSettled, true);
+});
+
+test('file-pass pool disposal rejects when a worker cannot be terminated', async () => {
+  const worker = {
+    postMessage: () => undefined,
+    on: () => worker,
+    terminate: () => Promise.reject(new Error('file-pass terminate failed')),
+  } as CodexFilePassWorkerLike;
+  const pool = new CodexFilePassPool(1, () => worker);
+  const running = pool.run(
+    [{ taskId: 'aggregate-only-termination-failure' } as any],
+    async () => undefined,
+  );
+  (pool as any).failActive(new Error('synthetic batch failure'));
+  await assert.rejects(running, /synthetic batch failure/);
+  await assert.rejects(pool.dispose(), /file-pass terminate failed/);
 });
 
 test('day or timezone changes invalidate the warm no-op metadata shortcut', async () => {
@@ -1709,15 +2124,18 @@ test('cancellation checkpoints a resumable period cursor without clearing all-ti
     );
 
     assert.equal(checkpoints.length, 1);
+    assert.equal(checkpoints[0].indexGeneration, legacy.indexGeneration);
     assert.ok(checkpoints[0].files[key].periodMigration!.offset > 0);
     assert.equal(checkpoints[0].aggregate.total.inputTotal, cold.index.aggregate.total.inputTotal);
     const saved = await loadCodexIndex(checkpointPath, 'UTC');
+    assert.equal(saved.indexGeneration, legacy.indexGeneration);
     assert.equal(saved.files[key].periodMigration?.offset, checkpoints[0].files[key].periodMigration?.offset);
     assert.equal('carry' in (saved.files[key].periodMigration ?? {}), false);
     const resumed = await updateCodexIndex(saved, manifest, {
       salt: SALT,
       timeZone: 'UTC',
     });
+    assert.equal(resumed.index.indexGeneration, saved.indexGeneration);
     assert.equal(resumed.index.files[key].aggregate.period?.indexedThrough, legacy.files[key].offset);
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -1803,7 +2221,7 @@ function dedupContribution(
     offset: 100,
     discardingOversizedLine: false,
     parserState: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       fileKey,
       sessionKey: 'shared-anonymous-session',
       role: 'root',

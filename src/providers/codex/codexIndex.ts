@@ -26,14 +26,20 @@ import {
   parseCodexLine,
 } from './codexParser';
 import {
+  CODEX_PERIOD_LINEAGE_VERSION,
+  CODEX_ROLLING_HOURLY_DAYS,
   CodexFilePeriodIndex,
   CodexFileTodayIndex,
+  CodexHourlyDays,
   CodexPeriodMigrationState,
   CodexStructuralSummary,
   CodexTodayMigrationState,
-  reduceCodexHourlySlice,
+  isCompatibleCodexPeriodLineage,
+  pruneCodexHourlyDays,
+  reduceCodexRollingHourlySlice,
   reduceCodexStructuralSlice,
   reduceCodexUsageSlice,
+  codexPeriodFitsAggregate,
 } from './codexPeriodIndex';
 import { parseJsonObject, stringField } from './codexSchema';
 import {
@@ -65,11 +71,20 @@ import {
   CODEX_LINEAGE_FINGERPRINTS_PER_BLOCK,
   CodexLineageTrace,
 } from './codexLineage';
+import {
+  appendCodexQuotaHistory,
+  CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  CODEX_QUOTA_HISTORY_LIMIT,
+  codexQuotaObservationsFromLimit,
+  CodexQuotaObservation,
+  sanitizeCodexQuotaHistory,
+} from './codexQuotaHistory';
 
 export {
   CodexPeriodMigrationState,
   CodexStructuralSummary,
 } from './codexPeriodIndex';
+export type { CodexQuotaObservation } from './codexQuotaHistory';
 
 export interface CodexFileAggregate {
   total: ProviderTokenCounts;
@@ -108,6 +123,8 @@ export interface CodexFileContribution {
   aggregate: CodexFileAggregate;
   limit?: ProviderLimitSnapshot;
   limits?: Record<string, ProviderLimitSnapshot>;
+  /** Small neutral history of weekly reset observations found in this file. */
+  quotaHistory?: CodexQuotaObservation[];
   qualityFlags: string[];
   identityChecked?: boolean;
   periodMigration?: CodexPeriodMigrationState;
@@ -177,6 +194,28 @@ export interface CodexTodayCoverage {
   complete: boolean;
 }
 
+export interface CodexHourlyDayCoverage {
+  day: string;
+  indexedFiles: number;
+  totalFiles: number;
+  indexedBytes: number;
+  totalBytes: number;
+  complete: boolean;
+}
+
+export interface CodexHourlyCoverage {
+  timeZone: string;
+  asOfDay: string;
+  windowDays: number;
+  indexedFiles: number;
+  totalFiles: number;
+  indexedBytes: number;
+  totalBytes: number;
+  complete: boolean;
+  /** Coverage for each civil day that has a verified period contribution. */
+  days: Record<string, CodexHourlyDayCoverage>;
+}
+
 export interface CodexIndexCoverage {
   indexedFiles: number;
   totalFiles: number;
@@ -185,6 +224,9 @@ export interface CodexIndexCoverage {
   complete: boolean;
   identity: CodexIdentityCoverage;
   period: CodexPeriodCoverage;
+  /** Missing only on pre-v2.3.1 schema-3 snapshots. */
+  hourly?: CodexHourlyCoverage;
+  /** Current-day compatibility projection of `hourly`. */
   today: CodexTodayCoverage;
 }
 
@@ -203,9 +245,13 @@ export interface CodexProviderAggregate {
 
 export interface CodexIndexV3 {
   schemaVersion: 3;
+  /** Independent persisted generation for migration completion isolation. */
+  indexGeneration?: number;
   files: Record<string, CodexFileContribution>;
   aggregate: CodexProviderAggregate;
   coverage: CodexIndexCoverage;
+  /** Bounded neutral history retained across file replacement/removal. */
+  quotaHistory?: CodexQuotaObservation[];
 }
 
 /** @deprecated Compatibility name until the remaining v2 consumers are rewired. */
@@ -219,6 +265,8 @@ export interface CodexIndexProgress {
   indexedBytes: number;
   totalBytes: number;
   period: CodexPeriodCoverage;
+  /** Present once rolling-hour coverage has been normalized or recomputed. */
+  hourly?: CodexHourlyCoverage;
 }
 
 export interface CodexIndexSchedulingPolicy {
@@ -292,6 +340,9 @@ export interface CodexIndexUpdateOptions {
   scheduling?: Partial<CodexIndexSchedulingPolicy>;
   /** Present only for accelerated cold/incomplete backfills. */
   filePassBatch?: CodexFilePassBatchRunner;
+  /** False skips unchanged historical lineage/period/hour/identity passes while
+   * still allowing the main changed-file and append-tail stage to run. */
+  allowHistoricalBackfill?: boolean;
   /** Internal resolved civil day shared with local file-pass workers. */
   asOfDay?: string;
 }
@@ -327,6 +378,14 @@ export class CodexIndexBudgetError extends Error {
 }
 
 const MAX_IDENTITY_BYTES = 256 * 1024;
+let lastRecoveryGeneration = 1;
+
+function recoveredIndex(timeZone: string): CodexIndexV3 {
+  const index = createEmptyCodexIndex(timeZone);
+  lastRecoveryGeneration = Math.max(lastRecoveryGeneration + 1, Date.now());
+  index.indexGeneration = lastRecoveryGeneration;
+  return index;
+}
 
 function zeroTokens(): ProviderTokenCounts {
   return {
@@ -442,6 +501,7 @@ export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV3 {
   });
   return {
     schemaVersion: 3,
+    indexGeneration: 1,
     files: {},
     aggregate: emptyAggregate(),
     coverage: {
@@ -461,6 +521,17 @@ export function createEmptyCodexIndex(timeZone = 'UTC'): CodexIndexV3 {
         last7Days: emptyRange(),
         last30Days: emptyRange(),
         allTime: emptyRange(),
+      },
+      hourly: {
+        timeZone: resolvedTimeZone,
+        asOfDay,
+        windowDays: CODEX_ROLLING_HOURLY_DAYS,
+        indexedFiles: 0,
+        totalFiles: 0,
+        indexedBytes: 0,
+        totalBytes: 0,
+        complete: true,
+        days: {},
       },
       today: {
         timeZone: resolvedTimeZone,
@@ -588,8 +659,12 @@ function promoteCaughtUpPeriod(
   timeZone: string,
 ): void {
   const migration = contribution.periodMigration;
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
   if (
     migration?.timeZone !== timeZone ||
+    migration.prefixEvents !== prefixEvents ||
+    !Number.isFinite(migration.tokenEventsSeen) ||
+    (migration.tokenEventsSeen ?? 0) < prefixEvents ||
     migration.offset < contribution.offset ||
     migration.discardingOversizedLine
   ) {
@@ -599,6 +674,8 @@ function promoteCaughtUpPeriod(
     timeZone,
     indexedThrough: contribution.offset,
     days: migration.days,
+    lineageVersion: CODEX_PERIOD_LINEAGE_VERSION,
+    lineagePrefixEvents: prefixEvents,
   };
   contribution.qualityFlags = uniqueFlags(
     contribution.qualityFlags,
@@ -612,7 +689,58 @@ function emptyTodayIndex(
   timeZone: string,
   indexedThrough = 0,
 ): CodexFileTodayIndex {
-  return { day, timeZone, indexedThrough, hours: {} };
+  return {
+    day,
+    timeZone,
+    indexedThrough,
+    hours: {},
+    windowDays: CODEX_ROLLING_HOURLY_DAYS,
+    days: {},
+  };
+}
+
+function rollingHourlyDaySet(day: string): Set<string> {
+  return new Set(
+    rollingDayKeysFromDayKey(day, CODEX_ROLLING_HOURLY_DAYS),
+  );
+}
+
+function isRollingTodayIndex(
+  value: CodexFileTodayIndex | undefined,
+  timeZone: string,
+): value is CodexFileTodayIndex & { days: CodexHourlyDays } {
+  return Boolean(
+    value &&
+    value.timeZone === timeZone &&
+    value.windowDays === CODEX_ROLLING_HOURLY_DAYS &&
+    value.days,
+  );
+}
+
+function syncTodayProjection(
+  value: CodexFileTodayIndex & { days: CodexHourlyDays },
+): void {
+  pruneCodexHourlyDays(value.days, rollingHourlyDaySet(value.day));
+  value.hours = value.days[value.day] ?? {};
+}
+
+/**
+ * A forward civil-day rollover needs only pruning: unchanged files cannot have
+ * events in the newly entered days. Moving the clock backwards can require
+ * days that were previously evicted, so it deliberately falls back to the
+ * resumable migration pass.
+ */
+function reanchorRollingToday(
+  value: CodexFileTodayIndex | undefined,
+  day: string,
+  timeZone: string,
+): boolean {
+  if (!isRollingTodayIndex(value, timeZone) || day < value.day) {
+    return false;
+  }
+  value.day = day;
+  syncTodayProjection(value);
+  return true;
 }
 
 function promoteCaughtUpToday(
@@ -625,6 +753,8 @@ function promoteCaughtUpToday(
   if (
     migration?.day !== day ||
     migration.timeZone !== timeZone ||
+    migration.windowDays !== CODEX_ROLLING_HOURLY_DAYS ||
+    !migration.days ||
     migration.prefixEvents !== prefixEvents ||
     migration.offset < contribution.offset ||
     migration.discardingOversizedLine
@@ -635,8 +765,15 @@ function promoteCaughtUpToday(
     day,
     timeZone,
     indexedThrough: contribution.offset,
-    hours: migration.hours,
+    hours: migration.days[day] ?? {},
+    windowDays: CODEX_ROLLING_HOURLY_DAYS,
+    days: migration.days,
   };
+  syncTodayProjection(
+    contribution.aggregate.today as CodexFileTodayIndex & {
+      days: CodexHourlyDays;
+    },
+  );
   contribution.qualityFlags = uniqueFlags(
     contribution.qualityFlags,
     migration.qualityFlags,
@@ -721,33 +858,43 @@ async function updateContribution(
   const pseudonymize = pseudonymizer(options.salt);
   let limit = contribution.limit;
   const limits = { ...(contribution.limits ?? {}) };
+  let quotaHistory = appendCodexQuotaHistory(
+    contribution.quotaHistory ?? [],
+    [],
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
   const timeZone = resolveTimeZone(options.timeZone);
   const asOfDay = options.asOfDay ?? dayKeyInZone(
     new Date((options.now ?? Date.now)()),
     timeZone,
   );
+  const rollingDays = rollingHourlyDaySet(asOfDay);
+  const desiredPrefixEvents = lineage.desiredPrefixEvents ?? 0;
   const advancePeriod =
     aggregate.period?.timeZone === timeZone &&
-    aggregate.period.indexedThrough === contribution.offset;
-  if (
-    aggregate.today &&
-    (aggregate.today.day !== asOfDay || aggregate.today.timeZone !== timeZone)
-  ) {
+    aggregate.period.indexedThrough === contribution.offset &&
+    lineage.appliedPrefixEvents === desiredPrefixEvents &&
+    isCompatibleCodexPeriodLineage(aggregate.period, desiredPrefixEvents) &&
+    codexPeriodFitsAggregate(aggregate.period, aggregate.total);
+  if (aggregate.today && !reanchorRollingToday(aggregate.today, asOfDay, timeZone)) {
     delete aggregate.today;
   }
   if (!aggregate.today && contribution.offset === 0) {
     aggregate.today = emptyTodayIndex(asOfDay, timeZone);
   }
-  const advanceToday =
-    aggregate.today?.day === asOfDay &&
-    aggregate.today.timeZone === timeZone &&
-    aggregate.today.indexedThrough === contribution.offset;
+  const activeToday =
+    isRollingTodayIndex(aggregate.today, timeZone) &&
+      aggregate.today.day === asOfDay &&
+      aggregate.today.indexedThrough === contribution.offset
+      ? aggregate.today
+      : undefined;
   let invalidEventTimestamp = false;
 
   const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => {
     syncSession(aggregate, parserState);
-    if (advanceToday && aggregate.today) {
-      aggregate.today.indexedThrough = cursor.offset;
+    if (activeToday) {
+      activeToday.indexedThrough = cursor.offset;
+      syncTodayProjection(activeToday);
     }
     return {
       ...contribution,
@@ -764,6 +911,7 @@ async function updateContribution(
       aggregate,
       limit,
       limits,
+      ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
       qualityFlags: uniqueFlags(
         contribution.qualityFlags,
         parserState.qualityFlags,
@@ -795,11 +943,11 @@ async function updateContribution(
           } else if (advancePeriod && aggregate.period) {
             reduceCodexUsageSlice(aggregate.period.days, event, timeZone);
           }
-          if (advanceToday && aggregate.today) {
-            reduceCodexHourlySlice(
-              aggregate.today.hours,
+          if (activeToday) {
+            reduceCodexRollingHourlySlice(
+              activeToday.days,
               event,
-              asOfDay,
+              rollingDays,
               timeZone,
             );
           }
@@ -823,6 +971,11 @@ async function updateContribution(
           limit = parsed.limit ?? limit;
         }
         if (parsed.limit) {
+          quotaHistory = appendCodexQuotaHistory(
+            quotaHistory,
+            codexQuotaObservationsFromLimit(parsed.limit),
+            CODEX_FILE_QUOTA_HISTORY_LIMIT,
+          );
           const limitKey =
             parsed.limit.limitId ?? parsed.limit.limitName ?? 'default';
           const previousLimit = limits[limitKey];
@@ -847,8 +1000,9 @@ async function updateContribution(
   if (advancePeriod && aggregate.period) {
     aggregate.period.indexedThrough = scan.cursor.offset;
   }
-  if (advanceToday && aggregate.today) {
-    aggregate.today.indexedThrough = scan.cursor.offset;
+  if (activeToday) {
+    activeToday.indexedThrough = scan.cursor.offset;
+    syncTodayProjection(activeToday);
   }
   if (
     scan.cursor.offset >= entry.size &&
@@ -880,6 +1034,10 @@ function promoteCaughtUpLineage(
   }
   contribution.aggregate = reconciliation.aggregate;
   lineage.appliedPrefixEvents = reconciliation.prefixEvents;
+  if (contribution.aggregate.period) {
+    contribution.aggregate.period.lineageVersion = CODEX_PERIOD_LINEAGE_VERSION;
+    contribution.aggregate.period.lineagePrefixEvents = reconciliation.prefixEvents;
+  }
   contribution.qualityFlags = uniqueFlags(
     contribution.qualityFlags,
     reconciliation.qualityFlags,
@@ -901,10 +1059,14 @@ async function reconcileContributionLineage(
     new Date((options.now ?? Date.now)()),
     timeZone,
   );
+  const rollingDays = rollingHourlyDaySet(asOfDay);
   const initial = contribution.lineageReconciliation?.prefixEvents ===
       prefixEvents &&
-      contribution.lineageReconciliation.aggregate.today?.day === asOfDay &&
-      contribution.lineageReconciliation.aggregate.today.timeZone === timeZone
+      isRollingTodayIndex(
+        contribution.lineageReconciliation.aggregate.today,
+        timeZone,
+      ) &&
+      contribution.lineageReconciliation.aggregate.today.day === asOfDay
     ? contribution.lineageReconciliation
     : {
         prefixEvents,
@@ -924,6 +1086,11 @@ async function reconcileContributionLineage(
   const aggregate = initial.aggregate;
   let invalidEventTimestamp = false;
   const pseudonymize = pseudonymizer(options.salt);
+  let quotaHistory = appendCodexQuotaHistory(
+    contribution.quotaHistory ?? [],
+    [],
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
 
   const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => {
     syncSession(aggregate, parserState);
@@ -932,9 +1099,13 @@ async function reconcileContributionLineage(
     }
     if (aggregate.today) {
       aggregate.today.indexedThrough = cursor.offset;
+      if (isRollingTodayIndex(aggregate.today, timeZone)) {
+        syncTodayProjection(aggregate.today);
+      }
     }
     return {
       ...contribution,
+      ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
       lineageReconciliation: {
         prefixEvents,
         tokenEventsSeen,
@@ -965,6 +1136,13 @@ async function reconcileContributionLineage(
       }
       const parsed = parseCodexLine(line, parserState, pseudonymize);
       parserState = parsed.state;
+      if (parsed.limit) {
+        quotaHistory = appendCodexQuotaHistory(
+          quotaHistory,
+          codexQuotaObservationsFromLimit(parsed.limit),
+          CODEX_FILE_QUOTA_HISTORY_LIMIT,
+        );
+      }
       if (parsed.lineageTokenKey) {
         tokenEventsSeen += 1;
       }
@@ -977,11 +1155,11 @@ async function reconcileContributionLineage(
           } else if (aggregate.period) {
             reduceCodexUsageSlice(aggregate.period.days, event, timeZone);
           }
-          if (aggregate.today) {
-            reduceCodexHourlySlice(
-              aggregate.today.hours,
+          if (isRollingTodayIndex(aggregate.today, timeZone)) {
+            reduceCodexRollingHourlySlice(
+              aggregate.today.days,
               event,
-              asOfDay,
+              rollingDays,
               timeZone,
             );
           }
@@ -1030,10 +1208,18 @@ async function migrateContributionPeriod(
   onChunk: ContributionChunkHandler,
 ): Promise<CodexFilePassResult> {
   const timeZone = resolveTimeZone(options.timeZone);
-  const initial = contribution.periodMigration?.timeZone === timeZone
-    ? contribution.periodMigration
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+  const savedMigration = contribution.periodMigration;
+  const canResume = savedMigration?.timeZone === timeZone &&
+    savedMigration.prefixEvents === prefixEvents &&
+    Number.isFinite(savedMigration.tokenEventsSeen) &&
+    (savedMigration.tokenEventsSeen ?? 0) >= prefixEvents;
+  const initial: CodexPeriodMigrationState = canResume
+    ? savedMigration
     : {
         timeZone,
+        prefixEvents,
+        tokenEventsSeen: 0,
         offset: 0,
         discardingOversizedLine: false,
         parserState: createCodexParserState(entry.fileKey),
@@ -1042,17 +1228,26 @@ async function migrateContributionPeriod(
       };
   let parserState = initial.parserState;
   const days = initial.days;
+  let tokenEventsSeen = initial.tokenEventsSeen ?? 0;
   let invalidEventTimestamp = false;
   const pseudonymize = pseudonymizer(options.salt);
+  let quotaHistory = appendCodexQuotaHistory(
+    contribution.quotaHistory ?? [],
+    [],
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
 
   const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => ({
     ...contribution,
+    ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
     aggregate: {
       ...contribution.aggregate,
       period: undefined,
     },
     periodMigration: {
       timeZone,
+      prefixEvents,
+      tokenEventsSeen,
       offset: cursor.offset,
       discardingOversizedLine: cursor.discardingOversizedLine,
       parserState,
@@ -1079,14 +1274,26 @@ async function migrateContributionPeriod(
       }
       const parsed = parseCodexLine(line, parserState, pseudonymize);
       parserState = parsed.state;
-      for (const event of parsed.events) {
-        if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
-          invalidEventTimestamp = true;
-        } else {
-          reduceCodexUsageSlice(days, event, timeZone);
+      if (parsed.limit) {
+        quotaHistory = appendCodexQuotaHistory(
+          quotaHistory,
+          codexQuotaObservationsFromLimit(parsed.limit),
+          CODEX_FILE_QUOTA_HISTORY_LIMIT,
+        );
+      }
+      if (parsed.lineageTokenKey) {
+        tokenEventsSeen += 1;
+      }
+      if (tokenEventsSeen > prefixEvents) {
+        for (const event of parsed.events) {
+          if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
+            invalidEventTimestamp = true;
+          } else {
+            reduceCodexUsageSlice(days, event, timeZone);
+          }
         }
       }
-      if (parsed.structural) {
+      if (parsed.structural && tokenEventsSeen >= prefixEvents) {
         if (
           !Number.isFinite(parsed.structural.timestamp) ||
           parsed.structural.timestamp <= 0
@@ -1120,6 +1327,8 @@ async function migrateContributionPeriod(
       timeZone,
       indexedThrough: contribution.offset,
       days: updated.periodMigration.days,
+      lineageVersion: CODEX_PERIOD_LINEAGE_VERSION,
+      lineagePrefixEvents: prefixEvents,
     };
     updated.qualityFlags = uniqueFlags(
       updated.qualityFlags,
@@ -1143,10 +1352,14 @@ async function migrateContributionToday(
     new Date((options.now ?? Date.now)()),
     timeZone,
   );
+  const rollingDays = rollingHourlyDaySet(day);
   const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
   const initial =
     contribution.todayMigration?.day === day &&
       contribution.todayMigration.timeZone === timeZone &&
+      contribution.todayMigration.windowDays ===
+        CODEX_ROLLING_HOURLY_DAYS &&
+      contribution.todayMigration.days &&
       contribution.todayMigration.prefixEvents === prefixEvents
       ? contribution.todayMigration
       : {
@@ -1158,16 +1371,25 @@ async function migrateContributionToday(
           discardingOversizedLine: false,
           parserState: createCodexParserState(entry.fileKey),
           hours: {},
+          windowDays: CODEX_ROLLING_HOURLY_DAYS,
+          days: {},
           qualityFlags: [],
         };
   let parserState = initial.parserState;
   let tokenEventsSeen = initial.tokenEventsSeen;
-  const hours = initial.hours;
+  const days = initial.days as CodexHourlyDays;
+  pruneCodexHourlyDays(days, rollingDays);
   let invalidEventTimestamp = false;
   const pseudonymize = pseudonymizer(options.salt);
+  let quotaHistory = appendCodexQuotaHistory(
+    contribution.quotaHistory ?? [],
+    [],
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
 
   const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => ({
     ...contribution,
+    ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
     aggregate: {
       ...contribution.aggregate,
       today: undefined,
@@ -1180,7 +1402,9 @@ async function migrateContributionToday(
       offset: cursor.offset,
       discardingOversizedLine: cursor.discardingOversizedLine,
       parserState,
-      hours,
+      hours: days[day] ?? {},
+      windowDays: CODEX_ROLLING_HOURLY_DAYS,
+      days,
       qualityFlags: uniqueFlags(
         initial.qualityFlags,
         parserState.qualityFlags,
@@ -1203,6 +1427,13 @@ async function migrateContributionToday(
       }
       const parsed = parseCodexLine(line, parserState, pseudonymize);
       parserState = parsed.state;
+      if (parsed.limit) {
+        quotaHistory = appendCodexQuotaHistory(
+          quotaHistory,
+          codexQuotaObservationsFromLimit(parsed.limit),
+          CODEX_FILE_QUOTA_HISTORY_LIMIT,
+        );
+      }
       if (parsed.lineageTokenKey) {
         tokenEventsSeen += 1;
       }
@@ -1214,7 +1445,7 @@ async function migrateContributionToday(
           invalidEventTimestamp = true;
           continue;
         }
-        reduceCodexHourlySlice(hours, event, day, timeZone);
+        reduceCodexRollingHourlySlice(days, event, rollingDays, timeZone);
       }
     },
     async (progress) => {
@@ -1222,7 +1453,7 @@ async function migrateContributionToday(
     },
   );
   if (!scan.reachedEnd) {
-    throw new Error('Codex log changed during current-day migration');
+    throw new Error('Codex log changed during rolling-hour migration');
   }
   const updated = snapshot(scan.cursor);
   if (updated.todayMigration && scan.oversizedLines > 0) {
@@ -1629,6 +1860,54 @@ function recomputeAggregate(
   return aggregate;
 }
 
+/**
+ * Merge the small per-file observations into the index-level history before
+ * any manifest removals can discard their last copy. The history is neutral by
+ * construction, so it can preserve reset boundaries without pretending to
+ * identify which account produced them.
+ */
+function mergeCodexQuotaHistory(index: CodexIndexV3): void {
+  const additions: CodexQuotaObservation[] = [];
+  for (const contribution of Object.values(index.files)) {
+    additions.push(...(contribution.quotaHistory ?? []));
+    for (const snapshot of [
+      ...Object.values(contribution.limits ?? {}),
+      ...(contribution.limit ? [contribution.limit] : []),
+    ]) {
+      additions.push(...codexQuotaObservationsFromLimit(snapshot));
+    }
+  }
+  const history = appendCodexQuotaHistory(
+    sanitizeCodexQuotaHistory(index.quotaHistory, CODEX_QUOTA_HISTORY_LIMIT),
+    additions,
+    CODEX_QUOTA_HISTORY_LIMIT,
+  );
+  index.quotaHistory = history.length > 0 ? history : undefined;
+}
+
+function hasCodexQuotaEvidence(index: CodexIndexV3): boolean {
+  return Object.values(index.files).some((contribution) =>
+    (contribution.quotaHistory?.length ?? 0) > 0 || [
+      ...Object.values(contribution.limits ?? {}),
+      ...(contribution.limit ? [contribution.limit] : []),
+    ].some((snapshot) => codexQuotaObservationsFromLimit(snapshot).length > 0),
+  );
+}
+
+export function isReadableCodexPeriod(
+  contribution: CodexFileContribution | undefined,
+  timeZone: string,
+): boolean {
+  if (!contribution || !isCodexUsageContributionCurrent(contribution)) {
+    return false;
+  }
+  const period = contribution.aggregate.period;
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+  return period?.timeZone === timeZone &&
+    isCompatibleCodexPeriodLineage(period, prefixEvents) &&
+    codexPeriodFitsAggregate(period, contribution.aggregate.total);
+}
+
 function coverageFor(
   files: Record<string, CodexFileContribution>,
   manifest: CodexManifest,
@@ -1698,8 +1977,18 @@ function coverageFor(
       }
       rangeTotalFiles += 1;
       rangeTotalBytes += entry.size;
-      const periodIsCurrent = Boolean(
-        contribution && isCodexUsageContributionCurrent(contribution),
+      const periodIsCurrent = isReadableCodexPeriod(contribution, timeZone);
+      const periodMigration = contribution?.periodMigration;
+      // A migration draft is intentionally not a readable period yet, but
+      // its cursor still represents verified work for the progress display.
+      // Keep this separate from periodIsCurrent so a rejected legacy sidecar
+      // cannot be rendered as data while an active rebuild remains visible.
+      const periodMigrationIsCurrent = Boolean(
+        contribution &&
+        isCodexUsageContributionCurrent(contribution) &&
+        periodMigration?.timeZone === timeZone &&
+        periodMigration.prefixEvents ===
+          (contribution.lineage?.desiredPrefixEvents ?? 0),
       );
       const promoted = periodIsCurrent &&
         contribution?.aggregate.period?.timeZone === timeZone
@@ -1709,9 +1998,8 @@ function coverageFor(
             entry.size,
           )
         : 0;
-      const draft = periodIsCurrent &&
-        contribution?.periodMigration?.timeZone === timeZone
-        ? Math.min(contribution.periodMigration.offset, contribution.offset, entry.size)
+      const draft = periodMigrationIsCurrent && periodMigration
+        ? Math.min(periodMigration.offset, contribution.offset, entry.size)
         : 0;
       const migrated = Math.max(0, Math.max(promoted, draft));
       migratedBytes += migrated;
@@ -1735,14 +2023,20 @@ function coverageFor(
     };
   };
   const last7Start = rollingDayKeysFromDayKey(asOfDay, 7)[0];
-  const last30Start = rollingDayKeysFromDayKey(asOfDay, 30)[0];
+  const last30DayKeys = rollingDayKeysFromDayKey(
+    asOfDay,
+    CODEX_ROLLING_HOURLY_DAYS,
+  );
+  const last30Start = last30DayKeys[0];
   const last7Days = rangeCoverage(last7Start);
   const last30Days = rangeCoverage(last30Start);
   const allTime = rangeCoverage();
-  let todayIndexedFiles = 0;
-  let todayTotalFiles = 0;
-  let todayIndexedBytes = 0;
-  let todayTotalBytes = 0;
+  const rollingDays = new Set(last30DayKeys);
+  const hourlyDays: Record<string, CodexHourlyDayCoverage> = {};
+  let hourlyIndexedFiles = 0;
+  let hourlyTotalFiles = 0;
+  let hourlyIndexedBytes = 0;
+  let hourlyTotalBytes = 0;
   for (const entry of manifest.files) {
     if (!deduplication.canonicalFileKeys.has(entry.fileKey)) {
       continue;
@@ -1754,15 +2048,20 @@ function coverageFor(
       contribution.lineageReconciliation ||
       contribution.lineage?.appliedPrefixEvents !==
         contribution.lineage?.desiredPrefixEvents ||
-      !contribution.aggregate.period?.days[asOfDay]
+      !isReadableCodexPeriod(contribution, timeZone)
     ) {
       continue;
     }
-    todayTotalFiles += 1;
-    todayTotalBytes += entry.size;
+    const eligibleDays = Object.keys(contribution.aggregate.period!.days)
+      .filter((day) => rollingDays.has(day));
+    if (eligibleDays.length === 0) {
+      continue;
+    }
+    hourlyTotalFiles += 1;
+    hourlyTotalBytes += entry.size;
     const promoted =
-      contribution.aggregate.today?.day === asOfDay &&
-      contribution.aggregate.today.timeZone === timeZone
+      isRollingTodayIndex(contribution.aggregate.today, timeZone) &&
+      contribution.aggregate.today.day === asOfDay
         ? Math.min(
             contribution.aggregate.today.indexedThrough,
             contribution.offset,
@@ -1772,6 +2071,9 @@ function coverageFor(
     const draft =
       contribution.todayMigration?.day === asOfDay &&
       contribution.todayMigration.timeZone === timeZone &&
+      contribution.todayMigration.windowDays ===
+        CODEX_ROLLING_HOURLY_DAYS &&
+      contribution.todayMigration.days &&
       contribution.todayMigration.prefixEvents ===
         (contribution.lineage?.desiredPrefixEvents ?? 0)
         ? Math.min(
@@ -1780,15 +2082,47 @@ function coverageFor(
             entry.size,
           )
         : 0;
-    todayIndexedBytes += Math.max(0, Math.max(promoted, draft));
-    if (
-      contribution.aggregate.today?.day === asOfDay &&
-      contribution.aggregate.today.timeZone === timeZone &&
-      contribution.aggregate.today.indexedThrough >= contribution.offset
-    ) {
-      todayIndexedFiles += 1;
+    const migratedBytes = Math.max(0, Math.max(promoted, draft));
+    hourlyIndexedBytes += migratedBytes;
+    const completeFile = Boolean(
+      isRollingTodayIndex(contribution.aggregate.today, timeZone) &&
+      contribution.aggregate.today.day === asOfDay &&
+      contribution.aggregate.today.indexedThrough >= contribution.offset,
+    );
+    if (completeFile) {
+      hourlyIndexedFiles += 1;
+    }
+    for (const day of eligibleDays) {
+      const current = (hourlyDays[day] ??= {
+        day,
+        indexedFiles: 0,
+        totalFiles: 0,
+        indexedBytes: 0,
+        totalBytes: 0,
+        complete: false,
+      });
+      current.totalFiles += 1;
+      current.totalBytes += entry.size;
+      current.indexedBytes += migratedBytes;
+      if (completeFile) {
+        current.indexedFiles += 1;
+      }
     }
   }
+  const hourlyComplete =
+    last30Days.complete && hourlyIndexedFiles === hourlyTotalFiles;
+  for (const coverage of Object.values(hourlyDays)) {
+    coverage.complete =
+      last30Days.complete && coverage.indexedFiles === coverage.totalFiles;
+  }
+  const todayDayCoverage = hourlyDays[asOfDay] ?? {
+    day: asOfDay,
+    indexedFiles: 0,
+    totalFiles: 0,
+    indexedBytes: 0,
+    totalBytes: 0,
+    complete: last30Days.complete,
+  };
   return {
     indexedFiles,
     totalFiles,
@@ -1807,14 +2141,25 @@ function coverageFor(
       last30Days,
       allTime,
     },
+    hourly: {
+      timeZone,
+      asOfDay,
+      windowDays: CODEX_ROLLING_HOURLY_DAYS,
+      indexedFiles: hourlyIndexedFiles,
+      totalFiles: hourlyTotalFiles,
+      indexedBytes: hourlyIndexedBytes,
+      totalBytes: hourlyTotalBytes,
+      complete: hourlyComplete,
+      days: hourlyDays,
+    },
     today: {
       timeZone,
       day: asOfDay,
-      indexedFiles: todayIndexedFiles,
-      totalFiles: todayTotalFiles,
-      indexedBytes: todayIndexedBytes,
-      totalBytes: todayTotalBytes,
-      complete: last7Days.complete && todayIndexedFiles === todayTotalFiles,
+      indexedFiles: todayDayCoverage.indexedFiles,
+      totalFiles: todayDayCoverage.totalFiles,
+      indexedBytes: todayDayCoverage.indexedBytes,
+      totalBytes: todayDayCoverage.totalBytes,
+      complete: todayDayCoverage.complete,
     },
   };
 }
@@ -1833,6 +2178,7 @@ function recomputeDerivedIndex(
       initialDeduplication.canonicalFileKeys,
     );
   }
+  mergeCodexQuotaHistory(index);
   const deduplication = classifyCodexSessionDuplicates(index.files);
   index.aggregate = recomputeAggregate(index.files, deduplication);
   index.coverage = coverageFor(
@@ -1851,6 +2197,7 @@ function progressFor(index: CodexIndexV3, scannedFiles: number): CodexIndexProgr
     indexedBytes: index.coverage.indexedBytes,
     totalBytes: index.coverage.totalBytes,
     period: index.coverage.period,
+    hourly: index.coverage.hourly,
   };
 }
 
@@ -1861,7 +2208,14 @@ function isWarmNoOp(
   timeZone: string,
   asOfDay: string,
 ): boolean {
+  // Older schema-3 indexes have a current `limit` projection but no neutral
+  // reset history. Give the next refresh one chance to seed the bounded cache
+  // even when the JSONL manifest itself has not changed.
+  if (hasCodexQuotaEvidence(previous) && !previous.quotaHistory?.length) {
+    return false;
+  }
   const totalBytes = manifest.files.reduce((sum, entry) => sum + entry.size, 0);
+  const hourlyCoverage = previous.coverage.hourly;
   if (
     diff.appended.length > 0 ||
     diff.truncated.length > 0 ||
@@ -1877,6 +2231,10 @@ function isWarmNoOp(
     !previous.coverage.period.allTime.complete ||
     previous.coverage.period.timeZone !== timeZone ||
     previous.coverage.period.asOfDay !== asOfDay ||
+    !hourlyCoverage?.complete ||
+    hourlyCoverage.timeZone !== timeZone ||
+    hourlyCoverage.asOfDay !== asOfDay ||
+    hourlyCoverage.windowDays !== CODEX_ROLLING_HOURLY_DAYS ||
     !previous.coverage.today?.complete ||
     previous.coverage.today.timeZone !== timeZone ||
     previous.coverage.today.day !== asOfDay
@@ -1885,6 +2243,7 @@ function isWarmNoOp(
   }
   const canonical = classifyCodexSessionDuplicates(previous.files)
     .canonicalFileKeys;
+  const rollingDays = rollingHourlyDaySet(asOfDay);
   return manifest.files.every((entry) => {
     const contribution = previous.files[entry.fileKey];
     const baseIsCurrent = Boolean(
@@ -1897,21 +2256,22 @@ function isWarmNoOp(
       !contribution.lineageReconciliation &&
       contribution.aggregate.period?.timeZone === timeZone &&
       contribution.aggregate.period.indexedThrough >= contribution.offset &&
+      isReadableCodexPeriod(contribution, timeZone) &&
       !contribution.qualityFlags.includes('stale-file') &&
       !contribution.qualityFlags.includes('stale-reset-required'),
     );
     if (!baseIsCurrent || !contribution) {
       return false;
     }
-    if (
-      !canonical.has(entry.fileKey) ||
-      !contribution.aggregate.period?.days[asOfDay]
-    ) {
+    const hasRollingDay = Object.keys(
+      contribution.aggregate.period?.days ?? {},
+    ).some((day) => rollingDays.has(day));
+    if (!canonical.has(entry.fileKey) || !hasRollingDay) {
       return true;
     }
     return Boolean(
-      contribution.aggregate.today?.day === asOfDay &&
-      contribution.aggregate.today.timeZone === timeZone &&
+      isRollingTodayIndex(contribution.aggregate.today, timeZone) &&
+      contribution.aggregate.today.day === asOfDay &&
       contribution.aggregate.today.indexedThrough >= contribution.offset &&
       !contribution.todayMigration
     );
@@ -1980,6 +2340,12 @@ export async function updateCodexIndex(
     };
   }
   const index = cloneIndex(previous);
+  // Seed the durable neutral history before moved/removed files disappear.
+  // This also upgrades an older index without rereading unchanged JSONL.
+  mergeCodexQuotaHistory(index);
+  if (previous.coverage.period.timeZone !== timeZone) {
+    index.indexGeneration = Math.max(1, Math.floor(previous.indexGeneration ?? 0) + 1);
+  }
   const entries = new Map(manifest.files.map((entry) => [entry.fileKey, entry]));
   let bodyReads = 0;
   let failedFiles = 0;
@@ -2027,27 +2393,60 @@ export async function updateCodexIndex(
   }
   for (const contribution of Object.values(index.files)) {
     promoteCaughtUpLineage(contribution);
-    if (contribution.aggregate.period?.timeZone !== timeZone) {
+    const desiredPrefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+    if (contribution.aggregate.period && (
+      !isCompatibleCodexPeriodLineage(
+        contribution.aggregate.period,
+        desiredPrefixEvents,
+      ) ||
+      !codexPeriodFitsAggregate(
+        contribution.aggregate.period,
+        contribution.aggregate.total,
+      ) ||
+      contribution.aggregate.period.timeZone !== timeZone
+    )) {
       delete contribution.aggregate.period;
     }
-    if (contribution.periodMigration?.timeZone !== timeZone) {
+    if (
+      contribution.periodMigration &&
+      (
+        contribution.periodMigration.timeZone !== timeZone ||
+        contribution.periodMigration.prefixEvents !== desiredPrefixEvents ||
+        !Number.isFinite(contribution.periodMigration.tokenEventsSeen) ||
+        (contribution.periodMigration.tokenEventsSeen ?? 0) < desiredPrefixEvents
+      )
+    ) {
       delete contribution.periodMigration;
     }
     promoteCaughtUpPeriod(contribution, timeZone);
-    if (
-      contribution.aggregate.today &&
-      (
-        contribution.aggregate.today.day !== asOfDay ||
-        contribution.aggregate.today.timeZone !== timeZone
-      )
-    ) {
-      delete contribution.aggregate.today;
+    const today = contribution.aggregate.today;
+    if (today) {
+      if (isRollingTodayIndex(today, timeZone)) {
+        const previousDay = today.day;
+        const nextWindow = rollingHourlyDaySet(asOfDay);
+        const hasPreviouslyFutureUsage =
+          asOfDay > previousDay &&
+          Object.keys(contribution.aggregate.period?.days ?? {}).some(
+            (day) => day > previousDay && nextWindow.has(day),
+          );
+        if (
+          hasPreviouslyFutureUsage ||
+          !reanchorRollingToday(today, asOfDay, timeZone)
+        ) {
+          delete contribution.aggregate.today;
+        }
+      } else if (today.day !== asOfDay || today.timeZone !== timeZone) {
+        delete contribution.aggregate.today;
+      }
     }
     if (
       contribution.todayMigration &&
       (
         contribution.todayMigration.day !== asOfDay ||
         contribution.todayMigration.timeZone !== timeZone ||
+        contribution.todayMigration.windowDays !==
+          CODEX_ROLLING_HOURLY_DAYS ||
+        !contribution.todayMigration.days ||
         contribution.todayMigration.prefixEvents !==
           (contribution.lineage?.desiredPrefixEvents ?? 0)
       )
@@ -2388,7 +2787,8 @@ export async function updateCodexIndex(
   }
 
   await finishStage(filePasses > mainPassStart, true);
-  const lineageWork = manifest.files
+  const allowHistoricalBackfill = options.allowHistoricalBackfill !== false;
+  const lineageWork = (allowHistoricalBackfill ? manifest.files : [])
     .filter((entry) => {
       const contribution = index.files[entry.fileKey];
       return Boolean(
@@ -2510,7 +2910,7 @@ export async function updateCodexIndex(
 
   await finishStage(filePasses > lineagePassStart);
   const canonical = classifyCodexSessionDuplicates(index.files).canonicalFileKeys;
-  const periodWork = manifest.files
+  const periodWork = (allowHistoricalBackfill ? manifest.files : [])
     .filter((entry) => {
       if (!canonical.has(entry.fileKey)) {
         return false;
@@ -2525,6 +2925,14 @@ export async function updateCodexIndex(
         contribution.offset >= entry.size &&
         !contribution.discardingOversizedLine &&
         (
+          !isCompatibleCodexPeriodLineage(
+            contribution.aggregate.period,
+            contribution.lineage?.desiredPrefixEvents ?? 0,
+          ) ||
+          !codexPeriodFitsAggregate(
+            contribution.aggregate.period,
+            contribution.aggregate.total,
+          ) ||
           contribution.aggregate.period?.timeZone !== timeZone ||
           contribution.aggregate.period.indexedThrough !== contribution.offset
         ),
@@ -2550,7 +2958,12 @@ export async function updateCodexIndex(
         continue;
       }
       const base = cloneContribution(prior);
-      const start = base.periodMigration?.timeZone === timeZone
+      const start = base.periodMigration?.timeZone === timeZone &&
+          base.periodMigration.prefixEvents ===
+            (base.lineage?.desiredPrefixEvents ?? 0) &&
+          Number.isFinite(base.periodMigration.tokenEventsSeen) &&
+          (base.periodMigration.tokenEventsSeen ?? 0) >=
+            (base.lineage?.desiredPrefixEvents ?? 0)
         ? base.periodMigration.offset
         : 0;
       const endExclusive = Math.min(
@@ -2590,7 +3003,12 @@ export async function updateCodexIndex(
       continue;
     }
     const base = cloneContribution(prior);
-    const start = base.periodMigration?.timeZone === timeZone
+    const start = base.periodMigration?.timeZone === timeZone &&
+        base.periodMigration.prefixEvents ===
+          (base.lineage?.desiredPrefixEvents ?? 0) &&
+        Number.isFinite(base.periodMigration.tokenEventsSeen) &&
+        (base.periodMigration.tokenEventsSeen ?? 0) >=
+          (base.lineage?.desiredPrefixEvents ?? 0)
       ? base.periodMigration.offset
       : 0;
     const endExclusive = Math.min(
@@ -2633,7 +3051,8 @@ export async function updateCodexIndex(
 
   const todayCanonical = classifyCodexSessionDuplicates(index.files)
     .canonicalFileKeys;
-  const todayWork = manifest.files
+  const hourlyWindowDays = rollingHourlyDaySet(asOfDay);
+  const todayWork = (allowHistoricalBackfill ? manifest.files : [])
     .filter((entry) => {
       if (!todayCanonical.has(entry.fileKey)) {
         return false;
@@ -2648,10 +3067,11 @@ export async function updateCodexIndex(
         contribution.offset > 0 &&
         contribution.offset >= entry.size &&
         !contribution.discardingOversizedLine &&
-        contribution.aggregate.period?.days[asOfDay] &&
+        Object.keys(contribution.aggregate.period?.days ?? {})
+          .some((day) => hourlyWindowDays.has(day)) &&
         (
-          contribution.aggregate.today?.day !== asOfDay ||
-          contribution.aggregate.today.timeZone !== timeZone ||
+          !isRollingTodayIndex(contribution.aggregate.today, timeZone) ||
+          contribution.aggregate.today.day !== asOfDay ||
           contribution.aggregate.today.indexedThrough !== contribution.offset
         )
       );
@@ -2680,6 +3100,8 @@ export async function updateCodexIndex(
       const start =
         migration?.day === asOfDay &&
           migration.timeZone === timeZone &&
+          migration.windowDays === CODEX_ROLLING_HOURLY_DAYS &&
+          migration.days &&
           migration.prefixEvents ===
             (base.lineage?.desiredPrefixEvents ?? 0)
           ? migration.offset
@@ -2727,6 +3149,8 @@ export async function updateCodexIndex(
     const start =
       migration?.day === asOfDay &&
         migration.timeZone === timeZone &&
+        migration.windowDays === CODEX_ROLLING_HOURLY_DAYS &&
+        migration.days &&
         migration.prefixEvents ===
           (base.lineage?.desiredPrefixEvents ?? 0)
         ? migration.offset
@@ -2773,7 +3197,9 @@ export async function updateCodexIndex(
 
   reconcileLineageForCheckpoint = true;
   const identityPassStart = filePasses;
-  const identityWork = manifest.files.sort(recentFirst);
+  const identityWork = allowHistoricalBackfill
+    ? manifest.files.sort(recentFirst)
+    : [];
   const pendingIdentity = identityWork.filter(
     (entry) => index.files[entry.fileKey]?.identityChecked !== true,
   );
@@ -2869,7 +3295,7 @@ export async function updateCodexIndex(
       pending:
         !index.coverage.complete ||
         !index.coverage.period.allTime.complete ||
-        !index.coverage.today.complete,
+        !index.coverage.hourly?.complete,
     },
   };
 }
@@ -2879,6 +3305,7 @@ interface LegacyCodexIndexV1 {
   readonly files: Readonly<Record<string, LegacyCodexFileContribution>>;
   readonly aggregate?: unknown;
   readonly coverage?: unknown;
+  readonly quotaHistory?: unknown;
 }
 
 interface LegacyCodexFileContribution {
@@ -2895,6 +3322,7 @@ interface LegacyCodexFileContribution {
   readonly aggregate?: unknown;
   readonly limit?: unknown;
   readonly limits?: unknown;
+  readonly quotaHistory?: unknown;
   readonly qualityFlags?: unknown;
   readonly identityChecked?: unknown;
 }
@@ -2916,6 +3344,7 @@ interface LegacyCodexIndexV2 {
   readonly files: Readonly<Record<string, unknown>>;
   readonly aggregate?: unknown;
   readonly coverage?: unknown;
+  readonly quotaHistory?: unknown;
 }
 
 function isLegacyIndexV2(value: unknown): value is LegacyCodexIndexV2 {
@@ -3110,7 +3539,7 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
     record.previousSnapshotSignature,
   );
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     fileKey,
     sessionKey,
     ...(treeKey ? { treeKey } : {}),
@@ -3195,6 +3624,12 @@ function sanitizePeriod(value: unknown): CodexFilePeriodIndex | undefined {
     timeZone: resolveTimeZone(value.timeZone),
     indexedThrough: Math.max(0, finiteNumber(value.indexedThrough)),
     days,
+    ...(optionalNumber(value.lineageVersion) !== undefined
+      ? { lineageVersion: optionalNumber(value.lineageVersion) }
+      : {}),
+    ...(optionalNumber(value.lineagePrefixEvents) !== undefined
+      ? { lineagePrefixEvents: Math.max(0, Math.floor(optionalNumber(value.lineagePrefixEvents)!)) }
+      : {}),
   };
 }
 
@@ -3217,6 +3652,21 @@ function sanitizeHourlySlices(
   );
 }
 
+function sanitizeHourlyDays(value: unknown): CodexHourlyDays {
+  if (!isRecord(value)) {
+    return {};
+  }
+  return Object.fromEntries(
+    Object.entries(value).flatMap(([day, rawHours]) => {
+      if (rollingDayKeysFromDayKey(day, 1)[0] !== day) {
+        return [];
+      }
+      const hours = sanitizeHourlySlices(rawHours);
+      return Object.keys(hours).length > 0 ? [[day, hours]] : [];
+    }),
+  );
+}
+
 function sanitizeToday(value: unknown): CodexFileTodayIndex | undefined {
   if (
     !isRecord(value) ||
@@ -3226,11 +3676,24 @@ function sanitizeToday(value: unknown): CodexFileTodayIndex | undefined {
   ) {
     return undefined;
   }
+  const timeZone = resolveTimeZone(value.timeZone);
+  const modern = value.windowDays === CODEX_ROLLING_HOURLY_DAYS &&
+    isRecord(value.days);
+  const days = modern ? sanitizeHourlyDays(value.days) : undefined;
+  if (days) {
+    pruneCodexHourlyDays(days, rollingHourlyDaySet(value.day));
+  }
   return {
     day: value.day,
-    timeZone: resolveTimeZone(value.timeZone),
+    timeZone,
     indexedThrough: Math.max(0, finiteNumber(value.indexedThrough)),
-    hours: sanitizeHourlySlices(value.hours),
+    hours: days ? days[value.day] ?? {} : sanitizeHourlySlices(value.hours),
+    ...(days
+      ? {
+          windowDays: CODEX_ROLLING_HOURLY_DAYS,
+          days,
+        }
+      : {}),
   };
 }
 
@@ -3308,6 +3771,12 @@ function sanitizePeriodMigration(
   }
   return {
     timeZone: period.timeZone,
+    ...(optionalNumber(value.prefixEvents) !== undefined
+      ? { prefixEvents: Math.max(0, Math.floor(optionalNumber(value.prefixEvents)!)) }
+      : {}),
+    ...(optionalNumber(value.tokenEventsSeen) !== undefined
+      ? { tokenEventsSeen: Math.max(0, Math.floor(optionalNumber(value.tokenEventsSeen)!)) }
+      : {}),
     offset: Math.max(0, finiteNumber(value.offset)),
     discardingOversizedLine: value.discardingOversizedLine === true,
     parserState: sanitizeParserState(value.parserState, fileKey),
@@ -3328,6 +3797,8 @@ function sanitizeTodayMigration(
     timeZone: value.timeZone,
     indexedThrough: value.offset,
     hours: value.hours,
+    windowDays: value.windowDays,
+    days: value.days,
   });
   if (!today) {
     return undefined;
@@ -3344,6 +3815,12 @@ function sanitizeTodayMigration(
     discardingOversizedLine: value.discardingOversizedLine === true,
     parserState: sanitizeParserState(value.parserState, fileKey),
     hours: today.hours,
+    ...(today.windowDays === CODEX_ROLLING_HOURLY_DAYS && today.days
+      ? {
+          windowDays: CODEX_ROLLING_HOURLY_DAYS,
+          days: today.days,
+        }
+      : {}),
     qualityFlags: sanitizeQualityFlags(value.qualityFlags),
   };
 }
@@ -3518,6 +3995,39 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
     : dayKeyInZone(new Date(Date.now()), timeZone);
   const last7Days = sanitizeRange(period.last7Days);
   const last30Days = sanitizeRange(period.last30Days);
+  const rawHourly = isRecord(coverage.hourly) ? coverage.hourly : {};
+  const hourlyTimeZone = resolveTimeZone(
+    typeof rawHourly.timeZone === 'string' ? rawHourly.timeZone : timeZone,
+  );
+  const candidateHourlyDay = typeof rawHourly.asOfDay === 'string'
+    ? rawHourly.asOfDay
+    : '';
+  const hasValidHourly =
+    typeof rawHourly.timeZone === 'string' &&
+    rawHourly.windowDays === CODEX_ROLLING_HOURLY_DAYS &&
+    rollingDayKeysFromDayKey(candidateHourlyDay, 1)[0] === candidateHourlyDay;
+  const hourlyAsOfDay = hasValidHourly ? candidateHourlyDay : asOfDay;
+  const allowedHourlyDays = rollingHourlyDaySet(hourlyAsOfDay);
+  const rawHourlyDays = isRecord(rawHourly.days) ? rawHourly.days : {};
+  const hourlyDays = Object.fromEntries(
+    Object.entries(rawHourlyDays).flatMap(([day, raw]) => {
+      if (!allowedHourlyDays.has(day) || !isRecord(raw)) {
+        return [];
+      }
+      const indexedFiles = Math.max(0, finiteNumber(raw.indexedFiles));
+      const totalFiles = Math.max(0, finiteNumber(raw.totalFiles));
+      return [[day, {
+        day,
+        indexedFiles,
+        totalFiles,
+        indexedBytes: Math.max(0, finiteNumber(raw.indexedBytes)),
+        totalBytes: Math.max(0, finiteNumber(raw.totalBytes)),
+        complete: hasValidHourly && raw.complete === true,
+      }]];
+    }),
+  );
+  const hourlyIndexedFiles = Math.max(0, finiteNumber(rawHourly.indexedFiles));
+  const hourlyTotalFiles = Math.max(0, finiteNumber(rawHourly.totalFiles));
   const rawToday = isRecord(coverage.today) ? coverage.today : {};
   const todayTimeZone = resolveTimeZone(
     typeof rawToday.timeZone === 'string' ? rawToday.timeZone : timeZone,
@@ -3562,6 +4072,17 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
       last30Days,
       allTime: sanitizeRange(period.allTime),
     },
+    hourly: {
+      timeZone: hourlyTimeZone,
+      asOfDay: hourlyAsOfDay,
+      windowDays: CODEX_ROLLING_HOURLY_DAYS,
+      indexedFiles: hourlyIndexedFiles,
+      totalFiles: hourlyTotalFiles,
+      indexedBytes: Math.max(0, finiteNumber(rawHourly.indexedBytes)),
+      totalBytes: Math.max(0, finiteNumber(rawHourly.totalBytes)),
+      complete: hasValidHourly && rawHourly.complete === true,
+      days: hourlyDays,
+    },
     today: {
       timeZone: todayTimeZone,
       day: todayDay,
@@ -3575,6 +4096,7 @@ function sanitizeCoverage(value: unknown): CodexIndexCoverage {
 }
 
 function markLineageRescanRequired(index: CodexIndexV3): CodexIndexV3 {
+  index.indexGeneration = Math.max(1, Math.floor(index.indexGeneration ?? 0) + 1);
   for (const contribution of Object.values(index.files)) {
     delete contribution.lineage;
     delete contribution.lineageReconciliation;
@@ -3605,6 +4127,12 @@ function markLineageRescanRequired(index: CodexIndexV3): CodexIndexV3 {
   index.coverage.today.indexedFiles = 0;
   index.coverage.today.indexedBytes = 0;
   index.coverage.today.complete = false;
+  if (index.coverage.hourly) {
+    index.coverage.hourly.indexedFiles = 0;
+    index.coverage.hourly.indexedBytes = 0;
+    index.coverage.hourly.complete = false;
+    index.coverage.hourly.days = {};
+  }
   return index;
 }
 
@@ -3622,11 +4150,15 @@ function migrateIndexV1(index: LegacyCodexIndexV1): CodexIndexV3 {
       false,
     );
   }
+  const quotaHistory = sanitizeCodexQuotaHistory(index.quotaHistory);
   return {
     schemaVersion: 3,
     files,
     aggregate: sanitizeProviderAggregate(index.aggregate),
     coverage: sanitizeCoverage(index.coverage),
+    ...(quotaHistory.length > 0
+      ? { quotaHistory }
+      : {}),
   };
 }
 
@@ -3649,6 +4181,10 @@ function sanitizeFileContribution(
   const safeOffset = offsetOverride ?? Math.max(0, finiteNumber(contribution.offset));
   const limit = sanitizeLimit(contribution.limit);
   const limits = sanitizeLimits(contribution.limits);
+  const quotaHistory = sanitizeCodexQuotaHistory(
+    contribution.quotaHistory,
+    CODEX_FILE_QUOTA_HISTORY_LIMIT,
+  );
   const lineage = sanitizeLineage(contribution.lineage);
   const lineageReconciliation = sanitizeLineageReconciliation(
     contribution.lineageReconciliation,
@@ -3674,6 +4210,20 @@ function sanitizeFileContribution(
   );
   if (periodMigration) {
     periodMigration.offset = Math.min(periodMigration.offset, safeOffset);
+    if (lineage) {
+      if (periodMigration.prefixEvents !== undefined) {
+        periodMigration.prefixEvents = Math.min(
+          periodMigration.prefixEvents,
+          lineage.tokenEvents,
+        );
+      }
+      if (periodMigration.tokenEventsSeen !== undefined) {
+        periodMigration.tokenEventsSeen = Math.min(
+          periodMigration.tokenEventsSeen,
+          lineage.tokenEvents,
+        );
+      }
+    }
   }
   const todayMigration = sanitizeTodayMigration(
     contribution.todayMigration,
@@ -3719,6 +4269,7 @@ function sanitizeFileContribution(
     aggregate,
     ...(limit ? { limit } : {}),
     ...(limits ? { limits } : {}),
+    ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
     qualityFlags: sanitizeQualityFlags(contribution.qualityFlags),
     ...(typeof contribution.identityChecked === 'boolean'
       ? { identityChecked: contribution.identityChecked }
@@ -3758,11 +4309,19 @@ function sanitizeIndexV2(value: unknown): CodexIndexV3 {
       delete contribution.todayMigration;
     }
   }
+  const quotaHistory = sanitizeCodexQuotaHistory(index.quotaHistory);
   return {
     schemaVersion: 3,
+    ...(typeof index.indexGeneration === 'number' &&
+      Number.isSafeInteger(index.indexGeneration) && index.indexGeneration > 0
+      ? { indexGeneration: index.indexGeneration }
+      : {}),
     files,
     aggregate: sanitizeProviderAggregate(index.aggregate),
     coverage,
+    ...(quotaHistory.length > 0
+      ? { quotaHistory }
+      : {}),
   };
 }
 
@@ -3770,7 +4329,7 @@ function requiresTokenSemanticsRescan(index: CodexIndexV3): boolean {
   return Object.values(index.files).some((contribution) =>
     !isRecord(contribution) ||
     !isRecord(contribution.parserState) ||
-    contribution.parserState.schemaVersion !== 3
+    contribution.parserState.schemaVersion !== 4
   );
 }
 
@@ -3811,7 +4370,7 @@ export async function loadCodexIndex(
     if (error instanceof SyntaxError) {
       await quarantineCorruptCodexIndex(indexPath);
       onRecovery?.({ reason: 'invalid-json' });
-      return createEmptyCodexIndex(timeZone);
+      return recoveredIndex(timeZone);
     }
     throw error;
   }
@@ -3830,7 +4389,7 @@ export async function loadCodexIndex(
   }
   await quarantineCorruptCodexIndex(indexPath);
   onRecovery?.({ reason: 'unsupported-schema' });
-  return createEmptyCodexIndex(timeZone);
+  return recoveredIndex(timeZone);
 }
 
 export async function saveCodexIndexAtomic(

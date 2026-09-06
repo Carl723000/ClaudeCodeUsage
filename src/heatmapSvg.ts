@@ -15,10 +15,83 @@ export const CLAUDE_ORANGE_SCALE = ['#ebedf0', '#fadcc9', '#f0aa82', '#e07d4f', 
 export interface HeatmapSvgOptions {
   metric?: HeatMetric; // default 'tokens'
   weeks?: number; // trailing weeks to show (default 53, GitHub-like)
+  startDateISO?: string; // explicit inclusive start for deterministic custom ranges
   endDateISO?: string; // last day to show (default today)
   title?: string; // override the auto summary heading
+  subtitle?: string; // optional aggregate breakdown below the heading
+  footerNote?: string; // optional semantic disclaimer above the watermark row
   watermark?: string; // bottom-left source note (default "Made with Claude Code Usage")
-  scale?: string[]; // 5 colours, empty→max (default CLAUDE_ORANGE_SCALE)
+  scale?: string[]; // 2..8 colours, empty→max (default CLAUDE_ORANGE_SCALE)
+  intensityMode?: 'linear' | 'quantile' | 'logarithmic'; // default linear; alternatives keep outliers from flattening the history
+  background?: string;
+  primaryText?: string;
+  secondaryText?: string;
+  borderColor?: string;
+  accentColor?: string;
+  minWidth?: number; // optional card width floor for short date ranges
+  ariaLabel?: string;
+  tooltip?: (dateISO: string, usage: DayUsage, value: number, metric: HeatMetric) => string;
+}
+
+function lowerBound(sorted: readonly number[], value: number): number {
+  let low = 0;
+  let high = sorted.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (sorted[middle] < value) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  return low;
+}
+
+function assignRenderBuckets(
+  cells: HeatGridCell[],
+  activeBands: number,
+  max: number,
+  mode: 'linear' | 'quantile' | 'logarithmic',
+): void {
+  // buildContributionGrid already applies the original four-band linear rule.
+  // Preserve that exact output for the long-standing Claude ramp.
+  if (mode === 'linear' && activeBands === 4) {
+    return;
+  }
+  const bands = Math.max(1, activeBands);
+  const positive = mode === 'quantile'
+    ? cells.map((cell) => cell.value).filter((value) => value > 0).sort((a, b) => a - b)
+    : [];
+  for (const cell of cells) {
+    if (cell.value <= 0 || max <= 0) {
+      cell.bucket = 0;
+      continue;
+    }
+    // Rank by the first occurrence, so a large tie of ordinary days stays in
+    // the lightest active band. The observed maximum is always the top band;
+    // otherwise sparse inputs and a tie at the maximum make the legend's
+    // darkest swatch unreachable.
+    if (mode === 'quantile' && positive.length > 0) {
+      cell.bucket = cell.value >= max
+        ? bands
+        : Math.min(bands, Math.max(1, Math.floor((lowerBound(positive, cell.value) / positive.length) * bands) + 1));
+      continue;
+    }
+    const normalized = mode === 'logarithmic'
+      ? Math.log1p(cell.value) / Math.log1p(max)
+      : cell.value / max;
+    cell.bucket = Math.min(bands, Math.max(1, Math.ceil(normalized * bands)));
+  }
+}
+
+function safeSvgColor(value: unknown, fallback: string): string {
+  if (typeof value !== 'string') {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  return normalized === 'transparent' || /^#(?:[0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/.test(normalized)
+    ? normalized
+    : fallback;
 }
 
 function valueOf(u: DayUsage, metric: HeatMetric): number {
@@ -128,14 +201,26 @@ export function renderHeatmapSvg(daily: Record<string, DayUsage>, opts: HeatmapS
   const metric = opts.metric ?? 'tokens';
   const weeks = Math.max(1, Math.min(53, opts.weeks ?? 53));
   const today = opts.endDateISO ?? new Date().toISOString().slice(0, 10);
-  const scale = opts.scale && opts.scale.length === 5 ? opts.scale : CLAUDE_ORANGE_SCALE;
+  const requestedScale = opts.scale && opts.scale.length >= 2 && opts.scale.length <= 8
+    ? opts.scale
+    : CLAUDE_ORANGE_SCALE;
+  const scale = requestedScale.map((color, index) => safeSvgColor(
+    color,
+    CLAUDE_ORANGE_SCALE[Math.min(index, CLAUDE_ORANGE_SCALE.length - 1)],
+  ));
   const watermark = opts.watermark ?? 'Made with Claude Code Usage';
 
   // Trailing window: full weeks ending on the Saturday of today's week, cells
   // only up to today (no future) — GitHub's default contribution view.
   const gridEndSat = addDays(today, 6 - weekdayOf(today));
-  const startISO = addDays(gridEndSat, -(weeks * 7 - 1)); // a Sunday, `weeks` back
+  const startISO = opts.startDateISO ?? addDays(gridEndSat, -(weeks * 7 - 1)); // a Sunday, `weeks` back
   const grid = buildContributionGrid(daily, startISO, today, metric);
+  assignRenderBuckets(
+    grid.cells,
+    scale.length - 1,
+    grid.max,
+    opts.intensityMode ?? 'linear',
+  );
 
   // Auto summary heading, e.g. "5.3B tokens in Claude Code · 2026".
   const year = Number(today.slice(0, 4));
@@ -152,29 +237,44 @@ export function renderHeatmapSvg(daily: Record<string, DayUsage>, opts: HeatmapS
   const gap = 3;
   const step = cell + gap;
   const padL = 38; // weekday labels
-  const titleH = 24;
+  const titleH = opts.subtitle ? 43 : 24;
   const monthH = 18;
   const padT = titleH + monthH;
   const gridW = grid.columns * step;
   const gridH = 7 * step;
-  const footerH = 30;
-  const width = padL + gridW + 10;
+  const footerH = opts.footerNote ? 48 : 30;
+  const width = Math.max(padL + gridW + 10, Math.max(0, opts.minWidth ?? 0));
   const height = padT + gridH + footerH;
 
   const parts: string[] = [];
+  const background = safeSvgColor(opts.background, '#ffffff');
+  const primaryText = safeSvgColor(opts.primaryText, '#24292f');
+  const secondaryText = safeSvgColor(opts.secondaryText, '#57606a');
+  const borderColor = safeSvgColor(opts.borderColor, 'transparent');
+  const accentColor = opts.accentColor
+    ? safeSvgColor(opts.accentColor, '')
+    : undefined;
   parts.push(
-    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">`
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif" role="img" aria-label="${esc(opts.ariaLabel ?? summary)}">`
   );
-  parts.push(`<rect width="${width}" height="${height}" fill="#ffffff"/>`);
-  parts.push(`<text x="${padL}" y="16" font-size="15" font-weight="600" fill="#24292f">${esc(summary)}</text>`);
+  parts.push(`<rect x="0.5" y="0.5" width="${width - 1}" height="${height - 1}" rx="12" fill="${background}" stroke="${borderColor}"/>`);
+  if (accentColor) {
+    parts.push(`<rect x="0" y="0" width="${width}" height="4" rx="2" fill="${accentColor}"/>`);
+  }
+  parts.push(`<text x="${padL}" y="16" font-size="15" font-weight="600" fill="${primaryText}">${esc(summary)}</text>`);
+  if (opts.subtitle) {
+    parts.push(`<text x="${padL}" y="34" font-size="11" fill="${secondaryText}">${esc(opts.subtitle)}</text>`);
+  }
 
   // Cells with GitHub-style tooltips: "1.2M tokens on June 18th".
   for (const c of grid.cells) {
     const x = padL + c.col * step;
     const y = padT + c.row * step;
     const when = longDate(c.dateISO);
-    const tip =
-      c.value <= 0
+    const usage = daily[c.dateISO] ?? { tokens: 0, cost: 0, sessions: 0 };
+    const tip = opts.tooltip
+      ? opts.tooltip(c.dateISO, usage, c.value, metric)
+      : c.value <= 0
         ? `No ${noun || 'usage'} on ${when}`
         : metric === 'cost'
           ? `$${compactNum(c.value)} on ${when}`
@@ -194,29 +294,37 @@ export function renderHeatmapSvg(daily: Record<string, DayUsage>, opts: HeatmapS
     const m = Number(first.dateISO.slice(5, 7)) - 1;
     if (m !== lastMonth) {
       lastMonth = m;
-      parts.push(`<text x="${padL + col * step}" y="${titleH + 13}" font-size="12" fill="#57606a">${MONTHS[m]}</text>`);
+      parts.push(`<text x="${padL + col * step}" y="${titleH + 13}" font-size="12" fill="${secondaryText}">${MONTHS[m]}</text>`);
     }
   }
 
   // Weekday labels (Mon / Wed / Fri).
   for (const [row, label] of [[1, 'Mon'], [3, 'Wed'], [5, 'Fri']] as [number, string][]) {
-    parts.push(`<text x="0" y="${padT + row * step + cell - 1}" font-size="11" fill="#57606a">${label}</text>`);
+    parts.push(`<text x="0" y="${padT + row * step + cell - 1}" font-size="11" fill="${secondaryText}">${label}</text>`);
   }
 
-  const footY = padT + gridH + 18;
+  const footY = padT + gridH + (opts.footerNote ? 36 : 18);
+
+  if (opts.footerNote) {
+    parts.push(`<text x="${padL}" y="${padT + gridH + 15}" font-size="10" fill="${secondaryText}">${esc(opts.footerNote)}</text>`);
+  }
 
   // Watermark, bottom-left (an orange dot + source, to point back at the tool).
-  parts.push(`<rect x="${padL}" y="${footY - 8}" width="9" height="9" rx="2" ry="2" fill="${scale[3]}"/>`);
-  parts.push(`<text x="${padL + 13}" y="${footY}" font-size="11" fill="#57606a">${esc(watermark)}</text>`);
+  const watermarkColor = scale[Math.min(3, scale.length - 1)];
+  parts.push(`<rect x="${padL}" y="${footY - 8}" width="9" height="9" rx="2" ry="2" fill="${watermarkColor}"/>`);
+  parts.push(`<text x="${padL + 13}" y="${footY}" font-size="11" fill="${secondaryText}">${esc(watermark)}</text>`);
 
   // Legend, bottom-right: Less [][][][][] More.
-  let lx = padL + gridW - (5 * step + 56);
-  parts.push(`<text x="${lx}" y="${footY}" font-size="11" fill="#57606a">Less</text>`);
+  // Anchor to the rendered card rather than the raw grid. Short 30/90-day
+  // ranges use minWidth, so a grid-relative position can fall outside the
+  // viewBox as the legend gains additional bands.
+  let lx = Math.max(padL, width - (scale.length * step + 66));
+  parts.push(`<text x="${lx}" y="${footY}" font-size="11" fill="${secondaryText}">Less</text>`);
   lx += 26;
-  for (let b = 0; b < 5; b++) {
+  for (let b = 0; b < scale.length; b++) {
     parts.push(`<rect x="${lx + b * step}" y="${footY - 9}" width="${cell}" height="${cell}" rx="2" ry="2" fill="${scale[b]}"/>`);
   }
-  parts.push(`<text x="${lx + 5 * step + 4}" y="${footY}" font-size="11" fill="#57606a">More</text>`);
+  parts.push(`<text x="${lx + scale.length * step + 4}" y="${footY}" font-size="11" fill="${secondaryText}">More</text>`);
 
   parts.push('</svg>');
   return parts.join('\n');

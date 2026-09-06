@@ -107,6 +107,31 @@ test('session index keeps the latest clean title behind an anonymous key', async
   }
 });
 
+test('thread titles mask absolute paths glued to a bare colon or punctuation', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-title-colon-'));
+  try {
+    await writeFile(
+      path.join(root, 'session_index.jsonl'),
+      [
+        JSON.stringify({ id: 'raw-session-g', thread_name: '3:/Users/carl' }),
+        JSON.stringify({ id: 'raw-session-h', thread_name: '3:/etc/passwd' }),
+        JSON.stringify({ id: 'raw-session-i', thread_name: ':/etc/passwd' }),
+      ].join('\n'),
+      'utf8',
+    );
+
+    const titles = await loadCodexSessionTitles(root, SALT);
+
+    for (const id of ['raw-session-g', 'raw-session-h', 'raw-session-i']) {
+      const title = titles.get(pseudonymousIdentityKey(SALT, id)) ?? '';
+      assert.match(title, /\[path\]/);
+      assert.doesNotMatch(title, /\/Users\/carl|\/etc\/passwd/);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('session title loading rejects a symlinked metadata file', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-title-link-'));
   const outside = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-title-out-'));

@@ -12,12 +12,27 @@ import {
   CodexIndexCoverage,
   CodexIndexProgress,
   CodexIndexRecovery,
+  CodexHourlyCoverage,
   CodexTodayCoverage,
   CodexIndexV1,
   createEmptyCodexIndex,
+  isReadableCodexPeriod,
   isCodexUsageContributionCurrent,
   loadCodexIndex,
 } from './codexIndex';
+import {
+  CODEX_ROLLING_HOURLY_DAYS,
+  codexPeriodFitsAggregate,
+  isCompatibleCodexPeriodLineage,
+} from './codexPeriodIndex';
+import {
+  appendCodexQuotaHistory,
+  CODEX_QUOTA_HISTORY_LIMIT,
+  CODEX_QUOTA_RESET_CLUSTER_MS,
+  CodexQuotaObservation,
+  weeklyQuotaObservationsFromCodexHistory,
+  weeklyQuotaObservationsFromCodexLimit,
+} from './codexQuotaHistory';
 import { CodexIndexClient } from './codexIndexClient';
 import {
   CodexWorkerRefreshInput,
@@ -40,11 +55,15 @@ export interface CodexIndexClientLike {
     input: CodexWorkerRefreshInput,
     onProgress?: (progress: CodexIndexProgress) => void,
   ): Promise<CodexWorkerResult>;
-  dispose(): void;
+  cancel?(): void;
+  whenIdle?(): Promise<void>;
+  dispose(): void | Promise<void>;
 }
 
 export interface CodexProviderSnapshot {
   provider: 'codex';
+  /** Persisted index generation used to isolate migration completion state. */
+  indexGeneration?: number;
   total: ProviderTokenCounts;
   files: CodexFileAggregate[];
   coverage: CodexIndexCoverage;
@@ -53,6 +72,8 @@ export interface CodexProviderSnapshot {
   limit: ProviderLimitSnapshot | null;
   /** Aggregate-only inputs for reset-aligned API-equivalent value estimates. */
   weeklyValueInputs?: WeeklyValueInputs;
+  /** Exact sparse configured-zone hour coverage for the rolling 30-day view. */
+  hourlyCoverage?: CodexHourlyCoverage;
   /** Independent exact-hour backfill state for the current civil day. */
   todayCoverage: CodexTodayCoverage;
   todayPartial: boolean;
@@ -142,57 +163,81 @@ function aggregateTotal(
   return total;
 }
 
-function isAccountWideCodexLimit(snapshot: ProviderLimitSnapshot): boolean {
-  const id = (snapshot.limitId ?? '').trim().toLowerCase();
-  const name = (snapshot.limitName ?? '').trim().toLowerCase();
-  return id === 'codex' || name === 'codex' || (!name && id === '');
-}
-
 function codexWeeklyValueInputs(
   files: CodexFileContribution[],
+  persistedHistory: readonly CodexQuotaObservation[] = [],
+  timeZone = 'UTC',
 ): WeeklyValueInputs {
-  const observations: WeeklyQuotaObservation[] = [];
+  const currentObservations: WeeklyQuotaObservation[] = [];
   const usage: WeeklyValueInputs['usage'] = [];
+  const seenObservations = new Set<string>();
+  const fileHistory: CodexQuotaObservation[] = [];
   for (const file of files) {
     const sourceKey = file.fileKey;
-    const seenSnapshots = new Set<string>();
+    fileHistory.push(...(file.quotaHistory ?? []));
     for (const snapshot of [
       ...Object.values(file.limits ?? {}),
       ...(file.limit ? [file.limit] : []),
     ]) {
-      if (!isAccountWideCodexLimit(snapshot)) {
-        continue;
-      }
-      const seriesKey = snapshot.limitId ?? snapshot.limitName ?? 'codex';
-      for (const window of snapshot.windows) {
-        if (
-          window.windowMinutes !== 7 * 24 * 60 ||
-          window.resetsAt === undefined
-        ) {
-          continue;
-        }
+      for (const observation of weeklyQuotaObservationsFromCodexLimit(
+        snapshot,
+        sourceKey,
+      )) {
         const identity = [
-          seriesKey,
-          snapshot.observedAt,
-          window.resetsAt,
-          window.usedPercent,
+          observation.observedAt,
+          observation.resetAt,
+          observation.usedPercent,
+          observation.sourceKey ?? '',
         ].join('|');
-        if (seenSnapshots.has(identity)) {
-          continue;
+        if (!seenObservations.has(identity)) {
+          seenObservations.add(identity);
+          currentObservations.push(observation);
         }
-        seenSnapshots.add(identity);
-        observations.push({
-          provider: 'codex',
-          seriesKey,
-          ...(snapshot.limitName ? { seriesLabel: snapshot.limitName } : {}),
-          observedAt: snapshot.observedAt,
-          resetAt: window.resetsAt,
-          usedPercent: window.usedPercent,
-          sourceKey,
-        });
       }
     }
-    for (const slice of Object.values(file.aggregate.period?.days ?? {})) {
+  }
+
+  const cachedHistory = appendCodexQuotaHistory(
+    persistedHistory,
+    fileHistory,
+    CODEX_QUOTA_HISTORY_LIMIT,
+  );
+  const cachedObservations = weeklyQuotaObservationsFromCodexHistory(
+    cachedHistory,
+  ).filter((cached) => !currentObservations.some((current) =>
+    Math.abs(current.resetAt - cached.resetAt) <= CODEX_QUOTA_RESET_CLUSTER_MS &&
+    // A delayed line written at/after reset is ineligible for the closed
+    // window. It cannot shadow a useful pre-reset observation retained by the
+    // durable history.
+    current.observedAt < current.resetAt,
+  ));
+  const observations = [...currentObservations, ...cachedObservations];
+
+  for (const file of files) {
+    const sourceKey = file.fileKey;
+    const usageReady = isCodexUsageContributionCurrent(file) &&
+      !file.lineageReconciliation &&
+      (
+        !file.lineage ||
+        file.lineage.appliedPrefixEvents === file.lineage.desiredPrefixEvents
+      );
+    if (!usageReady) {
+      continue;
+    }
+    const period = file.aggregate.period;
+    const prefixEvents = file.lineage?.desiredPrefixEvents ?? 0;
+    if (
+      !period ||
+      period.timeZone !== timeZone ||
+      !isCompatibleCodexPeriodLineage(period, prefixEvents) ||
+      !codexPeriodFitsAggregate(period, file.aggregate.total)
+    ) {
+      // A pre-fix or still-rebuilding period projection may contain copied
+      // lineage records. Do not turn the reliable all-time total into a false
+      // model-priced weekly estimate; the next bounded refresh will rebuild it.
+      continue;
+    }
+    for (const slice of Object.values(period.days)) {
       const timestamp = slice.lastObservedAt ?? slice.firstObservedAt;
       if (timestamp === undefined) {
         continue;
@@ -234,27 +279,53 @@ function snapshotFromIndex(
     ),
   );
   const files = usageContributions
-    .map((file) => ({
-      ...file.aggregate,
-      session: {
-        ...file.aggregate.session,
-        sessionTitle: sessionTitles.get(file.aggregate.session.sessionKey),
-      },
-    }))
+    .map((file) => {
+      const periodReadable = isReadableCodexPeriod(
+        file,
+        index.coverage.period.timeZone,
+      );
+      return {
+        ...file.aggregate,
+        // Keep the trusted all-time aggregate visible, but do not let a
+        // rejected or rebuilding period projection reach any period consumer.
+        ...(periodReadable ? {} : { period: undefined }),
+        session: {
+          ...file.aggregate.session,
+          sessionTitle: sessionTitles.get(file.aggregate.session.sessionKey),
+        },
+      };
+    })
     .sort(
       (left, right) =>
         (right.session.startedAt ?? 0) - (left.session.startedAt ?? 0),
     );
   const limits = latestLimits(contributions);
+  const hourlyCoverage = index.coverage.hourly ?? {
+    timeZone: index.coverage.period.timeZone,
+    asOfDay: index.coverage.period.asOfDay,
+    windowDays: CODEX_ROLLING_HOURLY_DAYS,
+    indexedFiles: 0,
+    totalFiles: 0,
+    indexedBytes: 0,
+    totalBytes: 0,
+    complete: false,
+    days: {},
+  };
   return {
     provider: 'codex',
+    indexGeneration: index.indexGeneration,
     total: aggregateTotal(usageContributions),
     files,
     coverage: index.coverage,
     qualityFlags: qualityCounts(contributions),
     limits,
     limit: limits[0] ?? null,
-    weeklyValueInputs: codexWeeklyValueInputs(usageContributions),
+    weeklyValueInputs: codexWeeklyValueInputs(
+      usageContributions,
+      index.quotaHistory ?? [],
+      index.coverage.period.timeZone,
+    ),
+    hourlyCoverage,
     todayCoverage: index.coverage.today,
     todayPartial: !index.coverage.today.complete,
   };
@@ -275,6 +346,8 @@ export class CodexProvider {
   private lastProgress: CodexIndexProgress | undefined;
   private snapshotGeneration = 0;
   private persistedSnapshotLoad: Promise<CodexProviderSnapshot | null> | null = null;
+  private disposed = false;
+  private disposal: Promise<void> | null = null;
 
   constructor(
     private readonly options: CodexProviderOptions,
@@ -283,7 +356,7 @@ export class CodexProvider {
   ) {}
 
   async isAvailable(): Promise<boolean> {
-    if (!this.options.enabled) {
+    if (this.disposed || !this.options.enabled) {
       return false;
     }
     const [sessions, archive] = await Promise.all([
@@ -301,6 +374,7 @@ export class CodexProvider {
    * lineage reconciliation continues in the background.
    */
   async loadPersistedSnapshot(): Promise<CodexProviderSnapshot | null> {
+    if (this.disposed) return null;
     if (this.currentSnapshot) {
       return this.currentSnapshot;
     }
@@ -346,7 +420,14 @@ export class CodexProvider {
   async refresh(
     profile: 'background' | 'foreground' = 'background',
     onProgress?: (progress: CodexIndexProgress) => void,
+    allowHistoricalBackfill: boolean = true,
   ): Promise<CodexProviderResult> {
+    if (this.disposed) {
+      return {
+        outcome: 'unavailable',
+        snapshot: this.currentSnapshot ?? emptySnapshot(this.options.timeZone),
+      };
+    }
     if (!(await this.isAvailable())) {
       return {
         outcome: 'unavailable',
@@ -354,15 +435,17 @@ export class CodexProvider {
       };
     }
     this.client ??= this.clientFactory();
+    const client = this.client;
     this.lastProgress = undefined;
     try {
-      const result = await this.client.refresh(
+      const result = await client.refresh(
         {
           codexHome: this.options.codexHome,
           indexPath: this.options.indexPath,
           salt: this.options.salt,
           timeZone: this.options.timeZone,
           profile,
+          allowHistoricalBackfill,
         },
         (progress) => {
           this.lastProgress = progress;
@@ -381,7 +464,9 @@ export class CodexProvider {
           !result.index.coverage.identity.complete ||
           !result.index.coverage.period.last7Days.complete ||
           !result.index.coverage.period.last30Days.complete ||
-          !result.index.coverage.period.allTime.complete
+          !result.index.coverage.period.allTime.complete ||
+          (result.index.coverage.hourly !== undefined &&
+            !result.index.coverage.hourly.complete)
           ? 'partial'
           : 'success';
       return {
@@ -400,6 +485,11 @@ export class CodexProvider {
         },
       };
     } catch {
+      try {
+        await client.dispose();
+      } finally {
+        if (this.client === client) this.client = null;
+      }
       return {
         outcome: 'error',
         snapshot: this.currentSnapshot ?? emptySnapshot(this.options.timeZone),
@@ -412,9 +502,25 @@ export class CodexProvider {
     return this.currentSnapshot;
   }
 
-  dispose(): void {
+  cancel(): void {
+    this.client?.cancel?.();
+  }
+
+  async cancelAndWait(): Promise<void> {
+    const client = this.client;
+    client?.cancel?.();
+    await client?.whenIdle?.();
+  }
+
+  async dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
+    this.disposed = true;
     this.snapshotGeneration += 1;
-    this.client?.dispose();
+    const client = this.client;
     this.client = null;
+    this.disposal = Promise.resolve()
+      .then(() => client?.dispose())
+      .then(() => undefined);
+    await this.disposal;
   }
 }

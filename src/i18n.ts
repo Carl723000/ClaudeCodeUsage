@@ -12,6 +12,7 @@ export interface WeeklyValueCopy {
   title: string;
   description: string;
   period: string;
+  periodDetails: string;
   currentPeriod: string;
   currentPeriodShort: string;
   resetsAt: string;
@@ -36,6 +37,67 @@ export interface WeeklyValueCopy {
   indexedSubtotal: string;
 }
 
+export interface AdviceEffectivenessTranslations {
+  title: string;
+  description: string;
+  candidateNotice: string;
+  spineLabel: string;
+  observation: string;
+  evidence: string;
+  recommendation: string;
+  action: string;
+  result: string;
+  source: string;
+  limitations: string;
+  proxyMetric: string;
+  longSessionSignal: string;
+  largeContextSignal: string;
+  frameworkOverheadSignal: string;
+  clearBoundaryRecommendation: string;
+  clearBoundaryAction: string;
+  codexLocalRecommendation: string;
+  noEvidenceAdvice: string;
+  codexPreviewUnavailable: string;
+  elapsedTimeProxy: string;
+  qualityGuardrailPending: string;
+  payloadTitle: string;
+  payloadDescription: string;
+  aggregatesOnly: string;
+  aggregatesWithPersonalization: string;
+  aggregatesWithPromptSamples: string;
+  payloadBytes: string;
+  promptSamplesIncluded: string;
+  previewPayload: string;
+  noNetworkTransport: string;
+  sendPreparedRequest: string;
+  sendingPreparedRequest: string;
+  sentPreparedRequest: string;
+  aggregateConsentLabel: string;
+  aggregateConsentHelp: string;
+  promptConsentLabel: string;
+  promptConsentHelp: string;
+  promptWindowHelp: string;
+  feedbackTitle: string;
+  helpful: string;
+  notHelpful: string;
+  applied: string;
+  snooze: string;
+  resume: string;
+  snoozedUntil: string;
+  feedbackLocalOnly: string;
+  feedbackSaveFailed: string;
+  comparisonTitle: string;
+  comparablePairs: string;
+  minimumComparablePairs: string;
+  insufficientEvidence: string;
+  qualityGuardrailFailed: string;
+  improved: string;
+  noDemonstratedImprovement: string;
+  clearLocalData: string;
+  clearLocalDataConfirm: string;
+  strictOutputRejected: string;
+}
+
 export interface Translations {
   statusBar: {
     loading: string;
@@ -47,6 +109,7 @@ export interface Translations {
   };
   releaseAnnouncement: {
     v230: string;
+    v231: string;
   };
   providers: ProviderTranslations;
   weeklyValue: WeeklyValueCopy;
@@ -62,6 +125,8 @@ export interface Translations {
     settings: string;
     settingsTab: string;
     settingsIntro: string;
+    secretMigrationFailed: string;
+    secretMigrationWorkspace: string;
     settingsResetAll: string;
     settingsGroupGeneral: string;
     settingsGroupProviders: string;
@@ -69,6 +134,7 @@ export interface Translations {
     settingsGroupStatusBar: string;
     settingsGroupData: string;
     settingsGroupAdvice: string;
+    adviceEffectiveness: AdviceEffectivenessTranslations;
     totalTokens: string;
     inputTokens: string;
     outputTokens: string;
@@ -137,8 +203,8 @@ export interface Translations {
     model: string;
     agents: string;
     agent: string;
-    workflowsThisMonth: string;
-    workflowCostShare: string;
+    workflowsLast30Days: string;
+    workflowLast30DaysCostShare: string;
     workflowCacheHint: string;
     adhocBadge: string;
     workflowModeBadge: string;
@@ -249,13 +315,15 @@ type CodexCopyMapKey =
   | 'insightTitles'
   | 'insightObservations'
   | 'insightTips'
-  | 'insightEvidenceLabels';
+  | 'insightEvidenceLabels'
+  | 'indexingReasons';
 
 type CodexCopyOverrides = Partial<Omit<CodexViewCopy, CodexCopyMapKey>> & {
   insightTitles?: Partial<CodexViewCopy['insightTitles']>;
   insightObservations?: Partial<CodexViewCopy['insightObservations']>;
   insightTips?: Partial<CodexViewCopy['insightTips']>;
   insightEvidenceLabels?: Partial<CodexViewCopy['insightEvidenceLabels']>;
+  indexingReasons?: Partial<CodexViewCopy['indexingReasons']>;
 };
 
 const TASK5_CODEX_COPY: Record<Exclude<SupportedLanguage, 'en'>, CodexCopyOverrides> = {
@@ -494,6 +562,7 @@ type CodexTask8CopyKey =
   | 'indexedAllTime'
   | 'indexedSubtotal'
   | 'indexingInProgress'
+  | 'indexingReasons'
   | 'updatedAt'
   | 'claudeTokenAccounting'
   | 'codexTokenAccounting'
@@ -513,6 +582,15 @@ const TASK8_CODEX_COPY: Record<
     indexedAllTime: 'Indexierter Gesamtzeitraum',
     indexedSubtotal: 'Indizierte Zwischensumme',
     indexingInProgress: 'Die Indexierung läuft noch; nicht verifizierte Altsummen werden ausgeschlossen.',
+    indexingReasons: {
+      'first-index': 'Erste lokale Verlaufseinrichtung',
+      'parser-migration': 'Lokalen Parser-Index aktualisieren',
+      'period-migration': 'Datumsverlauf aktualisieren',
+      'hourly-history': 'Stündlichen Verlauf der letzten Zeit erstellen',
+      'history-backfill': 'Lokalen Verlauf vervollständigen',
+      'rule-migration': 'Messregeln aktualisieren',
+      resume: 'Lokalen Verlauf fortsetzen',
+    },
     updatedAt: 'Aktualisiert um',
     claudeTokenAccounting: 'Claude-Token-Zählung',
     codexTokenAccounting: 'Codex-Token-Zählung',
@@ -547,6 +625,15 @@ const TASK8_CODEX_COPY: Record<
     indexedAllTime: '已索引的全部時間',
     indexedSubtotal: '已索引小計',
     indexingInProgress: '索引仍在進行；未驗證的舊版總量不會計入。',
+    indexingReasons: {
+      'first-index': '首次設定本機歷史',
+      'parser-migration': '更新本機解析器索引',
+      'period-migration': '更新日期歷史',
+      'hourly-history': '建立近期每小時歷史',
+      'history-backfill': '補齊本機歷史',
+      'rule-migration': '更新量測規則',
+      resume: '繼續整理本機歷史',
+    },
     updatedAt: '更新於',
     claudeTokenAccounting: 'Claude Token 口徑',
     codexTokenAccounting: 'Codex Token 口徑',
@@ -581,6 +668,15 @@ const TASK8_CODEX_COPY: Record<
     indexedAllTime: '已索引的全部时间',
     indexedSubtotal: '已索引小计',
     indexingInProgress: '索引仍在进行；未验证的旧版总量不会计入。',
+    indexingReasons: {
+      'first-index': '首次整理本地历史',
+      'parser-migration': '更新本地解析器索引',
+      'period-migration': '更新日期历史',
+      'hourly-history': '整理近期小时历史',
+      'history-backfill': '补齐本地历史',
+      'rule-migration': '更新测量规则',
+      resume: '继续整理本地历史',
+    },
     updatedAt: '更新时间',
     claudeTokenAccounting: 'Claude Token 口径',
     codexTokenAccounting: 'Codex Token 口径',
@@ -615,6 +711,15 @@ const TASK8_CODEX_COPY: Record<
     indexedAllTime: '索引済みの全期間',
     indexedSubtotal: 'インデックス済み小計',
     indexingInProgress: 'インデックス作成中です。未検証の旧集計値は除外されています。',
+    indexingReasons: {
+      'first-index': '初回のローカル履歴設定',
+      'parser-migration': 'ローカル解析インデックスを更新中',
+      'period-migration': '日付履歴を更新中',
+      'hourly-history': '最近の時間別履歴を作成中',
+      'history-backfill': 'ローカル履歴を補完中',
+      'rule-migration': '測定ルールを更新中',
+      resume: 'ローカル履歴を再開中',
+    },
     updatedAt: '更新日時',
     claudeTokenAccounting: 'Claude トークン集計',
     codexTokenAccounting: 'Codex トークン集計',
@@ -649,6 +754,15 @@ const TASK8_CODEX_COPY: Record<
     indexedAllTime: '인덱싱된 전체 기간',
     indexedSubtotal: '인덱싱된 소계',
     indexingInProgress: '인덱싱이 진행 중이며 검증되지 않은 이전 합계는 제외됩니다.',
+    indexingReasons: {
+      'first-index': '첫 로컬 기록 설정',
+      'parser-migration': '로컬 파서 인덱스 업데이트',
+      'period-migration': '날짜 기록 업데이트',
+      'hourly-history': '최근 시간별 기록 생성',
+      'history-backfill': '로컬 기록 완성',
+      'rule-migration': '측정 규칙 업데이트',
+      resume: '로컬 기록 재개',
+    },
     updatedAt: '업데이트 시각',
     claudeTokenAccounting: 'Claude 토큰 집계',
     codexTokenAccounting: 'Codex 토큰 집계',
@@ -683,6 +797,15 @@ const TASK8_CODEX_COPY: Record<
     indexedAllTime: 'Todo o período indexado',
     indexedSubtotal: 'Subtotal indexado',
     indexingInProgress: 'A indexação ainda está em andamento; totais legados não verificados são excluídos.',
+    indexingReasons: {
+      'first-index': 'Primeira configuração do histórico local',
+      'parser-migration': 'Atualizando o índice do analisador local',
+      'period-migration': 'Atualizando o histórico por data',
+      'hourly-history': 'Criando o histórico horário recente',
+      'history-backfill': 'Concluindo o histórico local',
+      'rule-migration': 'Atualizando as regras de medição',
+      resume: 'Retomando o histórico local',
+    },
     updatedAt: 'Atualizado em',
     claudeTokenAccounting: 'Contagem de tokens do Claude',
     codexTokenAccounting: 'Contagem de tokens do Codex',
@@ -717,6 +840,15 @@ const TASK8_CODEX_COPY: Record<
     indexedAllTime: 'Seluruh waktu terindeks',
     indexedSubtotal: 'Subtotal terindeks',
     indexingInProgress: 'Pengindeksan masih berlangsung; total lama yang belum diverifikasi tidak disertakan.',
+    indexingReasons: {
+      'first-index': 'Penyiapan awal riwayat lokal',
+      'parser-migration': 'Memperbarui indeks parser lokal',
+      'period-migration': 'Memperbarui riwayat tanggal',
+      'hourly-history': 'Membuat riwayat per jam terbaru',
+      'history-backfill': 'Melengkapi riwayat lokal',
+      'rule-migration': 'Memperbarui aturan pengukuran',
+      resume: 'Melanjutkan riwayat lokal',
+    },
     updatedAt: 'Diperbarui pada',
     claudeTokenAccounting: 'Penghitungan token Claude',
     codexTokenAccounting: 'Penghitungan token Codex',
@@ -779,6 +911,11 @@ function providerTranslations(
         ...CODEX_COPY_EN.insightEvidenceLabels,
         ...overrides.insightEvidenceLabels,
         ...task5Overrides.insightEvidenceLabels,
+      },
+      indexingReasons: {
+        ...CODEX_COPY_EN.indexingReasons,
+        ...overrides.indexingReasons,
+        ...task5Overrides.indexingReasons,
       },
     },
   };
@@ -905,122 +1042,122 @@ const PROVIDERS: Record<SupportedLanguage, ProviderTranslations> = {
 
 const WEEKLY_VALUE_COPY: Record<SupportedLanguage, WeeklyValueCopy> = {
   en: {
-    title: 'Weekly allowance value',
-    description: 'Current official API prices applied to local tokens; full allowance is inferred from the last observed utilization in each reset window. Request-level surcharges absent from aggregate logs are excluded. Estimate, not a bill.',
-    period: 'Period', currentPeriod: 'Current period', currentPeriodShort: 'Current', resetsAt: 'resets',
+    title: 'Weekly subscription allowance · API-equivalent estimate',
+    description: 'A durability estimate for the subscription: current official API prices applied to local tokens, with total and unused value inferred from observed quota utilization. Request-level surcharges absent from aggregate logs are excluded. It is not an official balance, bill, or cash value.',
+    period: 'Period', periodDetails: 'Period details', currentPeriod: 'Current period', currentPeriodShort: 'Current', resetsAt: 'resets',
     usedValue: 'Used equivalent', fullValue: 'Full allowance est.', unusedValue: 'Unused est.',
     reset: 'Week / reset', utilization: 'End observed', confidence: 'Confidence', pricingCoverage: 'Priced coverage',
     current: 'In progress', high: 'High', medium: 'Medium', low: 'Low', usageOnly: 'Usage only',
     noData: 'No locally recorded weekly usage is available yet.',
     historyFromLogs: 'Historical used equivalents come directly from local token logs. Full and unused estimates appear only for windows with a real quota-utilization observation.',
     calendarFallback: 'No historical weekly reset was observed; usage-only history is grouped into Monday-to-Monday UTC calendar weeks.',
-    multiAccount: 'Codex usage-only history combines all sign-ins in this Codex home. When usage cannot be reliably attributed to a single quota observation, only the used equivalent is shown; no account split or allowance estimate is invented.',
-    boundaryApproximation: 'Codex usage is aggregated by day. If an official reset falls within a recorded day, the affected period keeps only its used equivalent; full and unused values are not inferred.',
+    multiAccount: 'Codex local history may span multiple sign-ins. The current window uses the latest real quota observation for a low-confidence blended durability estimate even when local series overlap; ambiguous completed windows remain usage-only. No account split or official balance is invented.',
+    boundaryApproximation: 'Codex usage is aggregated by day. A reset inside a recorded day lowers confidence, but current and completed windows may still show total and unused approximations.',
     boundaryApproximate: 'Boundary approx.',
     indexedSubtotal: 'Indexing is incomplete; weekly values are conservative subtotals.',
   },
   'zh-CN': {
-    title: '每周等效额度价值',
-    description: '按当前官方 API 单价折算本地 Token；每个重置窗口的总额度由最后观测用量比例反推。聚合日志无法确认的请求级附加价格不计入。属于估算，并非账单。',
-    period: '周期', currentPeriod: '当前周期', currentPeriodShort: '当前', resetsAt: '重置于',
+    title: '每周订阅额度 · API 等效估算',
+    description: '用于粗略理解订阅套餐耐用度：按当前官方 API 单价折算本地 Token，并由真实额度观测反推总额和未用值。聚合日志无法确认的请求级附加价格不计入。它不是官方余额、账单或现金价值。',
+    period: '周期', periodDetails: '周期详情', currentPeriod: '当前周期', currentPeriodShort: '当前', resetsAt: '重置于',
     usedValue: '已用等价值', fullValue: '总额度估算', unusedValue: '未用估算',
     reset: '周期 / 重置', utilization: '末次观测', confidence: '可信度', pricingCoverage: '已定价覆盖',
     current: '进行中', high: '高', medium: '中', low: '低', usageOnly: '仅已用值',
     noData: '尚无可用于按周计算的本地用量记录。',
     historyFromLogs: '历史“已用等价值”直接由本地 Token 日志计算；只有某个窗口存在真实额度用量观测时，才显示总额度和未用额度估算。',
     calendarFallback: '未观测到可用于对齐历史的每周重置时间；仅已用历史按 UTC 周一至周一的自然周分组。',
-    multiAccount: 'Codex 的仅已用历史会合并此 Codex home 中的全部登录。用量无法可靠归属到单一额度观测时，只显示已用等价值；不会虚构账号拆分或额度估算。',
-    boundaryApproximation: 'Codex 用量按日汇总。如果官方重置发生在某个已记录日期内，受影响周期只保留已用等价值，不反推总额度或未用额度。',
+    multiAccount: 'Codex 本地历史可能跨多个登录。即使本地额度系列重叠，当前周期仍会采用最后一次真实额度观测给出低可信度的混合耐用度估算；归属不清的已结束周期仍只显示已用值。不虚构账号拆分或官方余额。',
+    boundaryApproximation: 'Codex 用量按日汇总。若官方重置发生在某个记录日内，可信度会降低，但当前和已结束周期仍可显示总额与未用近似值。',
     boundaryApproximate: '边界近似',
     indexedSubtotal: '索引尚未完成；每周价值目前是保守小计。',
   },
   'zh-TW': {
-    title: '每週等效額度價值',
-    description: '依目前官方 API 單價折算本機 Token；每個重設視窗的總額度由最後觀測用量比例反推。彙總日誌無法確認的請求級附加價格不計入。屬於估算，並非帳單。',
-    period: '週期', currentPeriod: '目前週期', currentPeriodShort: '目前', resetsAt: '重設於',
+    title: '每週訂閱額度 · API 等效估算',
+    description: '用於粗略理解訂閱方案耐用度：依目前官方 API 單價折算本機 Token，並由真實額度觀測反推總額與未用值。彙總日誌無法確認的請求級附加價格不計入。它不是官方餘額、帳單或現金價值。',
+    period: '週期', periodDetails: '週期詳情', currentPeriod: '目前週期', currentPeriodShort: '目前', resetsAt: '重設於',
     usedValue: '已用等價值', fullValue: '總額度估算', unusedValue: '未用估算',
     reset: '週期 / 重設', utilization: '末次觀測', confidence: '可信度', pricingCoverage: '已定價涵蓋',
     current: '進行中', high: '高', medium: '中', low: '低', usageOnly: '僅已用值',
     noData: '尚無可用於每週計算的本機用量記錄。',
     historyFromLogs: '歷史「已用等價值」直接由本機 Token 日誌計算；只有視窗存在真實額度用量觀測時，才顯示總額度與未用額度估算。',
     calendarFallback: '未觀測到可用於對齊歷史的每週重設時間；僅已用歷史依 UTC 週一至週一的自然週分組。',
-    multiAccount: 'Codex 的僅已用歷史會合併此 Codex home 中的所有登入。用量無法可靠歸屬到單一額度觀測時，只顯示已用等價值；不會虛構帳號拆分或額度估算。',
-    boundaryApproximation: 'Codex 用量按日彙總。如果官方重設發生在某個已記錄日期內，受影響週期只保留已用等價值，不反推總額度或未用額度。',
+    multiAccount: 'Codex 本機歷史可能跨多個登入。即使本機額度系列重疊，目前週期仍會採用最後一次真實額度觀測提供低可信度的混合耐用度估算；歸屬不清的已結束週期仍只顯示已用值。不虛構帳號拆分或官方餘額。',
+    boundaryApproximation: 'Codex 用量按日彙總。若官方重設發生於某個記錄日內，可信度會降低，但目前與已結束週期仍可顯示總額與未用近似值。',
     boundaryApproximate: '邊界近似',
     indexedSubtotal: '索引尚未完成；每週價值目前是保守小計。',
   },
   ja: {
-    title: '週間上限の等価価値',
-    description: '現在の公式 API 単価をローカルトークンに適用し、各リセット枠の総上限を最終観測利用率から推定します。集計ログで確認できないリクエスト単位の追加料金は含みません。請求額ではありません。',
-    period: '期間', currentPeriod: '現在の期間', currentPeriodShort: '現在', resetsAt: 'リセット',
+    title: '週間サブスクリプション枠 · API 等価推定',
+    description: 'サブスクリプションの耐用度を把握するため、現在の公式 API 単価をローカル Token に適用し、観測された枠の利用率から総量と未使用量を推定します。集計ログで確認できないリクエスト単位の追加料金は含みません。公式残高、請求額、現金価値ではありません。',
+    period: '期間', periodDetails: '期間の詳細', currentPeriod: '現在の期間', currentPeriodShort: '現在', resetsAt: 'リセット',
     usedValue: '使用済み等価値', fullValue: '総上限の推定', unusedValue: '未使用の推定',
     reset: '期間 / リセット', utilization: '最終観測', confidence: '信頼度', pricingCoverage: '価格適用率',
     current: '進行中', high: '高', medium: '中', low: '低', usageOnly: '使用分のみ',
     noData: '週単位で計算できるローカル使用記録がまだありません。',
     historyFromLogs: '過去の使用済み等価値はローカルの Token ログから直接計算します。総上限と未使用分は、実際の上限利用率が観測された枠だけで推定します。',
     calendarFallback: '履歴を揃える週間リセットが観測されていないため、使用分のみの履歴は UTC の月曜から月曜の暦週で集計します。',
-    multiAccount: 'Codex の使用分のみの履歴は、この Codex home の全ログインを合算します。使用量を単一の上限観測に確実に帰属できない場合は使用済み等価値だけを表示し、アカウント分割や上限推定を作りません。',
-    boundaryApproximation: 'Codex の使用量は日単位で集計されます。公式リセットが記録日の途中にある場合、影響する期間は使用済み等価値だけを保持し、総上限や未使用分を推定しません。',
+    multiAccount: 'Codex のローカル履歴には複数のログインが含まれる場合があります。ローカルの系列が重複していても、現在の期間は最新の実測クォータを使った低信頼度の混合耐久性推定を表示します。帰属が曖昧な完了期間は使用分のみです。アカウント分割や公式残高は推測しません。',
+    boundaryApproximation: 'Codex の使用量は日単位で集計されます。記録日の途中にリセットがあると信頼度は下がりますが、現在と完了済みの枠に総量と未使用量の近似を表示できます。',
     boundaryApproximate: '境界近似',
     indexedSubtotal: '索引作成中のため、週間価値は保守的な小計です。',
   },
   ko: {
-    title: '주간 한도 등가 가치',
-    description: '현재 공식 API 단가를 로컬 토큰에 적용하고 각 재설정 창의 총한도를 마지막 관측 사용률로 추정합니다. 집계 로그에서 확인할 수 없는 요청 단위 추가 요금은 제외합니다. 청구 금액이 아닙니다.',
-    period: '기간', currentPeriod: '현재 기간', currentPeriodShort: '현재', resetsAt: '재설정',
+    title: '주간 구독 한도 · API 등가 추정',
+    description: '구독이 얼마나 오래 지속되는지 가늠하기 위해 현재 공식 API 단가를 로컬 Token에 적용하고, 관측된 한도 사용률에서 총량과 미사용량을 추정합니다. 집계 로그에서 확인할 수 없는 요청 단위 추가 요금은 제외합니다. 공식 잔액, 청구액 또는 현금 가치가 아닙니다.',
+    period: '기간', periodDetails: '기간 세부 정보', currentPeriod: '현재 기간', currentPeriodShort: '현재', resetsAt: '재설정',
     usedValue: '사용 등가치', fullValue: '총한도 추정', unusedValue: '미사용 추정',
     reset: '주 / 재설정', utilization: '마지막 관측', confidence: '신뢰도', pricingCoverage: '가격 적용률',
     current: '진행 중', high: '높음', medium: '보통', low: '낮음', usageOnly: '사용분만',
     noData: '주간 계산에 사용할 로컬 사용 기록이 아직 없습니다.',
     historyFromLogs: '과거 사용 등가치는 로컬 Token 로그에서 직접 계산합니다. 실제 한도 사용률 관측이 있는 창에서만 총한도와 미사용분을 추정합니다.',
     calendarFallback: '과거를 정렬할 주간 재설정이 관측되지 않아 사용분 전용 기록은 UTC 월요일부터 월요일까지의 달력 주로 묶습니다.',
-    multiAccount: 'Codex 사용분 전용 기록은 이 Codex home의 모든 로그인을 합산합니다. 사용량을 단일 할당량 관측에 안정적으로 귀속할 수 없으면 사용 등가치만 표시하며 계정 분리나 한도 추정을 만들어 내지 않습니다.',
-    boundaryApproximation: 'Codex 사용량은 일별로 집계됩니다. 공식 재설정이 기록된 하루 중간에 발생하면 영향을 받는 기간에는 사용 등가치만 유지하고 총한도나 미사용분을 추정하지 않습니다.',
+    multiAccount: 'Codex 로컬 기록에는 여러 로그인이 포함될 수 있습니다. 로컬 할당량 계열이 겹쳐도 현재 기간은 마지막 실제 할당량 관측으로 신뢰도 낮은 혼합 내구성 추정을 표시합니다. 귀속이 불명확한 완료 기간은 사용분만 표시합니다. 계정 분리나 공식 잔액은 추정하지 않습니다.',
+    boundaryApproximation: 'Codex 사용량은 일별로 집계됩니다. 기록일 중간에 재설정이 있으면 신뢰도가 낮아지지만 현재 및 완료 창에도 총량과 미사용 근사를 표시할 수 있습니다.',
     boundaryApproximate: '경계 근사',
     indexedSubtotal: '인덱싱이 끝나지 않아 주간 가치는 보수적인 소계입니다.',
   },
   'pt-BR': {
-    title: 'Valor equivalente semanal',
-    description: 'Aplica os preços oficiais atuais da API aos tokens locais e infere o limite total pela última utilização observada em cada janela. Sobretaxas por solicitação ausentes dos logs agregados não são incluídas. É uma estimativa, não uma fatura.',
-    period: 'Período', currentPeriod: 'Período atual', currentPeriodShort: 'Atual', resetsAt: 'reinicia em',
+    title: 'Cota semanal da assinatura · estimativa equivalente à API',
+    description: 'Estima a durabilidade da assinatura aplicando os preços oficiais atuais da API aos Tokens locais e inferindo o total e o saldo não usado a partir da utilização de cota observada. Sobretaxas por solicitação ausentes dos logs agregados são excluídas. Não é saldo oficial, fatura nem valor em dinheiro.',
+    period: 'Período', periodDetails: 'Detalhes do período', currentPeriod: 'Período atual', currentPeriodShort: 'Atual', resetsAt: 'reinicia em',
     usedValue: 'Equivalente usado', fullValue: 'Limite total est.', unusedValue: 'Não usado est.',
     reset: 'Semana / reset', utilization: 'Última observação', confidence: 'Confiança', pricingCoverage: 'Cobertura de preços',
     current: 'Em andamento', high: 'Alta', medium: 'Média', low: 'Baixa', usageOnly: 'Somente uso',
     noData: 'Ainda não há uso local registrado para o cálculo semanal.',
     historyFromLogs: 'Os equivalentes usados no histórico vêm diretamente dos logs locais de Token. O limite total e o não usado só são estimados quando há uma observação real da utilização da cota.',
     calendarFallback: 'Nenhuma redefinição semanal histórica foi observada; o histórico somente de uso é agrupado em semanas UTC de segunda a segunda.',
-    multiAccount: 'O histórico somente de uso do Codex combina todos os logins deste Codex home. Quando o uso não pode ser atribuído com segurança a uma única observação de cota, só o equivalente usado é mostrado; nenhuma divisão por conta ou estimativa de limite é inventada.',
-    boundaryApproximation: 'O uso do Codex é agregado por dia. Se uma redefinição oficial ocorrer dentro de um dia registrado, o período afetado mantém apenas o equivalente usado; o limite total e o não usado não são inferidos.',
+    multiAccount: 'O histórico local do Codex pode abranger vários logins. Mesmo com séries locais sobrepostas, o período atual usa a observação real mais recente para uma estimativa combinada de baixa confiança; períodos concluídos com atribuição ambígua mostram apenas o uso. Nenhuma divisão de conta ou saldo oficial é inventado.',
+    boundaryApproximation: 'O uso do Codex é agregado por dia. Uma redefinição dentro de um dia registrado reduz a confiança, mas janelas atuais e concluídas ainda podem mostrar aproximações do total e do restante.',
     boundaryApproximate: 'Fronteira aprox.',
     indexedSubtotal: 'A indexação está incompleta; os valores semanais são subtotais conservadores.',
   },
   'de-DE': {
-    title: 'Wöchentlicher Gegenwert',
-    description: 'Aktuelle offizielle API-Preise werden auf lokale Token angewandt; das Gesamtlimit wird aus der letzten beobachteten Auslastung je Reset-Fenster geschätzt. Anfragebezogene Aufpreise, die in aggregierten Logs fehlen, sind ausgeschlossen. Keine Rechnung.',
-    period: 'Zeitraum', currentPeriod: 'Aktueller Zeitraum', currentPeriodShort: 'Aktuell', resetsAt: 'Reset',
+    title: 'Wöchentliches Abo-Kontingent · API-Äquivalenzschätzung',
+    description: 'Schätzt die Reichweite des Abonnements, indem aktuelle offizielle API-Preise auf lokale Token angewandt und Gesamt- sowie Restwert aus beobachteter Kontingentnutzung abgeleitet werden. Anfragebezogene Aufpreise, die in aggregierten Logs fehlen, sind ausgeschlossen. Dies ist weder offizielles Guthaben noch Rechnung oder Barwert.',
+    period: 'Zeitraum', periodDetails: 'Zeitraumdetails', currentPeriod: 'Aktueller Zeitraum', currentPeriodShort: 'Aktuell', resetsAt: 'Reset',
     usedValue: 'Genutzter Gegenwert', fullValue: 'Gesamtlimit geschätzt', unusedValue: 'Ungenutzt geschätzt',
     reset: 'Woche / Reset', utilization: 'Letzte Beobachtung', confidence: 'Vertrauen', pricingCoverage: 'Preisabdeckung',
     current: 'Laufend', high: 'Hoch', medium: 'Mittel', low: 'Niedrig', usageOnly: 'Nur Nutzung',
     noData: 'Noch keine lokal erfasste Nutzung für die Wochenberechnung verfügbar.',
     historyFromLogs: 'Historische genutzte Gegenwerte stammen direkt aus lokalen Token-Logs. Gesamtlimit und ungenutzter Anteil werden nur bei real beobachteter Quotenauslastung geschätzt.',
     calendarFallback: 'Kein historischer Wochen-Reset wurde beobachtet; reine Nutzungsverläufe werden in UTC-Kalenderwochen von Montag bis Montag gruppiert.',
-    multiAccount: 'Der reine Codex-Nutzungsverlauf kombiniert alle Anmeldungen in diesem Codex home. Lässt sich die Nutzung nicht zuverlässig einer einzelnen Kontingentbeobachtung zuordnen, wird nur der genutzte Gegenwert angezeigt; weder Kontotrennung noch Limitschätzung werden erfunden.',
-    boundaryApproximation: 'Die Codex-Nutzung wird tageweise aggregiert. Fällt ein offizieller Reset in einen erfassten Tag, behält der betroffene Zeitraum nur den genutzten Gegenwert; Gesamtlimit und ungenutzter Anteil werden nicht geschätzt.',
+    multiAccount: 'Der lokale Codex-Verlauf kann mehrere Anmeldungen umfassen. Auch bei überlappenden lokalen Serien nutzt der aktuelle Zeitraum die jüngste reale Kontingentbeobachtung für eine zusammengeführte Schätzung mit niedriger Zuverlässigkeit; mehrdeutige abgeschlossene Zeiträume zeigen nur die Nutzung. Weder Kontotrennung noch offizielles Guthaben werden erfunden.',
+    boundaryApproximation: 'Die Codex-Nutzung wird tageweise aggregiert. Ein Reset innerhalb eines erfassten Tages senkt die Zuverlässigkeit, dennoch können aktuelle und abgeschlossene Fenster Näherungen für Gesamt- und Restwert zeigen.',
     boundaryApproximate: 'Grenznäherung',
     indexedSubtotal: 'Die Indizierung ist unvollständig; Wochenwerte sind konservative Zwischensummen.',
   },
   id: {
-    title: 'Nilai ekuivalen mingguan',
-    description: 'Harga API resmi saat ini diterapkan pada token lokal; total batas disimpulkan dari pemakaian terakhir yang diamati pada tiap jendela reset. Biaya tambahan per permintaan yang tidak ada dalam log agregat tidak dihitung. Ini perkiraan, bukan tagihan.',
-    period: 'Periode', currentPeriod: 'Periode saat ini', currentPeriodShort: 'Saat ini', resetsAt: 'reset',
+    title: 'Batas langganan mingguan · estimasi ekuivalen API',
+    description: 'Memperkirakan daya tahan langganan dengan menerapkan harga API resmi terkini pada Token lokal, lalu menyimpulkan total dan sisa dari pemakaian kuota yang teramati. Biaya tambahan per permintaan yang tidak ada dalam log agregat dikecualikan. Ini bukan saldo resmi, tagihan, atau nilai tunai.',
+    period: 'Periode', periodDetails: 'Detail periode', currentPeriod: 'Periode saat ini', currentPeriodShort: 'Saat ini', resetsAt: 'reset',
     usedValue: 'Ekuivalen terpakai', fullValue: 'Total batas estimasi', unusedValue: 'Tak terpakai estimasi',
     reset: 'Minggu / reset', utilization: 'Pengamatan akhir', confidence: 'Keyakinan', pricingCoverage: 'Cakupan harga',
     current: 'Berjalan', high: 'Tinggi', medium: 'Sedang', low: 'Rendah', usageOnly: 'Hanya pemakaian',
     noData: 'Belum ada penggunaan lokal yang tercatat untuk perhitungan mingguan.',
     historyFromLogs: 'Ekuivalen terpakai historis dihitung langsung dari log Token lokal. Total batas dan sisa hanya diestimasi jika ada pengamatan nyata atas persentase kuota.',
     calendarFallback: 'Tidak ada reset mingguan historis yang teramati; riwayat khusus pemakaian dikelompokkan dalam minggu UTC Senin-ke-Senin.',
-    multiAccount: 'Riwayat khusus pemakaian Codex menggabungkan semua login di Codex home ini. Jika penggunaan tidak dapat dikaitkan secara andal ke satu pengamatan kuota, hanya ekuivalen terpakai yang ditampilkan; pemisahan akun atau perkiraan batas tidak direka.',
-    boundaryApproximation: 'Penggunaan Codex diagregasi per hari. Jika reset resmi terjadi di tengah hari yang tercatat, periode yang terdampak hanya mempertahankan ekuivalen terpakai; total batas dan sisa tidak diperkirakan.',
+    multiAccount: 'Riwayat lokal Codex dapat mencakup beberapa login. Meski seri lokal tumpang tindih, periode saat ini memakai pengamatan kuota nyata terbaru untuk perkiraan daya tahan gabungan berkeyakinan rendah; periode selesai yang ambigu tetap hanya menampilkan pemakaian. Pemisahan akun atau saldo resmi tidak direka.',
+    boundaryApproximation: 'Penggunaan Codex diagregasi per hari. Reset di tengah hari tercatat menurunkan keyakinan, tetapi jendela saat ini dan selesai tetap dapat menampilkan perkiraan total dan sisa.',
     boundaryApproximate: 'Perkiraan batas',
     indexedSubtotal: 'Pengindeksan belum selesai; nilai mingguan masih berupa subtotal konservatif.',
   },
@@ -1038,6 +1175,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: "What's new — Codex Beta usage and local optimization guidance, exact-version release notes, and removal of the obsolete model-specific weekly Opus option.",
+      v231: 'Accurate 30-day Codex totals, reset-aware weekly allowance estimates, and a private combined activity heatmap with local SVG and Markdown sharing.',
     },
     providers: PROVIDERS.en,
     weeklyValue: WEEKLY_VALUE_COPY.en,
@@ -1053,7 +1191,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: 'Settings',
       settingsTab: 'Settings',
       settingsIntro:
-        'Settings live here now. Only language, data directory and API key remain in VS Code Settings (so they sync). Changes apply immediately.',
+        'Settings live here now. Language and data directories remain in VS Code Settings; API keys use VS Code SecretStorage and never sync. Changes apply immediately.',
+      secretMigrationFailed:
+        'Claude Code Usage could not move the saved advice API key into encrypted SecretStorage. The extension stopped before deleting the old value. Fix the legacy setting and reload the window.',
+      secretMigrationWorkspace:
+        'A workspace-specific advice API key cannot be migrated safely into one global SecretStorage entry. Copy it, remove it from workspace settings, reload, then enter it under Dashboard Settings → Advice.',
       settingsResetAll: 'Reset all to defaults',
       settingsGroupGeneral: 'General',
       settingsGroupProviders: 'Providers',
@@ -1061,6 +1203,66 @@ const translations: Record<SupportedLanguage, Translations> = {
       settingsGroupStatusBar: 'Status bar',
       settingsGroupData: 'Data & refresh',
       settingsGroupAdvice: 'AI advice & Optimizer',
+      adviceEffectiveness: {
+        title: 'AI advice effectiveness',
+        description: 'Review how each suggestion moves from a local observation to evidence, an action, and a guarded result.',
+        candidateNotice: 'v2.3.1 candidate · off by default · no default or background AI requests.',
+        spineLabel: 'Advice evidence path',
+        observation: 'Observation',
+        evidence: 'Evidence',
+        recommendation: 'Advice',
+        action: 'Action',
+        result: 'Result',
+        source: 'Source',
+        limitations: 'Limitations',
+        proxyMetric: 'Proxy metric',
+        longSessionSignal: '{share} of observed usage came from long sessions.',
+        largeContextSignal: '{share} of observed usage occurred at large context sizes.',
+        frameworkOverheadSignal: '{share} of observed usage is separately estimated framework injection; it does not evaluate the quality of the user\'s writing.',
+        clearBoundaryRecommendation: 'Use clearer task boundaries for long or large-context work.',
+        clearBoundaryAction: 'Start a fresh session when the task changes; compact only when continuing the same task.',
+        codexLocalRecommendation: 'Review the local Codex structural signal before the next comparable task.',
+        noEvidenceAdvice: 'No evidence-backed advice is available for this scope.',
+        codexPreviewUnavailable: 'A privacy-safe Codex aggregate payload preview is not available yet.',
+        elapsedTimeProxy: 'Elapsed session span is a proxy, not measured active work time.',
+        qualityGuardrailPending: 'Quality evidence is pending, so no effectiveness conclusion is available.',
+        payloadTitle: 'Sealed payload snapshot',
+        payloadDescription: 'This sealed snapshot is the exact UTF-8 JSON body the configured BYOK endpoint receives only after the separate Send click.',
+        aggregatesOnly: 'Aggregates only',
+        aggregatesWithPersonalization: 'Aggregates + explicitly allowed personal context',
+        aggregatesWithPromptSamples: 'Aggregates + explicitly allowed prompt samples',
+        payloadBytes: '{bytes} UTF-8 bytes',
+        promptSamplesIncluded: '{count} prompt samples included',
+        previewPayload: 'Preview sealed snapshot',
+        noNetworkTransport: 'Previewing sends nothing. Sending requires a separate click.',
+        sendPreparedRequest: 'Send this exact request',
+        sendingPreparedRequest: 'Sending…',
+        sentPreparedRequest: 'Structured advice received.',
+        aggregateConsentLabel: 'Allow aggregate usage data',
+        aggregateConsentHelp: 'Includes only allowlisted numeric aggregates and structural signals — no prompts, paths, session IDs, or individual records.',
+        promptConsentLabel: 'Also include prompt samples and configured personal context',
+        promptConsentHelp: 'Optional and off by default. Bounded prompt text and configured personal context are added only after this separate explicit consent.',
+        promptWindowHelp: 'Prompt samples older than the configured {days}-day evidence window are excluded.',
+        feedbackTitle: 'Local feedback',
+        helpful: 'Helpful',
+        notHelpful: 'Not helpful',
+        applied: 'Applied',
+        snooze: 'Snooze 7 days',
+        resume: 'Show again',
+        snoozedUntil: 'Snoozed until {date}',
+        feedbackLocalOnly: 'Stored only on this device and never added to a remote payload.',
+        feedbackSaveFailed: 'Feedback could not be saved locally. Nothing was sent.',
+        comparisonTitle: 'Comparable task results',
+        comparablePairs: '{count} comparable task pairs',
+        minimumComparablePairs: 'At least {minimum} comparable task pairs are required before drawing a conclusion.',
+        insufficientEvidence: 'Not enough evidence to draw a conclusion.',
+        qualityGuardrailFailed: 'The quality guardrail did not hold, so no effectiveness claim is made.',
+        improved: 'Improvement met the pre-declared threshold while the quality guardrail held.',
+        noDemonstratedImprovement: 'No improvement was demonstrated; this does not establish harm or causation.',
+        clearLocalData: 'Clear local advice data',
+        clearLocalDataConfirm: 'Clear advice consent, feedback, comparable pairs, and comparison results stored on this device?',
+        strictOutputRejected: 'The structured model output was rejected. No advice was created.',
+      },
       totalTokens: 'Total Tokens',
       inputTokens: 'Input Tokens',
       outputTokens: 'Output Tokens',
@@ -1129,8 +1331,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: 'Model',
       agents: 'Agents',
       agent: 'Agent',
-      workflowsThisMonth: 'Workflows this month',
-      workflowCostShare: "share of this month's cost",
+      workflowsLast30Days: 'Workflows in the last 30 days',
+      workflowLast30DaysCostShare: "share of the last 30 days' cost",
       workflowCacheHint:
         'Cache hit rate = cache reads ÷ all input-side tokens. Native Claude workflows reuse the prompt cache across agents (high rate); a provider without cross-agent caching shows ~0% — the same workflow costs disproportionately more there.',
       adhocBadge: 'subagents (ad-hoc)',
@@ -1203,14 +1405,14 @@ const translations: Record<SupportedLanguage, Translations> = {
       getAdvice: 'Get AI Advice',
       adviceCardTitle: 'AI advice',
       adviceCardDesc:
-        'Send your usage digest + a sample of your own prompts to your model and get concrete tips on writing clearer instructions and cutting waste.',
+        'Review local evidence first. The exact request defaults to aggregates only; prompt samples and personal context require separate consent, and nothing is sent until you click Send.',
       optimizerTitle: 'Usage optimizer',
       optimizerDesc:
         'Turn a rough, half-formed request into a clean prompt you can paste straight into Claude Code — plus a suggested effort / thinking / model for the task.',
       optimizerHowto:
-        'Type or paste your draft below, tick any of the optional tweaks, then click Optimise. Only the text you paste is sent to your model — never to Claude Code or your terminal.',
+        'Type or paste your draft below, choose any optional tweaks, then build the exact request preview. Nothing is sent until you click Send; only the text you pasted can be included.',
       optimizerConsent:
-        'The Usage Optimizer sends the text you paste to your configured API model. Nothing is sent to Claude Code and nothing is typed into a terminal. Continue?',
+        'Build the exact request preview? This does not send anything; sending to your configured API model requires a separate click.',
       optimizerEnableBtn: 'Enable in settings',
       optimizerPlaceholder: 'Paste a rough prompt to optimise…',
       optimizerRun: 'Optimise',
@@ -1242,10 +1444,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> feature produces. It is **not** based on your actual Claude Code\n' +
         '> usage data — nothing was sent to any API to generate this.\n\n' +
         '### To get real, personalised advice based on YOUR usage:\n\n' +
-        '1. Open Settings (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. Search for **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. Paste an OpenAI-compatible API key — DeepSeek works out of the box\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. Run **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. Open the dashboard **Settings → Advice** section\n' +
+        '3. Paste an OpenAI-compatible API key — it is kept in VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. Re-run **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: 'Cost Composition',
       date: 'Date',
@@ -1273,6 +1475,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: 'Neu: Codex-Beta-Nutzung und lokale Optimierungshinweise, versionsgenaue Release-Hinweise und Entfernung der veralteten modellspezifischen wöchentlichen Opus-Option.',
+      v231: 'Neu: korrekte 30-Tage-Codex-Werte, reset-bewusste Wochenschätzungen und eine private kombinierte Aktivitäts-Heatmap mit lokalem SVG- und Markdown-Export.',
     },
     providers: PROVIDERS['de-DE'],
     weeklyValue: WEEKLY_VALUE_COPY['de-DE'],
@@ -1288,7 +1491,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: "Einstellungen",
       settingsTab: "Einstellungen",
       settingsIntro:
-        "Die Einstellungen sind jetzt hier. Nur Sprache, Datenverzeichnis und API-Schlüssel bleiben in den VS-Code-Einstellungen (damit sie synchronisiert werden). Änderungen wirken sofort.",
+        "Die Einstellungen sind jetzt hier. Sprache und Datenverzeichnisse bleiben in den VS-Code-Einstellungen; API-Schlüssel liegen in VS Code SecretStorage und werden nie synchronisiert. Änderungen wirken sofort.",
+      secretMigrationFailed:
+        'Der gespeicherte API-Schlüssel konnte nicht in den verschlüsselten SecretStorage verschoben werden. Die Erweiterung wurde beendet, bevor der alte Wert gelöscht wurde. Korrigieren Sie die alte Einstellung und laden Sie das Fenster neu.',
+      secretMigrationWorkspace:
+        'Ein arbeitsbereichsspezifischer API-Schlüssel kann nicht sicher in einen globalen SecretStorage-Eintrag migriert werden. Kopieren und entfernen Sie ihn aus den Arbeitsbereichseinstellungen, laden Sie neu und geben Sie ihn unter Dashboard-Einstellungen → Beratung ein.',
       settingsResetAll: "Alle zurücksetzen",
       settingsGroupGeneral: "Allgemein",
       settingsGroupProviders: "Anbieter",
@@ -1296,6 +1503,66 @@ const translations: Record<SupportedLanguage, Translations> = {
       settingsGroupStatusBar: "Statusleiste",
       settingsGroupData: "Daten & Aktualisierung",
       settingsGroupAdvice: "KI-Beratung & Optimizer",
+      adviceEffectiveness: {
+        title: 'Wirksamkeit von KI-Empfehlungen',
+        description: 'Prüfe, wie jede Empfehlung von einer lokalen Beobachtung über Evidenz und eine Maßnahme zu einem abgesicherten Ergebnis gelangt.',
+        candidateNotice: 'v2.3.1-Kandidat · standardmäßig deaktiviert · keine standardmäßigen oder Hintergrund-KI-Anfragen.',
+        spineLabel: 'Evidenzpfad der Empfehlung',
+        observation: 'Beobachtung',
+        evidence: 'Evidenz',
+        recommendation: 'Empfehlung',
+        action: 'Maßnahme',
+        result: 'Ergebnis',
+        source: 'Quelle',
+        limitations: 'Einschränkungen',
+        proxyMetric: 'Proxy-Metrik',
+        longSessionSignal: '{share} der beobachteten Nutzung stammten aus langen Sitzungen.',
+        largeContextSignal: '{share} der beobachteten Nutzung traten bei großen Kontextgrößen auf.',
+        frameworkOverheadSignal: '{share} der beobachteten Nutzung entfallen auf separat geschätzte Framework-Injektionen; dies bewertet nicht die Qualität der Texte des Nutzers.',
+        clearBoundaryRecommendation: 'Nutze klarere Aufgabengrenzen für lange Arbeiten oder Arbeiten mit großem Kontext.',
+        clearBoundaryAction: 'Beginne bei einem Aufgabenwechsel eine neue Sitzung; kompaktiere nur beim Fortsetzen derselben Aufgabe.',
+        codexLocalRecommendation: 'Prüfe vor der nächsten vergleichbaren Aufgabe das lokale strukturelle Codex-Signal.',
+        noEvidenceAdvice: 'Für diesen Bereich ist keine evidenzbasierte Empfehlung verfügbar.',
+        codexPreviewUnavailable: 'Eine datenschutzfreundliche Vorschau der aggregierten Codex-Payload ist noch nicht verfügbar.',
+        elapsedTimeProxy: 'Die verstrichene Sitzungsspanne ist ein Proxy und keine gemessene aktive Arbeitszeit.',
+        qualityGuardrailPending: 'Qualitätsevidenz steht noch aus; daher ist keine Aussage zur Wirksamkeit möglich.',
+        payloadTitle: 'Versiegelte Payload-Momentaufnahme',
+        payloadDescription: 'Diese versiegelte Momentaufnahme ist exakt der UTF-8-JSON-Body, den der konfigurierte BYOK-Endpunkt erst nach einem separaten Klick auf Senden erhält.',
+        aggregatesOnly: 'Nur Aggregate',
+        aggregatesWithPersonalization: 'Aggregate + ausdrücklich erlaubter persönlicher Kontext',
+        aggregatesWithPromptSamples: 'Aggregate + ausdrücklich erlaubte Prompt-Beispiele',
+        payloadBytes: '{bytes} UTF-8-Bytes',
+        promptSamplesIncluded: '{count} Prompt-Beispiele enthalten',
+        previewPayload: 'Versiegelte Momentaufnahme anzeigen',
+        noNetworkTransport: 'Die Vorschau sendet nichts. Das Senden erfordert einen separaten Klick.',
+        sendPreparedRequest: 'Genau diese Anfrage senden',
+        sendingPreparedRequest: 'Wird gesendet…',
+        sentPreparedRequest: 'Strukturierter Rat empfangen.',
+        aggregateConsentLabel: 'Aggregierte Nutzungsdaten erlauben',
+        aggregateConsentHelp: 'Enthält nur freigegebene numerische Aggregate und strukturelle Signale — keine Prompts, Pfade, Sitzungs-IDs oder Einzelaufzeichnungen.',
+        promptConsentLabel: 'Auch Prompt-Beispiele und konfigurierten persönlichen Kontext einschließen',
+        promptConsentHelp: 'Optional und standardmäßig deaktiviert. Begrenzter Prompt-Text und der konfigurierte persönliche Kontext werden nur nach dieser separaten ausdrücklichen Einwilligung hinzugefügt.',
+        promptWindowHelp: 'Prompt-Beispiele außerhalb des konfigurierten Evidenzfensters von {days} Tagen werden ausgeschlossen.',
+        feedbackTitle: 'Lokales Feedback',
+        helpful: 'Hilfreich',
+        notHelpful: 'Nicht hilfreich',
+        applied: 'Angewendet',
+        snooze: '7 Tage zurückstellen',
+        resume: 'Wieder anzeigen',
+        snoozedUntil: 'Zurückgestellt bis {date}',
+        feedbackLocalOnly: 'Wird nur auf diesem Gerät gespeichert und nie einer Remote-Payload hinzugefügt.',
+        feedbackSaveFailed: 'Das Feedback konnte lokal nicht gespeichert werden. Es wurde nichts gesendet.',
+        comparisonTitle: 'Ergebnisse vergleichbarer Aufgaben',
+        comparablePairs: '{count} vergleichbare Aufgabenpaare',
+        minimumComparablePairs: 'Mindestens {minimum} vergleichbare Aufgabenpaare sind nötig, bevor eine Schlussfolgerung gezogen wird.',
+        insufficientEvidence: 'Nicht genügend Evidenz für eine Schlussfolgerung.',
+        qualityGuardrailFailed: 'Die Qualitätsleitplanke hielt nicht; deshalb wird keine Wirksamkeit behauptet.',
+        improved: 'Die Verbesserung erreichte den vorab festgelegten Schwellenwert, während die Qualitätsleitplanke hielt.',
+        noDemonstratedImprovement: 'Es wurde keine Verbesserung nachgewiesen; daraus folgen weder Schaden noch Kausalität.',
+        clearLocalData: 'Lokale Empfehlungsdaten löschen',
+        clearLocalDataConfirm: 'Einwilligungen, Feedback, vergleichbare Paare und Vergleichsergebnisse auf diesem Gerät löschen?',
+        strictOutputRejected: 'Die strukturierte Modellausgabe wurde abgelehnt. Es wurde keine Empfehlung erstellt.',
+      },
       totalTokens: "Gesamte Token",
       inputTokens: "Eingabe Token",
       outputTokens: "Ausgabe Token",
@@ -1364,8 +1631,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: "Modell",
       agents: "Agenten",
       agent: "Agent",
-      workflowsThisMonth: "Workflows diesen Monat",
-      workflowCostShare: "Anteil an den Monatskosten",
+      workflowsLast30Days: 'Workflows in den letzten 30 Tagen',
+      workflowLast30DaysCostShare: 'Anteil an den Kosten der letzten 30 Tage',
       workflowCacheHint:
         "Cache-Trefferrate = Cache-Lesevorgänge ÷ alle eingabeseitigen Tokens. Native Claude-Workflows nutzen den Prompt-Cache agentenübergreifend (hohe Rate); ein Anbieter ohne agentenübergreifenden Cache zeigt ~0 % — derselbe Workflow kostet dort unverhältnismäßig mehr.",
       adhocBadge: "Subagenten (ad-hoc)",
@@ -1438,14 +1705,14 @@ const translations: Record<SupportedLanguage, Translations> = {
       getAdvice: "KI-Rat holen",
       adviceCardTitle: "KI-Rat",
       adviceCardDesc:
-        "Sende deine Nutzungsübersicht + eine Auswahl deiner eigenen Prompts an dein Modell und erhalte konkrete Tipps für klarere Anweisungen und weniger Verschwendung.",
+        "Prüfe zuerst die lokalen Belege. Die exakte Anfrage enthält standardmäßig nur Aggregate; Prompt-Beispiele und persönlicher Kontext brauchen eine separate Einwilligung, und erst ein Klick auf Senden überträgt etwas.",
       optimizerTitle: "Nutzungs-Optimierer",
       optimizerDesc:
         "Mach aus einer groben, halbfertigen Anfrage einen sauberen Prompt, den du direkt in Claude Code einfügen kannst — plus empfohlenes Effort / Thinking / Modell für die Aufgabe.",
       optimizerHowto:
-        "Tippe oder füge deinen Entwurf unten ein, aktiviere optionale Feineinstellungen und klicke Optimieren. Nur der eingefügte Text wird an dein Modell gesendet — nie an Claude Code oder dein Terminal.",
+        "Tippe oder füge deinen Entwurf unten ein, wähle optionale Anpassungen und erstelle dann die exakte Anfragevorschau. Erst ein separater Klick auf Senden überträgt etwas; enthalten sein kann nur dein eingefügter Text.",
       optimizerConsent:
-        "Der Nutzungs-Optimierer sendet den eingefügten Text an dein konfiguriertes API-Modell. Nichts geht an Claude Code, nichts wird ins Terminal getippt. Fortfahren?",
+        "Exakte Anfragevorschau erstellen? Dabei wird nichts gesendet; die Übertragung an dein konfiguriertes API-Modell erfordert einen separaten Klick.",
       optimizerEnableBtn: "In Einstellungen aktivieren",
       optimizerPlaceholder: "Groben Prompt zum Optimieren einfügen…",
       optimizerRun: "Optimieren",
@@ -1478,10 +1745,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> Ihren tatsächlichen Nutzungsdaten — es wurde nichts an eine API\n' +
         '> gesendet, um diesen Text zu generieren.\n\n' +
         '### Für echten, personalisierten Rat basierend auf IHRER Nutzung:\n\n' +
-        '1. Einstellungen öffnen (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. Nach **`claudeCodeUsage.advice.apiKey`** suchen\n' +
-        '3. Einen OpenAI-kompatiblen API-Key einfügen — DeepSeek funktioniert\n' +
-        '   sofort ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. **`Claude Code Usage: Show Usage Details`** ausführen\n' +
+        '2. Im Dashboard **Einstellungen → Beratung** öffnen\n' +
+        '3. Einen OpenAI-kompatiblen API-Key einfügen — er bleibt in VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. **`Claude Code Usage: Get AI Usage Advice`** erneut ausführen',
       costComposition: "Kostenzusammensetzung",
       date: "Datum",
@@ -1511,6 +1778,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: '新功能：Codex Beta 用量與本機優化建議、與安裝版本精確對應的更新說明，並移除已過時的特定模型每週 Opus 選項。',
+      v231: '新功能：正確的 Codex 最近 30 天統計、可識別重置的每週額度估算，以及可匯出本機 SVG／Markdown 的隱私安全綜合活動熱力圖。',
     },
     providers: PROVIDERS['zh-TW'],
     weeklyValue: WEEKLY_VALUE_COPY['zh-TW'],
@@ -1526,7 +1794,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: '設定',
       settingsTab: '設定',
       settingsIntro:
-        '設定現在都在這裡。只有語言、資料目錄與 API 金鑰仍留在 VS Code 設定中(以便同步)。變更會立即生效。',
+        '設定現在都在這裡。語言與資料目錄仍使用 VS Code 設定；API 金鑰存於 VS Code SecretStorage，絕不同步。變更會立即生效。',
+      secretMigrationFailed:
+        '無法將已儲存的建議 API 金鑰移入加密 SecretStorage。擴充套件已在刪除舊值前停止。請修正舊設定並重新載入視窗。',
+      secretMigrationWorkspace:
+        '工作區專用 API 金鑰無法安全遷移至單一全域 SecretStorage。請先複製並從工作區設定移除，重新載入後在「儀表板設定 → 建議」輸入。',
       settingsResetAll: '全部還原為預設',
       settingsGroupGeneral: '一般',
       settingsGroupProviders: '供應商',
@@ -1534,6 +1806,66 @@ const translations: Record<SupportedLanguage, Translations> = {
       settingsGroupStatusBar: '狀態列',
       settingsGroupData: '資料與重新整理',
       settingsGroupAdvice: 'AI 建議與最佳化工具',
+      adviceEffectiveness: {
+        title: 'AI 建議有效性',
+        description: '檢視每項建議如何從本機觀察，經由證據與行動，走到有品質護欄的結果。',
+        candidateNotice: 'v2.3.1 候選功能 · 預設關閉 · 沒有預設或背景 AI 請求。',
+        spineLabel: '建議證據路徑',
+        observation: '觀察',
+        evidence: '證據',
+        recommendation: '建議',
+        action: '行動',
+        result: '結果',
+        source: '來源',
+        limitations: '限制',
+        proxyMetric: '代理指標',
+        longSessionSignal: '觀察到的用量中，有 {share} 來自長工作階段。',
+        largeContextSignal: '觀察到的用量中，有 {share} 發生於大型上下文。',
+        frameworkOverheadSignal: '觀察到的用量中，{share} 是另行估算的框架注入占比；這不評價使用者的寫作品質。',
+        clearBoundaryRecommendation: '對長時間或大型上下文工作採用更清楚的任務邊界。',
+        clearBoundaryAction: '任務改變時開始新的工作階段；只有繼續同一任務時才壓縮上下文。',
+        codexLocalRecommendation: '在下一個可比任務前，先檢視本機 Codex 結構訊號。',
+        noEvidenceAdvice: '此範圍目前沒有以證據為基礎的建議。',
+        codexPreviewUnavailable: '隱私安全的 Codex 彙總 payload 預覽尚未可用。',
+        elapsedTimeProxy: '工作階段首尾跨度是代理指標，不是實測的活躍工作時間。',
+        qualityGuardrailPending: '品質證據仍待補充，因此目前無法判定建議有效性。',
+        payloadTitle: '密封 payload 快照',
+        payloadDescription: '此密封快照就是設定的 BYOK 端點在另行點擊「傳送」後才會收到的確切 UTF-8 JSON body。',
+        aggregatesOnly: '僅彙總資料',
+        aggregatesWithPersonalization: '彙總資料 + 明確允許的個人上下文',
+        aggregatesWithPromptSamples: '彙總資料 + 明確允許的 prompt 樣本',
+        payloadBytes: '{bytes} 個 UTF-8 位元組',
+        promptSamplesIncluded: '包含 {count} 個 prompt 樣本',
+        previewPayload: '預覽密封快照',
+        noNetworkTransport: '預覽不會傳送任何內容；傳送需要另行點擊。',
+        sendPreparedRequest: '傳送這個完全相同的請求',
+        sendingPreparedRequest: '正在傳送…',
+        sentPreparedRequest: '已收到結構化建議。',
+        aggregateConsentLabel: '允許使用彙總用量資料',
+        aggregateConsentHelp: '只包含允許清單內的數值彙總與結構訊號——不含 prompt、路徑、工作階段 ID 或逐筆記錄。',
+        promptConsentLabel: '同時包含 prompt 樣本與設定的個人上下文',
+        promptConsentHelp: '選用且預設關閉。只有在另行明確同意後，才會加入有數量與長度限制的 prompt 文字及設定的個人上下文。',
+        promptWindowHelp: '早於設定之 {days} 天證據視窗的 prompt 樣本不會包含。',
+        feedbackTitle: '本機意見回饋',
+        helpful: '有用',
+        notHelpful: '無用',
+        applied: '已套用',
+        snooze: '暫停 7 天',
+        resume: '再次顯示',
+        snoozedUntil: '暫停至 {date}',
+        feedbackLocalOnly: '只儲存在此裝置，絕不加入遠端 payload。',
+        feedbackSaveFailed: '無法在本機儲存回饋。未傳送任何內容。',
+        comparisonTitle: '可比任務結果',
+        comparablePairs: '{count} 組可比任務',
+        minimumComparablePairs: '至少需要 {minimum} 組可比任務，才能下結論。',
+        insufficientEvidence: '證據不足，無法下結論。',
+        qualityGuardrailFailed: '品質護欄未通過，因此不聲稱建議有效。',
+        improved: '改善達到預先聲明的門檻，且品質護欄維持通過。',
+        noDemonstratedImprovement: '尚未證明有改善；這不代表造成傷害，也不建立因果關係。',
+        clearLocalData: '清除本機建議資料',
+        clearLocalDataConfirm: '要清除此裝置上的建議同意、回饋、可比配對與比較結果嗎？',
+        strictOutputRejected: '結構化模型輸出遭拒絕，因此未建立任何建議。',
+      },
       totalTokens: '總 Token 數',
       inputTokens: '輸入 Token',
       outputTokens: '輸出 Token',
@@ -1602,8 +1934,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: '模型',
       agents: '代理數',
       agent: '代理',
-      workflowsThisMonth: '本月工作流',
-      workflowCostShare: '佔本月成本',
+      workflowsLast30Days: '最近 30 天工作流',
+      workflowLast30DaysCostShare: '佔最近 30 天成本',
       workflowCacheHint:
         '快取命中率 = 快取讀取 ÷ 全部輸入側 token。原生 Claude 工作流可在代理間重用提示快取（命中率高）；不支援跨代理快取的供應商約為 0%——同樣的工作流在那裡的成本會高出許多。',
       adhocBadge: '子代理（臨時）',
@@ -1672,14 +2004,14 @@ const translations: Record<SupportedLanguage, Translations> = {
       getAdvice: '取得 AI 建議',
       adviceCardTitle: 'AI 建議',
       adviceCardDesc:
-        '將你的用量摘要 + 你自己的 prompt 樣本送給模型，取得寫出更清楚指令、減少浪費的具體建議。',
+        '先查看本機證據。精確請求預設只含彙總資料；prompt 樣本與個人上下文需另行同意，而且只有按下「傳送」才會送出。',
       optimizerTitle: '用量優化器',
       optimizerDesc:
         '把粗略、半成形的需求，變成可直接貼進 Claude Code 的乾淨 prompt，並附上這個任務建議的 effort / thinking / 模型。',
       optimizerHowto:
-        '在下方輸入或貼上你的草稿，按需勾選可選的微調項，再按「優化」。只有你貼上的文字會送給模型——不會送給 Claude Code 或終端。',
+        '在下方輸入或貼上草稿，選取需要的調整，再建立精確請求預覽。此步驟不會傳送；只有另按「傳送」才會送出，且只會包含你貼上的文字。',
       optimizerConsent:
-        '用量優化器會把你貼上的文字送給你配置的 API 模型。不會送給 Claude Code，也不會注入終端。要繼續嗎？',
+        '要建立精確請求預覽嗎？此步驟不會傳送；送往你配置的 API 模型仍需另按一次「傳送」。',
       optimizerEnableBtn: '在設定中啟用',
       optimizerPlaceholder: '貼上要優化的粗略 prompt…',
       optimizerRun: '優化',
@@ -1711,10 +2043,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> 它**不是**基於你實際的 Claude Code 用量資料 ——\n' +
         '> 沒有任何資料被送往 API 來產生本內容。\n\n' +
         '### 要取得基於你實際用量的個人化建議:\n\n' +
-        '1. 開啟設定(`Ctrl+,` / `Cmd+,`)\n' +
-        '2. 搜尋 **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. 貼入 OpenAI-相容 API key —— DeepSeek 開箱即用\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. 執行 **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. 開啟儀表板的 **設定 → 建議** 區段\n' +
+        '3. 貼入 OpenAI 相容 API key —— 金鑰只會存於 VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. 重新執行 **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: '成本構成',
       date: '日期',
@@ -1742,6 +2074,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: '新功能：Codex Beta 用量与本地优化建议、与安装版本精确对应的更新说明，并移除已过时的特定模型每周 Opus 选项。',
+      v231: '新功能：准确的 Codex 最近 30 天统计、可识别重置的每周额度估算，以及可导出本地 SVG／Markdown 的隐私安全综合活动热力图。',
     },
     providers: PROVIDERS['zh-CN'],
     weeklyValue: WEEKLY_VALUE_COPY['zh-CN'],
@@ -1757,7 +2090,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: '设置',
       settingsTab: '设置',
       settingsIntro:
-        '设置现在都在这里。只有语言、数据目录和 API key 仍留在 VS Code 设置中(便于同步)。更改即时生效。',
+        '设置现在都在这里。语言和数据目录仍使用 VS Code 设置；API 密钥存入 VS Code SecretStorage，绝不同步。更改即时生效。',
+      secretMigrationFailed:
+        '无法把已保存的建议 API 密钥迁入加密 SecretStorage。插件已在删除旧值前停止。请修正旧设置并重新加载窗口。',
+      secretMigrationWorkspace:
+        '工作区专用 API 密钥无法安全迁移到单一全局 SecretStorage。请先复制并从工作区设置中移除，重新加载后在“仪表板设置 → 建议”中输入。',
       settingsResetAll: '全部恢复默认',
       settingsGroupGeneral: '常规',
       settingsGroupProviders: '供应商',
@@ -1765,6 +2102,66 @@ const translations: Record<SupportedLanguage, Translations> = {
       settingsGroupStatusBar: '状态栏',
       settingsGroupData: '数据与刷新',
       settingsGroupAdvice: 'AI 建议与优化器',
+      adviceEffectiveness: {
+        title: 'AI 建议有效性',
+        description: '查看每条建议如何从本地观察，经由证据与行动，走到有质量护栏的结果。',
+        candidateNotice: 'v2.3.1 候选功能 · 默认关闭 · 不存在默认或后台 AI 请求。',
+        spineLabel: '建议证据路径',
+        observation: '观察',
+        evidence: '证据',
+        recommendation: '建议',
+        action: '行动',
+        result: '结果',
+        source: '来源',
+        limitations: '限制',
+        proxyMetric: '代理指标',
+        longSessionSignal: '观察到的用量中，有 {share} 来自长会话。',
+        largeContextSignal: '观察到的用量中，有 {share} 发生在大型上下文。',
+        frameworkOverheadSignal: '观察到的用量中，{share} 是单独估算的框架注入占比；这不评价用户的写作质量。',
+        clearBoundaryRecommendation: '对长时间或大型上下文工作采用更清晰的任务边界。',
+        clearBoundaryAction: '任务改变时开始新会话；只有继续同一任务时才压缩上下文。',
+        codexLocalRecommendation: '在下一个可比任务前，先查看本地 Codex 结构信号。',
+        noEvidenceAdvice: '此范围目前没有基于证据的建议。',
+        codexPreviewUnavailable: '隐私安全的 Codex 汇总 payload 预览尚不可用。',
+        elapsedTimeProxy: '会话首尾跨度是代理指标，不是实测的活跃工作时间。',
+        qualityGuardrailPending: '质量证据仍待补充，因此目前无法判断建议有效性。',
+        payloadTitle: '密封 payload 快照',
+        payloadDescription: '此密封快照就是配置的 BYOK 端点仅在另行点击“发送”后才会收到的确切 UTF-8 JSON body。',
+        aggregatesOnly: '仅汇总数据',
+        aggregatesWithPersonalization: '汇总数据 + 明确允许的个人上下文',
+        aggregatesWithPromptSamples: '汇总数据 + 明确允许的 prompt 样本',
+        payloadBytes: '{bytes} 个 UTF-8 字节',
+        promptSamplesIncluded: '包含 {count} 个 prompt 样本',
+        previewPayload: '预览密封快照',
+        noNetworkTransport: '预览不会发送任何内容；发送需要另行点击。',
+        sendPreparedRequest: '发送这份完全相同的请求',
+        sendingPreparedRequest: '正在发送…',
+        sentPreparedRequest: '已收到结构化建议。',
+        aggregateConsentLabel: '允许使用汇总用量数据',
+        aggregateConsentHelp: '只包含允许列表内的数值汇总与结构信号——不含 prompt、路径、会话 ID 或逐条记录。',
+        promptConsentLabel: '同时包含 prompt 样本与配置的个人上下文',
+        promptConsentHelp: '可选且默认关闭。只有另行明确同意后，才会加入有数量和长度限制的 prompt 文本及配置的个人上下文。',
+        promptWindowHelp: '早于所配置 {days} 天证据窗口的 prompt 样本不会包含。',
+        feedbackTitle: '本地反馈',
+        helpful: '有用',
+        notHelpful: '无用',
+        applied: '已应用',
+        snooze: '暂停 7 天',
+        resume: '再次显示',
+        snoozedUntil: '暂停至 {date}',
+        feedbackLocalOnly: '只存储在此设备上，绝不加入远程 payload。',
+        feedbackSaveFailed: '无法在本地保存反馈。未发送任何内容。',
+        comparisonTitle: '可比任务结果',
+        comparablePairs: '{count} 组可比任务',
+        minimumComparablePairs: '至少需要 {minimum} 组可比任务，才能下结论。',
+        insufficientEvidence: '证据不足，无法下结论。',
+        qualityGuardrailFailed: '质量护栏未通过，因此不声称建议有效。',
+        improved: '改善达到预先声明的门槛，且质量护栏保持通过。',
+        noDemonstratedImprovement: '尚未证明有改善；这不代表造成伤害，也不建立因果关系。',
+        clearLocalData: '清除本地建议数据',
+        clearLocalDataConfirm: '要清除此设备上保存的建议同意、反馈、可比配对和比较结果吗？',
+        strictOutputRejected: '结构化模型输出被拒绝，因此未创建任何建议。',
+      },
       totalTokens: '总 Token 数',
       inputTokens: '输入 Token',
       outputTokens: '输出 Token',
@@ -1833,8 +2230,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: '模型',
       agents: '代理数',
       agent: '代理',
-      workflowsThisMonth: '本月工作流',
-      workflowCostShare: '占本月成本',
+      workflowsLast30Days: '最近 30 天工作流',
+      workflowLast30DaysCostShare: '占最近 30 天成本',
       workflowCacheHint:
         '缓存命中率 = 缓存读取 ÷ 全部输入侧 token。原生 Claude 工作流可在代理间复用提示缓存（命中率高）；不支持跨代理缓存的供应商约为 0%——同样的工作流在那里的成本会高出许多。',
       adhocBadge: '子代理（临时）',
@@ -1903,14 +2300,14 @@ const translations: Record<SupportedLanguage, Translations> = {
       getAdvice: '获取 AI 建议',
       adviceCardTitle: 'AI 建议',
       adviceCardDesc:
-        '将你的用量摘要 + 你自己的 prompt 样本送给模型，获得写出更清晰指令、减少浪费的具体建议。',
+        '先查看本地证据。精确请求默认只含汇总数据；prompt 样本与个人上下文需另行同意，而且只有点击“发送”才会发出。',
       optimizerTitle: '用量优化器',
       optimizerDesc:
         '把粗略、没成形的需求，变成可以直接粘进 Claude Code 的干净 prompt，并附上这个任务建议的 effort / thinking / 模型。',
       optimizerHowto:
-        '在下方输入或粘贴你的草稿，按需勾选下面的可选微调项，再点「优化」。只有你粘贴的文字会发给模型——不会发给 Claude Code，也不会注入终端。',
+        '在下方输入或粘贴草稿，选择需要的调整，再生成精确请求预览。此步骤不会发送；只有另点“发送”才会发出，且只会包含你粘贴的文字。',
       optimizerConsent:
-        '用量优化器会把你粘贴的文字发送给你配置的 API 模型。不会发送给 Claude Code，也不会注入终端。要继续吗？',
+        '要生成精确请求预览吗？此步骤不会发送；发送到你配置的 API 模型仍需另点一次“发送”。',
       optimizerEnableBtn: '在设置中启用',
       optimizerPlaceholder: '粘贴要优化的粗略 prompt…',
       optimizerRun: '优化',
@@ -1942,10 +2339,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> 它**不是**基于你实际的 Claude Code 用量数据 ——\n' +
         '> 没有任何数据被发往 API 来生成本内容。\n\n' +
         '### 要获得基于你实际用量的个性化建议:\n\n' +
-        '1. 打开设置(`Ctrl+,` / `Cmd+,`)\n' +
-        '2. 搜索 **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. 填入 OpenAI-兼容 API key —— DeepSeek 开箱即用\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. 运行 **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. 打开仪表板的 **设置 → 建议** 区域\n' +
+        '3. 填入 OpenAI 兼容 API key —— 密钥只存入 VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. 重新运行 **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: '成本构成',
       date: '日期',
@@ -1973,6 +2370,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: '新機能：Codex Beta の使用量とローカル最適化ガイド、完全なバージョンに対応するリリース通知、および古いモデル別の週間 Opus オプションの削除。',
+      v231: '新機能：正確な Codex の直近 30 日集計、リセットを考慮した週間枠の推定、ローカル SVG／Markdown 共有に対応したプライバシー保護の統合アクティビティヒートマップ。',
     },
     providers: PROVIDERS.ja,
     weeklyValue: WEEKLY_VALUE_COPY.ja,
@@ -1988,7 +2386,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: '設定',
       settingsTab: '設定',
       settingsIntro:
-        '設定はここにまとまりました。言語・データディレクトリ・API キーのみ VS Code 設定に残ります(同期のため)。変更は即時反映されます。',
+        '設定はここにまとまりました。言語とデータディレクトリは VS Code 設定を使い、API キーは同期されない VS Code SecretStorage に保存されます。変更は即時反映されます。',
+      secretMigrationFailed:
+        '保存済みのアドバイス API キーを暗号化された SecretStorage に移動できませんでした。旧値を削除する前に拡張機能を停止しました。旧設定を修正してウィンドウを再読み込みしてください。',
+      secretMigrationWorkspace:
+        'ワークスペース固有の API キーを単一のグローバル SecretStorage に安全に移行できません。キーをコピーしてワークスペース設定から削除し、再読み込み後に「ダッシュボード設定 → アドバイス」で入力してください。',
       settingsResetAll: 'すべて既定値に戻す',
       settingsGroupGeneral: '一般',
       settingsGroupProviders: 'プロバイダー',
@@ -1996,6 +2398,66 @@ const translations: Record<SupportedLanguage, Translations> = {
       settingsGroupStatusBar: 'ステータスバー',
       settingsGroupData: 'データと更新',
       settingsGroupAdvice: 'AI アドバイス & オプティマイザー',
+      adviceEffectiveness: {
+        title: 'AI アドバイスの有効性',
+        description: '各提案がローカルの観察から根拠と行動を経て、品質ガードレール付きの結果に至る流れを確認します。',
+        candidateNotice: 'v2.3.1 候補機能 · デフォルトは無効 · 既定またはバックグラウンドの AI リクエストはありません。',
+        spineLabel: 'アドバイスの根拠経路',
+        observation: '観察',
+        evidence: '根拠',
+        recommendation: 'アドバイス',
+        action: '行動',
+        result: '結果',
+        source: '情報源',
+        limitations: '制約',
+        proxyMetric: '代理指標',
+        longSessionSignal: '観測された使用量のうち {share} は長時間セッションから生じました。',
+        largeContextSignal: '観測された使用量のうち {share} は大きなコンテキストで生じました。',
+        frameworkOverheadSignal: '観測された使用量のうち {share} は、別途推定したフレームワーク注入の割合です。ユーザーの文章品質を評価するものではありません。',
+        clearBoundaryRecommendation: '長時間または大きなコンテキストの作業では、タスク境界をより明確にします。',
+        clearBoundaryAction: 'タスクが変わったら新しいセッションを開始し、同じタスクを続ける場合にだけコンテキストを圧縮します。',
+        codexLocalRecommendation: '次の比較可能なタスクの前に、ローカルの Codex 構造シグナルを確認します。',
+        noEvidenceAdvice: 'この範囲には、根拠に基づくアドバイスがありません。',
+        codexPreviewUnavailable: 'プライバシーを保護した Codex 集計 payload のプレビューは、まだ利用できません。',
+        elapsedTimeProxy: 'セッションの経過範囲は代理指標であり、実測した作業時間ではありません。',
+        qualityGuardrailPending: '品質の根拠が未確定のため、有効性について結論を出せません。',
+        payloadTitle: '封印済み payload スナップショット',
+        payloadDescription: 'この封印済みスナップショットは、別の送信クリック後にだけ設定済み BYOK エンドポイントが受け取る UTF-8 JSON body と完全に同一です。',
+        aggregatesOnly: '集計データのみ',
+        aggregatesWithPersonalization: '集計データ + 明示的に許可した個人コンテキスト',
+        aggregatesWithPromptSamples: '集計データ + 明示的に許可したプロンプト例',
+        payloadBytes: '{bytes} UTF-8 バイト',
+        promptSamplesIncluded: '{count} 件のプロンプト例を含む',
+        previewPayload: '封印済みスナップショットをプレビュー',
+        noNetworkTransport: 'プレビューでは何も送信されません。送信には別のクリックが必要です。',
+        sendPreparedRequest: 'この同一リクエストを送信',
+        sendingPreparedRequest: '送信中…',
+        sentPreparedRequest: '構造化された助言を受信しました。',
+        aggregateConsentLabel: '集計使用データを許可する',
+        aggregateConsentHelp: '許可リスト内の数値集計と構造シグナルだけを含み、プロンプト、パス、セッション ID、個別レコードは含みません。',
+        promptConsentLabel: 'プロンプト例と設定済み個人コンテキストも含める',
+        promptConsentHelp: '任意で、デフォルトは無効です。この独立した明示的同意の後にだけ、件数と長さを制限したプロンプト本文と設定済み個人コンテキストを追加します。',
+        promptWindowHelp: '設定した {days} 日間の根拠期間より古いプロンプト例は除外します。',
+        feedbackTitle: 'ローカルフィードバック',
+        helpful: '役に立った',
+        notHelpful: '役に立たなかった',
+        applied: '適用済み',
+        snooze: '7日間保留',
+        resume: '再表示',
+        snoozedUntil: '{date} まで保留',
+        feedbackLocalOnly: 'この端末だけに保存され、リモート payload には追加されません。',
+        feedbackSaveFailed: 'フィードバックをローカルに保存できませんでした。何も送信されていません。',
+        comparisonTitle: '比較可能なタスクの結果',
+        comparablePairs: '{count} 組の比較可能なタスク',
+        minimumComparablePairs: '結論を出す前に、少なくとも {minimum} 組の比較可能なタスクが必要です。',
+        insufficientEvidence: '結論を出すには根拠が不足しています。',
+        qualityGuardrailFailed: '品質ガードレールを満たさなかったため、有効性を主張しません。',
+        improved: '品質ガードレールを保ったまま、事前に定めた改善基準に達しました。',
+        noDemonstratedImprovement: '改善は実証されていません。これは害や因果関係を示すものではありません。',
+        clearLocalData: 'ローカルのアドバイスデータを消去',
+        clearLocalDataConfirm: 'この端末に保存された同意、フィードバック、比較可能ペア、比較結果を消去しますか？',
+        strictOutputRejected: '構造化されたモデル出力を拒否しました。アドバイスは作成されていません。',
+      },
       totalTokens: '総トークン数',
       inputTokens: '入力トークン',
       outputTokens: '出力トークン',
@@ -2064,8 +2526,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: 'モデル',
       agents: 'エージェント数',
       agent: 'エージェント',
-      workflowsThisMonth: '今月のワークフロー',
-      workflowCostShare: '今月のコストに占める割合',
+      workflowsLast30Days: '過去30日間のワークフロー',
+      workflowLast30DaysCostShare: '過去30日間のコストに占める割合',
       workflowCacheHint:
         'キャッシュヒット率 = キャッシュ読取 ÷ 入力側トークン全体。ネイティブ Claude のワークフローはエージェント間でプロンプトキャッシュを再利用します（高い率）。エージェント間キャッシュのないプロバイダーでは約 0% となり、同じワークフローのコストが大幅に高くなります。',
       adhocBadge: 'サブエージェント（アドホック）',
@@ -2138,14 +2600,14 @@ const translations: Record<SupportedLanguage, Translations> = {
       getAdvice: 'AI アドバイスを取得',
       adviceCardTitle: 'AI アドバイス',
       adviceCardDesc:
-        '使用量サマリー + あなた自身のプロンプトのサンプルをモデルに送り、より明確な指示と無駄削減の具体的なヒントを得ます。',
+        'まずローカルの根拠を確認します。正確なリクエストは既定で集計のみです。プロンプト例と個人コンテキストには別の同意が必要で、「送信」を押すまで何も送られません。',
       optimizerTitle: '使用量オプティマイザー',
       optimizerDesc:
         '雑で半端な依頼を、Claude Code にそのまま貼り付けられる整ったプロンプトに変換し、そのタスクに推奨の effort / thinking / モデルも返します。',
       optimizerHowto:
-        '下に下書きを入力または貼り付け、必要に応じて任意の調整オプションを選び「最適化」を押します。送信されるのは貼り付けたテキストのみ——Claude Code やターミナルには送られません。',
+        '下に下書きを入力または貼り付け、必要な調整を選んで正確なリクエストをプレビューします。この段階では送信されません。別途「送信」を押した場合のみ、貼り付けたテキストが含まれます。',
       optimizerConsent:
-        '使用量オプティマイザーは貼り付けたテキストを設定した API モデルに送信します。Claude Code には送られず、ターミナルにも入力されません。続行しますか？',
+        '正確なリクエストをプレビューしますか？この操作では送信されません。設定した API モデルへの送信には別のクリックが必要です。',
       optimizerEnableBtn: '設定で有効化',
       optimizerPlaceholder: '最適化する雑なプロンプトを貼り付け…',
       optimizerRun: '最適化',
@@ -2178,10 +2640,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> に基づくものでは**ありません** —— この内容を生成するために\n' +
         '> API にデータは送信されていません。\n\n' +
         '### あなたの実際の使用量に基づくパーソナライズされたアドバイスを取得するには:\n\n' +
-        '1. 設定を開く(`Ctrl+,` / `Cmd+,`)\n' +
-        '2. **`claudeCodeUsage.advice.apiKey`** を検索\n' +
-        '3. OpenAI 互換 API キーを貼り付け —— DeepSeek はすぐに使えます\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. **`Claude Code Usage: Show Usage Details`** を実行\n' +
+        '2. ダッシュボードの **設定 → アドバイス** を開く\n' +
+        '3. OpenAI 互換 API キーを貼り付け —— VS Code SecretStorage のみに保存されます\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. **`Claude Code Usage: Get AI Usage Advice`** を再実行',
       costComposition: 'コスト構成',
       date: '日付',
@@ -2209,6 +2671,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: '새 기능: Codex Beta 사용량과 로컬 최적화 안내, 설치된 전체 버전에 맞는 릴리스 알림, 그리고 오래된 모델별 주간 Opus 옵션 제거.',
+      v231: '새 기능: 정확한 Codex 최근 30일 통계, 재설정을 인식하는 주간 한도 추정, 로컬 SVG/Markdown 공유를 지원하는 개인정보 보호 통합 활동 히트맵.',
     },
     providers: PROVIDERS.ko,
     weeklyValue: WEEKLY_VALUE_COPY.ko,
@@ -2224,7 +2687,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: '설정',
       settingsTab: '설정',
       settingsIntro:
-        '설정이 이제 여기로 모였습니다. 언어, 데이터 디렉터리, API 키만 VS Code 설정에 남습니다(동기화를 위해). 변경은 즉시 적용됩니다.',
+        '설정이 이제 여기로 모였습니다. 언어와 데이터 디렉터리는 VS Code 설정을 사용하고, API 키는 동기화되지 않는 VS Code SecretStorage에 저장됩니다. 변경은 즉시 적용됩니다.',
+      secretMigrationFailed:
+        '저장된 조언 API 키를 암호화된 SecretStorage로 옮기지 못했습니다. 이전 값을 삭제하기 전에 확장이 중지되었습니다. 기존 설정을 수정하고 창을 다시 로드하세요.',
+      secretMigrationWorkspace:
+        '작업 영역별 API 키는 하나의 전역 SecretStorage 항목으로 안전하게 이전할 수 없습니다. 키를 복사한 뒤 작업 영역 설정에서 제거하고, 다시 로드한 후 대시보드 설정 → 조언에 입력하세요.',
       settingsResetAll: '모두 기본값으로',
       settingsGroupGeneral: '일반',
       settingsGroupProviders: '공급자',
@@ -2232,6 +2699,66 @@ const translations: Record<SupportedLanguage, Translations> = {
       settingsGroupStatusBar: '상태 표시줄',
       settingsGroupData: '데이터 및 새로고침',
       settingsGroupAdvice: 'AI 조언 & 옵티마이저',
+      adviceEffectiveness: {
+        title: 'AI 조언 효과성',
+        description: '각 제안이 로컬 관찰에서 근거와 행동을 거쳐 품질 가드레일이 있는 결과로 이어지는 과정을 확인합니다.',
+        candidateNotice: 'v2.3.1 후보 기능 · 기본적으로 꺼짐 · 기본 또는 백그라운드 AI 요청 없음.',
+        spineLabel: '조언 근거 경로',
+        observation: '관찰',
+        evidence: '근거',
+        recommendation: '조언',
+        action: '행동',
+        result: '결과',
+        source: '출처',
+        limitations: '제한 사항',
+        proxyMetric: '프록시 지표',
+        longSessionSignal: '관찰된 사용량 중 {share}가 긴 세션에서 발생했습니다.',
+        largeContextSignal: '관찰된 사용량 중 {share}가 큰 컨텍스트에서 발생했습니다.',
+        frameworkOverheadSignal: '관찰된 사용량 중 {share}는 별도로 추정한 프레임워크 주입 비중이며, 사용자의 글쓰기 품질을 평가하지 않습니다.',
+        clearBoundaryRecommendation: '오래 걸리거나 컨텍스트가 큰 작업에는 더 명확한 작업 경계를 사용하세요.',
+        clearBoundaryAction: '작업이 바뀌면 새 세션을 시작하고, 같은 작업을 계속할 때만 컨텍스트를 압축하세요.',
+        codexLocalRecommendation: '다음 비교 가능한 작업 전에 로컬 Codex 구조 신호를 검토하세요.',
+        noEvidenceAdvice: '이 범위에는 근거 기반 조언이 없습니다.',
+        codexPreviewUnavailable: '개인정보를 보호하는 Codex 집계 payload 미리보기는 아직 사용할 수 없습니다.',
+        elapsedTimeProxy: '세션의 시작과 끝 사이 시간은 프록시이며, 실제로 측정한 활성 작업 시간이 아닙니다.',
+        qualityGuardrailPending: '품질 근거가 아직 준비되지 않아 효과성 결론을 내릴 수 없습니다.',
+        payloadTitle: '봉인된 payload 스냅샷',
+        payloadDescription: '이 봉인된 스냅샷은 별도의 보내기 클릭 후에만 설정된 BYOK 엔드포인트가 받는 UTF-8 JSON body와 정확히 같습니다.',
+        aggregatesOnly: '집계 데이터만',
+        aggregatesWithPersonalization: '집계 데이터 + 명시적으로 허용한 개인 컨텍스트',
+        aggregatesWithPromptSamples: '집계 데이터 + 명시적으로 허용한 프롬프트 샘플',
+        payloadBytes: '{bytes} UTF-8바이트',
+        promptSamplesIncluded: '프롬프트 샘플 {count}개 포함',
+        previewPayload: '봉인된 스냅샷 미리보기',
+        noNetworkTransport: '미리보기는 아무것도 보내지 않습니다. 전송하려면 별도로 클릭해야 합니다.',
+        sendPreparedRequest: '이 동일한 요청 보내기',
+        sendingPreparedRequest: '전송 중…',
+        sentPreparedRequest: '구조화된 조언을 받았습니다.',
+        aggregateConsentLabel: '집계 사용량 데이터 허용',
+        aggregateConsentHelp: '허용 목록의 수치 집계와 구조 신호만 포함하며 프롬프트, 경로, 세션 ID, 개별 레코드는 포함하지 않습니다.',
+        promptConsentLabel: '프롬프트 샘플과 설정된 개인 컨텍스트도 포함',
+        promptConsentHelp: '선택 사항이며 기본적으로 꺼져 있습니다. 이 별도의 명시적 동의 후에만 제한된 프롬프트 텍스트와 설정된 개인 컨텍스트를 추가합니다.',
+        promptWindowHelp: '설정한 {days}일 근거 기간보다 오래된 프롬프트 샘플은 제외합니다.',
+        feedbackTitle: '로컬 피드백',
+        helpful: '유용함',
+        notHelpful: '유용하지 않음',
+        applied: '적용함',
+        snooze: '7일간 숨기기',
+        resume: '다시 표시',
+        snoozedUntil: '{date}까지 숨김',
+        feedbackLocalOnly: '이 기기에만 저장되며 원격 payload에는 절대 추가되지 않습니다.',
+        feedbackSaveFailed: '피드백을 로컬에 저장하지 못했습니다. 아무것도 전송되지 않았습니다.',
+        comparisonTitle: '비교 가능한 작업 결과',
+        comparablePairs: '비교 가능한 작업 쌍 {count}개',
+        minimumComparablePairs: '결론을 내리기 전에 비교 가능한 작업 쌍이 최소 {minimum}개 필요합니다.',
+        insufficientEvidence: '결론을 내리기에 근거가 부족합니다.',
+        qualityGuardrailFailed: '품질 가드레일을 충족하지 못했으므로 효과성을 주장하지 않습니다.',
+        improved: '품질 가드레일을 유지하면서 사전에 정한 개선 기준을 충족했습니다.',
+        noDemonstratedImprovement: '개선이 입증되지 않았습니다. 이는 피해나 인과관계를 뜻하지 않습니다.',
+        clearLocalData: '로컬 조언 데이터 지우기',
+        clearLocalDataConfirm: '이 기기에 저장된 조언 동의, 피드백, 비교 쌍 및 비교 결과를 지우시겠습니까?',
+        strictOutputRejected: '구조화된 모델 출력을 거부했습니다. 조언이 생성되지 않았습니다.',
+      },
       totalTokens: '총 토큰 수',
       inputTokens: '입력 토큰',
       outputTokens: '출력 토큰',
@@ -2300,8 +2827,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: '모델',
       agents: '에이전트 수',
       agent: '에이전트',
-      workflowsThisMonth: '이번 달 워크플로',
-      workflowCostShare: '이번 달 비용 중 비율',
+      workflowsLast30Days: '최근 30일 워크플로',
+      workflowLast30DaysCostShare: '최근 30일 비용 중 비율',
       workflowCacheHint:
         '캐시 적중률 = 캐시 읽기 ÷ 전체 입력측 토큰. 네이티브 Claude 워크플로는 에이전트 간 프롬프트 캐시를 재사용합니다(높은 적중률). 에이전트 간 캐시가 없는 공급자는 약 0%로, 같은 워크플로 비용이 훨씬 더 많이 듭니다.',
       adhocBadge: '서브에이전트(애드혹)',
@@ -2374,14 +2901,14 @@ const translations: Record<SupportedLanguage, Translations> = {
       getAdvice: 'AI 조언 받기',
       adviceCardTitle: 'AI 조언',
       adviceCardDesc:
-        '사용량 요약 + 본인 프롬프트 샘플을 모델에 보내 더 명확한 지시와 낭비 줄이기에 대한 구체적 팁을 받습니다.',
+        '먼저 로컬 근거를 확인합니다. 정확한 요청은 기본적으로 집계만 포함하며, 프롬프트 샘플과 개인 컨텍스트는 별도 동의가 필요하고 「전송」을 누르기 전에는 아무것도 보내지 않습니다.',
       optimizerTitle: '사용량 옵티마이저',
       optimizerDesc:
         '대략적이고 정리되지 않은 요청을 Claude Code에 바로 붙여넣을 수 있는 깔끔한 프롬프트로 바꾸고, 그 작업에 추천하는 effort / thinking / 모델도 함께 제공합니다.',
       optimizerHowto:
-        '아래에 초안을 입력하거나 붙여넣고, 필요하면 선택 옵션을 고른 뒤 「최적화」를 누르세요. 붙여넣은 텍스트만 모델로 전송됩니다 — Claude Code나 터미널로는 가지 않습니다.',
+        '아래에 초안을 입력하거나 붙여넣고 필요한 옵션을 고른 뒤 정확한 요청을 미리 봅니다. 이 단계에서는 전송되지 않으며, 별도로 「전송」을 눌렀을 때만 붙여넣은 텍스트가 포함됩니다.',
       optimizerConsent:
-        '사용량 옵티마이저는 붙여넣은 텍스트를 설정한 API 모델로 보냅니다. Claude Code로는 전송되지 않고 터미널에도 입력되지 않습니다. 계속할까요?',
+        '정확한 요청을 미리 볼까요? 이 단계에서는 아무것도 보내지 않으며, 설정한 API 모델로 보내려면 별도의 클릭이 필요합니다.',
       optimizerEnableBtn: '설정에서 사용',
       optimizerPlaceholder: '최적화할 대략적인 프롬프트 붙여넣기…',
       optimizerRun: '최적화',
@@ -2414,10 +2941,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> 기반하지 **않으며**, 이 내용을 생성하기 위해 API에 데이터가\n' +
         '> 전송된 적이 없습니다.\n\n' +
         '### 실제 사용량 기반의 맞춤형 조언을 받으려면:\n\n' +
-        '1. 설정 열기 (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. **`claudeCodeUsage.advice.apiKey`** 검색\n' +
-        '3. OpenAI 호환 API 키 붙여넣기 — DeepSeek 즉시 사용 가능\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. **`Claude Code Usage: Show Usage Details`** 실행\n' +
+        '2. 대시보드의 **설정 → 조언** 섹션 열기\n' +
+        '3. OpenAI 호환 API 키 붙여넣기 — VS Code SecretStorage에만 저장됩니다\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. **`Claude Code Usage: Get AI Usage Advice`** 다시 실행',
       costComposition: '비용 구성',
       date: '날짜',
@@ -2445,6 +2972,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: 'Novidades: uso do Codex Beta e orientações locais de otimização, avisos da versão exata instalada e remoção da opção semanal obsoleta do Opus por modelo.',
+      v231: 'Novidades: totais corretos dos últimos 30 dias do Codex, estimativas semanais cientes de redefinições e um mapa de calor combinado e privado com exportação local em SVG e Markdown.',
     },
     providers: PROVIDERS['pt-BR'],
     weeklyValue: WEEKLY_VALUE_COPY['pt-BR'],
@@ -2460,7 +2988,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: 'Configurações',
       settingsTab: 'Configurações',
       settingsIntro:
-        'As configurações agora ficam aqui. Apenas idioma, diretório de dados e chave de API permanecem nas Configurações do VS Code (para sincronizar). As alterações são aplicadas imediatamente.',
+        'As configurações agora ficam aqui. Idioma e diretórios de dados continuam nas Configurações do VS Code; chaves de API ficam no VS Code SecretStorage e nunca são sincronizadas. As alterações são aplicadas imediatamente.',
+      secretMigrationFailed:
+        'Não foi possível mover a chave de API de conselho salva para o SecretStorage criptografado. A extensão parou antes de excluir o valor antigo. Corrija a configuração legada e recarregue a janela.',
+      secretMigrationWorkspace:
+        'Uma chave de API específica do espaço de trabalho não pode ser migrada com segurança para uma única entrada global do SecretStorage. Copie-a, remova-a das configurações do espaço de trabalho, recarregue e informe-a em Configurações do painel → Conselho.',
       settingsResetAll: 'Restaurar tudo para os padrões',
       settingsGroupGeneral: 'Geral',
       settingsGroupProviders: 'Provedores',
@@ -2468,6 +3000,66 @@ const translations: Record<SupportedLanguage, Translations> = {
       settingsGroupStatusBar: 'Barra de status',
       settingsGroupData: 'Dados e atualização',
       settingsGroupAdvice: 'Conselho de IA e Optimizer',
+      adviceEffectiveness: {
+        title: 'Eficácia dos conselhos de IA',
+        description: 'Revise como cada sugestão passa de uma observação local para evidências, uma ação e um resultado com proteção de qualidade.',
+        candidateNotice: 'Candidato v2.3.1 · desativado por padrão · sem solicitações de IA padrão ou em segundo plano.',
+        spineLabel: 'Trilha de evidências do conselho',
+        observation: 'Observação',
+        evidence: 'Evidência',
+        recommendation: 'Conselho',
+        action: 'Ação',
+        result: 'Resultado',
+        source: 'Fonte',
+        limitations: 'Limitações',
+        proxyMetric: 'Métrica proxy',
+        longSessionSignal: '{share} do uso observado veio de sessões longas.',
+        largeContextSignal: '{share} do uso observado ocorreu com contextos grandes.',
+        frameworkOverheadSignal: '{share} do uso observado corresponde à parcela estimada separadamente de injeção do framework; isso não avalia a qualidade da escrita do usuário.',
+        clearBoundaryRecommendation: 'Use limites de tarefa mais claros em trabalhos longos ou com contexto grande.',
+        clearBoundaryAction: 'Inicie uma nova sessão quando a tarefa mudar; compacte apenas ao continuar a mesma tarefa.',
+        codexLocalRecommendation: 'Revise o sinal estrutural local do Codex antes da próxima tarefa comparável.',
+        noEvidenceAdvice: 'Não há conselho baseado em evidências disponível para este escopo.',
+        codexPreviewUnavailable: 'Uma prévia de payload agregado do Codex que preserve a privacidade ainda não está disponível.',
+        elapsedTimeProxy: 'O intervalo decorrido da sessão é um proxy, não tempo de trabalho ativo medido.',
+        qualityGuardrailPending: 'As evidências de qualidade estão pendentes; portanto, ainda não há conclusão sobre eficácia.',
+        payloadTitle: 'Snapshot de payload selado',
+        payloadDescription: 'Este snapshot selado é exatamente o body JSON em UTF-8 que o endpoint BYOK configurado recebe somente após um clique separado em Enviar.',
+        aggregatesOnly: 'Somente agregados',
+        aggregatesWithPersonalization: 'Agregados + contexto pessoal permitido explicitamente',
+        aggregatesWithPromptSamples: 'Agregados + amostras de prompt permitidas explicitamente',
+        payloadBytes: '{bytes} bytes UTF-8',
+        promptSamplesIncluded: '{count} amostras de prompt incluídas',
+        previewPayload: 'Visualizar snapshot selado',
+        noNetworkTransport: 'A prévia não envia nada. O envio exige um clique separado.',
+        sendPreparedRequest: 'Enviar esta solicitação exata',
+        sendingPreparedRequest: 'Enviando…',
+        sentPreparedRequest: 'Conselho estruturado recebido.',
+        aggregateConsentLabel: 'Permitir dados agregados de uso',
+        aggregateConsentHelp: 'Inclui somente agregados numéricos e sinais estruturais da lista permitida — sem prompts, caminhos, IDs de sessão ou registros individuais.',
+        promptConsentLabel: 'Incluir amostras de prompt e contexto pessoal configurado',
+        promptConsentHelp: 'Opcional e desativado por padrão. Texto de prompt limitado e contexto pessoal configurado só são adicionados após este consentimento explícito separado.',
+        promptWindowHelp: 'Amostras de prompt anteriores à janela de evidências configurada de {days} dias são excluídas.',
+        feedbackTitle: 'Feedback local',
+        helpful: 'Útil',
+        notHelpful: 'Não útil',
+        applied: 'Aplicado',
+        snooze: 'Adiar por 7 dias',
+        resume: 'Mostrar novamente',
+        snoozedUntil: 'Adiado até {date}',
+        feedbackLocalOnly: 'Armazenado somente neste dispositivo e nunca adicionado a um payload remoto.',
+        feedbackSaveFailed: 'Não foi possível salvar o feedback localmente. Nada foi enviado.',
+        comparisonTitle: 'Resultados de tarefas comparáveis',
+        comparablePairs: '{count} pares de tarefas comparáveis',
+        minimumComparablePairs: 'São necessários pelo menos {minimum} pares de tarefas comparáveis antes de chegar a uma conclusão.',
+        insufficientEvidence: 'Não há evidências suficientes para chegar a uma conclusão.',
+        qualityGuardrailFailed: 'A proteção de qualidade não foi mantida, portanto nenhuma eficácia é afirmada.',
+        improved: 'A melhoria atingiu o limite pré-declarado enquanto a proteção de qualidade foi mantida.',
+        noDemonstratedImprovement: 'Nenhuma melhoria foi demonstrada; isso não estabelece dano nem causalidade.',
+        clearLocalData: 'Limpar dados locais de conselho',
+        clearLocalDataConfirm: 'Limpar consentimentos, feedback, pares comparáveis e resultados de comparação armazenados neste dispositivo?',
+        strictOutputRejected: 'A saída estruturada do modelo foi rejeitada. Nenhum conselho foi criado.',
+      },
       totalTokens: 'Total de tokens',
       inputTokens: 'Tokens de entrada',
       outputTokens: 'Tokens de saída',
@@ -2536,8 +3128,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: 'Modelo',
       agents: 'Agentes',
       agent: 'Agente',
-      workflowsThisMonth: 'Workflows neste mês',
-      workflowCostShare: 'do custo deste mês',
+      workflowsLast30Days: 'Workflows nos últimos 30 dias',
+      workflowLast30DaysCostShare: 'dos custos dos últimos 30 dias',
       workflowCacheHint:
         'Taxa de acerto do cache = leituras de cache ÷ todos os tokens do lado da entrada. Workflows nativos do Claude reaproveitam o cache de prompt entre agentes (taxa alta); um provedor sem cache entre agentes mostra ~0% — o mesmo workflow custa desproporcionalmente mais nele.',
       adhocBadge: 'subagentes (ad-hoc)',
@@ -2610,14 +3202,14 @@ const translations: Record<SupportedLanguage, Translations> = {
       getAdvice: 'Obter conselho de IA',
       adviceCardTitle: 'Conselho de IA',
       adviceCardDesc:
-        'Envie o resumo do seu uso + uma amostra dos seus próprios prompts ao seu modelo e receba dicas concretas para escrever instruções mais claras e reduzir desperdício.',
+        'Revise primeiro as evidências locais. A solicitação exata usa apenas agregados por padrão; amostras de prompts e contexto pessoal exigem consentimento separado, e nada é enviado até você clicar em Enviar.',
       optimizerTitle: 'Otimizador de uso',
       optimizerDesc:
         'Transforme um pedido rascunhado e malformado em um prompt limpo para colar direto no Claude Code — além de um esforço / raciocínio / modelo sugeridos para a tarefa.',
       optimizerHowto:
-        'Digite ou cole seu rascunho abaixo, marque quaisquer ajustes opcionais e clique em Otimizar. Apenas o texto que você cola é enviado ao seu modelo — nunca ao Claude Code nem ao seu terminal.',
+        'Digite ou cole seu rascunho abaixo, escolha os ajustes opcionais e gere a visualização da solicitação exata. Nada é enviado até um clique separado em Enviar; somente o texto colado pode ser incluído.',
       optimizerConsent:
-        'O Otimizador de Uso envia o texto que você cola ao modelo de API configurado. Nada é enviado ao Claude Code e nada é digitado em um terminal. Continuar?',
+        'Gerar a visualização da solicitação exata? Isso não envia nada; o envio ao modelo de API configurado exige outro clique.',
       optimizerEnableBtn: 'Ativar nas configurações',
       optimizerPlaceholder: 'Cole um prompt rascunhado para otimizar…',
       optimizerRun: 'Otimizar',
@@ -2649,10 +3241,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> que o recurso produz. Ele **não** é baseado nos seus dados reais de uso\n' +
         '> do Claude Code — nada foi enviado a nenhuma API para gerar isso.\n\n' +
         '### Para obter um conselho real e personalizado com base no SEU uso:\n\n' +
-        '1. Abra as Configurações (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. Pesquise por **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. Cole uma chave de API compatível com OpenAI — DeepSeek funciona direto\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. Execute **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. Abra **Configurações → Conselho** no painel\n' +
+        '3. Cole uma chave compatível com OpenAI — ela fica apenas no VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. Execute novamente **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: 'Composição de custos',
       date: 'Data',
@@ -2680,6 +3272,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     },
     releaseAnnouncement: {
       v230: 'Yang baru: penggunaan Codex Beta dan panduan optimasi lokal, catatan rilis yang sesuai dengan versi lengkap terpasang, serta penghapusan opsi Opus mingguan khusus model yang sudah usang.',
+      v231: 'Yang baru: statistik 30 hari Codex yang akurat, estimasi batas mingguan yang mengenali reset, dan heatmap aktivitas gabungan privat dengan ekspor SVG serta Markdown lokal.',
     },
     providers: PROVIDERS.id,
     weeklyValue: WEEKLY_VALUE_COPY.id,
@@ -2695,7 +3288,11 @@ const translations: Record<SupportedLanguage, Translations> = {
       settings: 'Pengaturan',
       settingsTab: 'Pengaturan',
       settingsIntro:
-        'Pengaturan sekarang ada di sini. Hanya bahasa, direktori data, dan API key yang tetap berada di Pengaturan VS Code (agar dapat disinkronkan). Perubahan langsung diterapkan.',
+        'Pengaturan sekarang ada di sini. Bahasa dan direktori data tetap memakai Pengaturan VS Code; API key disimpan di VS Code SecretStorage dan tidak pernah disinkronkan. Perubahan langsung diterapkan.',
+      secretMigrationFailed:
+        'API key saran yang tersimpan tidak dapat dipindahkan ke SecretStorage terenkripsi. Ekstensi dihentikan sebelum nilai lama dihapus. Perbaiki pengaturan lama lalu muat ulang jendela.',
+      secretMigrationWorkspace:
+        'API key khusus workspace tidak dapat dimigrasikan dengan aman ke satu entri SecretStorage global. Salin lalu hapus dari pengaturan workspace, muat ulang, kemudian masukkan di Pengaturan Dashboard → Saran.',
       settingsResetAll: 'Kembalikan semua ke default',
       settingsGroupGeneral: 'Umum',
       settingsGroupProviders: 'Penyedia',
@@ -2703,6 +3300,66 @@ const translations: Record<SupportedLanguage, Translations> = {
       settingsGroupStatusBar: 'Status bar',
       settingsGroupData: 'Data & penyegaran',
       settingsGroupAdvice: 'Saran AI & Optimizer',
+      adviceEffectiveness: {
+        title: 'Efektivitas saran AI',
+        description: 'Tinjau bagaimana setiap saran bergerak dari pengamatan lokal menuju bukti, tindakan, dan hasil dengan pagar pengaman kualitas.',
+        candidateNotice: 'Kandidat v2.3.1 · nonaktif secara default · tanpa permintaan AI default atau latar belakang.',
+        spineLabel: 'Alur bukti saran',
+        observation: 'Pengamatan',
+        evidence: 'Bukti',
+        recommendation: 'Saran',
+        action: 'Tindakan',
+        result: 'Hasil',
+        source: 'Sumber',
+        limitations: 'Keterbatasan',
+        proxyMetric: 'Metrik proksi',
+        longSessionSignal: '{share} penggunaan yang diamati berasal dari sesi panjang.',
+        largeContextSignal: '{share} penggunaan yang diamati terjadi pada konteks besar.',
+        frameworkOverheadSignal: '{share} dari penggunaan yang diamati adalah porsi injeksi framework yang diperkirakan secara terpisah; ini tidak menilai kualitas tulisan pengguna.',
+        clearBoundaryRecommendation: 'Gunakan batas tugas yang lebih jelas untuk pekerjaan panjang atau berkonteks besar.',
+        clearBoundaryAction: 'Mulai sesi baru saat tugas berubah; ringkas konteks hanya saat melanjutkan tugas yang sama.',
+        codexLocalRecommendation: 'Tinjau sinyal struktural Codex lokal sebelum tugas berikutnya yang sebanding.',
+        noEvidenceAdvice: 'Tidak ada saran berbasis bukti untuk cakupan ini.',
+        codexPreviewUnavailable: 'Pratinjau payload agregat Codex yang aman bagi privasi belum tersedia.',
+        elapsedTimeProxy: 'Rentang waktu sesi adalah proksi, bukan waktu kerja aktif yang diukur.',
+        qualityGuardrailPending: 'Bukti kualitas masih tertunda, sehingga belum ada kesimpulan efektivitas.',
+        payloadTitle: 'Snapshot payload tersegel',
+        payloadDescription: 'Snapshot tersegel ini persis sama dengan body JSON UTF-8 yang diterima endpoint BYOK terkonfigurasi hanya setelah klik Kirim yang terpisah.',
+        aggregatesOnly: 'Hanya agregat',
+        aggregatesWithPersonalization: 'Agregat + konteks pribadi yang diizinkan secara eksplisit',
+        aggregatesWithPromptSamples: 'Agregat + sampel prompt yang diizinkan secara eksplisit',
+        payloadBytes: '{bytes} byte UTF-8',
+        promptSamplesIncluded: '{count} sampel prompt disertakan',
+        previewPayload: 'Pratinjau snapshot tersegel',
+        noNetworkTransport: 'Pratinjau tidak mengirim apa pun. Pengiriman memerlukan klik terpisah.',
+        sendPreparedRequest: 'Kirim permintaan persis ini',
+        sendingPreparedRequest: 'Mengirim…',
+        sentPreparedRequest: 'Saran terstruktur diterima.',
+        aggregateConsentLabel: 'Izinkan data penggunaan agregat',
+        aggregateConsentHelp: 'Hanya mencakup agregat numerik dan sinyal struktural dalam daftar izin — tanpa prompt, path, ID sesi, atau catatan individual.',
+        promptConsentLabel: 'Sertakan sampel prompt dan konteks pribadi terkonfigurasi',
+        promptConsentHelp: 'Opsional dan nonaktif secara default. Teks prompt terbatas dan konteks pribadi terkonfigurasi hanya ditambahkan setelah persetujuan eksplisit terpisah ini.',
+        promptWindowHelp: 'Sampel prompt yang lebih lama dari jendela bukti {days} hari yang dikonfigurasi akan dikecualikan.',
+        feedbackTitle: 'Umpan balik lokal',
+        helpful: 'Bermanfaat',
+        notHelpful: 'Tidak bermanfaat',
+        applied: 'Diterapkan',
+        snooze: 'Tunda 7 hari',
+        resume: 'Tampilkan lagi',
+        snoozedUntil: 'Ditunda hingga {date}',
+        feedbackLocalOnly: 'Disimpan hanya di perangkat ini dan tidak pernah ditambahkan ke payload jarak jauh.',
+        feedbackSaveFailed: 'Umpan balik tidak dapat disimpan secara lokal. Tidak ada yang dikirim.',
+        comparisonTitle: 'Hasil tugas yang sebanding',
+        comparablePairs: '{count} pasangan tugas yang sebanding',
+        minimumComparablePairs: 'Setidaknya {minimum} pasangan tugas yang sebanding diperlukan sebelum menarik kesimpulan.',
+        insufficientEvidence: 'Bukti belum cukup untuk menarik kesimpulan.',
+        qualityGuardrailFailed: 'Pagar pengaman kualitas tidak terpenuhi, sehingga tidak ada klaim efektivitas.',
+        improved: 'Peningkatan mencapai ambang yang ditetapkan sebelumnya sambil mempertahankan pagar pengaman kualitas.',
+        noDemonstratedImprovement: 'Belum ada peningkatan yang terbukti; ini tidak membuktikan kerugian atau hubungan sebab-akibat.',
+        clearLocalData: 'Hapus data saran lokal',
+        clearLocalDataConfirm: 'Hapus persetujuan saran, umpan balik, pasangan sebanding, dan hasil perbandingan yang tersimpan di perangkat ini?',
+        strictOutputRejected: 'Output model terstruktur ditolak. Tidak ada saran yang dibuat.',
+      },
       totalTokens: 'Total Token',
       inputTokens: 'Token Masukan',
       outputTokens: 'Token Keluaran',
@@ -2772,8 +3429,8 @@ const translations: Record<SupportedLanguage, Translations> = {
       model: 'Model',
       agents: 'Agen',
       agent: 'Agen',
-      workflowsThisMonth: 'Workflow bulan ini',
-      workflowCostShare: 'proporsi dari biaya bulan ini',
+      workflowsLast30Days: 'Workflow 30 hari terakhir',
+      workflowLast30DaysCostShare: 'proporsi biaya 30 hari terakhir',
       workflowCacheHint:
         'Tingkat cache hit = cache read ÷ semua token sisi masukan. Workflow native Claude memakai ulang prompt cache lintas agen (tingkat tinggi); provider tanpa cache lintas-agen menunjukkan ~0% — workflow yang sama jadi jauh lebih mahal di sana.',
       adhocBadge: 'subagent (ad-hoc)',
@@ -2846,14 +3503,14 @@ const translations: Record<SupportedLanguage, Translations> = {
       getAdvice: 'Dapatkan Saran AI',
       adviceCardTitle: 'Saran AI',
       adviceCardDesc:
-        'Kirim ringkasan penggunaan Anda + sampel prompt Anda sendiri ke model Anda dan dapatkan tips konkret untuk menulis instruksi yang lebih jelas dan mengurangi pemborosan.',
+        'Tinjau bukti lokal terlebih dahulu. Permintaan persis hanya berisi agregat secara default; sampel prompt dan konteks pribadi memerlukan persetujuan terpisah, dan tidak ada yang dikirim sampai Anda mengeklik Kirim.',
       optimizerTitle: 'Pengoptimal Penggunaan',
       optimizerDesc:
         'Ubah permintaan yang masih kasar dan belum rapi menjadi prompt bersih yang bisa langsung ditempel ke Claude Code — plus saran effort / thinking / model untuk tugas tersebut.',
       optimizerHowto:
-        'Ketik atau tempel draf Anda di bawah, centang penyesuaian opsional yang diinginkan, lalu klik Optimalkan. Hanya teks yang Anda tempel yang dikirim ke model Anda — tidak pernah ke Claude Code atau terminal Anda.',
+        'Ketik atau tempel draf Anda di bawah, pilih penyesuaian opsional, lalu buat pratinjau permintaan persis. Tidak ada yang dikirim sampai Anda mengeklik Kirim secara terpisah; hanya teks yang ditempel yang dapat disertakan.',
       optimizerConsent:
-        'Usage Optimizer mengirim teks yang Anda tempel ke model API yang telah dikonfigurasi. Tidak ada yang dikirim ke Claude Code dan tidak ada yang diketik ke terminal. Lanjutkan?',
+        'Buat pratinjau permintaan persis? Ini tidak mengirim apa pun; pengiriman ke model API yang dikonfigurasi memerlukan klik terpisah.',
       optimizerEnableBtn: 'Aktifkan di pengaturan',
       optimizerPlaceholder: 'Tempel draf prompt untuk dioptimalkan…',
       optimizerRun: 'Optimalkan',
@@ -2885,10 +3542,10 @@ const translations: Record<SupportedLanguage, Translations> = {
         '> yang dihasilkan fitur ini. Ini **bukan** berdasarkan data penggunaan\n' +
         '> Claude Code Anda yang sebenarnya — tidak ada yang dikirim ke API mana pun untuk menghasilkan ini.\n\n' +
         '### Untuk mendapatkan saran nyata dan personal berdasarkan penggunaan ANDA:\n\n' +
-        '1. Buka Pengaturan (`Ctrl+,` / `Cmd+,`)\n' +
-        '2. Cari **`claudeCodeUsage.advice.apiKey`**\n' +
-        '3. Tempel API key yang kompatibel dengan OpenAI — DeepSeek langsung berfungsi\n' +
-        '   ([deepseek.com](https://platform.deepseek.com))\n' +
+        '1. Jalankan **`Claude Code Usage: Show Usage Details`**\n' +
+        '2. Buka bagian **Pengaturan → Saran** di dashboard\n' +
+        '3. Tempel API key yang kompatibel dengan OpenAI — hanya disimpan di VS Code SecretStorage\n' +
+        '   DeepSeek: [deepseek.com](https://platform.deepseek.com)\n' +
         '4. Jalankan ulang **`Claude Code Usage: Get AI Usage Advice`**',
       costComposition: 'Komposisi Biaya',
       date: 'Tanggal',
@@ -2925,13 +3582,13 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.fileWatchSeconds': { label: 'Codex-Live-Aktualisierungsverzögerung', help: 'Ruhe-Debounce nach lokalen Codex-JSONL-Änderungen. Aus deaktiviert die Überwachung.' },
     'codex.optimization.enabled': { label: 'Codex-Verhaltensoptimierung anzeigen', help: 'Lokale, deterministische Codex-Verhaltensmetriken und Empfehlungen anzeigen.' },
     'statusBarProvider': { label: 'Statusleisten-Anbieter', help: 'Auto bevorzugt Claude, wenn beide Anbieter Daten haben.' },
-    'codex.statusMetric': { label: 'Codex-Statusmetrik', help: 'Nutzung ohne Cache, verarbeitete Token oder Ausgabe-Token.' },
+    'codex.statusMetric': { label: 'Codex-Statusmetrik', help: 'Heutige Nutzung ohne Cache, verarbeitete Token oder Ausgabe-Token.' },
     'timezone': { label: 'Zeitzone für Daten', help: 'Gängige Zone oder UTC-Offset (jeder Offset abgedeckt) oder Systemstandard. Labels zeigen den aktuellen UTC-Offset.' },
     'showWeeklyEquivalentValue': { label: 'Wöchentlichen API-Gegenwert anzeigen', help: 'Standardmäßig an. Zeigt den historischen wöchentlichen API-Gegenwert in „Seit Aufzeichnungsbeginn“ und „Vergleich“. Dies ist eine Schätzung, keine Rechnung und kein Abonnementkontingent.' },
     'showHeatmap': { label: 'Token-Heatmap zeigen (Tab „Seit Aufzeichnungsbeginn“)', help: 'Standardmäßig aus. GitHub-artige Jahres-Heatmap; als SVG exportieren oder auf dein GitHub-Profil veröffentlichen.' },
     'showEfficiency': { label: 'Effizienz-Einblicke zeigen', help: 'Standardmäßig aus. Kosten/Nachricht, Token/Nachricht, Cache-Ersparnis und die Cache-Warmzeit-Schätzung.' },
     'showCostliestMessages': { label: '„Top 10 teuerste Nachrichten“ zeigen', help: 'Standardmäßig aus. Reiht deine teuersten Einzel-Turns; das Aufklappen zeigt den Prompt (dein eigener Text).' },
-    'enableShareCard': { label: 'Nutzungs-Sharecard aktivieren', help: 'Standardmäßig aus. Eine konfigurierbare einseitige SVG-Zusammenfassung zum Erzeugen und Teilen.' },
+    'enableShareCard': { label: 'Freigabe-Arbeitsbereich aktivieren', help: 'Standardmäßig an. Zeigt den Freigabe-Arbeitsbereich im Vergleich und die Anbieter-Sharecard. Ausschalten blendet die Freigabeoberfläche aus; Export bleibt eine ausdrückliche Aktion.' },
     'enableSessionActions': { label: 'Sitzungsaktionen (Fortsetzen & Löschen)', help: 'Standardmäßig aus. Zeigt auf dem Sitzungen-Tab die Schaltflächen „Fortsetzen“ und „Löschen“. Beide WIRKEN auf dein Claude Code (Gespräch erneut öffnen / Log in den Papierkorb), anders als diese schreibgeschützte Erweiterung — daher zusammen optional.' },
     'projectGroupingMode': { label: 'Projektgruppierung', help: 'git = nach Repo · folder = oberste Ebene · flat = jedes cwd.' },
     'showCost': { label: 'Heutige Kosten / Token anzeigen', help: '' },
@@ -2952,13 +3609,14 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'dashboardAutoRefresh': { label: 'Dashboard-Auto-Aktualisierung', help: 'Aktualisiert das Dashboard automatisch bei neuer Nutzung. Aus = nur manuelle Aktualisierung (die Statusleiste aktualisiert weiter).' },
     'enableContentAnalysis': { label: 'Inhaltsanalyse (Content-Registerkarte)', help: 'Deaktivieren, um die CPU-intensive Textprüfung zu überspringen.' },
     'analysis.calibrate': { label: 'Inhaltszahlen kalibrieren', help: 'Skalieren Sie Schätzungen auf die exakten abgerechneten Token-Gesamtzahlen.' },
-    'advice.apiKey': { label: 'API-Schlüssel', help: 'Für das api-Backend. Bleibt in den VS Code-Einstellungen.' },
+    'advice.effectiveness.enabled': { label: 'Vorschau zur Wirksamkeit von KI-Empfehlungen aktivieren', help: 'Standardmäßig aus. Zeigt lokale Evidenz, exakte BYOK-Anfragevorschau, Feedback und Vergleiche; gesendet wird nur nach einem separaten Klick.' },
+    'advice.apiKey': { label: 'API-Schlüssel', help: 'Für das api-Backend. Liegt in VS Code SecretStorage, wird nie synchronisiert und nie an das Dashboard gesendet.' },
     'advice.apiFormat': { label: 'API-Format', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API-URL', help: 'Endpunkt für das api-Backend.' },
     'advice.model': { label: 'API-Modell', help: '' },
     'advice.reasoningEffort': { label: 'Reasoning-Aufwand (openai)', help: '' },
-    'advice.promptWindowDays': { label: 'Prompt-Beispielfenster (Tage)', help: '' },
-    'advice.userContext': { label: 'Persönlicher/Projektkontext', help: 'Optionale Hintergrundinfo; fügt einen Abschnitt "Personalisiert" hinzu.' },
+    'advice.promptWindowDays': { label: 'Evidenz- und Prompt-Fenster (Tage)', help: '' },
+    'advice.userContext': { label: 'Persönlicher/Projektkontext', help: 'Optional; wird nur mit separater Prompt-Personalisierungs-Einwilligung und sichtbar in der exakten Vorschau gesendet.' },
     'advice.optimizer.enabled': { label: 'Usage Optimizer aktivieren', help: 'Zeigt die Opt-in-Optimizer-Karte auf der Registerkarte "Content" an.' },
   },
   'zh-TW': {
@@ -2973,13 +3631,13 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.fileWatchSeconds': { label: 'Codex 即時重新整理延遲', help: '本機 Codex JSONL 變更後的靜默防抖；關閉即停用監看。' },
     'codex.optimization.enabled': { label: '顯示 Codex 行為最佳化', help: '顯示本機、確定性的 Codex 行為指標與建議。' },
     'statusBarProvider': { label: '狀態列供應商', help: '兩個供應商都有資料時，自動模式優先顯示 Claude。' },
-    'codex.statusMetric': { label: 'Codex 狀態列指標', help: '未快取用量、已處理 Token 或輸出 Token。' },
+    'codex.statusMetric': { label: 'Codex 狀態列指標', help: '今日未快取用量、已處理 Token 或輸出 Token。' },
     'timezone': { label: '日期時區', help: '常用時區或 UTC 偏移（涵蓋所有偏移），或系統預設。標籤顯示目前的 UTC 偏移。' },
     'showWeeklyEquivalentValue': { label: '顯示每週 API 等效價值', help: '預設開啟。在「所有」與「比較」中顯示歷史每週 API 等效價值；屬於估算，不是帳單或訂閱額度。' },
     'showHeatmap': { label: '顯示 Token 熱力圖（「所有」分頁）', help: '預設關閉。全部分頁上的 GitHub 風格年度熱力圖；可匯出 SVG 或發佈到你的 GitHub 首頁。' },
     'showEfficiency': { label: '顯示效率洞察', help: '預設關閉。加入每則成本、每則 token、快取節省與快取保溫估計。' },
     'showCostliestMessages': { label: '顯示「最貴 10 則訊息」', help: '預設關閉。列出最貴的單則對話；展開會顯示 prompt（隱私：你自己的文字）。' },
-    'enableShareCard': { label: '啟用用量分享卡', help: '預設關閉。可設定的一頁式 SVG 摘要，可產生並匯出分享。' },
+    'enableShareCard': { label: '啟用分享工作台', help: '預設開啟。顯示「比較」分享工作台與供應商分享卡；關閉後隱藏分享介面，匯出仍需明確操作。' },
     'enableSessionActions': { label: '會話操作（恢復與刪除）', help: '預設關閉。在「會話」分頁顯示「恢復」和「刪除」按鈕。兩者都會「操作」你的 Claude Code（重開對話／把紀錄檔丟進垃圾桶），與這個唯讀擴充功能的定位相反，所以一起維持選用。' },
     'projectGroupingMode': { label: '專案分組', help: 'git = 依儲存庫 · folder = 最上層 · flat = 每個目前工作目錄。' },
     'showCost': { label: '顯示今日費用 / Token 用量', help: '' },
@@ -3000,13 +3658,14 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'dashboardAutoRefresh': { label: '儀表板自動重新整理', help: '有新用量時自動重新整理儀表板。關閉 = 僅手動重新整理（狀態列仍會更新）。' },
     'enableContentAnalysis': { label: '內容分析 (Content 分頁)', help: '停用以跳過 CPU 密集的文字掃描。' },
     'analysis.calibrate': { label: '校準內容數據', help: '將估計值縮放至確切的計費 Token 總數。' },
-    'advice.apiKey': { label: 'API 金鑰', help: '用於 api 後端。保留在 VS Code 設定中。' },
+    'advice.effectiveness.enabled': { label: '啟用 AI 建議有效性預覽', help: '預設關閉。顯示本機證據、精確 BYOK 請求預覽、回饋與比較；只有另行點擊後才會傳送。' },
+    'advice.apiKey': { label: 'API 金鑰', help: '用於 api 後端。只存於 VS Code SecretStorage，不同步，也不傳送至儀表板。' },
     'advice.apiFormat': { label: 'API 格式', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API URL', help: 'api 後端的端點。' },
     'advice.model': { label: 'API 模型', help: '' },
     'advice.reasoningEffort': { label: '推論努力度 (openai)', help: '' },
-    'advice.promptWindowDays': { label: '提示取樣視窗 (天數)', help: '' },
-    'advice.userContext': { label: '個人/專案上下文', help: '可選的背景資訊；新增「Personalised」區段。' },
+    'advice.promptWindowDays': { label: '證據與提示視窗 (天數)', help: '' },
+    'advice.userContext': { label: '個人/專案上下文', help: '選用；僅在另行同意提示個人化後傳送，並完整顯示在精確預覽中。' },
     'advice.optimizer.enabled': { label: '啟用使用情況優化器', help: '在 Content 分頁上顯示自願加入的 Optimizer 卡片。' },
   },
   'zh-CN': {
@@ -3021,13 +3680,13 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.fileWatchSeconds': { label: 'Codex 实时刷新延迟', help: '本地 Codex JSONL 变更后的静默防抖；关闭即停用监视。' },
     'codex.optimization.enabled': { label: '显示 Codex 行为优化', help: '显示本地、确定性的 Codex 行为指标与建议。' },
     'statusBarProvider': { label: '状态栏供应商', help: '两个供应商都有数据时，自动模式优先显示 Claude。' },
-    'codex.statusMetric': { label: 'Codex 状态栏指标', help: '未缓存用量、已处理 Token 或输出 Token。' },
+    'codex.statusMetric': { label: 'Codex 状态栏指标', help: '今日未缓存用量、已处理 Token 或输出 Token。' },
     'timezone': { label: '日期时区', help: '常用时区或 UTC 偏移（涵盖所有偏移），或系统默认。标签显示当前的 UTC 偏移。' },
     'showWeeklyEquivalentValue': { label: '显示每周 API 等效价值', help: '默认开启。在“全部时间”和“对比”中显示历史每周 API 等效价值；属于估算，不是账单或订阅额度。' },
     'showHeatmap': { label: '显示 Token 热力图（“所有”选项卡）', help: '默认关闭。全部标签上的 GitHub 风格年度热力图；可导出 SVG 或发布到你的 GitHub 主页。' },
     'showEfficiency': { label: '显示效率洞察', help: '默认关闭。加入每条成本、每条 token、缓存节省与缓存保温估计。' },
     'showCostliestMessages': { label: '显示“最贵 10 条消息”', help: '默认关闭。列出最贵的单条对话；展开会显示 prompt（隐私：你自己的文字）。' },
-    'enableShareCard': { label: '启用用量分享卡', help: '默认关闭。可配置的一页式 SVG 摘要，可生成并导出分享。' },
+    'enableShareCard': { label: '启用分享工作台', help: '默认开启。显示“对比”分享工作台与供应商分享卡；关闭后隐藏分享界面，导出仍需明确操作。' },
     'enableSessionActions': { label: '会话操作（恢复与删除）', help: '默认关闭。在「会话」标签页显示「恢复」和「删除」按钮。两者都会「操作」你的 Claude Code（重开对话／把日志丢进回收站），与这个只读扩展的定位相反，所以一起保持可选。' },
     'projectGroupingMode': { label: '项目分组', help: 'git = 按仓库 · folder = 顶层 · flat = 每个当前工作目录。' },
     'showCost': { label: '显示今日费用 / token 用量', help: '' },
@@ -3048,13 +3707,14 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'dashboardAutoRefresh': { label: '仪表板自动刷新', help: '有新用量时自动刷新仪表板。关闭 = 仅手动刷新（状态栏仍会更新）。' },
     'enableContentAnalysis': { label: '内容分析 (Content 选项卡)', help: '禁用以跳过 CPU 密集型文本扫描。' },
     'analysis.calibrate': { label: '校准内容数据', help: '将估计值缩放至确切的计费 token 总数。' },
-    'advice.apiKey': { label: 'API 密钥', help: '用于 api 后端。保留在 VS Code 设置中。' },
+    'advice.effectiveness.enabled': { label: '启用 AI 建议有效性预览', help: '默认关闭。显示本地证据、精确 BYOK 请求预览、反馈与比较；只有另行点击后才会发送。' },
+    'advice.apiKey': { label: 'API 密钥', help: '用于 api 后端。只存入 VS Code SecretStorage，不同步，也不发送到仪表板。' },
     'advice.apiFormat': { label: 'API 格式', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API URL', help: 'api 后端的端点。' },
     'advice.model': { label: 'API 模型', help: '' },
     'advice.reasoningEffort': { label: '推理努力度 (openai)', help: '' },
-    'advice.promptWindowDays': { label: '提示采样窗口 (天数)', help: '' },
-    'advice.userContext': { label: '个人/项目上下文', help: '可选的背景信息；添加「Personalised」部分。' },
+    'advice.promptWindowDays': { label: '证据与提示窗口 (天数)', help: '' },
+    'advice.userContext': { label: '个人/项目上下文', help: '可选；仅在另行同意提示个性化后发送，并完整显示在精确预览中。' },
     'advice.optimizer.enabled': { label: '启用使用优化器', help: '在「Content」选项卡上显示自愿加入的 Optimizer 卡片。' },
   },
   'ja': {
@@ -3069,13 +3729,13 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.fileWatchSeconds': { label: 'Codex ライブ更新遅延', help: 'ローカル Codex JSONL 変更後の静かなデバウンス。オフで監視を無効化します。' },
     'codex.optimization.enabled': { label: 'Codex の行動最適化を表示', help: 'ローカルで決定論的な Codex の行動指標と提案を表示します。' },
     'statusBarProvider': { label: 'ステータスバーのプロバイダー', help: '両方にデータがある場合、自動は Claude を優先します。' },
-    'codex.statusMetric': { label: 'Codex ステータスメトリック', help: '非キャッシュ使用量、処理済みトークン、または出力トークン。' },
+    'codex.statusMetric': { label: 'Codex ステータスメトリック', help: '今日の非キャッシュ使用量、処理済みトークン、または出力トークン。' },
     'timezone': { label: '日付のタイムゾーン', help: '一般的なゾーンまたは UTC オフセット（全オフセット対応）、あるいはシステム既定。ラベルは現在の UTC オフセットを表示。' },
     'showWeeklyEquivalentValue': { label: '週間 API 等価価値を表示', help: '既定でオン。「すべて」と「比較」に過去の週間 API 等価価値を表示します。これは推定値であり、請求額やサブスクリプション利用枠ではありません。' },
     'showHeatmap': { label: 'トークンヒートマップを表示（「すべて」タブ）', help: '既定でオフ。GitHub 風の年間ヒートマップ。SVG 書き出しや GitHub プロフィールへの公開が可能。' },
     'showEfficiency': { label: '効率インサイトを表示', help: '既定でオフ。メッセージ単価、メッセージ当たりトークン、キャッシュ節約、キャッシュ保温推定を追加。' },
     'showCostliestMessages': { label: '「最も高価なメッセージ Top 10」を表示', help: '既定でオフ。最も高価な単一ターンを順位付け。展開でプロンプト表示（自分の文章）。' },
-    'enableShareCard': { label: '使用状況シェアカードを有効化', help: '既定でオフ。生成して共有できる、設定可能な 1 ページの SVG サマリー。' },
+    'enableShareCard': { label: '共有ワークスペースを有効化', help: '既定でオン。「比較」の共有ワークスペースとプロバイダーの共有カードを表示します。オフにすると共有 UI を隠し、書き出しは引き続き明示操作です。' },
     'enableSessionActions': { label: 'セッション操作（再開と削除）', help: '既定はオフ。セッションタブに「再開」と「削除」ボタンを表示します。どちらもあなたの Claude Code を操作します（会話を再度開く／ログをゴミ箱へ）。読み取り専用のこの拡張とは相容れないため、まとめてオプトインです。' },
     'projectGroupingMode': { label: 'プロジェクトのグループ化', help: 'git = リポジトリごと · folder = トップレベル · flat = 各 cwd。' },
     'showCost': { label: '今日のコスト / トークンを表示', help: '' },
@@ -3096,13 +3756,14 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'dashboardAutoRefresh': { label: 'ダッシュボードの自動更新', help: '新しい使用があるとダッシュボードを自動更新します。オフ = 手動更新のみ（ステータスバーは更新を続行）。' },
     'enableContentAnalysis': { label: 'コンテンツ分析 (Content タブ)', help: 'CPU負荷の高いテキストスキャンをスキップするには無効にします。' },
     'analysis.calibrate': { label: 'コンテンツ数値を調整', help: '推定値を正確な課金トークン総数に合わせて拡大縮小します。' },
-    'advice.apiKey': { label: 'API キー', help: 'api バックエンド用。VS Code 設定に保存されます。' },
+    'advice.effectiveness.enabled': { label: 'AI アドバイス有効性プレビューを有効化', help: 'デフォルトは無効です。ローカル根拠、正確な BYOK リクエストプレビュー、フィードバック、比較を表示し、別のクリック後にだけ送信します。' },
+    'advice.apiKey': { label: 'API キー', help: 'api バックエンド用。VS Code SecretStorage のみに保存され、同期もダッシュボードへの送信も行いません。' },
     'advice.apiFormat': { label: 'API 形式', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API URL', help: 'api バックエンドのエンドポイント。' },
     'advice.model': { label: 'API モデル', help: '' },
     'advice.reasoningEffort': { label: '推論努力 (openai)', help: '' },
-    'advice.promptWindowDays': { label: 'プロンプトサンプルウィンドウ (日数)', help: '' },
-    'advice.userContext': { label: '個人/プロジェクトのコンテキスト', help: 'オプションの背景情報。「Personalised」セクションが追加されます。' },
+    'advice.promptWindowDays': { label: '根拠とプロンプトの期間 (日数)', help: '' },
+    'advice.userContext': { label: '個人/プロジェクトのコンテキスト', help: '任意です。別のプロンプト個人化同意後だけ送信し、正確なプレビューに全文を表示します。' },
     'advice.optimizer.enabled': { label: 'Usage Optimizer を有効にする', help: '「Content」タブにオプトインの Optimizer カードを表示します。' },
   },
   'ko': {
@@ -3117,13 +3778,13 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.fileWatchSeconds': { label: 'Codex 실시간 새로고침 지연', help: '로컬 Codex JSONL 변경 후 조용한 디바운스입니다. 끄면 감시를 중지합니다.' },
     'codex.optimization.enabled': { label: 'Codex 행동 최적화 표시', help: '로컬의 결정론적 Codex 행동 지표와 권장 사항을 표시합니다.' },
     'statusBarProvider': { label: '상태 표시줄 공급자', help: '두 공급자 모두 데이터가 있으면 자동은 Claude를 우선합니다.' },
-    'codex.statusMetric': { label: 'Codex 상태 지표', help: '캐시되지 않은 사용량, 처리된 토큰 또는 출력 토큰.' },
+    'codex.statusMetric': { label: 'Codex 상태 지표', help: '오늘의 캐시되지 않은 사용량, 처리된 토큰 또는 출력 토큰.' },
     'timezone': { label: '날짜 시간대', help: '일반 지역 또는 UTC 오프셋(모든 오프셋 지원), 또는 시스템 기본값. 라벨에 현재 UTC 오프셋 표시.' },
     'showWeeklyEquivalentValue': { label: '주간 API 등가 가치 표시', help: '기본값 켜짐. 전체 및 비교 화면에 과거 주간 API 등가 가치를 표시합니다. 이는 추정치이며 청구서나 구독 할당량이 아닙니다.' },
     'showHeatmap': { label: '토큰 히트맵 표시(전체 탭)', help: '기본 꺼짐. GitHub 스타일 연간 히트맵. SVG 내보내기 또는 GitHub 프로필에 게시 가능.' },
     'showEfficiency': { label: '효율 인사이트 표시', help: '기본 꺼짐. 메시지당 비용/토큰, 캐시 절감, 캐시 보온 추정치를 추가.' },
     'showCostliestMessages': { label: '“가장 비싼 메시지 Top 10” 표시', help: '기본 꺼짐. 가장 비싼 단일 턴을 순위화. 펼치면 프롬프트 표시(본인 텍스트).' },
-    'enableShareCard': { label: '사용량 공유 카드 사용', help: '기본 꺼짐. 생성·내보내 공유할 수 있는 구성 가능한 1페이지 SVG 요약.' },
+    'enableShareCard': { label: '공유 작업 공간 사용', help: '기본 켜짐. 비교 공유 작업 공간과 공급자 공유 카드를 표시합니다. 끄면 공유 UI가 숨겨지며 내보내기는 계속 명시적 작업입니다.' },
     'enableSessionActions': { label: '세션 작업(재개 및 삭제)', help: '기본값 꺼짐. 세션 탭에 재개·삭제 버튼을 표시합니다. 둘 다 사용자의 Claude Code를 조작하므로(대화 다시 열기/로그를 휴지통으로) 읽기 전용인 이 확장과 맞지 않아 함께 옵트인으로 둡니다.' },
     'projectGroupingMode': { label: '프로젝트 그룹화', help: 'git = 저장소별 · folder = 최상위 · flat = 각 cwd.' },
     'showCost': { label: '오늘의 비용 / 토큰 표시', help: '' },
@@ -3144,13 +3805,14 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'dashboardAutoRefresh': { label: '대시보드 자동 새로 고침', help: '새 사용량이 들어오면 대시보드를 자동 새로 고침. 끄면 수동 새로 고침만(상태 표시줄은 계속 업데이트).' },
     'enableContentAnalysis': { label: '콘텐츠 분석 (Content 탭)', help: 'CPU 사용이 많은 텍스트 검사를 건너뛰려면 비활성화하세요.' },
     'analysis.calibrate': { label: '콘텐츠 수치 보정', help: '예상치를 정확한 청구 토큰 총합에 맞게 조정합니다.' },
-    'advice.apiKey': { label: 'API 키', help: 'api 백엔드용. VS Code 설정에 보관됩니다.' },
+    'advice.effectiveness.enabled': { label: 'AI 조언 효과성 미리보기 활성화', help: '기본적으로 꺼져 있습니다. 로컬 근거, 정확한 BYOK 요청 미리보기, 피드백, 비교를 표시하며 별도 클릭 후에만 전송합니다.' },
+    'advice.apiKey': { label: 'API 키', help: 'api 백엔드용. VS Code SecretStorage에만 저장되며 동기화되거나 대시보드로 전송되지 않습니다.' },
     'advice.apiFormat': { label: 'API 형식', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'API URL', help: 'api 백엔드의 엔드포인트.' },
     'advice.model': { label: 'API 모델', help: '' },
     'advice.reasoningEffort': { label: '추론 노력 (openai)', help: '' },
-    'advice.promptWindowDays': { label: '프롬프트 샘플 창 (일)', help: '' },
-    'advice.userContext': { label: '개인/프로젝트 컨텍스트', help: '선택적 배경 정보; "Personalised" 섹션을 추가합니다.' },
+    'advice.promptWindowDays': { label: '근거 및 프롬프트 기간 (일)', help: '' },
+    'advice.userContext': { label: '개인/프로젝트 컨텍스트', help: '선택 사항이며 별도의 프롬프트 개인화 동의 후에만 전송되고 정확한 미리보기에 모두 표시됩니다.' },
     'advice.optimizer.enabled': { label: '사용량 최적화 도구 활성화', help: 'Content 탭에 옵트인 Optimizer 카드를 표시합니다.' },
   },
   'pt-BR': {
@@ -3165,13 +3827,13 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.fileWatchSeconds': { label: 'Atraso da atualização ao vivo do Codex', help: 'Debounce silencioso após mudanças locais em JSONL do Codex. Desligado desativa a observação.' },
     'codex.optimization.enabled': { label: 'Mostrar otimização de comportamento do Codex', help: 'Mostra métricas e recomendações locais e determinísticas de comportamento do Codex.' },
     'statusBarProvider': { label: 'Provedor da barra de status', help: 'Auto prioriza Claude quando ambos têm dados.' },
-    'codex.statusMetric': { label: 'Métrica de status do Codex', help: 'Uso sem cache, tokens processados ou tokens de saída.' },
+    'codex.statusMetric': { label: 'Métrica de status do Codex', help: 'Uso de hoje sem cache, tokens processados ou tokens de saída.' },
     'timezone': { label: 'Fuso horário das datas', help: 'Zona comum ou deslocamento UTC (todos cobertos), ou padrão do sistema. Os rótulos mostram o deslocamento UTC atual.' },
     'showWeeklyEquivalentValue': { label: 'Mostrar valor equivalente semanal da API', help: 'Ligado por padrão. Mostra o valor equivalente semanal histórico da API em Todo o período e Comparar. É uma estimativa, não uma fatura nem uma franquia de assinatura.' },
     'showHeatmap': { label: 'Mostrar heatmap de tokens (aba Todo o período)', help: 'Desligado por padrão. Heatmap anual estilo GitHub; exporte SVG ou publique no seu perfil do GitHub.' },
     'showEfficiency': { label: 'Mostrar insights de eficiência', help: 'Desligado por padrão. Custo/mensagem, tokens/mensagem, economia de cache e a estimativa de aquecimento do cache.' },
     'showCostliestMessages': { label: 'Mostrar "10 mensagens mais caras"', help: 'Desligado por padrão. Ranqueia seus turnos mais caros; ao expandir mostra o prompt (seu próprio texto).' },
-    'enableShareCard': { label: 'Ativar cartão de compartilhamento de uso', help: 'Desligado por padrão. Um resumo SVG de uma página, configurável, para gerar e compartilhar.' },
+    'enableShareCard': { label: 'Ativar espaço de compartilhamento', help: 'Ligado por padrão. Mostra o espaço de compartilhamento em Comparar e o cartão do provedor. Desligar oculta a interface; exportar continua exigindo uma ação explícita.' },
     'enableSessionActions': { label: 'Ações de sessão (retomar e excluir)', help: 'Desligado por padrão. Mostra os botões Retomar e Excluir na aba Sessões. Ambos AGEM sobre o seu Claude Code (reabrir uma conversa / mover o log para a lixeira), ao contrário desta extensão somente leitura, então ficam opcionais juntos.' },
     'projectGroupingMode': { label: 'Agrupamento de projetos', help: 'git = por repositório · folder = nível superior · flat = cada cwd.' },
     'showCost': { label: 'Mostrar custo / tokens de hoje', help: '' },
@@ -3193,13 +3855,14 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'pauseDashboardRefresh': { label: 'Pausar atualização do dashboard', help: 'A barra de status continua atualizando; o dashboard só atualiza manualmente.' },
     'enableContentAnalysis': { label: 'Análise de conteúdo (aba Content)', help: 'Desative para pular a varredura de texto, que usa muita CPU.' },
     'analysis.calibrate': { label: 'Calibrar números de conteúdo', help: 'Ajusta as estimativas aos totais exatos de tokens cobrados.' },
-    'advice.apiKey': { label: 'Chave de API', help: 'Para o backend api. Permanece nas Configurações do VS Code.' },
+    'advice.effectiveness.enabled': { label: 'Ativar prévia de eficácia dos conselhos de IA', help: 'Desativado por padrão. Mostra evidências locais, prévia exata da solicitação BYOK, feedback e comparação; só envia após um clique separado.' },
+    'advice.apiKey': { label: 'Chave de API', help: 'Para o backend api. Fica apenas no VS Code SecretStorage, sem sincronização nem envio ao painel.' },
     'advice.apiFormat': { label: 'Formato da API', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'URL da API', help: 'Endpoint do backend api.' },
     'advice.model': { label: 'Modelo da API', help: '' },
     'advice.reasoningEffort': { label: 'Esforço de raciocínio (openai)', help: '' },
-    'advice.promptWindowDays': { label: 'Janela de amostragem de prompts (dias)', help: '' },
-    'advice.userContext': { label: 'Contexto pessoal/do projeto', help: 'Informação de fundo opcional; adiciona uma seção "Personalizado".' },
+    'advice.promptWindowDays': { label: 'Janela de evidências e prompts (dias)', help: '' },
+    'advice.userContext': { label: 'Contexto pessoal/do projeto', help: 'Opcional; só é enviado após consentimento separado de personalização e aparece por inteiro na prévia exata.' },
     'advice.optimizer.enabled': { label: 'Ativar o Otimizador de uso', help: 'Mostra o cartão opt-in do Optimizer na aba Content.' },
   },
   'id': {
@@ -3214,13 +3877,13 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.fileWatchSeconds': { label: 'Jeda penyegaran langsung Codex', help: 'Debounce tenang setelah perubahan JSONL Codex lokal. Mati menonaktifkan pemantauan.' },
     'codex.optimization.enabled': { label: 'Tampilkan optimasi perilaku Codex', help: 'Tampilkan metrik dan rekomendasi perilaku Codex yang lokal dan deterministik.' },
     'statusBarProvider': { label: 'Penyedia status bar', help: 'Otomatis memprioritaskan Claude saat keduanya memiliki data.' },
-    'codex.statusMetric': { label: 'Metrik status Codex', help: 'Penggunaan tanpa cache, token diproses, atau token output.' },
+    'codex.statusMetric': { label: 'Metrik status Codex', help: 'Penggunaan hari ini tanpa cache, token diproses, atau token output.' },
     'timezone': { label: 'Zona waktu untuk tanggal', help: 'Pilih zona umum atau offset UTC (semua offset tersedia), atau default sistem. Label menampilkan offset UTC saat ini.' },
     'showWeeklyEquivalentValue': { label: 'Tampilkan nilai ekuivalen API mingguan', help: 'Aktif secara default. Tampilkan riwayat nilai ekuivalen API mingguan di Sepanjang Waktu dan Perbandingan. Ini perkiraan, bukan tagihan atau jatah langganan.' },
     'showHeatmap': { label: 'Tampilkan heatmap token (tab Sepanjang Waktu)', help: 'Nonaktif secara default. Heatmap token tahunan bergaya GitHub di tab All; ekspor sebagai SVG atau publikasikan ke profil GitHub Anda.' },
     'showEfficiency': { label: 'Tampilkan wawasan efisiensi', help: 'Nonaktif secara default. Menambahkan biaya/pesan, token/pesan, penghematan cache, dan perkiraan cache warmth.' },
     'showCostliestMessages': { label: 'Tampilkan "10 pesan termahal"', help: 'Nonaktif secara default. Menampilkan giliran termahal; membuka detail menampilkan prompt-nya (teks Anda sendiri).' },
-    'enableShareCard': { label: 'Aktifkan share card penggunaan', help: 'Nonaktif secara default. Ringkasan SVG satu halaman yang dapat dikonfigurasi untuk dibuat dan dibagikan.' },
+    'enableShareCard': { label: 'Aktifkan ruang kerja berbagi', help: 'Aktif secara default. Menampilkan ruang kerja berbagi Perbandingan dan kartu penyedia. Menonaktifkannya menyembunyikan UI; ekspor tetap memerlukan tindakan eksplisit.' },
     'enableSessionActions': { label: 'Aksi sesi (Lanjutkan & Hapus)', help: 'Nonaktif secara default. Menampilkan tombol Lanjutkan dan Hapus di tab Sesi. Keduanya BERTINDAK pada Claude Code Anda (membuka ulang percakapan / memindahkan log ke sampah) — bertentangan dengan sifat baca-saja extension ini, jadi tetap opsional bersama.' },
     'projectGroupingMode': { label: 'Pengelompokan proyek', help: 'git = per repo · folder = level teratas · flat = setiap cwd.' },
     'showCost': { label: 'Tampilkan biaya / token hari ini', help: '' },
@@ -3241,13 +3904,14 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'dashboardAutoRefresh': { label: 'Penyegaran otomatis dashboard', help: 'Segarkan dashboard secara otomatis saat ada penggunaan baru. Nonaktif = hanya penyegaran manual (status bar tetap diperbarui).' },
     'enableContentAnalysis': { label: 'Analisis konten (tab Konten)', help: 'Nonaktifkan untuk melewati pemindaian teks yang berat bagi CPU.' },
     'analysis.calibrate': { label: 'Kalibrasi angka konten', help: 'Skalakan perkiraan ke total token yang benar-benar ditagih.' },
-    'advice.apiKey': { label: 'API key', help: 'Untuk backend api. Tetap berada di Pengaturan VS Code.' },
+    'advice.effectiveness.enabled': { label: 'Aktifkan pratinjau efektivitas saran AI', help: 'Nonaktif secara default. Menampilkan bukti lokal, pratinjau permintaan BYOK yang persis, umpan balik, dan perbandingan; hanya mengirim setelah klik terpisah.' },
+    'advice.apiKey': { label: 'API key', help: 'Untuk backend api. Hanya disimpan di VS Code SecretStorage, tidak disinkronkan atau dikirim ke dashboard.' },
     'advice.apiFormat': { label: 'Format API', help: 'anthropic = /v1/messages · openai = chat-completions.' },
     'advice.apiUrl': { label: 'URL API', help: 'Endpoint untuk backend api.' },
     'advice.model': { label: 'Model API', help: '' },
     'advice.reasoningEffort': { label: 'Effort reasoning (openai)', help: '' },
-    'advice.promptWindowDays': { label: 'Jendela sampel prompt (hari)', help: '' },
-    'advice.userContext': { label: 'Konteks pribadi/proyek', help: 'Latar belakang opsional; menambahkan bagian "Personalisasi".' },
+    'advice.promptWindowDays': { label: 'Jendela bukti dan prompt (hari)', help: '' },
+    'advice.userContext': { label: 'Konteks pribadi/proyek', help: 'Opsional; hanya dikirim setelah persetujuan personalisasi prompt terpisah dan ditampilkan penuh dalam pratinjau persis.' },
     'advice.optimizer.enabled': { label: 'Aktifkan Usage Optimizer', help: 'Tampilkan kartu Optimizer opsional di tab Konten.' },
   },
 };

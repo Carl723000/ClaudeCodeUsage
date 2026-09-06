@@ -55,6 +55,11 @@ export function hourKeyInZone(date: Date, timeZone: string): string {
     ?.value ?? '';
 }
 
+/** Provider-neutral display label for a validated "00" through "23" hour key. */
+export function formatHourLabel(hour: string): string {
+  return /^(?:[01]\d|2[0-3])$/.test(hour) ? `${hour}:00` : '';
+}
+
 /**
  * Calendar-day keys ending on `now` in `timeZone`, ordered from oldest to newest.
  * The range walks civil dates rather than subtracting fixed-duration milliseconds.

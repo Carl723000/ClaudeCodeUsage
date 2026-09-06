@@ -6,7 +6,13 @@ import * as path from 'path';
 // Removed zod dependency - using native validation instead
 import { calculateCostBreakdown, getModelRatesPerMillion } from './pricing';
 import { isRetryDuplicatePrompt } from './promptDedup';
-import { dayKeyInZone, monthKeyInZone } from './dateKeys';
+import {
+  dayKeyInZone,
+  formatHourLabel,
+  hourKeyInZone,
+  monthKeyInZone,
+  rollingDayKeysFromDayKey,
+} from './dateKeys';
 import { I18n } from './i18n';
 import { DayUsage } from './heatmap';
 import { ShareInput, ShareRange, rangeLabel as shareRangeLabel } from './shareCard';
@@ -16,6 +22,7 @@ import {
   UsageManifest,
 } from './claudeUsageFiles';
 import { LoadUsageDiagnostics } from './refreshDiagnostics';
+import { classifyPromptTextOrigin } from './promptOrigin';
 import {
   AttributionEntry,
   AttributionScope,
@@ -24,6 +31,7 @@ import {
   CostlyMessage,
   ContentAnalysis,
   ContextWindowInfo,
+  FrameworkOverheadKind,
   ContentSlice,
   ProjectGroup,
   ProjectUsage,
@@ -101,7 +109,7 @@ export interface AnalysisAcc {
   toolIdToName: Record<string, string>;
   seenUuids: Set<string>;
   cutoffMs: number;
-  prompts: { cwd: string; text: string }[];
+  prompts: { cwd: string; text: string; observedAtEpochMs: number }[];
   // Estimated thinking vs. total assistant-output tokens, per session and per
   // local day ("YYYY-MM-DD") — feeds the thinking-share column / Today line.
   thinkingBySession: Record<string, ThinkingShare>;
@@ -110,6 +118,10 @@ export interface AnalysisAcc {
   // so the matching tool result's size can be attributed to the skill.
   skillUses: SkillUse[];
   skillByToolId: Record<string, number>;
+  frameworkOverhead: Partial<Record<FrameworkOverheadKind, { tokens: number; count: number }>>;
+  observedInputEstimatedTokens: number;
+  userAuthoredEstimatedTokens: number;
+  toolResultEstimatedTokens: number;
 }
 
 // cutoffMs: ignore log lines older than this (0 = no cutoff).
@@ -125,6 +137,10 @@ export function newAnalysisAcc(cutoffMs: number): AnalysisAcc {
     thinkingByDay: {},
     skillUses: [],
     skillByToolId: {},
+    frameworkOverhead: {},
+    observedInputEstimatedTokens: 0,
+    userAuthoredEstimatedTokens: 0,
+    toolResultEstimatedTokens: 0,
   };
 }
 
@@ -153,18 +169,24 @@ function localDayKey(timestamp: unknown): string {
 }
 
 // Collect an actual user prompt (capped + truncated) for the AI-advice feature.
-function collectPrompt(acc: AnalysisAcc, cwd: string, text: string): void {
+function collectPrompt(
+  acc: AnalysisAcc,
+  cwd: string,
+  text: string,
+  observedAtEpochMs: number,
+): void {
   const trimmed = text.trim();
   if (trimmed.length < 4) {
     return;
   }
-  // Agent-framework scaffolding is not something the user typed: interrupt
-  // notices and kebab-case XML-ish wrappers (<command-name>, <system-reminder>,
-  // <local-command-stdout>, …). Plain HTML a user pastes (<div>, <p>) survives.
-  if (/^\[Request interrupted/i.test(trimmed) || /^<[a-z][a-z0-9]*(-[a-z0-9]+)+[\s>/]/i.test(trimmed)) {
-    return;
-  }
-  acc.prompts.push({ cwd, text: trimmed.slice(0, 2500) });
+  // The caller has already applied classifyPromptTextOrigin. Do not repeat a
+  // looser tag heuristic here: unknown custom elements may be user-authored
+  // Web Component examples and must remain eligible for explicit opt-in.
+  acc.prompts.push({
+    cwd,
+    text: trimmed.slice(0, 2500),
+    observedAtEpochMs: Number.isFinite(observedAtEpochMs) ? observedAtEpochMs : 0,
+  });
   if (acc.prompts.length > 600) {
     acc.prompts.shift();
   }
@@ -242,6 +264,42 @@ function addToBucket(map: Record<string, AnalysisBucket>, key: string, text: str
   map[key].tokens += estimateTokens(text);
   map[key].chars += text.length;
   map[key].count += 1;
+}
+
+function addFrameworkOverhead(
+  acc: AnalysisAcc,
+  kind: FrameworkOverheadKind,
+  tokens: number,
+): void {
+  if (!Number.isFinite(tokens) || tokens < 0) {
+    return;
+  }
+  const current = acc.frameworkOverhead[kind] || { tokens: 0, count: 0 };
+  current.tokens += tokens;
+  current.count += 1;
+  acc.frameworkOverhead[kind] = current;
+}
+
+function trackPromptTextOrigin(
+  parsed: any,
+  acc: AnalysisAcc,
+  text: string,
+  isSubagentFile: boolean,
+): 'user-authored' | FrameworkOverheadKind {
+  const origin = classifyPromptTextOrigin({
+    text,
+    isMeta: parsed.isMeta === true,
+    isSidechain: parsed.isSidechain === true,
+    isSubagentFile,
+  });
+  const tokens = estimateTokens(text);
+  acc.observedInputEstimatedTokens += tokens;
+  if (origin === 'user-authored') {
+    acc.userAuthoredEstimatedTokens += tokens;
+  } else {
+    addFrameworkOverhead(acc, origin, tokens);
+  }
+  return origin;
 }
 
 // Accumulate one raw log line into the content analysis.
@@ -354,10 +412,14 @@ export function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = fals
     // sub-agent logs, meta lines (command echoes) or sidechain dispatches.
     const allowPromptSample = !isSubagentFile && !parsed.isMeta && !parsed.isSidechain;
     if (typeof content === 'string') {
+      const origin = trackPromptTextOrigin(parsed, acc, content, isSubagentFile);
+      // Keep the legacy content-category shape stable for the current UI and
+      // calibration path. The separate numeric overlay above is the only
+      // source for framework-vs-user advice evidence.
       addToBucket(acc.cat, 'userPrompts', content);
       collectCommandUse(acc, content, sessionId, parsed.timestamp);
-      if (allowPromptSample) {
-        collectPrompt(acc, cwd, content);
+      if (allowPromptSample && origin === 'user-authored') {
+        collectPrompt(acc, cwd, content, Date.parse(parsed.timestamp));
       }
     } else if (Array.isArray(content)) {
       for (const block of content) {
@@ -366,19 +428,29 @@ export function analyzeLine(parsed: any, acc: AnalysisAcc, isSubagentFile = fals
         }
         if (block.type === 'tool_result') {
           const text = blockText(block.content);
+          const toolResultTokens = estimateTokens(text);
+          acc.toolResultEstimatedTokens += toolResultTokens;
+          acc.observedInputEstimatedTokens += toolResultTokens + 8;
           addToBucket(acc.cat, 'toolResults', text);
           addToBucket(acc.tools, acc.toolIdToName[block.tool_use_id] || 'unknown', text);
+          // Count only a fixed structural envelope proxy here; the tool-result
+          // body remains in its ordinary consumption bucket and is never
+          // mistaken for user-authored prose.
+          addFrameworkOverhead(acc, 'tool-result-envelope', 8);
           // The injected skill prompt comes back as the Skill tool's result —
           // its size is the best available estimate of the skill's footprint.
           const skillIdx = acc.skillByToolId[block.tool_use_id];
           if (skillIdx !== undefined && acc.skillUses[skillIdx]) {
-            acc.skillUses[skillIdx].estTokens += estimateTokens(text);
+            const skillTokens = estimateTokens(text);
+            acc.skillUses[skillIdx].estTokens += skillTokens;
+            addFrameworkOverhead(acc, 'skill-preamble', skillTokens);
           }
         } else if (block.type === 'text' && typeof block.text === 'string') {
+          const origin = trackPromptTextOrigin(parsed, acc, block.text, isSubagentFile);
           addToBucket(acc.cat, 'userPrompts', block.text);
           collectCommandUse(acc, block.text, sessionId, parsed.timestamp);
-          if (allowPromptSample) {
-            collectPrompt(acc, cwd, block.text);
+          if (allowPromptSample && origin === 'user-authored') {
+            collectPrompt(acc, cwd, block.text, Date.parse(parsed.timestamp));
           }
         }
       }
@@ -393,11 +465,27 @@ export function finalizeAnalysis(acc: AnalysisAcc): ContentAnalysis {
       .sort((a, b) => b.estimatedTokens - a.estimatedTokens);
 
   const categories = toSlices(acc.cat);
+  const frameworkComponents = (Object.entries(acc.frameworkOverhead) as Array<
+    [FrameworkOverheadKind, { tokens: number; count: number }]
+  >)
+    .map(([kind, value]) => ({ kind, estimatedTokens: value.tokens, count: value.count }))
+    .sort((a, b) => a.kind.localeCompare(b.kind));
   return {
     categories,
     toolResultBreakdown: toSlices(acc.tools),
     totalEstimatedTokens: categories.reduce((sum, c) => sum + c.estimatedTokens, 0),
     recentPrompts: acc.prompts.slice(-300),
+    frameworkOverhead: {
+      frameworkEstimatedTokens: frameworkComponents.reduce(
+        (sum, component) => sum + component.estimatedTokens,
+        0,
+      ),
+      observedInputEstimatedTokens: acc.observedInputEstimatedTokens,
+      userAuthoredEstimatedTokens: acc.userAuthoredEstimatedTokens,
+      toolResultEstimatedTokens: acc.toolResultEstimatedTokens,
+      classifiedEvents: frameworkComponents.reduce((sum, component) => sum + component.count, 0),
+      components: frameworkComponents,
+    },
     thinkingBySession: acc.thinkingBySession,
     thinkingByDay: acc.thinkingByDay,
     skillUses: acc.skillUses,
@@ -446,6 +534,17 @@ export function mergeAnalysisAcc(target: AnalysisAcc, source: AnalysisAcc): void
     if (target.skillUses.length >= MAX_SKILL_USES) break;
     target.skillUses.push({ ...use });
   }
+  for (const [kind, value] of Object.entries(source.frameworkOverhead) as Array<
+    [FrameworkOverheadKind, { tokens: number; count: number }]
+  >) {
+    const current = target.frameworkOverhead[kind] ?? { tokens: 0, count: 0 };
+    current.tokens += value.tokens;
+    current.count += value.count;
+    target.frameworkOverhead[kind] = current;
+  }
+  target.observedInputEstimatedTokens += source.observedInputEstimatedTokens;
+  target.userAuthoredEstimatedTokens += source.userAuthoredEstimatedTokens;
+  target.toolResultEstimatedTokens += source.toolResultEstimatedTokens;
 }
 
 export function finalizeAnalysisWithCalibration(
@@ -1033,32 +1132,13 @@ export class ClaudeDataLoader {
     return { sessionId, projectName, projectPath };
   }
 
-  /** True if a `user` line's text is a Claude Code system marker rather than
-   * something the user actually typed: an interruption notice, or the echo of
-   * a slash command (`/model`, `/clear`, …) and its output. These otherwise
-   * inflate the "Messages" count (one session showed 106 vs ~80 real prompts:
-   * `[Request interrupted by user]` ×3, `<command-name>/model…` ×8, etc.). */
+  /** True if a `user` line's text carries one of the reviewed Claude Code
+   * framework markers. Unknown XML/custom elements remain user-authored.
+   *
+   * Keep this public for the existing compatibility tests and callers; the
+   * classifier itself remains the single source of marker semantics. */
   static isSyntheticUserText(text: string): boolean {
-    const t = text.trim();
-    if (/^\[Request interrupted/i.test(t)) {
-      return true;
-    }
-    // Compaction continuation: when a session is auto-compacted, Claude Code
-    // injects the summary as a *user* message — the user never typed it, so it
-    // must not count towards "Messages".
-    if (/^This session is being continued from a previous conversation/i.test(t)) {
-      return true;
-    }
-    // Slash-command echo blocks wrap the invocation/output in these tags.
-    if (
-      t.startsWith('<command-name>') ||
-      t.startsWith('<command-message>') ||
-      t.includes('<local-command-stdout>') ||
-      t.includes('<local-command-caveat>')
-    ) {
-      return true;
-    }
-    return false;
+    return classifyPromptTextOrigin({ text }) !== 'user-authored';
   }
 
   /** Last segment of a path, handling both '/' and '\\' separators. */
@@ -1302,9 +1382,10 @@ export class ClaudeDataLoader {
 
   /** Model context-window size in tokens, plus whether it's a guess. Current
    * Claude (Opus 4.6+, Opus 5+, Sonnet 4.6+, Sonnet 5+, Fable/Mythos 5) is 1M;
-   * Haiku and older Claude are 200K; a "[1m]" suffix forces 1M (the marker
-   * pricing.ts strips). A user override (>0) wins outright and is treated as
-   * exact. Unrecognised / proxied models fall back to 200K and are flagged
+   * GPT-6 Astra is 1.05M; Haiku and older Claude are 200K; a "[1m]" suffix
+   * forces 1M (the marker pricing.ts strips). A user override (>0) wins
+   * outright and is treated as exact. Unrecognised / proxied models fall back
+   * to 200K and are flagged
    * `estimated` so the UI can mark the percentage as approximate.
    * Sonnet 5 (`claude-sonnet-5`) verified 2026-07-01 —
    * https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5
@@ -1337,6 +1418,9 @@ export class ClaudeDataLoader {
     if (/haiku/.test(m) || /opus|sonnet/.test(m)) {
       return { tokens: 200_000, estimated: false };
     }
+    if (/gpt-6-astra/.test(m)) {
+      return { tokens: 1_050_000, estimated: false };
+    }
     if (/deepseek/.test(m)) {
       return { tokens: 128_000, estimated: false };
     }
@@ -1345,13 +1429,11 @@ export class ClaudeDataLoader {
   }
 
   static getTodayData(records: ClaudeUsageRecord[]): UsageData {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const todayRecords = records.filter((record) => {
-      const recordDate = new Date(record.timestamp);
-      return recordDate >= today;
-    });
+    const tz = I18n.getTimezone();
+    const today = dayKeyInZone(new Date(), tz);
+    const todayRecords = records.filter((record) =>
+      dayKeyInZone(new Date(record.timestamp), tz) === today
+    );
 
     return this.calculateUsageData(todayRecords);
   }
@@ -2072,7 +2154,8 @@ export class ClaudeDataLoader {
   static buildShareInput(
     records: ClaudeUsageRecord[],
     range: ShareRange,
-    scope: string = 'all'
+    scope: string = 'all',
+    now: Date = new Date(),
   ): ShareInput {
     const tz = I18n.getTimezone();
 
@@ -2091,22 +2174,17 @@ export class ClaudeDataLoader {
     // Range filter.
     let inRange: ClaudeUsageRecord[];
     if (range === 'today') {
-      const todayKey = dayKeyInZone(new Date(), tz);
+      const todayKey = dayKeyInZone(now, tz);
       inRange = scoped.filter((r) => dayKeyInZone(new Date(r.timestamp), tz) === todayKey);
-    } else if (range === 'week') {
-      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      inRange = scoped.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
-    } else if (range === 'last30') {
-      const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      inRange = scoped.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
-    } else if (range === 'year') {
-      const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
-      inRange = scoped.filter((r) => new Date(r.timestamp).getTime() >= cutoff);
+    } else if (range === 'week' || range === 'last30' || range === 'year') {
+      const dayCount = range === 'week' ? 7 : range === 'last30' ? 30 : 365;
+      const dayKeys = new Set(rollingDayKeysFromDayKey(dayKeyInZone(now, tz), dayCount));
+      inRange = scoped.filter((r) => dayKeys.has(dayKeyInZone(new Date(r.timestamp), tz)));
     } else if (range.startsWith('month:')) {
       const monthKey = range.slice('month:'.length); // 'YYYY-MM'
       inRange = scoped.filter((r) => monthKeyInZone(new Date(r.timestamp), tz) === monthKey);
     } else {
-      const monthKey = monthKeyInZone(new Date(), tz);
+      const monthKey = monthKeyInZone(now, tz);
       inRange = scoped.filter((r) => monthKeyInZone(new Date(r.timestamp), tz) === monthKey);
     }
 
@@ -2458,15 +2536,16 @@ export class ClaudeDataLoader {
   static getUsageAttribution(
     records: ClaudeUsageRecord[],
     analysis: ContentAnalysis | null,
-    scope: AttributionScope
+    scope: AttributionScope,
+    now: Date = new Date(),
   ): UsageAttribution {
-    const now = new Date();
-    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
-    const minTs =
-      scope.kind === 'day' ? startOfDay
-      : scope.kind === 'week' ? now.getTime() - 7 * 24 * 60 * 60 * 1000
-      : scope.kind === 'month' ? now.getTime() - 30 * 24 * 60 * 60 * 1000
-      : 0;
+    const timeZone = I18n.getTimezone();
+    const configuredToday = dayKeyInZone(now, timeZone);
+    const scopeDayKeys =
+      scope.kind === 'day' ? new Set([configuredToday])
+      : scope.kind === 'week' ? new Set(rollingDayKeysFromDayKey(configuredToday, 7))
+      : scope.kind === 'month' ? new Set(rollingDayKeysFromDayKey(configuredToday, 30))
+      : undefined;
     const normScope = scope.projectPath ? this.normalizePath(scope.projectPath) : '';
 
     const scoped = records.filter((r) => {
@@ -2480,7 +2559,10 @@ export class ClaudeDataLoader {
         return this.normalizePath(r._projectPath || '').startsWith(normScope);
       }
       const t = Date.parse(r.timestamp);
-      return !isNaN(t) && t >= minTs;
+      if (isNaN(t)) {
+        return false;
+      }
+      return scopeDayKeys?.has(dayKeyInZone(new Date(t), timeZone)) ?? true;
     });
 
     // Skill / plugin activation points. A skill's usage share is the weight
@@ -2502,9 +2584,12 @@ export class ClaudeDataLoader {
         const sessionIds = new Set(scoped.map((r) => r._sessionId));
         uses = uses.filter((u) => sessionIds.has(u.sessionId));
       } else {
-        // "YYYY-MM-DD" compares correctly as a string.
-        const minDay = localDayKey(new Date(minTs).toISOString());
-        uses = uses.filter((u) => u.day >= minDay);
+        uses = uses.filter((u) => {
+          const currentZoneDay = u.ts > 0 && Number.isFinite(u.ts)
+            ? dayKeyInZone(new Date(u.ts), timeZone)
+            : u.day;
+          return scopeDayKeys?.has(currentZoneDay) === true;
+        });
       }
       // key → session → earliest invocation ts (skills and plugins separately)
       const skillEarliest: Record<string, Record<string, number>> = {};
@@ -2982,20 +3067,21 @@ export class ClaudeDataLoader {
   }
 
   static getHourlyDataForToday(records: ClaudeUsageRecord[]): { hour: string; data: UsageData }[] {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-
-    const todayRecords = records.filter((record) => {
-      const recordDate = new Date(record.timestamp);
-      return recordDate >= today;
-    });
+    const tz = I18n.getTimezone();
+    const today = dayKeyInZone(new Date(), tz);
+    const todayRecords = records.filter((record) =>
+      dayKeyInZone(new Date(record.timestamp), tz) === today
+    );
 
     // Group records by hour
     const recordsByHour: Record<string, ClaudeUsageRecord[]> = {};
 
     todayRecords.forEach((record) => {
       const recordDate = new Date(record.timestamp);
-      const hourKey = `${recordDate.getHours().toString().padStart(2, '0')}:00`; // HH:00 format
+      const hourKey = formatHourLabel(hourKeyInZone(recordDate, tz));
+      if (!hourKey) {
+        return;
+      }
 
       if (!recordsByHour[hourKey]) {
         recordsByHour[hourKey] = [];
@@ -3015,23 +3101,20 @@ export class ClaudeDataLoader {
   }
 
   static getHourlyDataForDate(records: ClaudeUsageRecord[], dateString: string): { hour: string; data: UsageData }[] {
-    const targetDate = new Date(dateString);
-    targetDate.setHours(0, 0, 0, 0);
-
-    const nextDate = new Date(targetDate);
-    nextDate.setDate(nextDate.getDate() + 1);
-
-    const dateRecords = records.filter((record) => {
-      const recordDate = new Date(record.timestamp);
-      return recordDate >= targetDate && recordDate < nextDate;
-    });
+    const tz = I18n.getTimezone();
+    const dateRecords = records.filter((record) =>
+      dayKeyInZone(new Date(record.timestamp), tz) === dateString
+    );
 
     // Group records by hour
     const recordsByHour: Record<string, ClaudeUsageRecord[]> = {};
 
     dateRecords.forEach((record) => {
       const recordDate = new Date(record.timestamp);
-      const hourKey = `${recordDate.getHours().toString().padStart(2, '0')}:00`; // HH:00 format
+      const hourKey = formatHourLabel(hourKeyInZone(recordDate, tz));
+      if (!hourKey) {
+        return;
+      }
 
       if (!recordsByHour[hourKey]) {
         recordsByHour[hourKey] = [];

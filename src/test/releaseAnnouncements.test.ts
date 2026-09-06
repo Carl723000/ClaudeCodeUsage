@@ -6,14 +6,20 @@ import {
   latestAnnouncementVersion,
 } from '../releaseAnnouncements';
 
-const catalog = { '2.3.0': { version: '2.3.0' } };
+const catalog = {
+  '2.3.0': { version: '2.3.0' },
+  '2.3.1': { version: '2.3.1' },
+};
 
 test('upgrade resolves only the exact current version', () => {
   assert.deepEqual(
     announcementForUpgrade('2.3.0', '2.2.1', true, catalog),
     catalog['2.3.0'],
   );
-  assert.equal(announcementForUpgrade('2.3.1', '2.3.0', true, catalog), null);
+  assert.deepEqual(
+    announcementForUpgrade('2.3.1', '2.3.0', true, catalog),
+    catalog['2.3.1'],
+  );
   assert.equal(announcementForUpgrade('2.2.9', '2.1.0', true, catalog), null);
 });
 
@@ -25,7 +31,7 @@ test('fresh install, already-seen, and disabled announcements do not show', () =
 
 test('preview selects the greatest full semantic version', () => {
   assert.equal(
-    latestAnnouncementVersion({ '2.3.0': {}, '2.10.0': {}, '2.9.5': {} }),
+    latestAnnouncementVersion({ '2.3.0': {}, '2.3.1': {}, '2.10.0': {}, '2.9.5': {} }),
     '2.10.0',
   );
 });

@@ -6,7 +6,7 @@ const { renderHarness } = require('./render-harness.cjs');
 const locales = new Set(['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id']);
 const uiTestPort = Number(process.env.CCU_UI_TEST_PORT ?? 4173);
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? '/', `http://127.0.0.1:${uiTestPort}`);
     if (url.pathname === '/health') {
@@ -28,12 +28,47 @@ const server = createServer((request, response) => {
       : 'codex';
     const theme = url.searchParams.get('theme') === 'dark' ? 'dark' : 'light';
     const requestedFixture = url.searchParams.get('fixture') ?? 'default';
-    const fixture = ['default', 'rootless-cycle', 'root-over-limit', 'persisted-details', 'weekly-usage-only', 'weekly-claude-completed', 'unknown-models', 'zero-input'].includes(requestedFixture)
+    const fixture = [
+      'default',
+      'rootless-cycle',
+      'root-over-limit',
+      'persisted-details',
+      'weekly-usage-only',
+      'weekly-claude-completed',
+      'unknown-models',
+      'zero-input',
+      'covered-day-without-hourly-rows',
+      'advice-effectiveness',
+      'advice-effectiveness-disabled',
+      'advice-optimizer',
+      'combined-heatmap',
+      'session-timezone-boundaries',
+    ].includes(requestedFixture)
       ? requestedFixture
       : 'default';
+    const requestedTimeZone = url.searchParams.get('timeZone') ?? 'Asia/Hong_Kong';
+    const timeZone = ['Asia/Hong_Kong', 'Asia/Tokyo', 'Pacific/Honolulu'].includes(requestedTimeZone)
+      ? requestedTimeZone
+      : 'Asia/Hong_Kong';
     const autoRefresh = url.searchParams.get('autoRefresh') === 'true';
     const weeklyValue = url.searchParams.get('weeklyValue') !== 'false';
-    const html = renderHarness({ provider, locale, theme, fixture, autoRefresh, weeklyValue });
+    const shareStudio = url.searchParams.get('shareStudio') !== 'false';
+    const requestedFeedback = url.searchParams.get('adviceFeedback');
+    const adviceFeedback = requestedFeedback === 'claude-helpful' ||
+      requestedFeedback === 'optimizer-helpful'
+      ? requestedFeedback
+      : 'none';
+    const html = await renderHarness({
+      provider,
+      locale,
+      theme,
+      fixture,
+      autoRefresh,
+      weeklyValue,
+      shareStudio,
+      adviceFeedback,
+      timeZone,
+    });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',
       'cache-control': 'no-store',

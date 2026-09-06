@@ -102,6 +102,39 @@ test('a token-total mismatch retains both copies as one ambiguous group', () => 
   assert.equal(ambiguous.exactDuplicateFileKeys.size, 0);
 });
 
+test('equal totals with different authoritative day distributions are not exact duplicates', () => {
+  const active = contribution('active-key', 'sessions');
+  const archive = contribution('archive-key', 'archive');
+  active.aggregate.byDay = {
+    '2026-08-30': { ...active.aggregate.total },
+  };
+  archive.aggregate.byDay = {
+    '2026-08-31': { ...archive.aggregate.total },
+  };
+
+  const result = classify(active, archive);
+
+  assert.equal(result.ambiguousSessionGroups, 1);
+  assert.deepEqual([...result.canonicalFileKeys], ['active-key', 'archive-key']);
+  assert.equal(result.exactDuplicateFileKeys.size, 0);
+});
+
+test('a one-sided rebuilding period projection does not destabilize exact dedup', () => {
+  const active = contribution('active-key', 'sessions');
+  const archive = contribution('archive-key', 'archive');
+  active.aggregate.period = {
+    timeZone: 'Asia/Shanghai',
+    indexedThrough: 50,
+    days: {},
+  };
+
+  const result = classify(active, archive);
+
+  assert.deepEqual([...result.canonicalFileKeys], ['active-key']);
+  assert.deepEqual([...result.exactDuplicateFileKeys], ['archive-key']);
+  assert.equal(result.ambiguousSessionGroups, 0);
+});
+
 test('a missing optional token field does not equal an explicit zero', () => {
   const active = contribution('active-key', 'sessions');
   const archive = contribution('archive-key', 'archive');

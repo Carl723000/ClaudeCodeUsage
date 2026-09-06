@@ -5,7 +5,6 @@ import { ProviderTokenCounts, UsageProvider } from './providers/providerTypes';
 
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 const RESET_CLUSTER_MS = 5 * 60 * 1000;
-const MIN_EXTRAPOLATION_PERCENT = 5;
 const MIN_PRICED_SHARE = 0.8;
 
 export type WeeklyValueConfidence = 'high' | 'medium' | 'low' | 'usage-only';
@@ -22,6 +21,19 @@ export interface WeeklyQuotaObservation {
   resetAt: number;
   usedPercent: number;
   sourceKey?: string;
+  /** Account continuity carried by the schema-2 local observation store. Old
+   * fixtures and migration rows may omit these fields and are treated as
+   * low-information legacy evidence. */
+  accountAttribution?: 'verified-local-signal' | 'profile-continuity' | 'unattributed';
+  windowId?: string;
+  observationConfidence?: 'high' | 'medium' | 'low';
+  flags?: Array<
+    | 'approximate-boundary'
+    | 'low-log-coverage'
+    | 'low-price-coverage'
+    | 'account-ambiguous'
+    | 'clock-anomaly'
+  >;
 }
 
 export interface WeeklyEquivalentUsage {
@@ -279,10 +291,15 @@ function clusterObservations(observations: WeeklyQuotaObservation[]): Observatio
     );
   for (const observation of ordered) {
     const previous = clusters[clusters.length - 1];
+    const previousWindowId = previous?.observations[0]?.windowId;
+    const sameExplicitWindow = previousWindowId !== undefined || observation.windowId !== undefined
+      ? previousWindowId !== undefined && previousWindowId === observation.windowId
+      : true;
     if (
       previous &&
       previous.provider === observation.provider &&
       previous.seriesKey === observation.seriesKey &&
+      sameExplicitWindow &&
       Math.abs(previous.resetAt - observation.resetAt) <= RESET_CLUSTER_MS
     ) {
       previous.observations.push(observation);
@@ -511,16 +528,166 @@ function alignedResetAt(resetAt: number, anchorResetAt: number): number | null {
   return Math.abs(aligned - resetAt) <= RESET_CLUSTER_MS ? aligned : null;
 }
 
+interface AllowanceCandidateSummary {
+  value: number;
+  pricingCoverage: number;
+  count: number;
+  dispersed: boolean;
+}
+
+function evidenceWeight(
+  observation: WeeklyQuotaObservation,
+  pricingCoverage: number,
+  boundaryApproximate: boolean,
+  windowStart: number,
+  periodEnd: number,
+): number {
+  const confidenceWeight = observation.observationConfidence === 'high'
+    ? 1
+    : observation.observationConfidence === 'medium'
+      ? 0.8
+      : observation.observationConfidence === 'low'
+        ? 0.55
+        : 0.7;
+  const attributionWeight = observation.accountAttribution === 'verified-local-signal'
+    ? 1
+    : observation.accountAttribution === 'profile-continuity'
+      ? 0.9
+      : observation.accountAttribution === 'unattributed'
+        ? 0.55
+        : 0.7;
+  const flags = new Set(observation.flags ?? []);
+  const flagWeight =
+    (flags.has('low-log-coverage') ? 0.6 : 1) *
+    (flags.has('low-price-coverage') ? 0.7 : 1) *
+    (flags.has('account-ambiguous') ? 0.4 : 1) *
+    (flags.has('clock-anomaly') ? 0.5 : 1);
+  const boundaryWeight = boundaryApproximate || flags.has('approximate-boundary')
+    ? 0.55
+    : 1;
+  const span = Math.max(1, periodEnd - windowStart);
+  const progress = Math.max(
+    0,
+    Math.min(1, (observation.observedAt - windowStart) / span),
+  );
+  const recencyWeight = 0.65 + 0.35 * progress;
+  // Low coverage must lower confidence, not erase a mathematically valid
+  // observation. Keep a small non-zero floor for partially priced prefixes.
+  const coverageWeight = Math.max(0.05, Math.min(1, pricingCoverage));
+  return confidenceWeight * attributionWeight * flagWeight *
+    boundaryWeight * recencyWeight * coverageWeight;
+}
+
+function robustAllowanceCandidate(
+  observations: WeeklyQuotaObservation[],
+  rows: WeeklyEquivalentUsage[],
+  windowStart: number,
+  periodEnd: number,
+  boundaryApproximate: boolean,
+): AllowanceCandidateSummary | null {
+  const candidates = observations.flatMap((observation) => {
+    if (
+      observation.observedAt < windowStart ||
+      observation.observedAt > periodEnd ||
+      observation.usedPercent <= 0 ||
+      observation.usedPercent > 100
+    ) {
+      return [];
+    }
+    const observed = totals(rows.filter((row) => row.timestamp <= observation.observedAt));
+    if (observed.equivalentUsd <= 0) {
+      return [];
+    }
+    const pricingCoverage = observed.totalTokens > 0
+      ? Math.min(1, observed.pricedTokens / observed.totalTokens)
+      : 0;
+    const value = observed.equivalentUsd / (observation.usedPercent / 100);
+    if (!Number.isFinite(value) || value <= 0) {
+      return [];
+    }
+    return [{
+      value,
+      pricingCoverage,
+      weight: evidenceWeight(
+        observation,
+        pricingCoverage,
+        boundaryApproximate,
+        windowStart,
+        periodEnd,
+      ),
+    }];
+  }).sort((left, right) => left.value - right.value);
+  if (candidates.length === 0) return null;
+  const totalWeight = candidates.reduce((sum, item) => sum + item.weight, 0);
+  let accumulated = 0;
+  let median = candidates[candidates.length - 1].value;
+  for (const candidate of candidates) {
+    accumulated += candidate.weight;
+    if (accumulated >= totalWeight / 2) {
+      median = candidate.value;
+      break;
+    }
+  }
+  const weightedCoverage = candidates.reduce(
+    (sum, item) => sum + item.pricingCoverage * item.weight,
+    0,
+  ) / Math.max(Number.EPSILON, totalWeight);
+  const minimum = candidates[0].value;
+  const maximum = candidates[candidates.length - 1].value;
+  return {
+    value: median,
+    pricingCoverage: weightedCoverage,
+    count: candidates.length,
+    dispersed: minimum > 0 && maximum / minimum > 2,
+  };
+}
+
+/**
+ * A quota sample can outlive the seven-day interval it describes. When that
+ * is the only evidence left after a reset, falling back to Monday buckets would
+ * put the new usage in a different period from the provider's actual window.
+ * Recover the reset as an alignment hint only when every observed Codex reset
+ * sits on the same seven-day sequence. This helper never supplies a quota
+ * observation, so it cannot enable an allowance estimate on its own.
+ */
+function latestKnownCodexResetAnchor(
+  observations: WeeklyQuotaObservation[],
+  now: number,
+): number | undefined {
+  const candidates = observations
+    .filter((item) =>
+      item.provider === 'codex' &&
+      Number.isFinite(item.observedAt) &&
+      item.observedAt <= now &&
+      Number.isFinite(item.resetAt) &&
+      item.resetAt > 0,
+    )
+    .sort((left, right) =>
+      right.observedAt - left.observedAt || right.resetAt - left.resetAt,
+    );
+  const latest = candidates[0];
+  if (!latest) {
+    return undefined;
+  }
+  return candidates.every((item) =>
+    alignedResetAt(item.resetAt, latest.resetAt) !== null,
+  )
+    ? latest.resetAt
+    : undefined;
+}
+
 /**
  * Builds the dashboard's one authoritative weekly timeline. Token-log usage is
  * first assigned to non-overlapping [start, reset) buckets exactly once. Quota
  * observations may then decorate their matching bucket with utilization and a
  * conservative allowance estimate; they never add a second usage row.
  *
- * Codex logs do not expose a reliable account identity. Any overlapping,
- * non-aligned future reset makes the current allowance ambiguous regardless of
- * its label. Historical Codex periods and source-mixed current periods remain
- * usage-only rather than manufacturing an account split.
+ * Codex logs do not expose a reliable account identity, but a file source key
+ * is not an account key either: one Codex home commonly contributes many
+ * files to the same account-wide quota series. Those rows may therefore be
+ * aggregated for an allowance estimate, with low confidence when the source
+ * or reset boundary is approximate. A genuinely different quota series still
+ * blocks the estimate rather than manufacturing an account split.
  */
 export function buildWeeklyValueTimeline(
   provider: UsageProvider,
@@ -557,7 +724,16 @@ export function buildWeeklyValueTimeline(
       right.latest.observedAt - left.latest.observedAt ||
       right.cluster.resetAt - left.cluster.resetAt,
     )[0];
-  const anchorResetAt = anchorEntry?.cluster.resetAt ?? options.anchorResetAt;
+  // If the newest reset sample is older than its own seven-day window, it is
+  // still useful for grouping usage after a rollover. It remains alignment-only
+  // until a valid in-window sample exists, so no allowance is inferred here.
+  const staleResetAnchor = !anchorEntry &&
+    options.anchorResetAt === undefined &&
+    provider === 'codex'
+    ? latestKnownCodexResetAnchor(normalizedObservations, now)
+    : undefined;
+  const anchorResetAt = anchorEntry?.cluster.resetAt ??
+    options.anchorResetAt ?? staleResetAnchor;
   const limit = Math.max(1, Math.floor(options.limit ?? 12));
   let history = buildWeeklyUsageHistory(provider, inputs.usage, {
     now,
@@ -596,23 +772,35 @@ export function buildWeeklyValueTimeline(
       .sort((left, right) => right.resetAt - left.resetAt);
   }
 
-  const alignedClusters = new Map<number, typeof validClusters[number]>();
+  type MappedObservation = {
+    entry: typeof validClusters[number];
+    resetAligned: boolean;
+  };
+  const historyByReset = new Map(history.map((point) => [point.resetAt, point]));
+  const mappedObservations = new Map<number, MappedObservation[]>();
   for (const entry of validClusters) {
-    if (entry.cluster.seriesKey !== anchorEntry.cluster.seriesKey) {
+    const alignedReset = alignedResetAt(entry.cluster.resetAt, anchorResetAt);
+    const target = alignedReset === null
+      ? history.find((point) =>
+          entry.latest.observedAt >= point.windowStart &&
+          entry.latest.observedAt < point.resetAt,
+        )
+      : historyByReset.get(alignedReset);
+    if (!target) {
       continue;
     }
-    const resetAt = alignedResetAt(entry.cluster.resetAt, anchorResetAt);
-    if (resetAt === null) {
-      continue;
-    }
-    const previous = alignedClusters.get(resetAt);
-    if (!previous || entry.latest.observedAt > previous.latest.observedAt) {
-      alignedClusters.set(resetAt, entry);
-    }
+    const candidate: MappedObservation = {
+      entry,
+      resetAligned: alignedReset !== null,
+    };
+    const mapped = mappedObservations.get(target.resetAt) ?? [];
+    mapped.push(candidate);
+    mappedObservations.set(target.resetAt, mapped);
   }
   const ambiguousCurrentCodexReset = provider === 'codex' && validClusters.some((entry) => {
     if (
       entry === anchorEntry ||
+      entry.cluster.seriesKey === anchorEntry.cluster.seriesKey ||
       entry.cluster.resetAt <= now ||
       alignedResetAt(entry.cluster.resetAt, anchorResetAt) !== null
     ) {
@@ -624,10 +812,17 @@ export function buildWeeklyValueTimeline(
   });
 
   return history.map((point): WeeklyValuePoint => {
-    const entry = alignedClusters.get(point.resetAt);
-    if (!entry) {
+    const mappedEntries = mappedObservations.get(point.resetAt);
+    if (!mappedEntries || mappedEntries.length === 0) {
       return point;
     }
+    const seriesKeys = new Set(mappedEntries.map((mapped) => mapped.entry.cluster.seriesKey));
+    const accountAmbiguous = provider === 'codex' && seriesKeys.size > 1;
+    const mapped = [...mappedEntries].sort((left, right) =>
+      left.entry.latest.observedAt - right.entry.latest.observedAt ||
+      Number(left.resetAligned) - Number(right.resetAligned),
+    )[mappedEntries.length - 1];
+    const { entry, resetAligned } = mapped;
     const latest = entry.latest;
     const sourceKeys = new Set(
       entry.cluster.observations.flatMap((item) => item.sourceKey ? [item.sourceKey] : []),
@@ -638,11 +833,17 @@ export function buildWeeklyValueTimeline(
       row.timestamp >= point.windowStart &&
       row.timestamp < point.resetAt,
     );
-    const seriesRows = sourceKeys.size === 0
+    // Codex's source key identifies a local log file, not a quota account.
+    // The provider reports the weekly window at the home/account level, so
+    // filter-by-file would systematically undercount the observed window.
+    // Claude observations remain profile-scoped and keep their source filter.
+    const seriesRows = provider === 'codex'
       ? bucketRows
-      : bucketRows.filter((row) =>
-          row.sourceKey !== undefined && sourceKeys.has(row.sourceKey),
-        );
+      : sourceKeys.size === 0
+        ? bucketRows
+        : bucketRows.filter((row) =>
+            row.sourceKey !== undefined && sourceKeys.has(row.sourceKey),
+          );
     const bucketSourceKeys = new Set(
       bucketRows.flatMap((row) => row.sourceKey ? [row.sourceKey] : []),
     );
@@ -650,7 +851,7 @@ export function buildWeeklyValueTimeline(
       entry.cluster.observations.some((item) => !item.sourceKey);
     const hasMixedMissingUsageSource = bucketSourceKeys.size > 0 &&
       bucketRows.some((row) => !row.sourceKey && finiteNonNegative(row.totalTokens) > 0);
-    const codexSourceAttributionSafe = provider !== 'codex' || (
+    const codexSourceAttributionExact = provider !== 'codex' || (
       (sourceKeys.size === 0 && bucketSourceKeys.size === 0) ||
       (
         !hasMixedMissingObservationSource &&
@@ -660,32 +861,46 @@ export function buildWeeklyValueTimeline(
         [...bucketSourceKeys].every((sourceKey) => sourceKeys.has(sourceKey))
       )
     );
-    const observed = totals(seriesRows.filter((row) => row.timestamp <= latest.observedAt));
-    const seriesTotal = totals(seriesRows);
-    const seriesPricingCoverage = seriesTotal.totalTokens > 0
-      ? Math.min(1, seriesTotal.pricedTokens / seriesTotal.totalTokens)
-      : 0;
+    const candidateSummary = robustAllowanceCandidate(
+      entry.cluster.observations,
+      seriesRows,
+      point.windowStart,
+      Math.min(now, point.resetAt),
+      !resetAligned || point.boundaryUncertain === true,
+    );
+    const observedPricingCoverage = candidateSummary?.pricingCoverage ?? 0;
     const observationGapMs = Math.max(
       0,
       (point.current ? now : point.resetAt) - latest.observedAt,
     );
-    const withholdInference = provider === 'codex' && (
-      !point.current ||
-      Math.abs(point.resetAt - anchorResetAt) > RESET_CLUSTER_MS ||
-      ambiguousCurrentCodexReset ||
-      !codexSourceAttributionSafe ||
+    // Overlapping Codex series make completed periods usage-only. For the
+    // current period, the latest real quota percentage can still support a
+    // deliberately low-confidence durability estimate against combined local
+    // usage; this is neither an account split nor an official balance.
+    const withholdInference = provider === 'codex' && accountAmbiguous && !point.current;
+    const weakObservation = latest.accountAttribution === 'unattributed' ||
+      (latest.flags ?? []).some((flag) =>
+        flag === 'approximate-boundary' ||
+        flag === 'low-log-coverage' ||
+        flag === 'low-price-coverage' ||
+        flag === 'account-ambiguous' ||
+        flag === 'clock-anomaly'
+      );
+    const approximateInference = weakObservation || (provider === 'codex' && (
+      accountAmbiguous ||
+      (point.current && ambiguousCurrentCodexReset) ||
+      !resetAligned ||
+      !codexSourceAttributionExact ||
       point.boundaryUncertain === true
-    );
+    ));
     let fullEquivalentUsd: number | null = null;
     let observationOverrun = false;
     if (
       !withholdInference &&
       point.usageAvailable !== false &&
-      latest.usedPercent >= MIN_EXTRAPOLATION_PERCENT &&
-      observed.equivalentUsd > 0 &&
-      seriesPricingCoverage >= MIN_PRICED_SHARE
+      candidateSummary !== null
     ) {
-      fullEquivalentUsd = observed.equivalentUsd / (latest.usedPercent / 100);
+      fullEquivalentUsd = candidateSummary.value;
       if (!Number.isFinite(fullEquivalentUsd) || fullEquivalentUsd <= 0) {
         fullEquivalentUsd = null;
       } else if (point.usedEquivalentUsd > fullEquivalentUsd) {
@@ -700,15 +915,18 @@ export function buildWeeklyValueTimeline(
       utilizationPercent: latest.usedPercent,
       fullEquivalentUsd,
       unusedEquivalentUsd:
-        !point.current && fullEquivalentUsd !== null
+        fullEquivalentUsd !== null && !observationOverrun
           ? Math.max(0, fullEquivalentUsd - point.usedEquivalentUsd)
           : null,
       observationGapMs,
       confidence: fullEquivalentUsd === null
         ? 'usage-only'
-        : observationOverrun
+        : observationOverrun ||
+          approximateInference ||
+          observedPricingCoverage < MIN_PRICED_SHARE ||
+          candidateSummary?.dispersed === true
           ? 'low'
-          : confidenceFor(point.current, observationGapMs, point.pricingCoverage),
+          : confidenceFor(point.current, observationGapMs, observedPricingCoverage),
       basis: 'quota-observation',
     };
   }).slice(0, limit);
@@ -757,8 +975,30 @@ export function buildWeeklyValueTrend(
   now: number = Date.now(),
 ): WeeklyValuePoint[] {
   const points: WeeklyValuePoint[] = [];
-  for (const cluster of clusterObservations(inputs.observations)) {
+  const clusters = clusterObservations(inputs.observations);
+  for (const cluster of clusters) {
     const windowStart = cluster.resetAt - WEEK_MS;
+    const clusterSourceKeys = new Set(
+      cluster.observations.flatMap((item) => item.sourceKey ? [item.sourceKey] : []),
+    );
+    const hasOverlappingCodexSeries = cluster.provider === 'codex' && clusters.some((other) =>
+      {
+        if (
+          other === cluster ||
+          other.provider !== cluster.provider ||
+          windowStart >= other.resetAt ||
+          other.resetAt - WEEK_MS >= cluster.resetAt
+        ) {
+          return false;
+        }
+        const otherSourceKeys = new Set(
+          other.observations.flatMap((item) => item.sourceKey ? [item.sourceKey] : []),
+        );
+        const disjointExplicitSources = clusterSourceKeys.size > 0 && otherSourceKeys.size > 0 &&
+          [...clusterSourceKeys].every((sourceKey) => !otherSourceKeys.has(sourceKey));
+        return other.seriesKey !== cluster.seriesKey || disjointExplicitSources;
+      },
+    );
     const periodEnd = Math.min(now, cluster.resetAt);
     const eligibleObservations = cluster.observations
       .filter((item) => item.observedAt >= windowStart && item.observedAt <= periodEnd)
@@ -781,6 +1021,9 @@ export function buildWeeklyValueTrend(
       continue;
     }
     const observed = totals(matchedUsage.filter((row) => row.timestamp <= latest.observedAt));
+    const observedPricingCoverage = observed.totalTokens > 0
+      ? Math.min(1, observed.pricedTokens / observed.totalTokens)
+      : 0;
     const pricingCoverage = used.totalTokens > 0
       ? Math.min(1, used.pricedTokens / used.totalTokens)
       : 0;
@@ -792,9 +1035,10 @@ export function buildWeeklyValueTrend(
     let fullEquivalentUsd: number | null = null;
     let observationOverrun = false;
     if (
-      latest.usedPercent >= MIN_EXTRAPOLATION_PERCENT &&
+      !hasOverlappingCodexSeries &&
+      latest.usedPercent > 0 &&
       observed.equivalentUsd > 0 &&
-      pricingCoverage >= MIN_PRICED_SHARE
+      latest.usedPercent <= 100
     ) {
       fullEquivalentUsd = observed.equivalentUsd / (latest.usedPercent / 100);
       if (!Number.isFinite(fullEquivalentUsd) || fullEquivalentUsd <= 0) {
@@ -817,7 +1061,7 @@ export function buildWeeklyValueTrend(
       usedEquivalentUsd: used.equivalentUsd,
       fullEquivalentUsd,
       unusedEquivalentUsd:
-        !current && fullEquivalentUsd !== null
+        fullEquivalentUsd !== null && !observationOverrun
           ? Math.max(0, fullEquivalentUsd - used.equivalentUsd)
           : null,
       utilizationPercent: latest.usedPercent,
@@ -825,7 +1069,13 @@ export function buildWeeklyValueTrend(
       observationGapMs,
       confidence: fullEquivalentUsd === null
         ? 'usage-only'
-        : observationOverrun
+        : observationOverrun ||
+          latest.accountAttribution === 'unattributed' ||
+          (latest.flags ?? []).some((flag) =>
+            flag === 'approximate-boundary' || flag === 'account-ambiguous'
+          ) ||
+          latest.usedPercent < 5 ||
+          observedPricingCoverage < MIN_PRICED_SHARE
           ? 'low'
           : confidenceFor(current, observationGapMs, pricingCoverage),
       basis: 'quota-observation',

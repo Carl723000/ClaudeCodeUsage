@@ -17,7 +17,8 @@ export interface HttpResponse {
 export interface HttpRequestOptions {
   method?: string;
   headers?: Record<string, string>;
-  body?: string;
+  body?: string | Uint8Array;
+  signal?: AbortSignal;
 }
 
 /** Run an HTTP request via Node fetch. Optional timeoutMs aborts the request
@@ -30,22 +31,31 @@ export async function requestViaFetch(
     throw new Error('fetch unavailable in this VS Code version');
   }
   let signal: AbortSignal | undefined;
+  let controller: AbortController | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  if (opts.timeoutMs && opts.timeoutMs > 0) {
-    const controller = new AbortController();
-    timer = setTimeout(() => controller.abort(), opts.timeoutMs);
-    signal = controller.signal;
+  const abortFromCaller = (): void => controller?.abort();
+  if ((opts.timeoutMs && opts.timeoutMs > 0) || opts.signal) {
+    controller = new AbortController();
+    if (opts.signal?.aborted) controller.abort();
+    else opts.signal?.addEventListener('abort', abortFromCaller, { once: true });
   }
+  if (opts.timeoutMs && opts.timeoutMs > 0 && controller) {
+    timer = setTimeout(() => controller.abort(), opts.timeoutMs);
+  }
+  signal = controller?.signal ?? opts.signal;
   try {
     const res = await fetch(url, {
       method: opts.method || 'GET',
       headers: opts.headers,
-      body: opts.body,
+      body: typeof opts.body === 'string' || opts.body === undefined
+        ? opts.body
+        : Buffer.from(opts.body),
       signal
     });
     return { status: res.status, body: await res.text() };
   } catch (e) {
     if ((e as Error).name === 'AbortError') {
+      if (opts.signal?.aborted) throw new Error('Request cancelled');
       throw new Error(`Request timed out after ${Math.round((opts.timeoutMs || 0) / 1000)}s`);
     }
     throw e;
@@ -53,6 +63,7 @@ export async function requestViaFetch(
     if (timer !== undefined) {
       clearTimeout(timer);
     }
+    opts.signal?.removeEventListener('abort', abortFromCaller);
   }
 }
 
@@ -63,6 +74,10 @@ export function requestViaCurl(
   log?: (line: string) => void
 ): Promise<HttpResponse> {
   return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(new Error('Request cancelled'));
+      return;
+    }
     const args: string[] = ['-sS', '-w', '\n__CCU_STATUS__%{http_code}', '--max-time', String(opts.timeoutSec ?? 15)];
     if (opts.method && opts.method !== 'GET') {
       args.push('-X', opts.method);
@@ -84,6 +99,23 @@ export function requestViaCurl(
     // quota silently stops loading (while a fresh window, with a valid cwd, works
     // fine). curl needs no particular cwd, so anchor it somewhere always valid.
     const child = spawn(cmd, args, { shell: false, windowsHide: true, cwd: os.homedir() });
+    let settled = false;
+    let aborted = false;
+    const finishReject = (error: Error): void => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
+    const finishResolve = (response: HttpResponse): void => {
+      if (settled) return;
+      settled = true;
+      resolve(response);
+    };
+    const abort = (): void => {
+      aborted = true;
+      child.kill();
+    };
+    opts.signal?.addEventListener('abort', abort, { once: true });
     let stdout = '';
     let stderr = '';
     child.stdout.on('data', (c: Buffer) => (stdout += c.toString('utf-8')));
@@ -92,17 +124,22 @@ export function requestViaCurl(
       if (log) {
         log(`curl: spawn error ${(e as Error).message} (is curl on PATH?)`);
       }
-      reject(e);
+      finishReject(e);
     });
     child.on('close', (code) => {
+      opts.signal?.removeEventListener('abort', abort);
+      if (aborted) {
+        return finishReject(new Error('Request cancelled'));
+      }
+      if (settled) return;
       if (code !== 0) {
-        return reject(new Error(`curl exit ${code}: ${stderr.trim().slice(0, 200)}`));
+        return finishReject(new Error(`curl exit ${code}: ${stderr.trim().slice(0, 200)}`));
       }
       const m = stdout.match(/^([\s\S]*)\n__CCU_STATUS__(\d{3})$/);
       if (!m) {
-        return reject(new Error(`Could not parse curl output: ${stdout.slice(0, 200)}`));
+        return finishReject(new Error(`Could not parse curl output: ${stdout.slice(0, 200)}`));
       }
-      resolve({ status: parseInt(m[2], 10), body: m[1] });
+      finishResolve({ status: parseInt(m[2], 10), body: m[1] });
     });
     if (opts.body !== undefined) {
       child.stdin.end(opts.body);

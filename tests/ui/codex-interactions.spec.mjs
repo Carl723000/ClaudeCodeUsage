@@ -85,6 +85,34 @@ test('session range and model filters survive a full reload', async ({ page }) =
   await expect(page.locator('#sessions .sess-model-select')).toHaveValue('gpt-5.6-sol');
 });
 
+test('session range filters use configured-zone civil days and survive reload', async ({ page }) => {
+  await page.clock.setFixedTime(new Date('2026-07-20T20:00:00.000Z'));
+  await openClaude(page, {
+    fixture: 'session-timezone-boundaries',
+    timeZone: 'Pacific/Honolulu',
+  });
+  await page.locator('#tab-sessions').click();
+
+  const row = (title) => page.locator('#sessions tr.sort-row', { hasText: title });
+  await page.locator('#sessions .sess-filter-btn[data-range="today"]').click();
+  await expect(row('Honolulu today')).toBeVisible();
+  await expect(row('Honolulu yesterday')).toBeHidden();
+
+  await page.locator('#sessions .sess-filter-btn[data-range="7"]').click();
+  await expect(row('Seven-day boundary inside')).toBeVisible();
+  await expect(row('Seven-day boundary outside')).toBeHidden();
+
+  await page.locator('#sessions .sess-filter-btn[data-range="30"]').click();
+  await expect(row('Thirty-day boundary inside')).toBeVisible();
+  await expect(row('Thirty-day boundary outside')).toBeHidden();
+
+  await page.reload();
+
+  await expect(page.locator('#sessions .sess-filter-btn[data-range="30"]')).toHaveClass(/active/);
+  await expect(row('Thirty-day boundary inside')).toBeVisible();
+  await expect(row('Thirty-day boundary outside')).toBeHidden();
+});
+
 test('persisted details survive a full reload', async ({ page }) => {
   await openClaude(page, { fixture: 'persisted-details' });
   const details = page.locator('details[data-persist]').first();
@@ -134,12 +162,131 @@ test('table sort column and direction survive a full reload', async ({ page }) =
 test('chart metric selection survives a full reload', async ({ page }) => {
   await openCodex(page);
   await page.locator('#tab-month').click();
-  await page.locator('#month .chart-tab[data-metric="outputTokens"]').click();
-  await expect(page.locator('#month .chart-tab[data-metric="outputTokens"]')).toHaveClass(/active/);
+  const metric = page.locator(
+    '#month [data-codex-last30-daily] > .chart-tabs .chart-tab[data-metric="outputTokens"]',
+  );
+  await metric.click();
+  await expect(metric).toHaveClass(/active/);
 
   await page.reload();
 
-  await expect(page.locator('#month .chart-tab[data-metric="outputTokens"]')).toHaveClass(/active/);
+  await expect(page.locator(
+    '#month [data-codex-last30-daily] > .chart-tabs .chart-tab[data-metric="outputTokens"]',
+  )).toHaveClass(/active/);
+});
+
+test('materialized Codex hourly detail sends no host message and survives a full reload', async ({ page }) => {
+  await openCodex(page);
+  await page.locator('#tab-month').click();
+
+  const day = '2026-07-19';
+  const toggle = page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`);
+  const detail = page.locator(`#month [data-codex-hourly-detail-row][data-date="${day}"]`);
+  const postedBefore = await page.evaluate(() => window.__ccuPostedMessages.length);
+
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(detail).toBeVisible();
+  await expect(detail.locator('[data-codex-materialized-hours="true"]')).toBeVisible();
+  await expect(detail.locator('.daily-table tbody .date-cell').first()).toHaveText(/^\d{2}:00$/);
+  expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBefore);
+
+  await toggle.click();
+  await expect(detail).toBeHidden();
+  const chartBar = page.locator(`#month [data-codex-last30-daily] .hc-col[data-date="${day}"] .chart-bar`);
+  await expect(chartBar).toHaveClass(/clickable/);
+  await chartBar.click();
+  await expect(detail).toBeVisible();
+  expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBefore);
+  await expect.poll(() => page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+    return state.codexHourlyDetails?.['codex:month'];
+  })).toBe(day);
+
+  await page.reload();
+
+  await expect(page.locator('#tab-month')).toHaveClass(/active/);
+  await expect(page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`))
+    .toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator(`#month [data-codex-hourly-detail-row][data-date="${day}"]`)).toBeVisible();
+  expect(await page.evaluate(() => window.__ccuPostedMessages.filter(
+    (message) => message.command !== 'localDataClientReady',
+  ))).toEqual([]);
+});
+
+test('Claude daily chart drill-down survives a full webview reload', async ({ page }) => {
+  await openClaude(page);
+  await page.locator('#tab-month').click();
+
+  const day = '2026-07-19';
+  const chartBar = page.locator(
+    `#month #dailyChart .hc-col[data-date="${day}"] .chart-bar.clickable`,
+  );
+  const detail = page.locator(`#month .hourly-detail-row[data-date="${day}"]`);
+
+  await chartBar.click();
+  await expect(detail).toBeVisible();
+  await expect(chartBar).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+    return state.claudeDrilldownDetails?.['claude:month:hourly'];
+  })).toBe(day);
+
+  await page.reload({ waitUntil: 'load' });
+
+  await expect(page.locator('#tab-month')).toHaveClass(/active/);
+  await expect(page.locator(`#month .hourly-detail-row[data-date="${day}"]`)).toBeVisible();
+  await expect(page.locator(
+    `#month #dailyChart .hc-col[data-date="${day}"] .chart-bar.clickable`,
+  )).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
+    (message) => message.command === 'getHourlyData',
+  ))).toEqual({ command: 'getHourlyData', date: day });
+});
+
+test('Claude monthly chart drill-down survives a full webview reload', async ({ page }) => {
+  await openClaude(page);
+  await page.locator('#tab-all').click();
+
+  const month = '2026-07';
+  const chartBar = page.locator(
+    `#all #allTimeChart .hc-col[data-date="${month}"] .chart-bar.clickable`,
+  );
+  const detail = page.locator(`#all .monthly-detail-row[data-date="${month}"]`);
+
+  await chartBar.click();
+  await expect(detail).toBeVisible();
+  await expect(chartBar).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+    return state.claudeDrilldownDetails?.['claude:all:monthly'];
+  })).toBe(month);
+
+  await page.reload({ waitUntil: 'load' });
+
+  await expect(page.locator('#tab-all')).toHaveClass(/active/);
+  await expect(page.locator(`#all .monthly-detail-row[data-date="${month}"]`)).toBeVisible();
+  await expect(page.locator(
+    `#all #allTimeChart .hc-col[data-date="${month}"] .chart-bar.clickable`,
+  )).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
+    (message) => message.command === 'getDailyData',
+  ))).toEqual({ command: 'getDailyData', month });
+});
+
+test('a covered Codex date with no hourly token rows expands to an explicit empty state', async ({ page }) => {
+  await openCodex(page, { fixture: 'covered-day-without-hourly-rows' });
+  await page.locator('#tab-month').click();
+
+  const day = '2026-07-19';
+  const toggle = page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`);
+  const detail = page.locator(`#month [data-codex-hourly-detail-row][data-date="${day}"]`);
+  const postedBefore = await page.evaluate(() => window.__ccuPostedMessages.length);
+
+  await toggle.click();
+  await expect(detail).toBeVisible();
+  await expect(detail.locator('.no-chart-data')).toHaveText('No daily Codex usage is indexed yet.');
+  expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBefore);
 });
 
 test('page scroll position survives a full reload', async ({ page }) => {
@@ -158,4 +305,51 @@ test('page scroll position survives a full reload', async ({ page }) => {
   await page.reload();
 
   await expect.poll(() => page.evaluate(() => scrollY)).toBe(target);
+});
+
+test('continuous scrolling persists state once after the gesture instead of every frame', async ({ page }) => {
+  await openCodex(page, { height: 560 });
+  await page.locator('#tab-sessions').click();
+
+  const result = await page.evaluate(() => {
+    window.__ccuSetStateCalls = 0;
+    const maxY = document.documentElement.scrollHeight - innerHeight;
+    for (let step = 1; step <= 12; step += 1) {
+      scrollTo(0, Math.min(maxY, step * 40));
+      window.dispatchEvent(new Event('scroll'));
+    }
+    return { maxY, callsDuringGesture: window.__ccuSetStateCalls };
+  });
+
+  expect(result.maxY).toBeGreaterThan(0);
+  expect(result.callsDuringGesture).toBe(0);
+  await page.clock.runFor(200);
+  await expect.poll(() => page.evaluate(() => window.__ccuSetStateCalls)).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await expect.poll(() => page.evaluate(() => window.__ccuSetStateCalls)).toBe(1);
+});
+
+test('live Codex indexing progress patches text without replacing the page or moving it', async ({ page }) => {
+  await openCodex(page, { height: 560 });
+  await page.locator('#tab-sessions').click();
+  const target = await page.evaluate(() => {
+    const y = Math.min(320, document.documentElement.scrollHeight - innerHeight);
+    scrollTo(0, y);
+    const body = document.body;
+    body.dataset.progressPatchIdentity = 'preserved';
+    return y;
+  });
+  await expect.poll(() => page.evaluate(() => scrollY)).toBe(target);
+
+  const progressText = 'Indexed log entries: 1,700/1,827 (93%) · Indexed storage: 3kB/4kB';
+  await page.evaluate((text) => {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { command: 'codexIndexProgress', text },
+    }));
+  }, progressText);
+
+  await expect(page.locator('[data-codex-index-progress-text]').first()).toHaveText(progressText);
+  expect(await page.locator('[data-codex-index-progress-text]').count()).toBeGreaterThan(1);
+  await expect(page.locator('body')).toHaveAttribute('data-progress-patch-identity', 'preserved');
+  expect(await page.evaluate(() => scrollY)).toBe(target);
 });

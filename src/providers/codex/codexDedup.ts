@@ -37,11 +37,28 @@ function bucketSignature(
     .map(([key, tokens]) => [key, tokenSignature(tokens)]);
 }
 
+function structuralSignature(structural: {
+  patchCalls: number;
+  toolCalls: number;
+  postPatchToolCalls: number;
+  compactCount: number;
+  taskCompleteCount: number;
+}): StableNumber[] {
+  return [
+    stableNumber(structural.patchCalls),
+    stableNumber(structural.toolCalls),
+    stableNumber(structural.postPatchToolCalls),
+    stableNumber(structural.compactCount),
+    stableNumber(structural.taskCompleteCount),
+  ];
+}
+
 function contributionSignature(contribution: CodexFileContribution): string {
   const { aggregate } = contribution;
   const { session, structural } = aggregate;
   return JSON.stringify([
     tokenSignature(aggregate.total),
+    bucketSignature(aggregate.byDay),
     bucketSignature(aggregate.byModel),
     bucketSignature(aggregate.byEffort),
     session.parentSessionKey ?? null,
@@ -49,11 +66,7 @@ function contributionSignature(contribution: CodexFileContribution): string {
     session.role,
     stableNumber(session.startedAt),
     stableNumber(session.endedAt),
-    stableNumber(structural.patchCalls),
-    stableNumber(structural.toolCalls),
-    stableNumber(structural.postPatchToolCalls),
-    stableNumber(structural.compactCount),
-    stableNumber(structural.taskCompleteCount),
+    structuralSignature(structural),
   ]);
 }
 

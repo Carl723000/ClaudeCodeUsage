@@ -6,7 +6,8 @@ import * as path from 'node:path';
 
 import { scanUsageManifest } from '../claudeUsageFiles';
 import { ClaudeDataLoader } from '../dataLoader';
-import { ClaudeUsageRecord } from '../types';
+import { I18n } from '../i18n';
+import { ClaudeUsageRecord, ContentAnalysis } from '../types';
 
 const tempRoots: string[] = [];
 
@@ -40,11 +41,276 @@ test('getCurrentContextInfo reports a 1M window for Opus 5, with or without the 
   }
 });
 
+test('getCurrentContextInfo recognizes Fable 5.1 and GPT-6 Astra context windows', () => {
+  const fable = ClaudeDataLoader.getCurrentContextInfo([record('claude-fable-5-1')]);
+  assert.ok(fable, 'expected Fable 5.1 context info, got null');
+  assert.equal(fable!.windowTokens, 1_000_000);
+  assert.equal(fable!.estimated, false);
+
+  const astra = ClaudeDataLoader.getCurrentContextInfo([record('gpt-6-astra')]);
+  assert.ok(astra, 'expected GPT-6 Astra context info, got null');
+  assert.equal(astra!.windowTokens, 1_050_000);
+  assert.equal(astra!.estimated, false);
+});
+
 test('getCurrentContextInfo keeps the 200K window for pre-4.6 Opus and Sonnet', () => {
   for (const model of ['claude-opus-4-20250514', 'claude-sonnet-4-5-20250929', 'claude-3-5-sonnet-20241022']) {
     const info = ClaudeDataLoader.getCurrentContextInfo([record(model)]);
     assert.ok(info, `expected context info for ${model}, got null`);
     assert.equal(info!.windowTokens, 200_000, model);
+  }
+});
+
+test('day attribution uses the configured timezone instead of the host timezone', () => {
+  const previousTimeZone = I18n.getTimezone();
+  const fixedNow = new Date('2026-07-21T02:00:00.000Z');
+  const attributionRecord = (
+    timestamp: string,
+    inputTokens: number,
+    sessionId: string,
+  ): ClaudeUsageRecord => ({
+    timestamp,
+    _sessionId: sessionId,
+    message: {
+      model: 'claude-sonnet-4-5',
+      usage: { input_tokens: inputTokens, output_tokens: 10 },
+    },
+  });
+
+  try {
+    I18n.setTimezone('America/New_York');
+    const attribution = ClaudeDataLoader.getUsageAttribution(
+      [
+        attributionRecord('2026-07-20T03:30:00.000Z', 200, 'previous-day'),
+        attributionRecord('2026-07-21T01:00:00.000Z', 100, 'configured-today'),
+      ],
+      null,
+      { kind: 'day' },
+      fixedNow,
+    );
+
+    assert.equal(attribution.totalTokens, 110);
+    assert.deepEqual(attribution.models.map(({ key, count }) => ({ key, count })), [
+      { key: 'claude-sonnet-4-5', count: 1 },
+    ]);
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
+function assertRollingAttributionUsesCivilDays(
+  kind: 'week' | 'month',
+  cases: ReadonlyArray<{
+    timeZone: string;
+    now: string;
+    outside: string;
+    outsideDay: string;
+    inside: string;
+    insideDay: string;
+  }>,
+): void {
+  const previousTimeZone = I18n.getTimezone();
+  const attributionRecord = (
+    timestamp: string,
+    inputTokens: number,
+    sessionId: string,
+  ): ClaudeUsageRecord => ({
+    timestamp,
+    _sessionId: sessionId,
+    message: {
+      model: 'claude-sonnet-4-5',
+      usage: { input_tokens: inputTokens, output_tokens: 10 },
+    },
+  });
+
+  try {
+    for (const sample of cases) {
+      I18n.setTimezone(sample.timeZone);
+      const analysis: ContentAnalysis = {
+        categories: [],
+        toolResultBreakdown: [],
+        totalEstimatedTokens: 0,
+        recentPrompts: [],
+        thinkingBySession: {},
+        thinkingByDay: {},
+        skillUses: [
+          {
+            name: 'outside-skill',
+            sessionId: 'outside',
+            day: sample.outsideDay,
+            ts: Date.parse(sample.outside),
+            estTokens: 50,
+          },
+          {
+            name: 'inside-skill',
+            sessionId: 'inside',
+            day: sample.insideDay,
+            ts: Date.parse(sample.inside),
+            estTokens: 100,
+          },
+        ],
+      };
+      const attribution = ClaudeDataLoader.getUsageAttribution(
+        [
+          attributionRecord(sample.outside, 500, 'outside'),
+          attributionRecord(sample.inside, 1_000, 'inside'),
+        ],
+        analysis,
+        { kind },
+        new Date(sample.now),
+      );
+
+      assert.equal(attribution.totalTokens, 1_010, sample.timeZone);
+      assert.deepEqual(attribution.skills.map(({ key }) => key), ['inside-skill'], sample.timeZone);
+    }
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+}
+
+test('week attribution uses seven configured-zone civil days', () => {
+  assertRollingAttributionUsesCivilDays('week', [
+    {
+      timeZone: 'Asia/Tokyo',
+      now: '2026-07-21T23:30:00.000Z',
+      outside: '2026-07-15T05:00:00.000Z',
+      outsideDay: '2026-07-15',
+      inside: '2026-07-15T15:30:00.000Z',
+      insideDay: '2026-07-16',
+    },
+    {
+      timeZone: 'Pacific/Honolulu',
+      now: '2026-07-21T05:00:00.000Z',
+      outside: '2026-07-14T07:00:00.000Z',
+      outsideDay: '2026-07-13',
+      inside: '2026-07-14T12:00:00.000Z',
+      insideDay: '2026-07-14',
+    },
+  ]);
+});
+
+test('month attribution uses thirty configured-zone civil days', () => {
+  assertRollingAttributionUsesCivilDays('month', [
+    {
+      timeZone: 'Asia/Tokyo',
+      now: '2026-07-21T23:30:00.000Z',
+      outside: '2026-06-22T05:00:00.000Z',
+      outsideDay: '2026-06-22',
+      inside: '2026-06-22T15:30:00.000Z',
+      insideDay: '2026-06-23',
+    },
+    {
+      timeZone: 'Pacific/Honolulu',
+      now: '2026-07-21T05:00:00.000Z',
+      outside: '2026-06-21T07:00:00.000Z',
+      outsideDay: '2026-06-20',
+      inside: '2026-06-21T12:00:00.000Z',
+      insideDay: '2026-06-21',
+    },
+  ]);
+});
+
+test('rolling attribution rebuckets cached skill-use timestamps after a timezone change', () => {
+  const previousTimeZone = I18n.getTimezone();
+  const outside = '2026-07-15T05:00:00.000Z';
+  const inside = '2026-07-15T15:30:00.000Z';
+  const analysis: ContentAnalysis = {
+    categories: [],
+    toolResultBreakdown: [],
+    totalEstimatedTokens: 0,
+    recentPrompts: [],
+    thinkingBySession: {},
+    thinkingByDay: {},
+    skillUses: [
+      {
+        name: 'outside-skill',
+        sessionId: 'outside',
+        day: '2026-07-16',
+        ts: Date.parse(outside),
+        estTokens: 50,
+      },
+      {
+        name: 'inside-skill',
+        sessionId: 'inside',
+        day: '2026-07-15',
+        ts: Date.parse(inside),
+        estTokens: 100,
+      },
+    ],
+  };
+
+  try {
+    I18n.setTimezone('Asia/Tokyo');
+    const attribution = ClaudeDataLoader.getUsageAttribution(
+      [
+        {
+          timestamp: outside,
+          _sessionId: 'outside',
+          message: {
+            model: 'claude-sonnet-4-5',
+            usage: { input_tokens: 500, output_tokens: 10 },
+          },
+        },
+        {
+          timestamp: inside,
+          _sessionId: 'inside',
+          message: {
+            model: 'claude-sonnet-4-5',
+            usage: { input_tokens: 1_000, output_tokens: 10 },
+          },
+        },
+      ],
+      analysis,
+      { kind: 'week' },
+      new Date('2026-07-21T23:30:00.000Z'),
+    );
+
+    assert.equal(attribution.totalTokens, 1_010);
+    assert.deepEqual(attribution.skills.map(({ key }) => key), ['inside-skill']);
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
+test('share-card rolling ranges use configured-zone civil days', () => {
+  const previousTimeZone = I18n.getTimezone();
+  const fixedNow = new Date('2026-07-08T04:00:00.000Z');
+  const shareRecord = (
+    timestamp: string,
+    inputTokens: number,
+    id: string,
+  ): ClaudeUsageRecord => ({
+    timestamp,
+    requestId: `request-${id}`,
+    message: {
+      id: `message-${id}`,
+      model: 'claude-sonnet-4-5',
+      usage: { input_tokens: inputTokens, output_tokens: 0 },
+    },
+  });
+  const cases = [
+    { range: 'week', outside: '2026-07-01T06:00:00.000Z', inside: '2026-07-01T12:00:00.000Z' },
+    { range: 'last30', outside: '2026-06-08T06:00:00.000Z', inside: '2026-06-08T12:00:00.000Z' },
+    { range: 'year', outside: '2025-07-08T06:00:00.000Z', inside: '2025-07-08T12:00:00.000Z' },
+  ] as const;
+
+  try {
+    I18n.setTimezone('Pacific/Honolulu');
+    for (const { range, outside, inside } of cases) {
+      const input = ClaudeDataLoader.buildShareInput(
+        [
+          shareRecord(outside, 500, `${range}-outside`),
+          shareRecord(inside, 1_000, `${range}-inside`),
+        ],
+        range,
+        'all',
+        fixedNow,
+      );
+      assert.equal(input.rangeData.totalInputTokens, 1_000, range);
+      assert.deepEqual(input.dailyDates, [inside.slice(0, 10)], range);
+    }
+  } finally {
+    I18n.setTimezone(previousTimeZone);
   }
 });
 
@@ -216,5 +482,123 @@ test('request ID presence may degrade within one message without double-counting
   })) {
     const records = await loadDedupFixture({ [name]: fixtures });
     assert.equal(records.length, 1, name);
+  }
+});
+
+test('content analysis keeps framework injection out of user prompt samples and emits numeric-only overhead', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-loader-framework-'));
+  tempRoots.push(root);
+  const project = path.join(root, 'projects', '-tmp-project');
+  await mkdir(project, { recursive: true });
+  const timestamp = new Date().toISOString();
+  const lines = [
+    {
+      type: 'user',
+      uuid: 'user-1',
+      timestamp,
+      cwd: '/private/project-sentinel',
+      message: { role: 'user', content: 'Please fix the login bug carefully.' },
+    },
+    {
+      type: 'user',
+      uuid: 'user-web-component',
+      timestamp,
+      cwd: '/private/project-sentinel',
+      message: {
+        role: 'user',
+        content: '<my-component data-mode="safe">Please review this component.</my-component>',
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'meta-1',
+      timestamp,
+      isMeta: true,
+      message: { role: 'user', content: 'PRIVATE_META_FRAMEWORK_TEXT' },
+    },
+    {
+      type: 'user',
+      uuid: 'command-1',
+      timestamp,
+      message: { role: 'user', content: '<command-name>/review</command-name>' },
+    },
+    {
+      type: 'user',
+      uuid: 'reminder-1',
+      timestamp,
+      message: {
+        role: 'user',
+        content: [{
+          type: 'text',
+          text: 'User-looking prefix <system-reminder>PRIVATE_REMINDER</system-reminder>',
+        }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'compaction-1',
+      timestamp,
+      message: {
+        role: 'user',
+        content: 'This session is being continued from a previous conversation PRIVATE_COMPACTION_SENTINEL',
+      },
+    },
+    {
+      type: 'assistant',
+      uuid: 'assistant-1',
+      timestamp,
+      message: {
+        role: 'assistant',
+        model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 10, output_tokens: 2 },
+        content: [{ type: 'tool_use', id: 'tool-private-id', name: 'Skill', input: { skill: 'review' } }],
+      },
+    },
+    {
+      type: 'user',
+      uuid: 'tool-result-1',
+      timestamp,
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tool-private-id', content: 'PRIVATE_SKILL_PREAMBLE' }],
+      },
+    },
+  ];
+  const body = lines.map((line) => JSON.stringify(line)).join('\n') + '\n';
+  await writeFile(path.join(project, 'session.jsonl'), body);
+  const manifest = await scanUsageManifest([root]);
+
+  const loaded = await ClaudeDataLoader.loadUsageRecords(root, {
+    analyzeContent: true,
+    windowDays: 30,
+    manifest,
+  });
+  const analysis = loaded.contentAnalysis;
+  assert.ok(analysis);
+  assert.deepEqual(analysis!.recentPrompts.map((prompt) => prompt.text), [
+    'Please fix the login bug carefully.',
+    '<my-component data-mode="safe">Please review this component.</my-component>',
+  ]);
+  assert.ok((analysis!.frameworkOverhead?.frameworkEstimatedTokens ?? 0) > 0);
+  assert.ok(
+    (analysis!.frameworkOverhead?.observedInputEstimatedTokens ?? 0) >=
+      (analysis!.frameworkOverhead?.frameworkEstimatedTokens ?? 0),
+  );
+  assert.ok((analysis!.frameworkOverhead?.userAuthoredEstimatedTokens ?? 0) > 0);
+  assert.ok((analysis!.frameworkOverhead?.toolResultEstimatedTokens ?? 0) > 0);
+  assert.deepEqual(
+    analysis!.frameworkOverhead?.components.map((component) => component.kind),
+    ['command-echo', 'meta', 'skill-preamble', 'system-reminder', 'tool-result-envelope'],
+  );
+  const serialized = JSON.stringify(analysis!.frameworkOverhead);
+  for (const privateText of [
+    'PRIVATE_META_FRAMEWORK_TEXT',
+    'PRIVATE_REMINDER',
+    'PRIVATE_SKILL_PREAMBLE',
+    'PRIVATE_COMPACTION_SENTINEL',
+    '/private/project-sentinel',
+    'tool-private-id',
+  ]) {
+    assert.equal(serialized.includes(privateText), false);
   }
 });

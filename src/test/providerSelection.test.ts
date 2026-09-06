@@ -122,7 +122,14 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
     provider.currentProvider = 'codex';
     const codexHtml = provider.getMainContent();
     const codexClasses = renderedClasses(codexHtml);
-    const codexOnly = [...codexClasses].filter((className) => !claudeClasses.has(className)).sort();
+    // The weekly allowance disclosure is shared by both providers, but this
+    // compact Claude fixture has no quota observations and therefore does not
+    // render that optional surface. Keep the parity gate strict for every
+    // unconditional class while acknowledging this data-dependent shared one.
+    const conditionalShared = new Set(['weekly-value-details']);
+    const codexOnly = [...codexClasses]
+      .filter((className) => !claudeClasses.has(className) && !conditionalShared.has(className))
+      .sort();
 
     assert.deepEqual(codexOnly, []);
     const equivalentCostIndex = codexHtml.indexOf('API-equivalent cost');
@@ -208,6 +215,7 @@ test('Codex tab stays visible while its first index is still running', () => {
           totalFiles: 1_827,
           indexedBytes: 1_024,
           totalBytes: 4_096,
+          reason: 'first-index',
         },
       },
     );
@@ -217,9 +225,55 @@ test('Codex tab stays visible while its first index is still running', () => {
     assert.match(html, /id="provider-tab-codex"/);
     assert.doesNotMatch(html, /id="provider-tab-compare"/);
     assert.match(html, /Indexing is still in progress/);
+    assert.match(html, /First local history setup/);
     assert.match(html, /Indexed log entries[^<]*1,566\/1,827 \(86%\)/);
     assert.doesNotMatch(html, /1\.6K\/1\.8K/);
     assert.match(html, /Indexed storage[^<]*1kB\/4kB/i);
+  } finally {
+    I18n.setLanguage(originalLanguage);
+    (Module as any)._load = originalLoad;
+  }
+});
+
+test('Codex index progress patches live text without rebuilding the webview', () => {
+  const originalLoad = (Module as any)._load;
+  const originalLanguage = I18n.getCurrentLanguage();
+  I18n.setLanguage('en');
+  (Module as any)._load = function(request: string, parent: unknown, isMain: boolean) {
+    if (request === 'vscode') {
+      return { workspace: { workspaceFolders: [] } };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    const { UsageWebviewProvider } = require('../webview') as typeof import('../webview');
+    const provider = new UsageWebviewProvider({} as any) as any;
+    const messages: Array<Record<string, unknown>> = [];
+    let rebuilds = 0;
+    provider.panel = {
+      webview: {
+        postMessage: (message: Record<string, unknown>) => {
+          messages.push(message);
+          return Promise.resolve(true);
+        },
+      },
+    };
+    provider.currentProvider = 'codex';
+    provider.updateWebview = () => { rebuilds += 1; };
+
+    provider.updateCodexProgress({
+      scannedFiles: 1_566,
+      totalFiles: 1_827,
+      indexedBytes: 1_024,
+      totalBytes: 4_096,
+      reason: 'first-index',
+    });
+
+    assert.equal(rebuilds, 0);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].command, 'codexIndexProgress');
+    assert.match(String(messages[0].text), /Indexed log entries: 1,566\/1,827 \(86%\)/);
+    assert.match(String(messages[0].text), /Indexed storage: 1kB\/4kB/i);
   } finally {
     I18n.setLanguage(originalLanguage);
     (Module as any)._load = originalLoad;
@@ -353,7 +407,7 @@ test('provider and Codex view copy is complete in every UI locale', () => {
         if (typeof value === 'string') {
           assert.notEqual(value.trim(), '', `${language} has empty Codex copy`);
         } else {
-          assert.ok([5, 15, 16, 17, 18].includes(Object.keys(value).length));
+          assert.ok([5, 7, 15, 16, 17, 18].includes(Object.keys(value).length));
         }
       }
       assert.deepEqual(
@@ -424,7 +478,13 @@ test('provider and Codex view copy is complete in every UI locale', () => {
     assert.doesNotMatch(englishVisibleCopy, /\b(?:fresh|new)\b/i);
     const settingsSource = readFileSync(path.resolve(__dirname, '..', '..', 'src', 'settings.ts'), 'utf8');
     assert.match(settingsSource, /key: 'codex\.statusMetric'[\s\S]*?enumValues: \['fresh', 'processed', 'output'\][\s\S]*?enumLabels: \['Uncached', 'Processed', 'Output'\]/);
-    assert.match(settingsSource, /help: 'Uncached usage, processed tokens, or output tokens\.'/);
+    assert.match(settingsSource, /help: "Today's uncached usage, processed tokens, or output tokens\."/);
+    const extensionSource = readFileSync(path.resolve(__dirname, '..', '..', 'src', 'extension.ts'), 'utf8');
+    assert.match(
+      extensionSource,
+      /statusBar\.updateCodex\(\s*this\.codexView\.today,\s*config\.codexStatusMetric,/,
+      'Codex status must use the configured-zone Today scope, not the recent task scope',
+    );
   } finally {
     I18n.setLanguage(previous);
   }

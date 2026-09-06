@@ -112,7 +112,8 @@ export async function runCodexWorkerRefresh(
       const metadataMs = now() - metadataStarted;
       const parseStarted = now();
       const foreground = request.profile === 'foreground';
-      const expeditedBackfill = needsExpeditedBackfill(
+      const allowHistoricalBackfill = request.allowHistoricalBackfill !== false;
+      const expeditedBackfill = allowHistoricalBackfill && needsExpeditedBackfill(
         previous,
         manifest.files.length,
       );
@@ -149,6 +150,7 @@ export async function runCodexWorkerRefresh(
               requestId: request.requestId,
               progress,
             }),
+          allowHistoricalBackfill,
           ...(filePassPool ? { filePassBatch: filePassPool.run } : {}),
         });
       } finally {

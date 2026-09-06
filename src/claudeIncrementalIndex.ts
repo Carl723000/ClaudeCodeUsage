@@ -16,7 +16,13 @@ import {
   newAnalysisAcc,
   validateUsageRecord,
 } from './dataLoader';
-import { dayKeyInZone, monthKeyInZone } from './dateKeys';
+import {
+  dayKeyInZone,
+  formatHourLabel,
+  monthKeyInZone,
+  resolveTimeZone,
+  rollingDayKeys,
+} from './dateKeys';
 import { I18n } from './i18n';
 import { isRetryDuplicatePrompt } from './promptDedup';
 import {
@@ -101,7 +107,14 @@ interface CopyOnWriteKeys {
   visibleLocalDays: Set<string>;
 }
 
+interface ConfiguredTimeKeyers {
+  formatter: Intl.DateTimeFormat;
+  hourWindowStartDay: string;
+}
+
 export interface ClaudeUsageIndex {
+  /** Canonical configured zone used by every materialized calendar bucket. */
+  timeZone: string;
   files: Map<string, ClaudeUsageFileContribution>;
   manifest: UsageManifest | null;
   candidatesByMessage: Map<string, Map<string, IndexedRecord>>;
@@ -129,6 +142,8 @@ export interface ClaudeUsageIndex {
   analyzeContent: boolean;
   windowDays: number;
   analysisCutoffMs: number;
+  /** Transient formatter/cache state; never persisted with the index. */
+  timeKeyers: ConfiguredTimeKeyers;
 }
 
 export interface ClaudeUsageIndexDiagnostics extends LoadUsageDiagnostics {
@@ -159,8 +174,13 @@ export interface ClaudeUsageIndexUpdateResult {
 
 export interface ClaudeUsageAggregateSnapshot {
   today: UsageData;
+  /** Rolling 30 local calendar days, including the snapshot day. This is kept
+   * separate from `month` because the status bar's monthly-cost metric is a
+   * true calendar-month total while the dashboard range is rolling. */
+  last30Days: UsageData;
   month: UsageData;
   allTime: UsageData;
+  dailyForLast30Days: { date: string; data: UsageData }[];
   dailyForMonth: { date: string; data: UsageData }[];
   monthlyForAllTime: { date: string; data: UsageData }[];
   hourlyForToday: { hour: string; data: UsageData }[];
@@ -175,6 +195,14 @@ export interface ClaudeUsageDashboardSnapshot extends ClaudeUsageAggregateSnapsh
   workflows: WorkflowUsage[];
   costliestMessages: CostlyMessage[];
   context: ContextWindowInfo | null;
+  /** Present only for the default-off advice capability; built from materialized aggregates. */
+  adviceWindow?: {
+    windowDays: number;
+    aggregate: UsageData;
+    totalSessions: number;
+    longSessionCount: number;
+    largeContextSessionCount: number;
+  };
 }
 
 interface FilePlan {
@@ -239,8 +267,25 @@ function emptyCopyOnWriteKeys(): CopyOnWriteKeys {
   };
 }
 
-export function createClaudeUsageIndex(): ClaudeUsageIndex {
+function createConfiguredTimeKeyers(timeZone: string, now = Date.now()): ConfiguredTimeKeyers {
+  const resolved = resolveTimeZone(timeZone);
   return {
+    formatter: new Intl.DateTimeFormat('en-CA', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hourCycle: 'h23',
+      timeZone: resolved,
+    }),
+    hourWindowStartDay: rollingDayKeys(now, resolved, 30)[0] ?? '',
+  };
+}
+
+export function createClaudeUsageIndex(): ClaudeUsageIndex {
+  const timeZone = resolveTimeZone(I18n.getTimezone());
+  return {
+    timeZone,
     files: new Map(),
     manifest: null,
     candidatesByMessage: new Map(),
@@ -268,6 +313,7 @@ export function createClaudeUsageIndex(): ClaudeUsageIndex {
     analyzeContent: false,
     windowDays: 30,
     analysisCutoffMs: 0,
+    timeKeyers: createConfiguredTimeKeyers(timeZone),
   };
 }
 
@@ -381,6 +427,12 @@ function cloneAnalysisAcc(value: AnalysisAcc): AnalysisAcc {
     ),
     skillUses: value.skillUses.map((use) => ({ ...use })),
     skillByToolId: { ...value.skillByToolId },
+    frameworkOverhead: Object.fromEntries(
+      Object.entries(value.frameworkOverhead).map(([key, bucket]) => [key, { ...bucket }]),
+    ),
+    observedInputEstimatedTokens: value.observedInputEstimatedTokens,
+    userAuthoredEstimatedTokens: value.userAuthoredEstimatedTokens,
+    toolResultEstimatedTokens: value.toolResultEstimatedTokens,
   };
 }
 
@@ -604,9 +656,17 @@ function cloneUsageData(value: UsageData): UsageData {
   };
 }
 
-function localDayKey(date: Date): string {
-  if (Number.isNaN(date.getTime())) return '';
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+function configuredTimeKeys(
+  index: ClaudeUsageIndex,
+  date: Date,
+): { day: string; month: string; hour: string } {
+  if (isNaN(date.getTime())) return { day: '', month: '', hour: '' };
+  const parts = index.timeKeyers.formatter.formatToParts(date);
+  const get = (type: string): string => parts.find((part) => part.type === type)?.value ?? '';
+  const day = `${get('year')}-${get('month')}-${get('day')}`;
+  const month = day.slice(0, 7);
+  const hour = formatHourLabel(get('hour'));
+  return { day, month, hour };
 }
 
 function addUsageData(target: UsageData, source: UsageData, sign: 1 | -1): void {
@@ -663,29 +723,38 @@ function applyBucket(
   else buckets.set(key, value);
 }
 
+function applyConfiguredTimeAggregate(
+  index: ClaudeUsageIndex,
+  record: ClaudeUsageRecord,
+  contribution: UsageData,
+  sign: 1 | -1,
+): void {
+  const date = new Date(record.timestamp);
+  const { day, month, hour } = configuredTimeKeys(index, date);
+  const dayHour = day && hour
+    ? `${day}\0${hour}`
+    : '';
+  applyBucket(index.aggregates.byDay, day, contribution, sign);
+  applyBucket(index.aggregates.byMonth, month, contribution, sign);
+  applyBucket(index.aggregates.byLocalDay, day, contribution, sign);
+  if (day >= index.timeKeyers.hourWindowStartDay) {
+    applyBucket(index.aggregates.byLocalHour, dayHour, contribution, sign);
+  }
+}
+
 function applyAggregate(index: ClaudeUsageIndex, record: ClaudeUsageRecord, sign: 1 | -1): void {
   const contribution = ClaudeDataLoader.calculateUsageData([record]);
   addUsageData(index.aggregates.allTime, contribution, sign);
-  const date = new Date(record.timestamp);
-  const day = dayKeyInZone(date, I18n.getTimezone());
-  const month = monthKeyInZone(date, I18n.getTimezone());
-  const localDay = localDayKey(date);
-  const localHour = localDay
-    ? `${localDay}\0${String(date.getHours()).padStart(2, '0')}:00`
-    : '';
+  applyConfiguredTimeAggregate(index, record, contribution, sign);
   const project = record._projectPath || record._projectName || 'unknown';
   const branch = record._gitBranch && record._gitBranch.trim() ? record._gitBranch : '-';
-  applyBucket(index.aggregates.byDay, day, contribution, sign);
-  applyBucket(index.aggregates.byMonth, month, contribution, sign);
-  applyBucket(index.aggregates.byLocalDay, localDay, contribution, sign);
-  applyBucket(index.aggregates.byLocalHour, localHour, contribution, sign);
   applyBucket(index.aggregates.bySession, record._sessionId || 'unknown', contribution, sign);
   applyBucket(index.aggregates.byProject, project.toLowerCase(), contribution, sign);
   applyBucket(index.aggregates.byBranch, `${record._projectName || 'unknown'}\0${branch}`, contribution, sign);
   applyBucket(index.aggregates.byWorkflow, record._workflowId, contribution, sign);
 }
 
-function membershipKeys(record: ClaudeUsageRecord): {
+function membershipKeys(index: ClaudeUsageIndex, record: ClaudeUsageRecord): {
   session: string;
   project: string;
   branch: string;
@@ -698,7 +767,13 @@ function membershipKeys(record: ClaudeUsageRecord): {
   const branchName = record._gitBranch && record._gitBranch.trim() ? record._gitBranch : '-';
   const branch = `${record._projectName || 'unknown'}\0${branchName}`;
   const workflow = record._workflowId || (record._agentId ? `adhoc:${session}` : undefined);
-  return { session, project, branch, workflow, localDay: localDayKey(new Date(record.timestamp)) };
+  return {
+    session,
+    project,
+    branch,
+    workflow,
+    localDay: dayKeyInZone(new Date(record.timestamp), index.timeZone),
+  };
 }
 
 function writableSet(
@@ -743,7 +818,7 @@ function removeMembership(
 }
 
 function markDirty(index: ClaudeUsageIndex, record: ClaudeUsageRecord): void {
-  const keys = membershipKeys(record);
+  const keys = membershipKeys(index, record);
   index.dirtyGroups.sessions.add(keys.session);
   index.dirtyGroups.projects.add(keys.project);
   index.dirtyGroups.branches.add(keys.branch);
@@ -751,7 +826,7 @@ function markDirty(index: ClaudeUsageIndex, record: ClaudeUsageRecord): void {
 }
 
 function addVisibleMembership(index: ClaudeUsageIndex, visibleKey: string, record: ClaudeUsageRecord): void {
-  const keys = membershipKeys(record);
+  const keys = membershipKeys(index, record);
   addMembership(index.visibleKeysBySession, keys.session, visibleKey, index.copyOnWrite.visibleSessions);
   addMembership(index.visibleKeysByProject, keys.project, visibleKey, index.copyOnWrite.visibleProjects);
   addMembership(index.visibleKeysByBranch, keys.branch, visibleKey, index.copyOnWrite.visibleBranches);
@@ -761,7 +836,7 @@ function addVisibleMembership(index: ClaudeUsageIndex, visibleKey: string, recor
 }
 
 function removeVisibleMembership(index: ClaudeUsageIndex, visibleKey: string, record: ClaudeUsageRecord): void {
-  const keys = membershipKeys(record);
+  const keys = membershipKeys(index, record);
   removeMembership(index.visibleKeysBySession, keys.session, visibleKey, index.copyOnWrite.visibleSessions);
   removeMembership(index.visibleKeysByProject, keys.project, visibleKey, index.copyOnWrite.visibleProjects);
   removeMembership(index.visibleKeysByBranch, keys.branch, visibleKey, index.copyOnWrite.visibleBranches);
@@ -789,6 +864,26 @@ function setVisible(
     index.visibleRecords.delete(visibleKey);
   }
   return 1;
+}
+
+/** Rebucket already-materialized records after an explicit timezone change. */
+function rebuildConfiguredTimeAggregates(index: ClaudeUsageIndex): void {
+  index.aggregates.byDay = new Map();
+  index.aggregates.byMonth = new Map();
+  index.aggregates.byLocalDay = new Map();
+  index.aggregates.byLocalHour = new Map();
+  index.visibleKeysByLocalDay = new Map();
+  index.copyOnWrite.visibleLocalDays = new Set();
+  for (const [visibleKey, record] of index.visibleRecords) {
+    const contribution = ClaudeDataLoader.calculateUsageData([record]);
+    applyConfiguredTimeAggregate(index, record, contribution, 1);
+    addMembership(
+      index.visibleKeysByLocalDay,
+      dayKeyInZone(new Date(record.timestamp), index.timeZone),
+      visibleKey,
+      index.copyOnWrite.visibleLocalDays,
+    );
+  }
 }
 
 function candidateMessageId(value: IndexedRecord): string | null {
@@ -990,6 +1085,14 @@ function cloneIndexForCommit(previous: ClaudeUsageIndex): ClaudeUsageIndex {
   };
 }
 
+function pruneHourlyBuckets(index: ClaudeUsageIndex): void {
+  const cutoff = index.timeKeyers.hourWindowStartDay;
+  if (!cutoff) return;
+  for (const key of index.aggregates.byLocalHour.keys()) {
+    if (key.slice(0, 10) < cutoff) index.aggregates.byLocalHour.delete(key);
+  }
+}
+
 function recordsOf(index: ClaudeUsageIndex): ClaudeUsageRecord[] {
   return [...index.visibleRecords.values()];
 }
@@ -1183,23 +1286,48 @@ export function claudeUsageAggregateSnapshot(
   index: ClaudeUsageIndex,
   now: Date = new Date(),
 ): ClaudeUsageAggregateSnapshot {
-  const localToday = localDayKey(now);
-  const configuredMonth = monthKeyInZone(now, I18n.getTimezone());
-  const dailyForMonth = [...index.aggregates.byDay.entries()]
+  const localToday = dayKeyInZone(now, index.timeZone);
+  const configuredMonth = monthKeyInZone(now, index.timeZone);
+  const last30DayKeys = rollingDayKeys(now.getTime(), index.timeZone, 30);
+  const last30Days = emptyUsageData();
+  const dailyForLast30Days = last30DayKeys.flatMap((date) => {
+    const data = index.aggregates.byLocalDay.get(date);
+    if (!data) return [];
+    addUsageData(last30Days, data, 1);
+    return [{ date, data: cloneUsageData(data) }];
+  }).sort((left, right) => right.date.localeCompare(left.date));
+  const dailyForMonth = [...index.aggregates.byLocalDay.entries()]
     .filter(([day]) => day.startsWith(configuredMonth))
     .map(([date, data]) => ({ date, data: cloneUsageData(data) }))
     .sort((left, right) => right.date.localeCompare(left.date));
   const monthlyForAllTime = [...index.aggregates.byMonth.entries()]
     .map(([month, data]) => ({ date: `${month}-01`, data: cloneUsageData(data) }))
     .sort((left, right) => right.date.localeCompare(left.date));
-  const hourlyForToday = [...index.aggregates.byLocalHour.entries()]
+  let hourlyForToday = [...index.aggregates.byLocalHour.entries()]
     .filter(([key]) => key.startsWith(`${localToday}\0`))
     .map(([key, data]) => ({ hour: key.slice(localToday.length + 1), data: cloneUsageData(data) }))
     .sort((left, right) => left.hour.localeCompare(right.hour));
+  // Historical callers may ask for a deterministic snapshot date (tests,
+  // replay, or an already-rendered day). If that day is outside the rolling
+  // materialized hour window, derive its hours from the in-memory visible
+  // records only; never reopen JSONL.
+  if (hourlyForToday.length === 0 && index.aggregates.byLocalDay.has(localToday)) {
+    const fallback = new Map<string, UsageData>();
+    for (const record of index.visibleRecords.values()) {
+      const keys = configuredTimeKeys(index, new Date(record.timestamp));
+      if (keys.day !== localToday || !keys.hour) continue;
+      applyBucket(fallback, keys.hour, ClaudeDataLoader.calculateUsageData([record]), 1);
+    }
+    hourlyForToday = [...fallback.entries()]
+      .map(([hour, data]) => ({ hour, data }))
+      .sort((left, right) => left.hour.localeCompare(right.hour));
+  }
   return {
     today: cloneUsageData(index.aggregates.byLocalDay.get(localToday) ?? emptyUsageData()),
+    last30Days,
     month: cloneUsageData(index.aggregates.byMonth.get(configuredMonth) ?? emptyUsageData()),
     allTime: cloneUsageData(index.aggregates.allTime),
+    dailyForLast30Days,
     dailyForMonth,
     monthlyForAllTime,
     hourlyForToday,
@@ -1212,6 +1340,7 @@ export function claudeUsageDashboardSnapshot(
     workspacePath?: string;
     projectGroupingMode?: 'git' | 'folder' | 'flat';
     contextWindowOverride?: number;
+    adviceWindowDays?: number;
     now?: Date;
   } = {},
 ): ClaudeUsageDashboardSnapshot {
@@ -1236,7 +1365,7 @@ export function claudeUsageDashboardSnapshot(
   if (options.workspacePath) {
     const todayRecords = recordsForKeys(
       index,
-      index.visibleKeysByLocalDay.get(localDayKey(now)),
+      index.visibleKeysByLocalDay.get(dayKeyInZone(now, index.timeZone)),
     ).filter((record) => recordMatchesWorkspace(record, options.workspacePath!));
     workspaceToday = ClaudeDataLoader.calculateUsageData(todayRecords);
   }
@@ -1265,6 +1394,30 @@ export function claudeUsageDashboardSnapshot(
     .flat()
     .sort((left, right) => right.cost - left.cost)
     .slice(0, 10);
+  let adviceWindow: ClaudeUsageDashboardSnapshot['adviceWindow'];
+  if (options.adviceWindowDays !== undefined) {
+    const windowDays = Math.min(365, Math.max(1, Math.round(options.adviceWindowDays)));
+    const dayKeys = new Set(rollingDayKeys(now.getTime(), index.timeZone, windowDays));
+    const aggregate = emptyUsageData();
+    for (const day of dayKeys) {
+      const value = index.aggregates.byLocalDay.get(day);
+      if (value) addUsageData(aggregate, value, 1);
+    }
+    const windowSessions = [...index.sessionRows.values()].filter((row) =>
+      dayKeys.has(dayKeyInZone(row.endTime, index.timeZone)),
+    );
+    adviceWindow = {
+      windowDays,
+      aggregate,
+      totalSessions: windowSessions.length,
+      longSessionCount: windowSessions.filter(
+        (row) => row.endTime.getTime() - row.startTime.getTime() >= 8 * 60 * 60 * 1000,
+      ).length,
+      largeContextSessionCount: windowSessions.filter(
+        (row) => row.peakContextTokens >= 150_000,
+      ).length,
+    };
+  }
   return {
     ...aggregates,
     session,
@@ -1279,6 +1432,7 @@ export function claudeUsageDashboardSnapshot(
       .slice(0, 50),
     costliestMessages,
     context,
+    ...(adviceWindow ? { adviceWindow } : {}),
   };
 }
 
@@ -1288,6 +1442,9 @@ export async function updateClaudeUsageIndex(
   options: ClaudeUsageIndexUpdateOptions = {},
 ): Promise<ClaudeUsageIndexUpdateResult> {
   const started = performance.now();
+  const configuredTimeZone = resolveTimeZone(I18n.getTimezone());
+  const timeKeyers = createConfiguredTimeKeyers(configuredTimeZone);
+  const timeZoneChanged = previous.timeZone !== configuredTimeZone;
   const analyzeContent = options.analyzeContent !== false;
   const windowDays = Math.min(365, Math.max(1, Math.round(options.windowDays ?? 30)));
   const analysisCutoffMs = analyzeContent && previous.analyzeContent &&
@@ -1425,6 +1582,12 @@ export async function updateClaudeUsageIndex(
   }
 
   const next = cloneIndexForCommit(previous);
+  next.timeZone = configuredTimeZone;
+  next.timeKeyers = timeKeyers;
+  pruneHourlyBuckets(next);
+  if (timeZoneChanged) {
+    rebuildConfiguredTimeAggregates(next);
+  }
   next.manifest = manifest;
   next.analyzeContent = analyzeContent;
   next.windowDays = windowDays;
@@ -1432,7 +1595,7 @@ export async function updateClaudeUsageIndex(
   const affectedMessages = new Set<string>();
   const affectedDirect = new Set<string>();
   const affectedSessions = new Set<string>();
-  let aggregateMutations = 0;
+  let aggregateMutations = timeZoneChanged ? next.visibleRecords.size : 0;
   const removeFile = (file: ClaudeUsageFileContribution): void => {
     next.files.delete(file.fileId);
     affectedSessions.add(ClaudeDataLoader.parseSessionInfo(file.path).sessionId);

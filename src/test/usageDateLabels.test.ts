@@ -14,6 +14,7 @@ test('the first day of a month remains a daily label outside monthly views', () 
 test('monthly views explicitly render month labels', () => {
   assert.equal(shortUsageDate('2026-07-01', true), '2026/07');
   assert.equal(formatUsageDate('2026-07-01', 'en-US', {}, true), 'July 2026');
+  assert.equal(formatUsageDate('2026-07', 'en-US', {}, true), 'July 2026');
 });
 
 test('date keys are rendered verbatim instead of shifting in behind-UTC zones', () => {

@@ -67,6 +67,9 @@ export class CodexFilePassPool {
   private workers: WorkerSlot[] = [];
   private active: ActiveBatch | null = null;
   private disposed = false;
+  private readonly pendingTerminations = new Set<Promise<void>>();
+  private terminationFailure: unknown = null;
+  private disposal: Promise<void> | null = null;
 
   readonly run: CodexFilePassBatchRunner = async (
     tasks,
@@ -121,19 +124,19 @@ export class CodexFilePassPool {
     this.workerFactory = workerFactory;
   }
 
-  async dispose(): Promise<void> {
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
     this.disposed = true;
-    if (this.active) {
-      this.failActive(new CodexIndexCancelledError());
-    }
-    const workers = this.workers.splice(0);
-    await Promise.all(workers.map(async ({ worker }) => {
-      try {
-        await worker.terminate();
-      } catch {
-        // Best-effort local worker cleanup.
+    this.disposal = (async () => {
+      if (this.active) {
+        this.failActive(new CodexIndexCancelledError());
       }
-    }));
+      const workers = this.workers.splice(0);
+      for (const { worker } of workers) this.trackTermination(worker);
+      await Promise.all([...this.pendingTerminations]);
+      if (this.terminationFailure) throw this.terminationFailure;
+    })();
+    return this.disposal;
   }
 
   private ensureWorkers(count: number): void {
@@ -249,8 +252,25 @@ export class CodexFilePassPool {
     this.active = null;
     const workers = this.workers.splice(0);
     for (const { worker } of workers) {
-      void worker.terminate();
+      this.trackTermination(worker);
     }
     active.reject(error);
+  }
+
+  private trackTermination(worker: CodexFilePassWorkerLike): void {
+    let pending!: Promise<void>;
+    pending = Promise.resolve()
+      .then(() => worker.terminate())
+      .then(() => undefined)
+      .catch((error: unknown) => {
+        this.terminationFailure ??= error;
+        throw error;
+      })
+      .finally(() => this.pendingTerminations.delete(pending));
+    this.pendingTerminations.add(pending);
+    // Disposal consumes and propagates this failure. Attach a side handler now
+    // so a fast rejection cannot become unhandled before the pool reaches its
+    // finally/dispose path.
+    void pending.catch(() => undefined);
   }
 }

@@ -6,12 +6,14 @@ export const test = base.extend({
   page: async ({ page }, use) => {
     await page.addInitScript(() => {
       window.__ccuPostedMessages = [];
+      window.__ccuSetStateCalls = 0;
       window.acquireVsCodeApi = () => ({
         getState: () => {
           const raw = localStorage.getItem('__ccu-vscode-state');
           return raw ? JSON.parse(raw) : undefined;
         },
         setState: (value) => {
+          window.__ccuSetStateCalls += 1;
           localStorage.setItem('__ccu-vscode-state', JSON.stringify(value));
         },
         postMessage: (value) => {
@@ -29,11 +31,11 @@ export { expect };
 
 export async function openCodex(
   page,
-  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, width = 1280, height = 900 } = {},
+  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, shareStudio = true, width = 1280, height = 900 } = {},
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `${uiBaseUrl}/?provider=codex&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}`,
+    `${uiBaseUrl}/?provider=codex&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}&shareStudio=${shareStudio}`,
     { waitUntil: 'load' },
   );
   await page.locator('.tab-content.active').waitFor();
@@ -42,11 +44,11 @@ export async function openCodex(
 
 export async function openClaude(
   page,
-  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, width = 1280, height = 900 } = {},
+  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, shareStudio = true, timeZone = 'Asia/Hong_Kong', width = 1280, height = 900 } = {},
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `${uiBaseUrl}/?provider=claude&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}`,
+    `${uiBaseUrl}/?provider=claude&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}&shareStudio=${shareStudio}&timeZone=${encodeURIComponent(timeZone)}`,
     { waitUntil: 'load' },
   );
   await page.locator('.tab-content.active').waitFor();
@@ -54,11 +56,11 @@ export async function openClaude(
 
 export async function openCompare(
   page,
-  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, width = 1280, height = 900 } = {},
+  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, shareStudio = true, width = 1280, height = 900 } = {},
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `${uiBaseUrl}/?provider=compare&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}`,
+    `${uiBaseUrl}/?provider=compare&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}&shareStudio=${shareStudio}`,
     { waitUntil: 'load' },
   );
   await page.locator('#provider-panel').waitFor();

@@ -73,6 +73,26 @@ test('VSIX policy rejects internal Superpowers review material', () => {
   );
 });
 
+test('VSIX policy rejects dormant v2.3.1 preparation seams and review documents', () => {
+  for (const entry of [
+    'extension/out/adviceEffectiveness/evidencePreparation.js',
+    'extension/out/adviceEffectiveness/feedback.js',
+    'extension/out/adviceEffectiveness/legacyBridge.js',
+    'extension/out/adviceEffectiveness/legacyPersonalization.js',
+    'extension/out/adviceEffectiveness/modelExperiment.js',
+    'extension/out/adviceDemoSample.js',
+    'extension/out/adviceSummary.js',
+    'extension/AI-ADVICE-INTEGRATION-V2.3.1.md',
+    'extension/V2.3.1-CANDIDATE-CONTRACT.zh-CN.md',
+  ]) {
+    assert.throws(
+      () => assertSafeVsixEntries([...minimalEntries, entry]),
+      /forbidden VSIX entry/,
+      entry,
+    );
+  }
+});
+
 test('VSIX policy rejects unsafe or non-canonical archive paths', () => {
   for (const entry of [
     '/extension/out/extra.js',

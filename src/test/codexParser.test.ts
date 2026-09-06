@@ -685,6 +685,86 @@ test('counter regression keeps exact last usage and marks it partial', () => {
   assert.equal(result.events[0].confidence, 'partial');
 });
 
+test('cumulative deltas preserve cached-input and reasoning subset invariants', () => {
+  let state = createCodexParserState('root-file');
+  state = parseCodexLine(
+    tokenSnapshot({
+      second: 1,
+      total: { input: 100, cached: 0, output: 100, reasoning: 0 },
+    }),
+    state,
+  ).state;
+  const result = parseCodexLine(
+    tokenSnapshot({
+      second: 2,
+      total: { input: 101, cached: 100, output: 101, reasoning: 100 },
+    }),
+    state,
+  );
+
+  assert.equal(result.events.length, 1);
+  assert.deepEqual(result.events[0].tokens, {
+    inputTotal: 1,
+    cachedInput: 1,
+    outputTotal: 1,
+    reasoningOutput: 1,
+    sourceTotal: 2,
+  });
+  assert.ok(result.events[0].qualityFlags.includes('component-delta-clamped'));
+  assert.equal(result.events[0].confidence, 'partial');
+});
+
+test('actual reasoning-effort schema variants normalize without model inference', () => {
+  let state = createCodexParserState('root-file');
+  state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:00.000Z',
+      type: 'turn_context',
+      payload: {
+        model: 'gpt-5.6-sol',
+        collaboration_mode: { settings: { reasoning_effort: 'ULTRA' } },
+      },
+    }),
+    state,
+  ).state;
+  assert.equal(state.effort, 'ultra');
+
+  state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:01.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'thread_settings_applied',
+        thread_settings: {
+          reasoning_effort: 'low',
+          collaboration_mode: { settings: { reasoning_effort: 'low' } },
+        },
+      },
+    }),
+    state,
+  ).state;
+  assert.equal(state.effort, 'low');
+
+  state = parseCodexLine(
+    JSON.stringify({
+      timestamp: '2026-07-20T00:00:02.000Z',
+      type: 'event_msg',
+      payload: {
+        type: 'thread_settings_applied',
+        thread_settings: { reasoning_effort: 'turbo' },
+      },
+    }),
+    state,
+  ).state;
+  assert.equal(state.effort, undefined);
+
+  const usage = parseCodexLine(
+    tokenLine({ inputTotal: 10, inputLast: 10 }),
+    state,
+  );
+  assert.equal(usage.events[0].effort, undefined);
+});
+
 test('session metadata is pseudonymized and auto-review stays distinct', () => {
   const pseudonyms: Record<string, string> = {
     'raw-session': 'session:001',

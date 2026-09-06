@@ -40,9 +40,21 @@ test('every locale implements complete non-English Codex product copy', () => {
       I18n.setLanguage(language);
       const copy = I18n.t.providers.codex;
       assert.deepEqual(Object.keys(copy).sort(), Object.keys(CODEX_COPY_EN).sort(), language);
+      assert.deepEqual(
+        Object.keys(copy.indexingReasons).sort(),
+        Object.keys(CODEX_COPY_EN.indexingReasons).sort(),
+        `${language}.indexingReasons`,
+      );
       if (language !== 'en') {
         for (const key of userFacingKeys) {
           assert.notEqual(copy[key], CODEX_COPY_EN[key], `${language}.${key} fell back to English`);
+        }
+        for (const reason of Object.keys(CODEX_COPY_EN.indexingReasons) as Array<keyof typeof CODEX_COPY_EN.indexingReasons>) {
+          assert.notEqual(
+            copy.indexingReasons[reason],
+            CODEX_COPY_EN.indexingReasons[reason],
+            `${language}.indexingReasons.${reason} fell back to English`,
+          );
         }
       }
     }
