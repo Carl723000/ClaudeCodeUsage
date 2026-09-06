@@ -62,6 +62,10 @@ These four v2.3.1 captures use the production renderer, synthetic fixtures, and 
   Fable 5 data. GPT-6 API-equivalent values use the official Standard
   short-context rates; the request-wide surcharge above 272K input is excluded
   because aggregate local logs cannot establish that per-request threshold.
+- Claude estimates can optionally use direct Anthropic or AWS Bedrock in-region
+  on-demand rates for current Opus, Sonnet, and Haiku families. Switching the
+  backend reprices unchanged logs immediately; Sonnet 5 uses the standard rate
+  after its launch promotion ended on 31 August 2026.
 - Last 30 days is the configured-timezone current date plus the preceding 29 dates. Today ≤ Last 30 days ≤ All time, repeated refresh/reindex is stable, all breakdowns reconcile, and months run oldest-first. Claude's Workflows summary uses the same rolling range and assigns each run by its configured-zone start date. Chart metric switches and drill-down labels render daily/monthly usage keys without host-timezone rollback; Advice and Optimizer snooze dates also use the configured timezone and UI locale.
 - Structured reasoning-effort variants normalize without model-name guessing. Non-zero unknown is explained; zero unknown is hidden.
 - Bounded anonymous quota observations preserve irregular and same-day resets. Every valid same-window used fraction contributes to labelled total and unused subscription-durability estimates, including the current window. Approximate or unattributed evidence is low confidence. If local Codex quota series overlap, the current window uses the latest real observation for a low-confidence blended estimate; ambiguous completed windows remain used-only. Unused value never becomes negative.
@@ -73,7 +77,7 @@ These four v2.3.1 captures use the production renderer, synthetic fixtures, and 
 - Claude and Codex now share dashboard density, hierarchy, disclosure, focus, ARIA, narrow-width, and light/dark design tokens while retaining provider-specific metric meanings.
 - Get AI Advice and Usage Optimizer share one exact-preview and explicit-send boundary. There is no default or background AI request, and local evidence/feedback remains bounded.
 
-Package metadata is `2.3.1`; Marketplace publication remains a separate human-controlled release step.
+The reviewed draft is `v2.3.1`; the human-controlled publish workflow stamps package metadata from that release tag.
 
 ## Codex Beta in v2.3
 

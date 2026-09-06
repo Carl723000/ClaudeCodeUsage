@@ -63,6 +63,10 @@ Empat gambar v2.3.1 ini menggunakan renderer produksi, data sintetis, dan variab
   konteks pendek. Biaya tambahan untuk seluruh permintaan di atas 272K input
   tidak disertakan karena log agregat lokal tidak dapat memastikan ambang per
   permintaan tersebut.
+- Estimasi Claude dapat memakai tarif langsung Anthropic atau tarif on-demand
+  AWS Bedrock in-region untuk keluarga Opus, Sonnet, dan Haiku saat ini.
+  Mengganti backend langsung menghitung ulang log yang tidak berubah; Sonnet 5
+  memakai tarif standar setelah promosi peluncurannya berakhir 31 Agustus 2026.
 - 30 hari terakhir berarti hari ini dan 29 tanggal sebelumnya dalam zona waktu konfigurasi. Total dapat direkonsiliasi, refresh berulang stabil, dan bulan tampil dari lama ke baru. Ringkasan Workflows Claude memakai rentang bergulir yang sama dan memasukkan setiap eksekusi berdasarkan tanggal mulai di zona waktu konfigurasi. Saat metrik grafik diganti atau label drill-down dirender, kunci penggunaan harian/bulanan tidak lagi mundur sehari atau sebulan akibat zona waktu host. Tanggal berakhirnya penundaan Saran AI dan Usage Optimizer juga memakai zona waktu konfigurasi dan bahasa UI.
 - Reasoning effort terstruktur tidak ditebak dari nama model. `unknown` bukan nol dijelaskan; nilai nol disembunyikan.
 - Pengamatan kuota anonim yang terbatas mempertahankan reset tidak teratur dan pada hari yang sama. Fraksi valid dalam satu jendela menghasilkan estimasi total dan sisa daya tahan langganan, termasuk periode berjalan. Bukti perkiraan atau tanpa atribusi diberi keyakinan rendah. Jika series kuota Codex lokal tumpang tindih, periode berjalan memakai pengamatan nyata terbaru untuk estimasi gabungan berkeyakinan rendah; periode selesai yang atribusinya ambigu tetap hanya menampilkan nilai terpakai.
@@ -73,7 +77,7 @@ Empat gambar v2.3.1 ini menggunakan renderer produksi, data sintetis, dan variab
 - Permintaan Optimizer yang kompatibel dengan OpenAI kini hanya mengirim `reasoning_effort` tanpa parameter tingkat atas `thinking` yang tidak didukung, menyelesaikan [#94](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/94).
 - Claude/Codex berbagi token desain untuk kepadatan, hierarki, fokus, ARIA, lebar sempit, serta tema terang/gelap tanpa menyamakan arti metrik.
 
-Metadata paket adalah `2.3.1`; publikasi Marketplace tetap langkah manual terpisah.
+Draft Release yang ditinjau adalah `v2.3.1`; alur publikasi manual menetapkan versi paket dari tag tersebut.
 
 ## Codex Beta di v2.3
 

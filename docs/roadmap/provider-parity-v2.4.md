@@ -9,6 +9,31 @@ This roadmap follows the v2.3.1 regression fixes. Its goal is to give equivalent
 - Run one read-only Claude CLI audit over production HTML/CSS/TypeScript and installed-build screenshots, classifying findings as missing, behavior mismatch, visual mismatch, or intentional semantic difference.
 - The audit may use only source, synthetic fixtures, and privacy-safe screenshots; no account data, paths, thread titles, prompts, log bodies, or credentials.
 
+## P0.5: accepted post-v2.3.1 audit follow-ups
+
+- Rearm failed Claude/Codex file watchers with bounded exponential backoff while
+  polling remains the safe fallback; test repeated failure, recovery, and
+  disposal without a hot loop.
+- Cache `session_index.jsonl` by verified size/mtime and keep title recovery
+  streaming and memory-bounded. Preserve the rule that titles stay memory-only
+  and every non-title field remains ignored.
+- Rename rolling-30-day variables that still say `month`, remove dead hourly
+  caches/branches, and escape every dynamic error-page slot before insertion.
+- Localize the non-zero `component-delta-clamped` quality explanation and add a
+  migration fixture proving quota compaction retains the oldest/newest boundary
+  evidence needed for later confidence calculations.
+- Add explicit browser contracts for Advice snooze persistence and for Compare
+  never summing cross-provider cost or quota. Decide whether the legacy Claude
+  Share Card is retired into the Compare studio or receives full timezone and
+  eight-locale parity before adding more sharing surfaces.
+- Implement [#91](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/91)
+  as a local display preference only: user-entered rate, currency code/symbol,
+  deterministic formatting, no exchange-rate network dependency, and USD kept
+  as the auditable base value.
+- Keep the detailed local-data inventory and destructive clear-path reference in
+  `LOCAL-DATA.md` / `LOCAL-DATA.zh-CN.md`; do not reintroduce the verbose panel
+  into the normal plugin Settings surface.
+
 ## P1: time-hierarchy chart drill-down
 
 - All-time month bar: click or Enter/Space opens that month's daily data.

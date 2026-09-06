@@ -163,6 +163,10 @@ same full-request preview and separate explicit Send action as AI advice.
   GPT-6 API-equivalent values use official Standard short-context rates; the
   request-wide surcharge above 272K input is excluded because aggregate local
   logs cannot establish that per-request threshold.
+- **Optional AWS Bedrock pricing** — Claude estimates can use direct Anthropic
+  or AWS Bedrock in-region on-demand rates for current Opus, Sonnet, and Haiku
+  families. Switching the backend reprices unchanged logs immediately; Sonnet
+  5 uses the standard rate after its launch promotion ended on 31 August 2026.
 - **Correct, stable date ranges** — Last 30 days means today plus the preceding
   29 calendar dates in the configured timezone. Today ≤ Last 30 days ≤ All time,
   provider totals reconcile, repeated refresh/reindex is idempotent, and Codex
@@ -230,8 +234,8 @@ same full-request preview and separate explicit Send action as AI advice.
   zone projection catches up. First-use work persists bounded progress and does
   not hot-loop or repeat after completion.
 
-The repository package metadata is `2.3.1`. Marketplace publication remains a
-separate human-controlled release step.
+The reviewed draft is `v2.3.1`; the human-controlled publish workflow stamps
+package metadata from that release tag.
 
 ## What's new in 2.3
 

@@ -16,6 +16,13 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   that per-request boundary, so the API-equivalent estimate deliberately uses
   the standard short-context rate and keeps the existing request-level-pricing
   disclaimer.
+- **AWS Bedrock in-region Claude pricing (#95)** — an opt-in Claude pricing
+  backend covers Opus 4.5–5, Sonnet 4.5–5, and Haiku 4.5 with separate
+  5-minute/1-hour cache-write and cache-read rates. Switching backends
+  invalidates cached Claude cost aggregates so unchanged local logs are
+  repriced immediately. Sonnet 5 uses the standard in-region rate that applies
+  after its launch promotion ended on 2026-08-31. Thanks to
+  [@akapti](https://github.com/akapti) for the contribution.
 - **Combined activity heatmap and private sharing** — Compare now leads with a
   Claude + Codex calendar heatmap built from the existing provider daily
   aggregates. Its preview-first share studio exports deterministic local SVG, a
@@ -115,6 +122,17 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   polling, credentials, or a second scanner.
 
 ### Fixed
+- **One-time v2.3.0 Codex token-semantics migration** — the per-file parser
+  state now carries a new semantics version. Existing schema-3 indexes request
+  one bounded, resumable rebuild instead of retaining pre-fix request
+  attribution indefinitely; completed files survive partial checkpoints.
+- **Account-aware quota confidence** — a reset boundary may remain useful for
+  deterministic weekly alignment across anonymous Codex epochs, but crossing
+  an account/profile fingerprint can no longer erase `account-ambiguous`.
+  Current-window total and unused estimates remain available at low confidence.
+- **Deterministic scroll debounce test** — continuous-scroll coverage now emits
+  one synchronous gesture and advances only the fake clock, removing a race
+  between animation frames and the 180 ms persistence timer.
 - **Immediate advice-consent revocation** — withdrawing aggregate or prompt
   consent immediately invalidates prepared previews and cancels active advice
   requests, without waiting for local storage. New previews/sends stay blocked
@@ -200,17 +218,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   previews create/overwrite, and stores owner/repository/path only after success.
   Release validation uses mocks and performs no real repository write.
 - Dormant migration/experiment modules and internal v2.3.1 review documents are
-  explicitly excluded from the VSIX. Package metadata is now `2.3.1`; this
-  changelog entry remains Unreleased until a human performs the remote release.
+  explicitly excluded from the VSIX. The human-controlled publish workflow
+  stamps package metadata from the reviewed `v2.3.1` release tag.
 
 ## [2.3.0] — Unreleased
 
 ### Fixed
-- **AWS Bedrock in-region Claude pricing** — the selectable Bedrock table now
-  covers Claude Opus 4.5, 4.6, 4.7, 4.8, Sonnet 4.5, Sonnet 4.6, Sonnet 5,
-  Opus 5, and Haiku 4.5, including separate 5-minute and 1-hour cache-write
-  rates. Changing the pricing backend invalidates the incremental cost
-  aggregate so existing logs are recalculated immediately.
 - **Codex Today is now the configured calendar day** — the first Codex tab now
   pairs its day total with exact hourly API-equivalent cost and a separate
   token-composition view. Its additive schema-3 current-day sidecar scans only

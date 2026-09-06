@@ -1496,9 +1496,14 @@ test('v2.3.1 README editions share release evidence and local-data boundaries', 
     version: string;
     packages: Record<string, { version?: string }>;
   };
-  assert.equal(packageJson.version, '2.3.1');
-  assert.equal(packageLock.version, '2.3.1');
-  assert.equal(packageLock.packages['']?.version, '2.3.1');
+  assert.equal(
+    packageJson.version,
+    '2.1.1',
+    'source metadata stays unstamped until the release-tag publish workflow',
+  );
+  assert.equal(packageLock.version, packageJson.version);
+  assert.equal(packageLock.packages['']?.version, packageJson.version);
+  assert.match(repoFile('.github/workflows/publish.yml'), /npm version "\$VER"/);
   assert.match(repoFile('LOCAL-DATA.md'), /OAuth access or refresh tokens/);
   assert.match(repoFile('LOCAL-DATA.zh-CN.md'), /OAuth access\/refresh token/);
 });

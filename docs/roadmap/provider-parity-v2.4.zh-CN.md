@@ -9,6 +9,25 @@
 - 用 Claude CLI 对生产 HTML/CSS/TypeScript 和真实安装截图做一次只读审计，输出“缺失、行为不同、视觉不同、刻意保留语义差异”四类问题。
 - 审计不得读取或输出账号、路径、线程标题、prompt、日志正文或凭证；只允许代码、合成 fixture 和隐私安全截图。
 
+## P0.5：v2.3.1 独立审阅后采纳的后续项
+
+- Claude/Codex 文件 watcher 失败后采用有界指数退避重建，轮询继续作为安全兜底；
+  测试连续失败、恢复与 dispose，确保不会热循环。
+- 按校验后的 size/mtime 缓存 `session_index.jsonl`，线程标题恢复继续保持流式与
+  内存有界；标题仍只驻留内存，其他字段继续全部忽略。
+- 清理仍以 `month` 命名的滚动 30 天变量、无效小时缓存与死分支，并在插入动态
+  错误页内容前统一转义。
+- 为非零 `component-delta-clamped` 质量标记补齐本地化解释，并增加迁移夹具，证明
+  quota 压缩会保留后续置信度计算所需的最早/最新边界证据。
+- 增加 Advice 暂停状态跨重载持久化，以及 Compare 永不跨 provider 相加成本或额度
+  的浏览器契约。继续扩展分享功能前，先决定旧 Claude Share Card 是收敛到 Compare
+  工作台，还是补齐时区与八语言一致性。
+- 将 [#91](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/91) 实现为纯本地
+  显示偏好：用户填写汇率、币种代码/符号，格式确定可复现，不增加联网汇率源，并
+  保留 USD 作为可审计基准值。
+- 详细本地数据清单与破坏性清理路径只保留在 `LOCAL-DATA.md` /
+  `LOCAL-DATA.zh-CN.md`；不把冗长面板重新放回插件的常规设置界面。
+
 ## P1：图表按时间层级下钻
 
 - 全部时间的月柱：点击或按 Enter/Space 后展开该月的每日数据。
