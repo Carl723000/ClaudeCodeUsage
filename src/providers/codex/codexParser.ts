@@ -23,7 +23,7 @@ export interface CodexRawTokenCounts {
 }
 
 export interface CodexParserState {
-  schemaVersion: 1 | 2 | 3;
+  schemaVersion: 1 | 2 | 3 | 4;
   fileKey: string;
   sessionKey: string;
   treeKey?: string;
@@ -63,7 +63,10 @@ export function createCodexParserState(
   fileKey: string,
 ): CodexParserState {
   return {
-    schemaVersion: 3,
+    // Version 4 invalidates v2.3.0's schema-3 parser snapshots after the
+    // request-level token attribution rules changed. The outer persisted
+    // index remains schema 3; only each file's parser semantics are rebuilt.
+    schemaVersion: 4,
     fileKey,
     sessionKey: fileKey,
     identityLocked: false,

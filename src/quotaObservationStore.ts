@@ -488,37 +488,29 @@ function annotateBoundaries(
     left.periodType.localeCompare(right.periodType) ||
     left.windowId.localeCompare(right.windowId),
   );
-  const previousBySeries = new Map<string, QuotaObservationV2>();
+  const previousByProviderPeriod = new Map<string, QuotaObservationV2>();
   return ordered.map((item) => {
-    const key = `${item.provider}|${item.periodType}`;
-    const previous = previousBySeries.get(key);
-    const inferred = previous
-      ? persistedBoundaryEvidence(previous, item, usageDropThreshold)
+    const providerPeriodKey = `${item.provider}|${item.periodType}`;
+    const previousForProvider = previousByProviderPeriod.get(providerPeriodKey);
+    // A reset can be observed across anonymous Codex epochs, so retain its
+    // boundary evidence for deterministic replay. Account changes are handled
+    // independently below and always remain explicitly ambiguous.
+    const inferred = previousForProvider
+      ? persistedBoundaryEvidence(previousForProvider, item, usageDropThreshold)
       : null;
-    // Older v2 stores marked every anonymous Codex epoch transition as
-    // account-ambiguous, including an otherwise coherent provider reset. A
-    // reset boundary keeps the epochs isolated already, so carrying that
-    // synthetic flag forward would suppress the low-confidence per-window
-    // allowance estimate forever after migration.
-    const retainedFlags = item.flags.filter((flag) =>
-      flag !== 'account-ambiguous' ||
-      !previous ||
-      previous.accountFingerprint === item.accountFingerprint ||
-      inferred === null,
+    const crossesAccountEpoch = Boolean(
+      previousForProvider &&
+      previousForProvider.accountFingerprint !== item.accountFingerprint,
     );
     const normalized = {
       ...item,
       captureReason: inferred ?? item.captureReason,
       flags: orderedUniqueFlags([
-        ...retainedFlags,
-        ...(previous &&
-          previous.accountFingerprint !== item.accountFingerprint &&
-          inferred === null
-          ? ['account-ambiguous' as const]
-          : []),
+        ...item.flags,
+        ...(crossesAccountEpoch ? ['account-ambiguous' as const] : []),
       ]),
     };
-    previousBySeries.set(key, normalized);
+    previousByProviderPeriod.set(providerPeriodKey, normalized);
     return normalized;
   });
 }
@@ -587,8 +579,7 @@ export function mergeQuotaCaptures(
       usageDropThreshold,
     );
     const captureWithBoundaryFlags = boundaryPrevious &&
-      boundaryPrevious.accountFingerprint !== stableFingerprint &&
-      boundary === null
+      boundaryPrevious.accountFingerprint !== stableFingerprint
       ? {
           ...capture,
           flags: orderedUniqueFlags([

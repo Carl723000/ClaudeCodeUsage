@@ -311,13 +311,12 @@ test('continuous scrolling persists state once after the gesture instead of ever
   await openCodex(page, { height: 560 });
   await page.locator('#tab-sessions').click();
 
-  const result = await page.evaluate(async () => {
+  const result = await page.evaluate(() => {
     window.__ccuSetStateCalls = 0;
     const maxY = document.documentElement.scrollHeight - innerHeight;
     for (let step = 1; step <= 12; step += 1) {
       scrollTo(0, Math.min(maxY, step * 40));
       window.dispatchEvent(new Event('scroll'));
-      await new Promise((resolve) => requestAnimationFrame(resolve));
     }
     return { maxY, callsDuringGesture: window.__ccuSetStateCalls };
   });

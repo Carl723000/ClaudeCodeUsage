@@ -182,7 +182,7 @@ test('schema-3 reload preserves only bounded pseudonymous replay evidence', asyn
     const index = createEmptyCodexIndex('UTC');
     const contribution = dedupContribution(fileKey, 'sessions');
     contribution.parserState = {
-      schemaVersion: 3,
+      schemaVersion: 4,
       fileKey,
       sessionKey: fileKey,
       role: 'root',
@@ -215,7 +215,7 @@ test('schema-3 reload preserves only bounded pseudonymous replay evidence', asyn
     const replayState = loaded.files[fileKey].parserState;
     const savedSources = Object.keys(replayState.snapshotSignaturesBySource ?? {});
 
-    assert.equal(replayState.schemaVersion, 3);
+    assert.equal(replayState.schemaVersion, 4);
     assert.equal(savedSources.length, 32);
     assert.ok(savedSources.includes(sourceKey));
     assert.equal(savedSources.includes('raw-account@example.invalid'), false);
@@ -261,7 +261,7 @@ test('schema-3 reload preserves only bounded pseudonymous replay evidence', asyn
   }
 });
 
-test('schema-3 index with pre-last-usage parser state requests one rescan', async () => {
+test('schema-3 index with v2.3.0 parser semantics requests one rescan', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-index-token-migration-'));
   try {
     const indexPath = path.join(root, 'codex-index.json');
@@ -270,7 +270,7 @@ test('schema-3 index with pre-last-usage parser state requests one rescan', asyn
     const contribution = dedupContribution(fileKey, 'sessions');
     contribution.parserState = {
       ...contribution.parserState,
-      schemaVersion: 2,
+      schemaVersion: 3,
       fileKey,
       sessionKey: fileKey,
     };
@@ -334,7 +334,7 @@ test('token semantics rescan preserves completed files across a partial checkpoi
     for (const contribution of Object.values(legacy.files)) {
       contribution.parserState = {
         ...contribution.parserState,
-        schemaVersion: 2,
+        schemaVersion: 3,
       };
     }
     await writeFile(indexPath, JSON.stringify(legacy), 'utf8');
@@ -477,7 +477,7 @@ test('index load and save fail closed for unsafe metadata labels and bucket keys
       offset: 100,
       discardingOversizedLine: false,
       parserState: {
-        schemaVersion: 3,
+        schemaVersion: 4,
         fileKey,
         sessionKey,
         agentNickname: unsafe.posix,
@@ -2221,7 +2221,7 @@ function dedupContribution(
     offset: 100,
     discardingOversizedLine: false,
     parserState: {
-      schemaVersion: 3,
+      schemaVersion: 4,
       fileKey,
       sessionKey: 'shared-anonymous-session',
       role: 'root',

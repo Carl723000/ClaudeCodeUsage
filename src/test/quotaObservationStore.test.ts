@@ -146,7 +146,7 @@ test('resetAt changes retain consecutive and same-day reset events', () => {
   assert.equal(new Set(store.observations.map((item) => item.accountFingerprint)).size, 1);
 });
 
-test('unattributed reset epochs expose boundary evidence without merging or inventing account ambiguity', () => {
+test('unattributed reset epochs retain low-confidence account ambiguity at a reset boundary', () => {
   const store = mergeQuotaCaptures(createEmptyQuotaObservationStore(), [
     capture({
       observedAt: NOW - HOUR,
@@ -164,14 +164,14 @@ test('unattributed reset epochs expose boundary evidence without merging or inve
 
   assert.equal(new Set(store.observations.map((item) => item.accountFingerprint)).size, 2);
   assert.equal(new Set(store.observations.map((item) => item.windowId)).size, 2);
-  assert.equal(store.observations[1].flags.includes('account-ambiguous'), false);
+  assert.equal(store.observations[1].flags.includes('account-ambiguous'), true);
   const events = deriveQuotaResetEvents(store);
   assert.equal(events.length, 1);
   assert.equal(events[0].evidence, 'reset-at-change');
   assert.notEqual(events[0].previousAccountFingerprint, events[0].nextAccountFingerprint);
 });
 
-test('a legacy synthetic account-ambiguous flag is removed across a coherent reset boundary', () => {
+test('a legacy account-ambiguous flag survives a coherent reset boundary', () => {
   const first = mergeQuotaCaptures(createEmptyQuotaObservationStore(), [capture({
     observedAt: NOW - HOUR,
     resetAt: NOW + HOUR,
@@ -187,7 +187,7 @@ test('a legacy synthetic account-ambiguous flag is removed across a coherent res
   })], { salt: SALT, now: NOW });
 
   assert.equal(legacy.observations[1].captureReason, 'reset-at-change');
-  assert.equal(legacy.observations[1].flags.includes('account-ambiguous'), false);
+  assert.equal(legacy.observations[1].flags.includes('account-ambiguous'), true);
 });
 
 test('an unattributed epoch change without reset evidence remains account ambiguous', () => {
@@ -267,6 +267,7 @@ test('an account epoch change alone does not invent an official reset event', ()
 
   assert.equal(new Set(store.observations.map((item) => item.accountFingerprint)).size, 2);
   assert.equal(new Set(store.observations.map((item) => item.windowId)).size, 2);
+  assert.ok(store.observations[1].flags.includes('account-ambiguous'));
   assert.deepEqual(deriveQuotaResetEvents(store), []);
 });
 

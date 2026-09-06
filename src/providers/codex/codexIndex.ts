@@ -3539,7 +3539,7 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
     record.previousSnapshotSignature,
   );
   return {
-    schemaVersion: 3,
+    schemaVersion: 4,
     fileKey,
     sessionKey,
     ...(treeKey ? { treeKey } : {}),
@@ -4329,7 +4329,7 @@ function requiresTokenSemanticsRescan(index: CodexIndexV3): boolean {
   return Object.values(index.files).some((contribution) =>
     !isRecord(contribution) ||
     !isRecord(contribution.parserState) ||
-    contribution.parserState.schemaVersion !== 3
+    contribution.parserState.schemaVersion !== 4
   );
 }
 
