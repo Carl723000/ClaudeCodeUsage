@@ -218,6 +218,19 @@ test('known Codex models use exact current API prices and unknown models stay un
   assert.equal(unattributedRemainder.pricingCoverage, 0.5);
 });
 
+test('GPT-6 Astra contributes exact Standard short-context API-equivalent value', () => {
+  const astra = equivalentUsageFromProviderTokens(RESET, 'gpt-6-astra', {
+    inputTotal: 2_000_000,
+    cachedInput: 1_000_000,
+    outputTotal: 1_000_000,
+  });
+
+  // 1M uncached * $10 + 1M cached * $1 + 1M output * $50.
+  assert.equal(astra.equivalentUsd, 61);
+  assert.equal(astra.pricedTokens, 3_000_000);
+  assert.equal(astra.totalTokens, 3_000_000);
+});
+
 test('Codex API-equivalent cost breakdown prices fresh cache-read and output buckets without charging reasoning twice', () => {
   const tokens = {
     inputTotal: 2_000_000,

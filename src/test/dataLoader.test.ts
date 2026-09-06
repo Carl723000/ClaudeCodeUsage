@@ -41,6 +41,18 @@ test('getCurrentContextInfo reports a 1M window for Opus 5, with or without the 
   }
 });
 
+test('getCurrentContextInfo recognizes Fable 5.1 and GPT-6 Astra context windows', () => {
+  const fable = ClaudeDataLoader.getCurrentContextInfo([record('claude-fable-5-1')]);
+  assert.ok(fable, 'expected Fable 5.1 context info, got null');
+  assert.equal(fable!.windowTokens, 1_000_000);
+  assert.equal(fable!.estimated, false);
+
+  const astra = ClaudeDataLoader.getCurrentContextInfo([record('gpt-6-astra')]);
+  assert.ok(astra, 'expected GPT-6 Astra context info, got null');
+  assert.equal(astra!.windowTokens, 1_050_000);
+  assert.equal(astra!.estimated, false);
+});
+
 test('getCurrentContextInfo keeps the 200K window for pre-4.6 Opus and Sonnet', () => {
   for (const model of ['claude-opus-4-20250514', 'claude-sonnet-4-5-20250929', 'claude-3-5-sonnet-20241022']) {
     const info = ClaudeDataLoader.getCurrentContextInfo([record(model)]);

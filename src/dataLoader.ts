@@ -1382,9 +1382,10 @@ export class ClaudeDataLoader {
 
   /** Model context-window size in tokens, plus whether it's a guess. Current
    * Claude (Opus 4.6+, Opus 5+, Sonnet 4.6+, Sonnet 5+, Fable/Mythos 5) is 1M;
-   * Haiku and older Claude are 200K; a "[1m]" suffix forces 1M (the marker
-   * pricing.ts strips). A user override (>0) wins outright and is treated as
-   * exact. Unrecognised / proxied models fall back to 200K and are flagged
+   * GPT-6 Astra is 1.05M; Haiku and older Claude are 200K; a "[1m]" suffix
+   * forces 1M (the marker pricing.ts strips). A user override (>0) wins
+   * outright and is treated as exact. Unrecognised / proxied models fall back
+   * to 200K and are flagged
    * `estimated` so the UI can mark the percentage as approximate.
    * Sonnet 5 (`claude-sonnet-5`) verified 2026-07-01 —
    * https://platform.claude.com/docs/en/about-claude/models/whats-new-sonnet-5
@@ -1416,6 +1417,9 @@ export class ClaudeDataLoader {
     }
     if (/haiku/.test(m) || /opus|sonnet/.test(m)) {
       return { tokens: 200_000, estimated: false };
+    }
+    if (/gpt-6-astra/.test(m)) {
+      return { tokens: 1_050_000, estimated: false };
     }
     if (/deepseek/.test(m)) {
       return { tokens: 128_000, estimated: false };

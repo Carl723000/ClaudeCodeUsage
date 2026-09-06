@@ -60,7 +60,8 @@ const MILL = 1_000_000;
 // Anthropic / Claude pricing
 // Verified 2026-05-21 — https://platform.claude.com/docs/en/about-claude/pricing
 //
-// Cache pricing follows Anthropic's standard multipliers vs base input price:
+// Cache pricing follows Anthropic's standard multipliers vs base input price,
+// except where a model-specific rate below says otherwise:
 //   - 5-minute cache write : 1.25x base input  (what Claude Code writes by default)
 //   - 1-hour cache write   : 2.00x base input  (used when a 1h TTL is requested)
 //   - cache read (hit)     : 0.10x base input
@@ -70,6 +71,17 @@ const MILL = 1_000_000;
 // portion is billed at its own rate; otherwise the whole cache-write total
 // falls back to the 5-minute rate (what Claude Code writes by default).
 // =====================================================================
+
+// Fable 5.1 / Mythos 5.1 — frontier tier ($10 / $50), verified 2026-09-06.
+// Cache reads are the model-specific exception: 0.025x input ($0.25/MTok).
+// https://platform.claude.com/docs/en/models/fable-5-1/overview
+const FABLE_5_1: ModelPricing = {
+  input_cost_per_token: 10 / MILL,
+  output_cost_per_token: 50 / MILL,
+  cache_creation_input_token_cost: 12.5 / MILL,
+  cache_creation_1h_input_token_cost: 20 / MILL,
+  cache_read_input_token_cost: 0.25 / MILL,
+};
 
 // Fable 5 / Mythos 5 — frontier tier ($10 / $50), verified 2026-06-09
 // https://platform.claude.com/docs/en/about-claude/pricing
@@ -133,17 +145,31 @@ const HAIKU_35: ModelPricing = {
  * @param outputPerM      Output price per 1M tokens (USD)
  * @param cachedInputPerM Cached/'cache hit' input price per 1M tokens (USD).
  *                        Defaults to 10% of the input price when omitted.
+ * @param cacheWritePerM  Cache-write price per 1M tokens (USD). Most providers
+ *                        do not expose a separate write rate, so it defaults to
+ *                        the ordinary input price.
  */
-function priced(inputPerM: number, outputPerM: number, cachedInputPerM?: number): ModelPricing {
+function priced(
+  inputPerM: number,
+  outputPerM: number,
+  cachedInputPerM?: number,
+  cacheWritePerM?: number,
+): ModelPricing {
   return {
     input_cost_per_token: inputPerM / MILL,
     output_cost_per_token: outputPerM / MILL,
-    // These providers do not charge extra to *write* a cache entry — a cache-write
-    // token is billed like a normal input token.
-    cache_creation_input_token_cost: inputPerM / MILL,
+    cache_creation_input_token_cost:
+      (cacheWritePerM != null ? cacheWritePerM : inputPerM) / MILL,
     cache_read_input_token_cost: (cachedInputPerM != null ? cachedInputPerM : inputPerM * 0.1) / MILL,
   };
 }
+
+// GPT-6 Astra Standard, short-context rates. Inputs above 272K receive a
+// request-wide long-context uplift, but the Codex aggregate index cannot prove
+// that per-request threshold, so the existing API-equivalent view deliberately
+// excludes it as an unavailable request-level surcharge.
+// https://developers.openai.com/api/docs/models/gpt-6-astra
+const GPT_6_ASTRA = priced(10, 50, 1, 12.5);
 
 // =====================================================================
 // Non-Claude reference pricing (USD per 1M tokens)
@@ -152,7 +178,11 @@ function priced(inputPerM: number, outputPerM: number, cachedInputPerM?: number)
 // — treat these as estimates and re-verify before relying on them.
 // =====================================================================
 const NON_CLAUDE_PRICING: Record<string, ModelPricing> = {
-  // --- OpenAI --- https://openai.com/api/pricing/
+  // --- OpenAI --- https://developers.openai.com/api/docs/pricing
+  'gpt-6-astra': GPT_6_ASTRA,
+  // Common proxy-qualified spelling; the official API model id remains the
+  // unprefixed `gpt-6-astra` above.
+  'openai/gpt-6-astra': GPT_6_ASTRA,
   // GPT-5.6 Codex tiers — verified 2026-08-22 against the official model
   // catalog. These exact entries are also used by the weekly API-equivalent
   // value audit; unknown Codex model labels are intentionally not inferred.
@@ -233,6 +263,10 @@ const NON_CLAUDE_PRICING: Record<string, ModelPricing> = {
 // so direct lookups stay fast; anything not listed is resolved by getModelPricing()'s
 // family-aware fallback below.
 const MODEL_PRICING: Record<string, ModelPricing> = {
+  // Claude Fable 5.1 / Mythos 5.1 (2026-09) — reduced cache-read rate.
+  'claude-fable-5-1': FABLE_5_1,
+  'claude-mythos-5-1': FABLE_5_1,
+
   // Claude Fable 5 / Mythos 5 (2026-06) — frontier tier
   'claude-fable-5': FABLE_5,
   'claude-mythos-5': FABLE_5,
@@ -305,6 +339,9 @@ function inferPricingByFamily(modelName: string): { pricing: ModelPricing; famil
 
   // --- Anthropic / Claude ---
   if (name.includes('fable') || name.includes('mythos')) {
+    if (/\b(?:fable|mythos)[._ -]+5[._ -]+1(?:\b|[._ -])/.test(name)) {
+      return { pricing: FABLE_5_1, family: 'Fable 5.1 (frontier tier)' };
+    }
     return { pricing: FABLE_5, family: 'Fable 5 (frontier tier)' };
   }
   if (name.includes('haiku')) {
@@ -323,6 +360,9 @@ function inferPricingByFamily(modelName: string): { pricing: ModelPricing; famil
   }
 
   // --- Other providers ---
+  if (name.includes('gpt-6-astra')) {
+    return { pricing: GPT_6_ASTRA, family: 'OpenAI GPT-6 Astra' };
+  }
   if (name.includes('gpt') || /(^|[^a-z])o[1-9]([^a-z]|$)/.test(name)) {
     return { pricing: NON_CLAUDE_PRICING['gpt-5'], family: 'OpenAI GPT' };
   }

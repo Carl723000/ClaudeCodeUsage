@@ -83,3 +83,32 @@ test('getModelPricing falls back to the right family for an unknown snapshot', (
   assert.ok(pricing, 'expected a fallback pricing object, got null');
   assert.equal(pricing!.input_cost_per_token, 5 / 1_000_000);
 });
+
+test('Fable 5.1 uses its reduced cache-read rate without changing Fable 5 history', () => {
+  for (const model of ['claude-fable-5-1', 'claude-mythos-5-1', 'claude-fable-5-1[1m]']) {
+    const pricing = getModelPricing(model);
+    assert.ok(pricing, `expected pricing for ${model}, got null`);
+    assert.equal(pricing!.input_cost_per_token, 10 / 1_000_000, model);
+    assert.equal(pricing!.output_cost_per_token, 50 / 1_000_000, model);
+    assert.equal(pricing!.cache_creation_input_token_cost, 12.5 / 1_000_000, model);
+    assert.equal(pricing!.cache_creation_1h_input_token_cost, 20 / 1_000_000, model);
+    assert.equal(pricing!.cache_read_input_token_cost, 0.25 / 1_000_000, model);
+  }
+
+  assert.equal(
+    getModelPricing('claude-fable-5')!.cache_read_input_token_cost,
+    1 / 1_000_000,
+    'historical Fable 5 cache reads keep their original price',
+  );
+});
+
+test('GPT-6 Astra uses official Standard short-context rates', () => {
+  for (const model of ['gpt-6-astra', 'openai/gpt-6-astra']) {
+    const pricing = getModelPricing(model);
+    assert.ok(pricing, `expected pricing for ${model}, got null`);
+    assert.equal(pricing!.input_cost_per_token, 10 / 1_000_000, model);
+    assert.equal(pricing!.output_cost_per_token, 50 / 1_000_000, model);
+    assert.equal(pricing!.cache_creation_input_token_cost, 12.5 / 1_000_000, model);
+    assert.equal(pricing!.cache_read_input_token_cost, 1 / 1_000_000, model);
+  }
+});
