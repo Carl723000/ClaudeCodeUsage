@@ -6,12 +6,14 @@ export const test = base.extend({
   page: async ({ page }, use) => {
     await page.addInitScript(() => {
       window.__ccuPostedMessages = [];
+      window.__ccuSetStateCalls = 0;
       window.acquireVsCodeApi = () => ({
         getState: () => {
           const raw = localStorage.getItem('__ccu-vscode-state');
           return raw ? JSON.parse(raw) : undefined;
         },
         setState: (value) => {
+          window.__ccuSetStateCalls += 1;
           localStorage.setItem('__ccu-vscode-state', JSON.stringify(value));
         },
         postMessage: (value) => {

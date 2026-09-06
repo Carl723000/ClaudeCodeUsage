@@ -2193,7 +2193,10 @@ export class UsageWebviewProvider {
   updateCodexProgress(progress: CodexRenderProgress): void {
     this.codexProgress = progress;
     if (this.panel && this.currentProvider === 'codex') {
-      this.updateWebview();
+      void this.panel.webview.postMessage({
+        command: 'codexIndexProgress',
+        text: this.codexProgressText(progress),
+      });
     }
   }
 
@@ -3277,7 +3280,10 @@ export class UsageWebviewProvider {
               totalBytes: coverage.totalBytes,
             }
           : null;
-    const details = progress ? ' · ' + this.renderCodexProgressText(progress) : '';
+    const details = progress
+      ? ' · <span data-codex-index-progress-text>' +
+        this.renderCodexProgressText(progress) + '</span>'
+      : '';
     const subtotal = indexedSubtotal
       ? '<strong>' + this.escapeHtml(copy.indexedSubtotal) + '</strong> · '
       : '';
@@ -3291,14 +3297,18 @@ export class UsageWebviewProvider {
       ? copy.indexingInProgress
       : copy.noRecentTask;
     const progress = this.codexLoading && this.codexProgress
-      ? '<p class="model-details">' +
-        this.renderCodexProgressText(this.codexProgress) + '</p>'
+      ? '<p class="model-details"><span data-codex-index-progress-text>' +
+        this.renderCodexProgressText(this.codexProgress) + '</span></p>'
       : '';
     return '<div class="no-data"><p>' + this.escapeHtml(message) + '</p>' +
       progress + '</div>';
   }
 
   private renderCodexProgressText(progress: CodexRenderProgress): string {
+    return this.escapeHtml(this.codexProgressText(progress));
+  }
+
+  private codexProgressText(progress: CodexRenderProgress): string {
     const copy = I18n.t.providers.codex;
     const exactCount = new Intl.NumberFormat(I18n.getLocale(), {
       maximumFractionDigits: 0,
@@ -3316,15 +3326,15 @@ export class UsageWebviewProvider {
       I18n.getTimezone(),
     );
     const reason = progress.reason
-      ? this.escapeHtml(copy.indexingReasons[progress.reason]) + ' · '
+      ? copy.indexingReasons[progress.reason] + ' · '
       : '';
-    return reason + this.escapeHtml(copy.indexedLogEntries) + ': ' +
+    return reason + copy.indexedLogEntries + ': ' +
       exactCount.format(progress.scannedFiles) + '/' +
       exactCount.format(progress.totalFiles) +
       (progress.totalFiles > 0 ? ' (' + completedPercent + '%)' : '') + ' · ' +
-      this.escapeHtml(copy.indexedStorage) + ': ' +
-      this.escapeHtml(formatters.formatBytes(progress.indexedBytes)) + '/' +
-      this.escapeHtml(formatters.formatBytes(progress.totalBytes));
+      copy.indexedStorage + ': ' +
+      formatters.formatBytes(progress.indexedBytes) + '/' +
+      formatters.formatBytes(progress.totalBytes);
   }
 
   private renderUsageData(
@@ -3355,10 +3365,11 @@ export class UsageWebviewProvider {
         equivalentRows,
         scope.total.processed,
       );
-      const pricingCoverage = new Intl.NumberFormat(I18n.getLocale(), {
+      const pricingCoverageFormatter = new Intl.NumberFormat(I18n.getLocale(), {
         style: 'percent',
         maximumFractionDigits: 0,
-      }).format(equivalent.pricingCoverage);
+      });
+      const pricingCoverage = pricingCoverageFormatter.format(equivalent.pricingCoverage);
       const equivalentHelp = copy.apiEquivalentCostHelp.replace(
         '{coverage}',
         pricingCoverage,
@@ -3394,15 +3405,36 @@ export class UsageWebviewProvider {
       const dimension = (
         title: string,
         rows: Array<{ key: string; totals: CodexMetricTotals }>,
+        showEquivalentPrice: boolean,
       ): string => {
         if (rows.length === 0) {
           return '';
         }
         return '<div class="model-breakdown"><div class="section-header"><h3>' +
-          this.escapeHtml(title) + '</h3></div><div class="model-list">' + rows.map((row, index) =>
-            '<details class="model-item"' + (index === 0 ? ' open' : '') + '><summary class="model-header">' +
-            '<span class="model-name">' + this.escapeHtml(row.key) + '</span><span class="model-cost">' +
-            I18n.formatNumber(row.totals.fresh) + ' ' + this.escapeHtml(copy.fresh) + '</span></summary>' +
+          this.escapeHtml(title) + '</h3></div><div class="model-list">' + rows.map((row, index) => {
+          let headline: string;
+          if (showEquivalentPrice) {
+            const rowEquivalent = summarizeEquivalentUsage([
+              equivalentUsageFromProviderTokens(0, row.key, {
+                inputTotal: row.totals.input,
+                cachedInput: row.totals.cachedInput,
+                outputTotal: row.totals.output,
+                reasoningOutput: row.totals.reasoning,
+              }),
+            ], row.totals.processed);
+            const rowCoverage = pricingCoverageFormatter.format(rowEquivalent.pricingCoverage);
+            const rowHelp = copy.apiEquivalentCostHelp.replace('{coverage}', rowCoverage);
+            headline = '<span class="model-metric model-cost" title="' +
+              this.escapeHtml(rowHelp) + '">' +
+              this.escapeHtml(rowEquivalent.pricedTokens > 0
+                ? I18n.formatCurrency(rowEquivalent.equivalentUsd)
+                : '—') + '</span>';
+          } else {
+            headline = '<span class="model-metric">' + I18n.formatNumber(row.totals.fresh) + ' ' +
+              this.escapeHtml(copy.fresh) + '</span>';
+          }
+          return '<details class="model-item"' + (index === 0 ? ' open' : '') + '><summary class="model-header">' +
+            '<span class="model-name">' + this.escapeHtml(row.key) + '</span>' + headline + '</summary>' +
             '<div class="model-details model-details-stacked">' +
             '<span><span class="model-stat-label">' + this.escapeHtml(copy.processed) + '</span><strong>' +
             I18n.formatNumber(row.totals.processed) + '</strong></span>' +
@@ -3411,8 +3443,8 @@ export class UsageWebviewProvider {
             '<span><span class="model-stat-label">' + this.escapeHtml(copy.output) + '</span><strong>' +
             I18n.formatNumber(row.totals.output) + '</strong></span>' +
             '<span><span class="model-stat-label">' + this.escapeHtml(copy.reasoning) + '</span><strong>' +
-            I18n.formatNumber(row.totals.reasoning) + '</strong></span></div></details>',
-          ).join('') + '</div></div>';
+            I18n.formatNumber(row.totals.reasoning) + '</strong></span></div></details>';
+        }).join('') + '</div></div>';
       };
       return '<div class="usage-summary">' +
         this.renderCodexIndexedSubtotal(scope.indexedSubtotal) +
@@ -3429,7 +3461,7 @@ export class UsageWebviewProvider {
         metric(copy.output, scope.total.output) +
         metric(copy.reasoning, scope.total.reasoning) +
         '</div>' + compositionHtml + '</div>' +
-        dimension(copy.models, scope.models) + dimension(copy.efforts, scope.efforts);
+        dimension(copy.models, scope.models, true) + dimension(copy.efforts, scope.efforts, false);
     }
     if (!data) {
       return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
@@ -3603,7 +3635,7 @@ export class UsageWebviewProvider {
           '<span class="model-name">' +
           this.escapeHtml(model) +
           '</span>' +
-          '<span class="model-cost">' +
+          '<span class="model-metric model-cost">' +
           I18n.formatCurrency(modelData.cost) +
           '</span>' +
           '</summary>' +
@@ -7848,12 +7880,16 @@ export class UsageWebviewProvider {
         color: var(--vscode-symbolIcon-functionForeground);
       }
 
-      .model-cost {
+      .model-metric {
         font-weight: bold;
-        color: var(--vscode-charts-green);
+        color: var(--vscode-foreground);
         margin-left: auto;
         font-family: var(--ccu-data-font);
         font-variant-numeric: tabular-nums;
+      }
+
+      .model-cost {
+        color: var(--vscode-charts-green);
       }
 
       .model-details {
@@ -9929,14 +9965,28 @@ function restoreScrollPosition() {
     });
   });
 }
-var __ccuScrollFrame = 0;
-window.addEventListener('scroll', function() {
-  if (!__ccuUiReady || __ccuScrollFrame) { return; }
-  __ccuScrollFrame = requestAnimationFrame(function() {
-    __ccuScrollFrame = 0;
-    saveScrollPosition();
-  });
-}, { passive: true });
+var __ccuScrollSaveTimer = 0;
+var __ccuScrollDirty = false;
+function flushScrollPosition() {
+  if (__ccuScrollSaveTimer) {
+    clearTimeout(__ccuScrollSaveTimer);
+    __ccuScrollSaveTimer = 0;
+  }
+  if (!__ccuUiReady || !__ccuScrollDirty) { return; }
+  __ccuScrollDirty = false;
+  saveScrollPosition();
+}
+function scheduleScrollPositionSave() {
+  if (!__ccuUiReady) { return; }
+  __ccuScrollDirty = true;
+  if (__ccuScrollSaveTimer) { clearTimeout(__ccuScrollSaveTimer); }
+  __ccuScrollSaveTimer = setTimeout(flushScrollPosition, 180);
+}
+window.addEventListener('scroll', scheduleScrollPositionSave, { passive: true });
+window.addEventListener('pagehide', flushScrollPosition);
+document.addEventListener('visibilitychange', function() {
+  if (document.visibilityState === 'hidden') { flushScrollPosition(); }
+});
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', restoreUi);
 } else {
@@ -11379,6 +11429,16 @@ document.addEventListener('click', function(event) {
 // Handle messages from extension
 window.addEventListener('message', async function(event) {
   const message = event.data;
+
+  if (
+    message.command === 'codexIndexProgress' &&
+    typeof message.text === 'string' &&
+    message.text.length <= 1024
+  ) {
+    document.querySelectorAll('[data-codex-index-progress-text]').forEach(function(element) {
+      element.textContent = message.text;
+    });
+  }
 
   if (message.command === 'requestLocalDataInventoryClient') {
     requestLocalDataInventory();

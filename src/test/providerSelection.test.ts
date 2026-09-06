@@ -235,6 +235,51 @@ test('Codex tab stays visible while its first index is still running', () => {
   }
 });
 
+test('Codex index progress patches live text without rebuilding the webview', () => {
+  const originalLoad = (Module as any)._load;
+  const originalLanguage = I18n.getCurrentLanguage();
+  I18n.setLanguage('en');
+  (Module as any)._load = function(request: string, parent: unknown, isMain: boolean) {
+    if (request === 'vscode') {
+      return { workspace: { workspaceFolders: [] } };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    const { UsageWebviewProvider } = require('../webview') as typeof import('../webview');
+    const provider = new UsageWebviewProvider({} as any) as any;
+    const messages: Array<Record<string, unknown>> = [];
+    let rebuilds = 0;
+    provider.panel = {
+      webview: {
+        postMessage: (message: Record<string, unknown>) => {
+          messages.push(message);
+          return Promise.resolve(true);
+        },
+      },
+    };
+    provider.currentProvider = 'codex';
+    provider.updateWebview = () => { rebuilds += 1; };
+
+    provider.updateCodexProgress({
+      scannedFiles: 1_566,
+      totalFiles: 1_827,
+      indexedBytes: 1_024,
+      totalBytes: 4_096,
+      reason: 'first-index',
+    });
+
+    assert.equal(rebuilds, 0);
+    assert.equal(messages.length, 1);
+    assert.equal(messages[0].command, 'codexIndexProgress');
+    assert.match(String(messages[0].text), /Indexed log entries: 1,566\/1,827 \(86%\)/);
+    assert.match(String(messages[0].text), /Indexed storage: 1kB\/4kB/i);
+  } finally {
+    I18n.setLanguage(originalLanguage);
+    (Module as any)._load = originalLoad;
+  }
+});
+
 test('webview provider changes are allowlisted and kept outside time tabs', () => {
   const source = readFileSync(
     path.resolve(__dirname, '..', '..', 'src', 'webview.ts'),

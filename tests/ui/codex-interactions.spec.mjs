@@ -306,3 +306,51 @@ test('page scroll position survives a full reload', async ({ page }) => {
 
   await expect.poll(() => page.evaluate(() => scrollY)).toBe(target);
 });
+
+test('continuous scrolling persists state once after the gesture instead of every frame', async ({ page }) => {
+  await openCodex(page, { height: 560 });
+  await page.locator('#tab-sessions').click();
+
+  const result = await page.evaluate(async () => {
+    window.__ccuSetStateCalls = 0;
+    const maxY = document.documentElement.scrollHeight - innerHeight;
+    for (let step = 1; step <= 12; step += 1) {
+      scrollTo(0, Math.min(maxY, step * 40));
+      window.dispatchEvent(new Event('scroll'));
+      await new Promise((resolve) => requestAnimationFrame(resolve));
+    }
+    return { maxY, callsDuringGesture: window.__ccuSetStateCalls };
+  });
+
+  expect(result.maxY).toBeGreaterThan(0);
+  expect(result.callsDuringGesture).toBe(0);
+  await page.clock.runFor(200);
+  await expect.poll(() => page.evaluate(() => window.__ccuSetStateCalls)).toBe(1);
+  await page.evaluate(() => window.dispatchEvent(new Event('pagehide')));
+  await expect.poll(() => page.evaluate(() => window.__ccuSetStateCalls)).toBe(1);
+});
+
+test('live Codex indexing progress patches text without replacing the page or moving it', async ({ page }) => {
+  await openCodex(page, { height: 560 });
+  await page.locator('#tab-sessions').click();
+  const target = await page.evaluate(() => {
+    const y = Math.min(320, document.documentElement.scrollHeight - innerHeight);
+    scrollTo(0, y);
+    const body = document.body;
+    body.dataset.progressPatchIdentity = 'preserved';
+    return y;
+  });
+  await expect.poll(() => page.evaluate(() => scrollY)).toBe(target);
+
+  const progressText = 'Indexed log entries: 1,700/1,827 (93%) · Indexed storage: 3kB/4kB';
+  await page.evaluate((text) => {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { command: 'codexIndexProgress', text },
+    }));
+  }, progressText);
+
+  await expect(page.locator('[data-codex-index-progress-text]').first()).toHaveText(progressText);
+  expect(await page.locator('[data-codex-index-progress-text]').count()).toBeGreaterThan(1);
+  await expect(page.locator('body')).toHaveAttribute('data-progress-patch-identity', 'preserved');
+  expect(await page.evaluate(() => scrollY)).toBe(target);
+});

@@ -256,6 +256,38 @@ test('Codex summary leads with a clearly qualified API-equivalent cost', async (
   await expect(cards.nth(5).locator('.label')).toHaveText('Cache Hit Rate');
 });
 
+test('Codex model headlines use green API-equivalent prices while effort stays token-native', async ({ page }) => {
+  await openCodex(page);
+
+  const modelSection = page.locator('#today .model-breakdown', {
+    has: page.getByRole('heading', { name: 'Models', exact: true }),
+  });
+  const modelSummary = modelSection.locator('summary').first();
+  const modelPrice = modelSummary.locator('.model-cost');
+  await expect(modelPrice).toHaveText(/^\$[\d,.]+$/);
+  await expect(modelPrice).toHaveAttribute(
+    'title',
+    /not a bill or subscription charge.*Priced model coverage: 100%/,
+  );
+  await expect(modelSummary).not.toContainText('Uncached usage');
+  const expectedGreen = await page.evaluate(() => {
+    const probe = document.createElement('span');
+    probe.style.color = 'var(--vscode-charts-green)';
+    document.body.appendChild(probe);
+    const color = getComputedStyle(probe).color;
+    probe.remove();
+    return color;
+  });
+  expect(await modelPrice.evaluate((element) => getComputedStyle(element).color)).toBe(expectedGreen);
+
+  const effortSection = page.locator('#today .model-breakdown', {
+    has: page.getByRole('heading', { name: 'Effort', exact: true }),
+  });
+  const effortSummary = effortSection.locator('summary').first();
+  await expect(effortSummary.locator('.model-cost')).toHaveCount(0);
+  await expect(effortSummary.locator('.model-metric')).toContainText('Uncached usage');
+});
+
 test('Codex shows an unpriced marker without hiding unknown-model token totals', async ({ page }) => {
   await openCodex(page, { fixture: 'unknown-models' });
 
@@ -268,6 +300,14 @@ test('Codex shows an unpriced marker without hiding unknown-model token totals',
   expect(costText).toBe('—');
   expect(costText).not.toContain('$');
   await expect(costCard).toHaveAttribute('title', /Priced model coverage: 0%/);
+  const modelSection = page.locator('#today .model-breakdown', {
+    has: page.getByRole('heading', { name: 'Models', exact: true }),
+  });
+  await expect(modelSection.locator('summary .model-cost').first()).toHaveText('—');
+  await expect(modelSection.locator('summary .model-cost').first()).toHaveAttribute(
+    'title',
+    /Priced model coverage: 0%/,
+  );
   await expect(
     page.locator('#today [data-codex-today-hourly] .chart-content .hc-yaxis .hc-yval'),
   ).toHaveText(['—', '—', '—']);
