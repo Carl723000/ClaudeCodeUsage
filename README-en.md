@@ -55,6 +55,13 @@ These four v2.3.1 captures use the production renderer, synthetic fixtures, and 
 
 ## What's new in v2.3.1
 
+- Exact pricing and context metadata now cover **GPT-6 Astra**
+  (`gpt-6-astra`, 1.05M context) and **Claude Fable 5.1 / Mythos 5.1**
+  (`claude-fable-5-1` / `claude-mythos-5-1`, 1M context). Fable 5.1 uses its
+  model-specific `$0.25 / MTok` cache-read rate without changing historical
+  Fable 5 data. GPT-6 API-equivalent values use the official Standard
+  short-context rates; the request-wide surcharge above 272K input is excluded
+  because aggregate local logs cannot establish that per-request threshold.
 - Last 30 days is the configured-timezone current date plus the preceding 29 dates. Today ≤ Last 30 days ≤ All time, repeated refresh/reindex is stable, all breakdowns reconcile, and months run oldest-first. Claude's Workflows summary uses the same rolling range and assigns each run by its configured-zone start date. Chart metric switches and drill-down labels render daily/monthly usage keys without host-timezone rollback; Advice and Optimizer snooze dates also use the configured timezone and UI locale.
 - Structured reasoning-effort variants normalize without model-name guessing. Non-zero unknown is explained; zero unknown is hidden.
 - Bounded anonymous quota observations preserve irregular and same-day resets. Every valid same-window used fraction contributes to labelled total and unused subscription-durability estimates, including the current window. Approximate or unattributed evidence is low confidence. If local Codex quota series overlap, the current window uses the latest real observation for a low-confidence blended estimate; ambiguous completed windows remain used-only. Unused value never becomes negative.

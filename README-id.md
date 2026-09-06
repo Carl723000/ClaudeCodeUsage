@@ -55,6 +55,14 @@ Empat gambar v2.3.1 ini menggunakan renderer produksi, data sintetis, dan variab
 
 ## Yang baru di v2.3.1
 
+- Metadata harga dan konteks yang tepat kini mencakup **GPT-6 Astra**
+  (`gpt-6-astra`, konteks 1,05 juta token) serta **Claude Fable 5.1 / Mythos
+  5.1** (`claude-fable-5-1` / `claude-mythos-5-1`, konteks 1 juta token).
+  Fable 5.1 memakai tarif baca cache khusus `$0.25 / juta token` tanpa mengubah
+  riwayat Fable 5. Nilai ekuivalen API GPT-6 memakai tarif Standard resmi untuk
+  konteks pendek. Biaya tambahan untuk seluruh permintaan di atas 272K input
+  tidak disertakan karena log agregat lokal tidak dapat memastikan ambang per
+  permintaan tersebut.
 - 30 hari terakhir berarti hari ini dan 29 tanggal sebelumnya dalam zona waktu konfigurasi. Total dapat direkonsiliasi, refresh berulang stabil, dan bulan tampil dari lama ke baru. Ringkasan Workflows Claude memakai rentang bergulir yang sama dan memasukkan setiap eksekusi berdasarkan tanggal mulai di zona waktu konfigurasi. Saat metrik grafik diganti atau label drill-down dirender, kunci penggunaan harian/bulanan tidak lagi mundur sehari atau sebulan akibat zona waktu host. Tanggal berakhirnya penundaan Saran AI dan Usage Optimizer juga memakai zona waktu konfigurasi dan bahasa UI.
 - Reasoning effort terstruktur tidak ditebak dari nama model. `unknown` bukan nol dijelaskan; nilai nol disembunyikan.
 - Pengamatan kuota anonim yang terbatas mempertahankan reset tidak teratur dan pada hari yang sama. Fraksi valid dalam satu jendela menghasilkan estimasi total dan sisa daya tahan langganan, termasuk periode berjalan. Bukti perkiraan atau tanpa atribusi diberi keyakinan rendah. Jika series kuota Codex lokal tumpang tindih, periode berjalan memakai pengamatan nyata terbaru untuk estimasi gabungan berkeyakinan rendah; periode selesai yang atribusinya ambigu tetap hanya menampilkan nilai terpakai.

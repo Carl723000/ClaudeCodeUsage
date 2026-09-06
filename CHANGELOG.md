@@ -7,6 +7,15 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ## [2.3.1] — Unreleased
 
 ### Added
+- **GPT-6 Astra and Claude Fable 5.1 pricing** — exact model IDs now use their
+  current official Standard API rates and context windows: `gpt-6-astra`
+  (1.05M context) and `claude-fable-5-1` / `claude-mythos-5-1` (1M context).
+  Fable 5.1's model-specific cache-read rate is `$0.25 / MTok`; historical
+  Fable 5 pricing remains unchanged. GPT-6 requests above 272K input receive a
+  request-wide surcharge from OpenAI, but local aggregate logs cannot prove
+  that per-request boundary, so the API-equivalent estimate deliberately uses
+  the standard short-context rate and keeps the existing request-level-pricing
+  disclaimer.
 - **Combined activity heatmap and private sharing** — Compare now leads with a
   Claude + Codex calendar heatmap built from the existing provider daily
   aggregates. Its preview-first share studio exports deterministic local SVG, a

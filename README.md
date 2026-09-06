@@ -156,6 +156,13 @@ same full-request preview and separate explicit Send action as AI advice.
 
 ## What's new in v2.3.1
 
+- **GPT-6 Astra and Fable 5.1 support** — exact pricing and context metadata now
+  cover `gpt-6-astra` (1.05M context) and `claude-fable-5-1` /
+  `claude-mythos-5-1` (1M context). Fable 5.1 uses its model-specific
+  `$0.25 / MTok` cache-read rate without changing historical Fable 5 data.
+  GPT-6 API-equivalent values use official Standard short-context rates; the
+  request-wide surcharge above 272K input is excluded because aggregate local
+  logs cannot establish that per-request threshold.
 - **Correct, stable date ranges** — Last 30 days means today plus the preceding
   29 calendar dates in the configured timezone. Today ≤ Last 30 days ≤ All time,
   provider totals reconcile, repeated refresh/reindex is idempotent, and Codex
