@@ -11,28 +11,45 @@ This roadmap follows the v2.3.1 regression fixes. Its goal is to give equivalent
 
 ## P0.5: accepted post-v2.3.1 audit follow-ups
 
-- Rearm failed Claude/Codex file watchers with bounded exponential backoff while
-  polling remains the safe fallback; test repeated failure, recovery, and
-  disposal without a hot loop.
-- Cache `session_index.jsonl` by verified size/mtime and keep title recovery
-  streaming and memory-bounded. Preserve the rule that titles stay memory-only
-  and every non-title field remains ignored.
-- Rename rolling-30-day variables that still say `month`, remove dead hourly
-  caches/branches, and escape every dynamic error-page slot before insertion.
-- Localize the non-zero `component-delta-clamped` quality explanation and add a
-  migration fixture proving quota compaction retains the oldest/newest boundary
-  evidence needed for later confidence calculations.
-- Add explicit browser contracts for Advice snooze persistence and for Compare
-  never summing cross-provider cost or quota. Decide whether the legacy Claude
-  Share Card is retired into the Compare studio or receives full timezone and
-  eight-locale parity before adding more sharing surfaces.
-- Implement [#91](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/91)
-  as a local display preference only: user-entered rate, currency code/symbol,
-  deterministic formatting, no exchange-rate network dependency, and USD kept
-  as the auditable base value.
-- Keep the detailed local-data inventory and destructive clear-path reference in
-  `LOCAL-DATA.md` / `LOCAL-DATA.zh-CN.md`; do not reintroduce the verbose panel
-  into the normal plugin Settings surface.
+At the start of the v2.3.2 stabilization branch, the accepted items have the
+following status. Commit identifiers refer to the local candidate branch and
+become release evidence only after maintainer review and merge.
+
+- **Done — watcher recovery:** failed Claude/Codex file watchers rearm with
+  bounded exponential backoff while polling remains the safe fallback. Tests
+  cover repeated failure, recovery, and disposal without a hot loop
+  (`cd7a100`).
+- **Done — title-index cache:** `session_index.jsonl` is cached by verified
+  size/mtime/device/inode with before/after race detection. Titles remain
+  memory-only and every non-title field remains ignored (`e89784d`).
+- **Done — time semantics and error boundary:** Webview rolling-30-day data no
+  longer masquerades as a calendar month, and the unused hourly cache is gone.
+  The stable `month` DOM tab id remains temporarily as a persistence-compatibility
+  contract. Dynamic share errors now use DOM `textContent`, not HTML insertion
+  (`d840976`, `e96c45a`).
+- **Done — quality and quota migration:** all eight locales explain a non-zero
+  `component-delta-clamped` flag. Quota compaction preserves the oldest and
+  newest series endpoints before other window boundaries, with a small-retention
+  migration fixture (`d840976`).
+- **Done — browser boundaries:** an Advice snooze stays closed and resumable
+  after a full Webview reload. Compare summaries remain provider-native token
+  cards while cost and allowance stay in two provider-qualified panels
+  (`cd482a5`).
+- **Decided — legacy Claude Share Card:** do not expand a second sharing-settings
+  surface. v2.3.x retains the current command, renderer, and export compatibility;
+  v2.4 converges provider-specific export into the Compare sharing studio, then
+  removes the old panel only after documentation migration and compatibility
+  tests. New sharing capabilities go only into the unified studio.
+- **Done — [#91](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/91):**
+  local display preferences accept a user-entered units-per-USD rate and bounded
+  currency code/symbol. Formatting is deterministic and carries `≈`; underlying
+  prices, aggregates, sorting, and persistence remain USD. No exchange-rate
+  transport exists, provider-native usage credits bypass conversion, and both
+  static and client-rendered drill-downs share the same formatter (`12bd21b`).
+- **Preserved — concise Settings:** keep the detailed local-data inventory and
+  destructive clear-path reference in `LOCAL-DATA.md` /
+  `LOCAL-DATA.zh-CN.md`; do not reintroduce the verbose panel into the normal
+  plugin Settings surface.
 
 ## P1: time-hierarchy chart drill-down
 
