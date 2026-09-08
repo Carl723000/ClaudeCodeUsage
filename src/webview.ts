@@ -606,9 +606,9 @@ export class UsageWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
   private currentSessionData: SessionData | null = null;
   private todayData: UsageData | null = null;
-  private monthData: UsageData | null = null;
+  private rolling30DayData: UsageData | null = null;
   private allTimeData: UsageData | null = null;
-  private dailyDataForMonth: { date: string; data: UsageData }[] = [];
+  private dailyDataForRolling30Days: { date: string; data: UsageData }[] = [];
   private dailyDataForAllTime: { date: string; data: UsageData }[] = [];
   private hourlyDataForToday: { hour: string; data: UsageData }[] = [];
   private isLoading: boolean = false;
@@ -622,7 +622,6 @@ export class UsageWebviewProvider {
   private codexLoading = false;
   private codexProgress: CodexRenderProgress | null = null;
   private providerSelectionInitialized = false;
-  private hourlyDataCache: Map<string, { hour: string; data: UsageData }[]> = new Map();
   private configuredDateTimeFormatter?: {
     configuredTimeZone: string;
     formatter: Intl.DateTimeFormat;
@@ -2104,9 +2103,9 @@ export class UsageWebviewProvider {
   updateData(
     sessionData: SessionData | null,
     todayData: UsageData | null,
-    monthData: UsageData | null,
+    rolling30DayData: UsageData | null,
     allTimeData: UsageData | null,
-    dailyDataForMonth: { date: string; data: UsageData }[] = [],
+    dailyDataForRolling30Days: { date: string; data: UsageData }[] = [],
     dailyDataForAllTime: { date: string; data: UsageData }[] = [],
     hourlyDataForToday: { hour: string; data: UsageData }[] = [],
     error?: string,
@@ -2121,9 +2120,9 @@ export class UsageWebviewProvider {
   ): void {
     this.currentSessionData = sessionData;
     this.todayData = todayData;
-    this.monthData = monthData;
+    this.rolling30DayData = rolling30DayData;
     this.allTimeData = allTimeData;
-    this.dailyDataForMonth = dailyDataForMonth;
+    this.dailyDataForRolling30Days = dailyDataForRolling30Days;
     this.dailyDataForAllTime = dailyDataForAllTime;
     this.hourlyDataForToday = hourlyDataForToday;
     this.error = error || null;
@@ -2139,7 +2138,7 @@ export class UsageWebviewProvider {
     this.workflowBreakdown = workflowBreakdown;
     this.costliestMessages = costliestMessages;
     this.providerAvailability.claude = Boolean(
-      sessionData || todayData || monthData || allTimeData,
+      sessionData || todayData || rolling30DayData || allTimeData,
     );
 
     if (this.panel) {
@@ -2333,7 +2332,7 @@ export class UsageWebviewProvider {
     if (
       !this.currentSessionData &&
       !this.todayData &&
-      !this.monthData &&
+      !this.rolling30DayData &&
       !this.providerAvailability.codex
     ) {
       return this.getNoDataContent();
@@ -2658,7 +2657,7 @@ export class UsageWebviewProvider {
     // Keep the navigation familiar across providers. Codex still renders the
     // provider-native "Recent task" heading and aggregation inside this tab.
     const today = I18n.t.popup.today;
-    const thisMonth = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.last30days;
+    const middleRangeLabel = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.last30days;
     const allTime = provider === 'codex' ? codexCopy.allTime : I18n.t.popup.allTime;
     const sessions = provider === 'codex' ? codexCopy.sessions : I18n.t.popup.sessions;
     const projects = provider === 'codex' ? codexCopy.projects : I18n.t.popup.projects;
@@ -2668,7 +2667,7 @@ export class UsageWebviewProvider {
     const settingsTab = I18n.t.popup.settingsTab;
 
     const todayActive = this.currentTab === 'today' ? 'active' : '';
-    const monthActive = this.currentTab === 'month' ? 'active' : '';
+    const rolling30Active = this.currentTab === 'month' ? 'active' : '';
     const allActive = this.currentTab === 'all' ? 'active' : '';
     const sessionsActive = this.currentTab === 'sessions' ? 'active' : '';
     const projectsActive = this.currentTab === 'projects' ? 'active' : '';
@@ -2750,7 +2749,7 @@ export class UsageWebviewProvider {
       `
           <div class="tabs" role="tablist" aria-label="${this.escapeHtml(title)}">
             ` + dashboardTab('today', today, todayActive) +
-      dashboardTab('month', thisMonth, monthActive) +
+      dashboardTab('month', middleRangeLabel, rolling30Active) +
       dashboardTab('all', allTime, allActive) +
       dashboardTab('sessions', sessions, sessionsActive) +
       dashboardTab('projects', projects, projectsActive) +
@@ -2763,7 +2762,7 @@ export class UsageWebviewProvider {
           </div>
 
           ` + dashboardPanel('today', todayActive, this.renderTodayData(provider)) +
-      dashboardPanel('month', monthActive, this.renderMonthData(provider)) +
+      dashboardPanel('month', rolling30Active, this.renderMonthData(provider)) +
       dashboardPanel('all', allActive, this.renderAllTimeData(provider)) +
       dashboardPanel('sessions', sessionsActive, this.renderSessionData(provider)) +
       dashboardPanel('projects', projectsActive, this.renderProjectData(provider)) +
@@ -3036,7 +3035,7 @@ export class UsageWebviewProvider {
       this.todayData.totalOutputTokens > 0 ||
       this.todayData.totalCacheCreationTokens > 0 ||
       this.todayData.totalCacheReadTokens > 0;
-    const latestActivityDate = this.dailyDataForMonth.reduce<string | undefined>(
+    const latestActivityDate = this.dailyDataForRolling30Days.reduce<string | undefined>(
       (latest, row) => latest === undefined || row.date > latest ? row.date : latest,
       undefined,
     );
@@ -3725,14 +3724,14 @@ export class UsageWebviewProvider {
           }).join('') + '</tbody></table></div></div>';
       return this.renderUsageData(null, provider, view.last30Days) + breakdown;
     }
-    if (!this.monthData) {
+    if (!this.rolling30DayData) {
       return `<div class="no-data"><p>${I18n.t.popup.noDataMessage}</p></div>`;
     }
 
-    const monthSummary = this.renderUsageData(this.monthData, provider);
+    const rolling30Summary = this.renderUsageData(this.rolling30DayData, provider);
 
     const dailyBreakdown =
-      this.dailyDataForMonth.length > 0
+      this.dailyDataForRolling30Days.length > 0
         ? `
       <div class="daily-breakdown">
         <h3>${I18n.t.popup.dailyBreakdown}</h3>
@@ -3753,7 +3752,7 @@ export class UsageWebviewProvider {
         </div>
 
         ${this.renderCompositionChart(
-          [...this.dailyDataForMonth]
+          [...this.dailyDataForRolling30Days]
             .sort((a, b) => a.date.localeCompare(b.date))
             .map((d) => ({ label: this.getShortDate(d.date), data: d.data })),
           provider,
@@ -3775,7 +3774,7 @@ export class UsageWebviewProvider {
               </tr>
             </thead>
             <tbody>
-              ${this.dailyDataForMonth
+              ${this.dailyDataForRolling30Days
                 .map(
                   ({ date, data }) => `
                 <tr class="daily-row" data-date="${date}">
@@ -3814,7 +3813,7 @@ export class UsageWebviewProvider {
     `
         : '';
 
-    return monthSummary + dailyBreakdown;
+    return rolling30Summary + dailyBreakdown;
   }
 
   private renderAllTimeData(provider: SettingProvider = 'claude'): string {
@@ -5107,7 +5106,7 @@ export class UsageWebviewProvider {
       (sum, w) => sum + w.data.totalCost + (w.orchestration ? w.orchestration.totalCost : 0),
       0
     );
-    const rollingTotalCost = this.monthData ? this.monthData.totalCost : 0;
+    const rollingTotalCost = this.rolling30DayData ? this.rolling30DayData.totalCost : 0;
     const rollingShare = rollingTotalCost > 0 ? rollingWorkflowCost / rollingTotalCost : null;
     const summaryStrip =
       '<p class="table-hint">' +
@@ -6877,7 +6876,7 @@ export class UsageWebviewProvider {
         provider,
       );
     }
-    const sortedData = [...this.dailyDataForMonth].sort((a, b) => a.date.localeCompare(b.date));
+    const sortedData = [...this.dailyDataForRolling30Days].sort((a, b) => a.date.localeCompare(b.date));
     return this.renderMainCostChart(sortedData, false, provider);
   }
 

@@ -61,7 +61,7 @@ test('Workflows summary matches the configured-zone rolling 30-day dashboard sco
     I18n.setLanguage('en');
     I18n.setTimezone('Asia/Tokyo');
     withWebviewProvider((provider) => {
-      provider.monthData = usage(40);
+      provider.rolling30DayData = usage(40);
       provider.workflowBreakdown = [
         // The first included civil date is 2026-08-06 in Tokyo.
         workflow('included-by-start', '2026-08-05T15:00:00.000Z', '2026-09-05T00:00:00.000Z', 10),
@@ -98,7 +98,7 @@ test('Workflows rolling-range summary is localized in every UI language', () => 
   try {
     I18n.setTimezone('UTC');
     withWebviewProvider((provider) => {
-      provider.monthData = usage(10);
+      provider.rolling30DayData = usage(10);
       provider.workflowBreakdown = [
         workflow('recent', '2026-09-01T00:00:00.000Z', '2026-09-01T01:00:00.000Z', 10),
       ];
