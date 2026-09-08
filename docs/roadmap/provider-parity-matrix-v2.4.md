@@ -28,10 +28,10 @@ local branch and has passed its listed tests.
 | All-time month → day | Click/table disclosure regroups already loaded records by configured-zone day | No entry: the Codex index currently exposes monthly all-time rows but only rolling-30-day daily rows | Intentional difference | Do not add a dead Codex control. Add parity only after an audited all-time daily aggregate exists with bounded storage |
 | Chart expansion semantics | One expanded period, matching table button and chart state, `aria-expanded` / `aria-controls` | Same for supported day → hour rows | Aligned | Reload and keyboard contracts pass in `codex-interactions.spec.mjs` and `codex-accessibility.spec.mjs` |
 | Empty / partial hourly detail | Claude no-data response inside the controlled row | Explicit no-data row plus hourly migration coverage | Aligned hierarchy, intentional provenance copy | Codex never falls back to unverified legacy totals |
-| Missing-period zero fill | Sparse source rows are rendered as-is | Sparse source rows are rendered as-is | Partial | Today can appear to start at the first active hour; Last 30 days can look shorter than the requested range. Zero-fill presentation is the next implementation slice |
+| Missing-period zero fill | Today presents all 24 hours; Last 30 days presents exactly 30 configured-zone civil dates without widening source aggregates | Complete Today coverage presents all 24 hours; partial indexing stays sparse; Last 30 days presents exactly 30 dates | Candidate (`7b86a54`) | Synthetic zero rows render as real zero values rather than unpriced data. Claude zero days expose no dead drill-down control. Helper unit tests and `time-range-presentation.spec.mjs` cover the exact ranges |
 | Metric persistence | Selected metric survives full Webview reload | Same | Aligned | `chartMetrics` state and browser coverage |
 | Expansion / selection persistence | Expansion and Today-hour selection survive Webview reload and reset on a user-initiated top-tab switch | Same for supported interactions | Aligned on reload; partial on live refresh | Live replacement must additionally prove focus and scroll-anchor preservation |
-| Page scroll | Debounced per-provider/tab position | Same | Aligned on reload | Continuous scrolling writes once after the gesture; reload restoration is covered in `codex-interactions.spec.mjs` |
+| Page scroll | Debounced per-provider/tab position | Same | Aligned on reload; candidate duplicate-write guard (`7b86a54`) | Continuous scrolling writes once after the gesture; late Chromium scroll/pagehide events cannot synchronously rewrite an identical position; reload restoration is covered in `codex-interactions.spec.mjs` |
 | Tables | Shared numeric alignment, sortable semantics where applicable, bounded horizontal scrollers | Same | Aligned | Keyboard sorting, 360 px, long-locale, and desktop overflow tests |
 | Weekly allowance-value detail | Provider-qualified Claude panel; details collapsed by default | Separate provider-qualified Codex panel; details collapsed by default | Aligned layout, intentional evidence authority | Claude uses official observations; Codex uses local last-observed evidence. Compare never sums them |
 | Status-bar quota detail | Official `/usage`, shared progress table and thresholds | Last-observed local evidence, same progress table and thresholds | Aligned layout, intentional authority | Provider-specific provenance stays visible and must never be inferred from matching colors |
@@ -57,14 +57,12 @@ bounded DTO before a new drill-down control is added.
 
 ## Next implementation order
 
-1. Zero-fill exact presentation ranges: 24 Today hours and 30 configured-zone
-   civil dates, with sparse source data left unchanged underneath.
-2. Transfer Claude rolling-hour materialization to the Webview so day → hour no
+1. Transfer Claude rolling-hour materialization to the Webview so day → hour no
    longer regroups all loaded records on activation.
-3. Preserve selection, expansion, keyboard focus, and the nearest scroll anchor
+2. Preserve selection, expansion, keyboard focus, and the nearest scroll anchor
    through a live data replacement, not only a full Webview reload.
-4. Add provider-qualified labelled chart regions or text alternatives and test
+3. Add provider-qualified labelled chart regions or text alternatives and test
    duplicate-looking Compare regions for unique accessible names.
-5. Decide whether an all-time Codex daily aggregate has acceptable storage and
+4. Decide whether an all-time Codex daily aggregate has acceptable storage and
    migration cost. Until then, month → day remains an explicit semantic
    difference rather than a nonfunctional control.
