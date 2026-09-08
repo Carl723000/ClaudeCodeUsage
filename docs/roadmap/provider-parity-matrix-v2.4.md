@@ -1,0 +1,70 @@
+# v2.4 provider parity matrix
+
+[简体中文](provider-parity-matrix-v2.4.zh-CN.md) · English
+
+Snapshot: 2026-09-08, local candidate branch `codex/v2.3.2-stabilization`.
+Commit identifiers are development evidence, not published-release claims.
+
+This matrix records interaction parity without pretending Claude and Codex
+expose equivalent data. “Aligned” means the user interaction and visual
+hierarchy match. “Intentional difference” means the available source evidence
+does not support the same behavior. “Partial” means a known contract remains to
+be implemented or verified. “Candidate” means the behavior exists only on the
+local branch and has passed its listed tests.
+
+## Component matrix
+
+| Area | Claude | Codex | Status | Evidence and boundary |
+|:--|:--|:--|:--|:--|
+| Provider navigation | Shared tablist, automatic activation, roving keyboard focus | Same | Aligned | `providerNavClient.ts`; keyboard and Axe coverage in `tests/ui/codex-accessibility.spec.mjs` |
+| Dashboard navigation | Today / Last 30 days / All time plus Claude-supported destinations | Same shared tabs, with unsupported Branches and Workflows omitted | Aligned with intentional destination difference | `showTab` owns one state and ARIA path; `codex-interactions.spec.mjs` covers navigation and reload |
+| Summary cards | Claude cost, messages, token/cache totals | Qualified API-equivalent value and Codex-native token totals | Aligned layout, intentional metrics | Shared production stylesheet and geometry contracts in `codex-visual.spec.mjs` |
+| Model disclosures | Green displayed cost, token detail in disclosure | Green API-equivalent value, Codex-native token detail | Aligned | `codex-visual.spec.mjs` verifies headline meaning and shared disclosure geometry |
+| Today hourly primary chart | Cost and token/message switches | API-equivalent value and Codex token/thread switches | Aligned | Both use the same chart controls, grid, stacked cost treatment, and configured-zone hour labels |
+| Today hourly selection | Selectable hour, synchronized detail line and table row | Same | Candidate (`fbaa693`) | Mouse, Enter, Space, metric synchronization, no host message, reload restoration, and tab-reset behavior pass in `codex-interactions.spec.mjs` |
+| Today token composition | Claude input, cache write, cache read, output | Fresh input, cached input, output; reasoning remains a subset note rather than a second output segment | Aligned with intentional token semantics | Shared composition renderer; Codex never double-counts reasoning |
+| Last-30-days primary chart | Daily values and metric switches | Same interaction with Codex-native metrics | Aligned | Shared chart stack and `chart-date-labels.spec.mjs`; configured-zone daily keys remain stable |
+| Last-30-days day → hour | Click/table disclosure asks the host to regroup already loaded in-memory Claude records | Click/table disclosure uses the persisted rolling-hour sidecar in the Webview | Partial | Neither path rereads JSONL on click. Codex is already materialized; Claude still performs an in-memory O(records) regroup and should move to the materialized recent-hour map |
+| All-time month → day | Click/table disclosure regroups already loaded records by configured-zone day | No entry: the Codex index currently exposes monthly all-time rows but only rolling-30-day daily rows | Intentional difference | Do not add a dead Codex control. Add parity only after an audited all-time daily aggregate exists with bounded storage |
+| Chart expansion semantics | One expanded period, matching table button and chart state, `aria-expanded` / `aria-controls` | Same for supported day → hour rows | Aligned | Reload and keyboard contracts pass in `codex-interactions.spec.mjs` and `codex-accessibility.spec.mjs` |
+| Empty / partial hourly detail | Claude no-data response inside the controlled row | Explicit no-data row plus hourly migration coverage | Aligned hierarchy, intentional provenance copy | Codex never falls back to unverified legacy totals |
+| Missing-period zero fill | Sparse source rows are rendered as-is | Sparse source rows are rendered as-is | Partial | Today can appear to start at the first active hour; Last 30 days can look shorter than the requested range. Zero-fill presentation is the next implementation slice |
+| Metric persistence | Selected metric survives full Webview reload | Same | Aligned | `chartMetrics` state and browser coverage |
+| Expansion / selection persistence | Expansion and Today-hour selection survive Webview reload and reset on a user-initiated top-tab switch | Same for supported interactions | Aligned on reload; partial on live refresh | Live replacement must additionally prove focus and scroll-anchor preservation |
+| Page scroll | Debounced per-provider/tab position | Same | Aligned on reload | Continuous scrolling writes once after the gesture; reload restoration is covered in `codex-interactions.spec.mjs` |
+| Tables | Shared numeric alignment, sortable semantics where applicable, bounded horizontal scrollers | Same | Aligned | Keyboard sorting, 360 px, long-locale, and desktop overflow tests |
+| Weekly allowance-value detail | Provider-qualified Claude panel; details collapsed by default | Separate provider-qualified Codex panel; details collapsed by default | Aligned layout, intentional evidence authority | Claude uses official observations; Codex uses local last-observed evidence. Compare never sums them |
+| Status-bar quota detail | Official `/usage`, shared progress table and thresholds | Last-observed local evidence, same progress table and thresholds | Aligned layout, intentional authority | Provider-specific provenance stays visible and must never be inferred from matching colors |
+| Sharing | Legacy Claude export remains compatible during v2.3.x | Compare studio exports privacy-safe provider components | Partial by decision | New sharing work goes only to the Compare studio; legacy removal waits for documentation and compatibility migration |
+| Settings | Concise provider-aware controls | Same | Aligned | Detailed local-data inventory and destructive controls remain repository documentation only |
+| Accessible chart alternatives | Interactive controls have names and state; empty states are live regions | Same | Partial | Every complete chart still needs one provider-qualified text alternative or labelled region, including duplicate-looking Compare regions |
+| Installed VSIX evidence | Not yet captured for this branch | Not yet captured for this branch | Partial | Candidate packaging must capture privacy-safe real VS Code screenshots for status, quota, and both supported drill-down levels |
+
+## Read and persistence boundaries
+
+| Interaction | Source read allowed on activation | Persisted across Webview reload | Reset boundary |
+|:--|:--|:--|:--|
+| Today hour selection | None; DOM state only | Selected hour and selected metric | User switches the top dashboard tab |
+| Last 30 days day → hour (Claude) | Existing in-memory records only; no filesystem read | Expanded day and metric | User switches the top dashboard tab |
+| Last 30 days day → hour (Codex) | Existing materialized Webview DTO only; no host message | Expanded day and metric | User switches the top dashboard tab |
+| All time month → day (Claude) | Existing in-memory records only; no filesystem read | Expanded month and metric | User switches the top dashboard tab |
+| Sort / filter | Existing rendered DTO only | Sort, session range, and model filter | Explicit user change or UI reset |
+| Scroll | Browser scroll position only | Per provider and dashboard tab | UI reset |
+
+No interaction in this table may initiate a JSONL rescan. A new aggregation
+must be built during the existing index/update pass and transferred through a
+bounded DTO before a new drill-down control is added.
+
+## Next implementation order
+
+1. Zero-fill exact presentation ranges: 24 Today hours and 30 configured-zone
+   civil dates, with sparse source data left unchanged underneath.
+2. Transfer Claude rolling-hour materialization to the Webview so day → hour no
+   longer regroups all loaded records on activation.
+3. Preserve selection, expansion, keyboard focus, and the nearest scroll anchor
+   through a live data replacement, not only a full Webview reload.
+4. Add provider-qualified labelled chart regions or text alternatives and test
+   duplicate-looking Compare regions for unique accessible names.
+5. Decide whether an all-time Codex daily aggregate has acceptable storage and
+   migration cost. Until then, month → day remains an explicit semantic
+   difference rather than a nonfunctional control.

@@ -2,6 +2,9 @@
 
 本路线图承接 v2.3.1 的回归修复，目标是在不混淆两家 provider 指标语义的前提下，让相同类型的信息采用相同的交互、视觉层级、键盘行为和反馈方式。它不是 v2.3.1 发布范围；每项进入实现前都要先补最小失败夹具。
 
+当前审计台账：[简体中文](provider-parity-matrix-v2.4.zh-CN.md) ·
+[English](provider-parity-matrix-v2.4.md)。
+
 ## P0：交互清单与独立审计
 
 - 建立 Claude / Codex 逐组件对照表：状态栏、额度 tooltip、摘要卡、图表、表格、折叠项、空状态、加载/失败状态、筛选、排序、下钻、返回路径、窄屏和深浅主题。
@@ -69,7 +72,7 @@
 
 ## P4：验收门
 
-- 一份可追踪的 provider parity matrix，每个差异标记为“已对齐”或“刻意不同”，后者必须写明语义理由。
+- 持续维护可追踪的 [provider 一致性矩阵](provider-parity-matrix-v2.4.zh-CN.md)；每个差异标记为“已对齐”或“刻意不同”，后者必须写明语义理由。
 - Node 夹具覆盖非 UTC 与 DST 守恒（`小时之和 = 日`、`日之和 = 月`，且 Today 使用同一日表）、点击零额外 JSONL 读取、额度阈值和状态栏范围。
 - Playwright 覆盖鼠标、Enter/Space、ARIA、焦点、Light+/Dark+、360 px、最长语言和逐级下钻/收起。
 - 在隔离 VS Code profile 安装 VSIX，至少截取 Claude/Codex 今日状态栏、额度 tooltip、月→日和日→小时四组隐私安全实图。

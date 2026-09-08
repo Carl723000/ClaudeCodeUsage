@@ -2,6 +2,9 @@
 
 This roadmap follows the v2.3.1 regression fixes. Its goal is to give equivalent information the same interaction, visual hierarchy, keyboard behavior, and feedback without pretending that Claude and Codex expose equivalent metrics. It is outside the v2.3.1 release scope; every item starts with a minimal failing fixture.
 
+Current audit ledger: [简体中文](provider-parity-matrix-v2.4.zh-CN.md) ·
+[English](provider-parity-matrix-v2.4.md).
+
 ## P0: inventory and independent audit
 
 - Build a component-by-component Claude/Codex matrix covering status items, quota tooltips, summary cards, charts, tables, disclosures, empty/loading/error states, filters, sorting, drill-down, return paths, narrow layouts, and light/dark themes.
@@ -79,7 +82,7 @@ become release evidence only after maintainer review and merge.
 
 ## P4: exit gate
 
-- A tracked parity matrix marks every difference aligned or intentionally different with a semantic rationale.
+- Maintain the tracked [provider parity matrix](provider-parity-matrix-v2.4.md), where every difference is aligned or intentionally different with a semantic rationale.
 - Node fixtures cover non-UTC and DST conservation (`sum(hours) = day`, `sum(days) = month`, and Today uses the same day map), zero JSONL reads on click, quota thresholds, and Today status scope.
 - Playwright covers mouse, Enter/Space, ARIA, focus, Light+/Dark+, 360 px, the longest locale, and drill-down/collapse flows.
 - An isolated VS Code profile installs the VSIX and captures privacy-safe Claude/Codex Today status, quota tooltip, month-to-day, and day-to-hour evidence.
