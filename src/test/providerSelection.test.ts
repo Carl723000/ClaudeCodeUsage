@@ -407,7 +407,7 @@ test('provider and Codex view copy is complete in every UI locale', () => {
         if (typeof value === 'string') {
           assert.notEqual(value.trim(), '', `${language} has empty Codex copy`);
         } else {
-          assert.ok([5, 7, 15, 16, 17, 18].includes(Object.keys(value).length));
+          assert.ok([5, 7, 15, 16, 17, 18, 19].includes(Object.keys(value).length));
         }
       }
       assert.deepEqual(

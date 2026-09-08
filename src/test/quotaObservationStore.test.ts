@@ -324,6 +324,23 @@ test('retention and compaction preserve a live window first and last observation
   assert.equal(retained.observations.length, 0);
 });
 
+test('migration compaction keeps the oldest and newest boundary evidence', () => {
+  const additions = Array.from({ length: 10 }, (_unused, index) => capture({
+    observedAt: NOW - (9 - index) * HOUR,
+    usedFraction: 0.1 + index * 0.01,
+    captureReason: 'migration',
+  }));
+  const compacted = mergeQuotaCaptures(createEmptyQuotaObservationStore(), additions, {
+    salt: SALT,
+    now: NOW,
+    limitPerSeries: 4,
+  });
+
+  assert.equal(compacted.observations.length, 4);
+  assert.ok(compacted.observations.some((item) => item.observedAt === NOW - 9 * HOUR));
+  assert.ok(compacted.observations.some((item) => item.observedAt === NOW));
+});
+
 test('quota store writes atomically and reloads a strict schema-2 document', async () => {
   const root = path.join(os.tmpdir(), `ccu-quota-store-${process.pid}-${Math.random().toString(16).slice(2)}`);
   await mkdir(root, { recursive: true });

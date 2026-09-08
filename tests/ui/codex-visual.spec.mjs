@@ -218,6 +218,26 @@ test('Claude middle dashboard scope is labelled as a rolling 30-day range', asyn
   await expect(page.locator('#tab-month')).toHaveText('Last 30 days');
 });
 
+test('legacy share-card errors are rendered as text instead of executable HTML', async ({ page }) => {
+  await openClaude(page, { fixture: 'combined-heatmap' });
+  await page.locator('#tab-all').click();
+  await expect(page.locator('#scPreview')).toBeVisible();
+
+  const hostileError = '<img src="missing" onerror="window.__shareCardErrorExecuted = true">';
+  await page.evaluate((error) => {
+    window.__shareCardErrorExecuted = false;
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { command: 'shareCardResult', error },
+    }));
+  }, hostileError);
+
+  await expect(page.locator('#scPreview img')).toHaveCount(0);
+  await expect(page.locator('#scPreview .table-hint')).toHaveText(
+    `Could not build the card: ${hostileError}`,
+  );
+  expect(await page.evaluate(() => window.__shareCardErrorExecuted)).toBe(false);
+});
+
 test('Codex header matches Claude with only Refresh and Settings actions', async ({ page }) => {
   await openCodex(page);
 

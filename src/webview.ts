@@ -11670,9 +11670,14 @@ window.addEventListener('message', async function(event) {
   if (message.command === 'shareCardResult') {
     const prev = document.getElementById('scPreview');
     if (prev) {
-      prev.innerHTML = message.error
-        ? '<p class="table-hint">Could not build the card: ' + message.error + '</p>'
-        : (message.svg || '');
+      if (message.error) {
+        var shareCardError = document.createElement('p');
+        shareCardError.className = 'table-hint';
+        shareCardError.textContent = 'Could not build the card: ' + String(message.error);
+        prev.replaceChildren(shareCardError);
+      } else {
+        prev.innerHTML = message.svg || '';
+      }
     }
   }
 
