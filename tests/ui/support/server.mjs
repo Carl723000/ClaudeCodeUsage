@@ -39,6 +39,7 @@ const server = createServer(async (request, response) => {
       'zero-input',
       'covered-day-without-hourly-rows',
       'advice-effectiveness',
+      'advice-effectiveness-snoozed',
       'advice-effectiveness-disabled',
       'advice-optimizer',
       'combined-heatmap',

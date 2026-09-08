@@ -430,7 +430,9 @@ exports.renderHarness = async function renderHarness({
     // consent or feedback control. Let that same path settle in the harness.
     await new Promise((resolve) => setImmediate(resolve));
     const persistedDetailsFixture = fixture === 'persisted-details';
-    const adviceEffectivenessFixture = fixture === 'advice-effectiveness';
+    const adviceEffectivenessFixture = fixture === 'advice-effectiveness'
+      || fixture === 'advice-effectiveness-snoozed';
+    const adviceSnoozedFixture = fixture === 'advice-effectiveness-snoozed';
     const adviceOptimizerFixture = fixture === 'advice-optimizer';
     const adviceContentFixture = adviceEffectivenessFixture
       || adviceOptimizerFixture
@@ -447,6 +449,18 @@ exports.renderHarness = async function renderHarness({
       provider.updateAdviceEffectivenessData(
         buildAdviceEffectivenessFixture({ locale }).states,
       );
+      if (adviceSnoozedFixture) {
+        provider.adviceLocalState = {
+          ...provider.adviceLocalState,
+          suppression: [{
+            provider: 'claude',
+            surface: 'advice',
+            recommendationId: 'recommendation-claude-clear-between-tasks',
+            updatedAtEpochMs: CODEX_WEBVIEW_NOW,
+            snoozedUntilEpochMs: CODEX_WEBVIEW_NOW + 7 * 24 * 60 * 60_000,
+          }],
+        };
+      }
     }
     if (adviceOptimizerFixture) {
       provider.optimizerState = {

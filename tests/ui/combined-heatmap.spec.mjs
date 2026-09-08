@@ -85,6 +85,26 @@ test('sharing workspace is on by default and can be hidden without removing Comp
   await expect(page.locator('.weekly-value-details')).toHaveCount(2);
 });
 
+test('Compare keeps provider costs and allowance estimates separate instead of summing them', async ({ page }) => {
+  await openCompare(page, { fixture: 'combined-heatmap', locale: 'en' });
+
+  const summaryCards = page.locator('#provider-panel > .usage-summary .summary-item');
+  await expect(summaryCards).toHaveCount(2);
+  await expect(summaryCards.locator(':scope > h3')).toHaveText(['Claude', 'Codex Beta']);
+  const summaryText = (await summaryCards.allTextContents()).join('\n');
+  expect(summaryText).not.toContain('$');
+  expect(summaryText).not.toMatch(/quota|allowance/i);
+
+  const allowancePanels = page.locator('#provider-panel > .daily-breakdown').filter({
+    has: page.locator('.weekly-value-details'),
+  });
+  await expect(allowancePanels).toHaveCount(2);
+  await expect(allowancePanels.locator(':scope > .section-header > h3')).toHaveText([
+    'Weekly subscription allowance · API-equivalent estimate · Claude',
+    'Weekly subscription allowance · API-equivalent estimate · Codex Beta',
+  ]);
+});
+
 test('combined share preferences stay local and every export action is explicit', async ({ page }) => {
   await openCompare(page, { fixture: 'combined-heatmap', locale: 'en' });
   expect(await page.evaluate(() => window.__ccuPostedMessages.filter(
