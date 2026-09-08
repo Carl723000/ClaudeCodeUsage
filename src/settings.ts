@@ -3,6 +3,7 @@ import {
   CODEX_LIVE_REFRESH_SECONDS,
   LIVE_REFRESH_SECONDS,
 } from './refreshPolicy';
+import { normalizeCurrencyDisplay } from './currencyDisplay';
 
 // Single source of truth for every user setting (V2.1: "settings in the
 // dashboard"). Most settings moved OUT of VS Code's Settings UI to keep it
@@ -43,6 +44,8 @@ export interface SettingDef {
   enumGroups?: { label: string; values: string[]; labels: string[] }[];
   min?: number;
   max?: number;
+  step?: number;
+  maxLength?: number;
   secret?: boolean; // mask the input (apiKey)
   multiline?: boolean; // render a textarea
   // Dashboard visibility. Omitted settings are Claude-only; explicitly list
@@ -228,6 +231,31 @@ export const SETTINGS: SettingDef[] = [
     label: 'Cost decimal places',
     min: 0,
     max: 4,
+    providers: ['claude', 'codex'],
+  },
+  {
+    key: 'displayCurrency',
+    type: 'string',
+    default: '$',
+    storage: 'state',
+    group: 'general',
+    label: 'Cost currency code or symbol',
+    help: 'Display only. Enter a three-letter code (EUR) or a short symbol (€). No exchange rate is fetched; underlying estimates remain USD.',
+    maxLength: 8,
+    providers: ['claude', 'codex'],
+  },
+  {
+    key: 'usdConversionRate',
+    type: 'number',
+    default: 1,
+    storage: 'state',
+    group: 'general',
+    label: 'Display units per USD',
+    help: 'Manual display multiplier, for example 0.92 for EUR. Converted values are marked ≈; 1 with $ preserves the USD baseline.',
+    min: 0.000001,
+    max: 1_000_000,
+    step: 0.000001,
+    providers: ['claude', 'codex'],
   },
   {
     key: 'tokenDecimalPlaces',
@@ -1059,9 +1087,16 @@ export class SettingsStore {
       return !!value;
     }
     if (def.type === 'number') {
-      let n = typeof value === 'number' ? value : Number(value);
+      let n = typeof value === 'number'
+        ? value
+        : String(value).trim() === ''
+          ? Number.NaN
+          : Number(value);
       if (!Number.isFinite(n)) {
         n = def.default as number;
+      }
+      if (def.key === 'usdConversionRate') {
+        return normalizeCurrencyDisplay('$', n).unitsPerUsd;
       }
       if (def.min !== undefined) {
         n = Math.max(def.min, n);
@@ -1075,7 +1110,13 @@ export class SettingsStore {
       const allowed = def.enumValues || [];
       return allowed.includes(String(value)) ? String(value) : (def.default as string);
     }
-    return String(value);
+    if (def.key === 'displayCurrency') {
+      return normalizeCurrencyDisplay(String(value), 1).label;
+    }
+    const stringValue = String(value);
+    return def.maxLength === undefined
+      ? stringValue
+      : Array.from(stringValue).slice(0, def.maxLength).join('');
   }
 
   /** Catalog + current values, for rendering the dashboard settings panel. */

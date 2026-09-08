@@ -1247,6 +1247,12 @@ export class UsageWebviewProvider {
     this.lastShareCardConfig = undefined;
   }
 
+  /** A display-format change invalidates rendered money but not the user's
+   * chosen share-card range, scope, sections, or theme. */
+  public invalidateShareCardPreview(): void {
+    this.lastShareCardSvg = undefined;
+  }
+
   private async handleClearAdviceLocalDataMessage(): Promise<void> {
     const ok = await this.clearAdviceLocalData();
     this.postAdviceMessage({ command: 'adviceClearResult', ok });
@@ -2917,6 +2923,7 @@ export class UsageWebviewProvider {
         '"' +
         (it.min !== undefined ? ' min="' + it.min + '"' : '') +
         (it.max !== undefined ? ' max="' + it.max + '"' : '') +
+        (it.step !== undefined ? ' step="' + it.step + '"' : '') +
         onCh('number') +
         '>';
     } else if (it.multiline) {
@@ -2931,6 +2938,7 @@ export class UsageWebviewProvider {
         '" value="' +
         esc(String(it.value)) +
         '"' +
+        (it.maxLength !== undefined ? ' maxlength="' + it.maxLength + '"' : '') +
         (it.secret
           ? ' autocomplete="new-password" placeholder="' + (it.configured ? '••••••••' : '') + '"'
           : '') +
@@ -4109,7 +4117,8 @@ export class UsageWebviewProvider {
         : '') +
       '</div><div class="hc-wrap"><div class="hc-yaxis"><span class="hc-yval">' +
       I18n.formatCurrency(maxValue) + '</span><span class="hc-yval">' +
-      I18n.formatCurrency(maxValue / 2) + '</span><span class="hc-yval">$0</span></div>' +
+      I18n.formatCurrency(maxValue / 2) + '</span><span class="hc-yval">' +
+      I18n.formatCurrency(0) + '</span></div>' +
       '<div class="hc-main"><div class="hc-scroll" tabindex="0"><div class="hc-plot">' +
       '<div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div>' +
       '<div class="hc-bars">' + bars + '</div></div><div class="hc-xlabels">' +
@@ -4270,7 +4279,12 @@ export class UsageWebviewProvider {
     const kind = vscode.window.activeColorTheme?.kind;
     const isDark = kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
     // Landscape only for now (other sizes need per-size tuning — a later patch).
-    return renderShareCardSvg(buildShareCardData(input, merged), { ...opts, isDark, lang: I18n.getLocale() });
+    return renderShareCardSvg(buildShareCardData(input, merged), {
+      ...opts,
+      isDark,
+      lang: I18n.getLocale(),
+      formatCurrency: (amountUsd) => I18n.formatCurrency(amountUsd),
+    });
   }
 
   /** Fetch the signed-in GitHub user's avatar (data: URI) and display name,
@@ -9997,6 +10011,10 @@ if (document.readyState === 'loading') {
 // that the original used in this script body).
 const __locale = ${JSON.stringify(I18n.getLocale())};
 const __tz = ${JSON.stringify(resolveTimeZone(I18n.getTimezone()))};
+const __currencyDisplay = ${JSON.stringify({
+  ...I18n.getCurrencyDisplay(),
+  decimalPlaces: I18n.getDecimalPlaces(),
+})};
 const __combinedHeatmapCopy = ${JSON.stringify(combinedHeatmapUiCopy(I18n.getLocale()))};
 const __localDataCopy = ${JSON.stringify(localDataUiCopy(I18n.getLocale()))};
 const __dateOpts = (extra) => {
@@ -12095,7 +12113,13 @@ function buildCostStack(bar, barHeight) {
 
 function formatValue(value, metric) {
   if (metric === 'cost') {
-    return '$' + value.toFixed(2);
+    if (!Number.isFinite(value)) { return '—'; }
+    var converted = value * __currencyDisplay.unitsPerUsd;
+    var separator = /^[A-Z]{3}$/.test(__currencyDisplay.label) ? ' ' : '';
+    return (__currencyDisplay.converted ? '≈' : '')
+      + __currencyDisplay.label
+      + separator
+      + converted.toFixed(__currencyDisplay.decimalPlaces);
   } else {
     return value.toLocaleString();
   }
@@ -12184,7 +12208,7 @@ function renderHourlyData(hourlyData, date) {
   hourlyData.forEach(function(item) {
     html += '<tr>';
     html += '<td class="date-cell">' + item.hour + '</td>';
-    html += '<td class="cost-cell">$' + item.data.totalCost.toFixed(2) + '</td>';
+    html += '<td class="cost-cell">' + formatValue(item.data.totalCost, 'cost') + '</td>';
     html += '<td class="number-cell">' + item.data.totalInputTokens.toLocaleString(__locale) + '</td>';
     html += '<td class="number-cell">' + item.data.totalOutputTokens.toLocaleString(__locale) + '</td>';
     html += '<td class="number-cell">' + item.data.totalCacheCreationTokens.toLocaleString(__locale) + '</td>';
@@ -12247,7 +12271,7 @@ function renderDailyData(dailyData, monthDate) {
 
     html += '<tr>';
     html += '<td class="date-cell">' + formattedDate + '</td>';
-    html += '<td class="cost-cell">$' + item.data.totalCost.toFixed(2) + '</td>';
+    html += '<td class="cost-cell">' + formatValue(item.data.totalCost, 'cost') + '</td>';
     html += '<td class="number-cell">' + item.data.totalInputTokens.toLocaleString(__locale) + '</td>';
     html += '<td class="number-cell">' + item.data.totalOutputTokens.toLocaleString(__locale) + '</td>';
     html += '<td class="number-cell">' + item.data.totalCacheCreationTokens.toLocaleString(__locale) + '</td>';

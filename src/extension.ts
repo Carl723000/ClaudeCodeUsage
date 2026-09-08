@@ -1937,7 +1937,12 @@ export class ClaudeCodeUsageExtension {
     const data = buildShareCardData(input, DEFAULT_SECTIONS);
     const kind = vscode.window.activeColorTheme?.kind;
     const isDark = kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
-    const svg = renderShareCardSvg(data, { theme: 'claudeClassic', isDark, lang: I18n.getLocale() });
+    const svg = renderShareCardSvg(data, {
+      theme: 'claudeClassic',
+      isDark,
+      lang: I18n.getLocale(),
+      formatCurrency: (amountUsd) => I18n.formatCurrency(amountUsd),
+    });
     const defaultName = shareCardFilename(picked.range).replace(/\.png$/, '.svg');
     const uri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(os.homedir(), defaultName)),
@@ -2063,11 +2068,7 @@ export class ClaudeCodeUsageExtension {
     const config = this.getConfiguration();
     this.activePricingBackend = config.pricingBackend;
     setPricingBackend(config.pricingBackend);
-    I18n.setLanguage(config.language as any);
-    I18n.setDecimalPlaces(config.decimalPlaces);
-    I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
-    I18n.setCompactNumbers(config.compactNumbers);
-    I18n.setTimezone(config.timezone);
+    this.applyFormattingConfiguration(config);
     this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
 
     // Listen for configuration changes
@@ -2090,6 +2091,15 @@ export class ClaudeCodeUsageExtension {
     });
   }
 
+  private applyFormattingConfiguration(config: ExtensionConfig): void {
+    I18n.setLanguage(config.language as any);
+    I18n.setDecimalPlaces(config.decimalPlaces);
+    I18n.setCurrencyDisplay(config.displayCurrency, config.usdConversionRate);
+    I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
+    I18n.setCompactNumbers(config.compactNumbers);
+    I18n.setTimezone(config.timezone);
+  }
+
   private getConfiguration(): ExtensionConfig {
     // All settings flow through SettingsStore: language and dataDirectory live
     // in VS Code config, BYOK secrets live in SecretStorage, and the rest use
@@ -2110,6 +2120,8 @@ export class ClaudeCodeUsageExtension {
       ),
       language: s.get<string>('language'),
       decimalPlaces: s.get<number>('decimalPlaces'),
+      displayCurrency: s.get<string>('displayCurrency'),
+      usdConversionRate: s.get<number>('usdConversionRate'),
       tokenDecimalPlaces: s.get<number>('tokenDecimalPlaces'),
       compactNumbers: s.get<boolean>('compactNumbers'),
       releaseAnnouncements: s.get<boolean>('releaseAnnouncements'),
@@ -3078,9 +3090,22 @@ export class ClaudeCodeUsageExtension {
     'showWeeklyEquivalentValue',
   ]);
 
+  // These values only reformat already-materialized USD estimates. They must
+  // not restart file watchers, recreate providers, or rescan either corpus.
+  private static readonly COST_DISPLAY_SETTINGS = new Set([
+    'decimalPlaces', 'displayCurrency', 'usdConversionRate',
+  ]);
+
   /** Dashboard Settings change — status-bar-only toggles apply in place, others reload. */
   private onSettingsChangedFromPanel(key?: string): void {
     if (this.disposed) return;
+    if (key && ClaudeCodeUsageExtension.COST_DISPLAY_SETTINGS.has(key)) {
+      const config = this.getConfiguration();
+      this.applyFormattingConfiguration(config);
+      this.webviewProvider.invalidateShareCardPreview();
+      this.syncProviderUi();
+      return;
+    }
     if (key && ClaudeCodeUsageExtension.DASHBOARD_ONLY_SETTINGS.has(key)) {
       this.syncProviderUi();
       return;
@@ -3154,11 +3179,7 @@ export class ClaudeCodeUsageExtension {
     if (pricingBackendChanged) {
       this.invalidateClaudeUsagePricingCache();
     }
-    I18n.setLanguage(config.language as any);
-    I18n.setDecimalPlaces(config.decimalPlaces);
-    I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
-    I18n.setCompactNumbers(config.compactNumbers);
-    I18n.setTimezone(config.timezone);
+    this.applyFormattingConfiguration(config);
     this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
 
     // Restart auto-refresh with new interval

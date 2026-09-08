@@ -248,6 +248,8 @@ export interface ShareCardSvgOptions {
   username?: string;
   fullNumbers?: boolean;
   lang?: string; // UI language; the card renders in it (en fallback)
+  /** Optional USD display formatter. Source data remains USD. */
+  formatCurrency?: (amountUsd: number) => string;
 }
 
 export function renderShareCardSvg(data: ShareCardData, opts: ShareCardSvgOptions = {}): string {
@@ -257,6 +259,7 @@ export function renderShareCardSvg(data: ShareCardData, opts: ShareCardSvgOption
   const T = SHARE_CARD_THEMES[resolveShareCardTheme(opts.theme, opts.isDark)];
   const L = cardLang(opts.lang);
   const S = CARD_STRINGS[L];
+  const formatMoney = opts.formatCurrency ?? money;
   const p: string[] = [];
 
   p.push(
@@ -338,7 +341,7 @@ export function renderShareCardSvg(data: ShareCardData, opts: ShareCardSvgOption
     heroValue = opts.fullNumbers ? data.totalTokens.toLocaleString('en-US') : compact(data.totalTokens, L, true);
     heroUnit = S.totalTokens;
   } else if (data.estimatedCost != null) {
-    heroValue = money(data.estimatedCost);
+    heroValue = formatMoney(data.estimatedCost);
     heroUnit = S.spent;
   } else if (data.sessions != null) {
     heroValue = String(data.sessions);
@@ -354,7 +357,7 @@ export function renderShareCardSvg(data: ShareCardData, opts: ShareCardSvgOption
 
   // Stat tiles — 4 by default (cost / cache / model / sessions), glass panels.
   const tiles: { label: string; value: string; accent?: string }[] = [];
-  if (data.totalTokens != null && data.estimatedCost != null) tiles.push({ label: S.estCost, value: money(data.estimatedCost) });
+  if (data.totalTokens != null && data.estimatedCost != null) tiles.push({ label: S.estCost, value: formatMoney(data.estimatedCost) });
   if (data.cacheSharePct != null) tiles.push({ label: S.cacheHit, value: data.cacheSharePct + '%', accent: T.cacheAccent });
   const modelLabel = data.topModelName || data.topModelFamily;
   if (modelLabel) tiles.push({ label: S.topModel, value: truncate(modelLabel, 12), accent: T.modelAccent });

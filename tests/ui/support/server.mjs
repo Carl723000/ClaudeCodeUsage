@@ -44,6 +44,7 @@ const server = createServer(async (request, response) => {
       'advice-optimizer',
       'combined-heatmap',
       'session-timezone-boundaries',
+      'local-currency',
     ].includes(requestedFixture)
       ? requestedFixture
       : 'default';

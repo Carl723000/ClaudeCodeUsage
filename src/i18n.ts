@@ -1,4 +1,9 @@
 import { SupportedLanguage } from './types';
+import {
+  formatUsdBaseline as formatUsdBaselineValue,
+  formatUsdForDisplay,
+  normalizeCurrencyDisplay,
+} from './currencyDisplay';
 import { CODEX_COPY_EN, CodexViewCopy } from './codexView';
 
 export interface ProviderTranslations {
@@ -3580,6 +3585,8 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'de-DE': {
     'language': { label: 'Anzeigesprache', help: 'UI-Sprache. "auto" folgt VS Code.' },
     'decimalPlaces': { label: 'Kosten-Dezimalstellen', help: '' },
+    'displayCurrency': { label: 'Anzeigewährung oder -symbol', help: 'Nur Anzeige. Gib einen dreibuchstabigen Code (EUR) oder ein kurzes Symbol (€) ein. Es wird kein Wechselkurs abgerufen; die zugrunde liegenden Schätzungen bleiben USD.' },
+    'usdConversionRate': { label: 'Anzeigeeinheiten pro USD', help: 'Manueller Anzeigemultiplikator, z. B. 0,92 für EUR. Umgerechnete Werte tragen ≈; 1 mit $ behält die USD-Basis bei.' },
     'tokenDecimalPlaces': { label: 'Token-Dezimalstellen', help: 'Dezimalstellen für kompakte Token-Anzeige (1.2M / 345.6K). Volle Ganzzahlen bleiben unberührt.' },
     'compactNumbers': { label: 'Kompakte Token-Zahlen', help: 'Zeige 1.2M / 345K statt voller Zahlen.' },
     'releaseAnnouncements': { label: 'Release-Hinweise', help: 'Nach einem Erweiterungs-Upgrade einmal die Neuerungen anzeigen.' },
@@ -3629,6 +3636,8 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'zh-TW': {
     'language': { label: '顯示語言', help: 'UI 語言。"auto" 會跟隨 VS Code。' },
     'decimalPlaces': { label: '費用小數位數', help: '' },
+    'displayCurrency': { label: '費用幣別代碼或符號', help: '僅影響顯示。輸入三字母代碼（EUR）或簡短符號（€）。不會擷取匯率；底層估算仍維持 USD。' },
+    'usdConversionRate': { label: '每 USD 顯示單位', help: '手動顯示乘數，例如 EUR 可填 0.92。換算值會標示 ≈；$ 搭配 1 則保留 USD 基準。' },
     'tokenDecimalPlaces': { label: 'Token 小數位數', help: '緊湊 token 顯示（1.2M / 345.6K）的小數位數。完整整數值不受影響。' },
     'compactNumbers': { label: '簡潔的 Token 計數', help: '顯示 1.2M / 345K 而非完整數字。' },
     'releaseAnnouncements': { label: '版本更新通知', help: '擴充套件升級後顯示一次「新功能」通知。' },
@@ -3678,6 +3687,8 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'zh-CN': {
     'language': { label: '显示语言', help: 'UI 语言。"auto" 会跟随 VS Code。' },
     'decimalPlaces': { label: '费用小数位数', help: '' },
+    'displayCurrency': { label: '费用币种代码或符号', help: '仅影响显示。输入三字母代码（EUR）或简短符号（€）。不会获取汇率；底层估算仍保持 USD。' },
+    'usdConversionRate': { label: '每 USD 显示单位', help: '手动显示乘数，例如 EUR 可填 0.92。换算值会标记 ≈；$ 配合 1 则保留 USD 基准。' },
     'tokenDecimalPlaces': { label: 'Token 小数位数', help: '紧凑 token 显示（1.2M / 345.6K）的小数位数。完整整数值不受影响。' },
     'compactNumbers': { label: '简洁的 token 计数', help: '显示 1.2M / 345K 而非完整数字。' },
     'releaseAnnouncements': { label: '版本更新通知', help: '扩展升级后显示一次“新功能”通知。' },
@@ -3727,6 +3738,8 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'ja': {
     'language': { label: '表示言語', help: 'UI 言語。"auto" は VS Code に従います。' },
     'decimalPlaces': { label: 'コストの小数点以下桁数', help: '' },
+    'displayCurrency': { label: 'コストの通貨コードまたは記号', help: '表示専用です。3 文字コード（EUR）または短い記号（€）を入力します。為替レートは取得せず、基礎となる推定値は USD のままです。' },
+    'usdConversionRate': { label: '1 USD あたりの表示単位', help: '手動の表示倍率です（例: EUR は 0.92）。換算値には ≈ を付け、$ と 1 なら USD 基準を維持します。' },
     'tokenDecimalPlaces': { label: 'トークンの小数点以下桁数', help: 'トークンの短縮表示（1.2M / 345.6K）の小数桁数。完全な整数値には影響しません。' },
     'compactNumbers': { label: 'トークン数を短縮表記', help: '完全な数値の代わりに 1.2M / 345K と表示します。' },
     'releaseAnnouncements': { label: 'リリース通知', help: '拡張機能のアップグレード後に新機能を一度通知します。' },
@@ -3776,6 +3789,8 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'ko': {
     'language': { label: '표시 언어', help: 'UI 언어. "auto"는 VS Code를 따릅니다.' },
     'decimalPlaces': { label: '비용 소수점 자리수', help: '' },
+    'displayCurrency': { label: '비용 통화 코드 또는 기호', help: '표시에만 사용됩니다. 세 글자 코드(EUR) 또는 짧은 기호(€)를 입력하세요. 환율을 가져오지 않으며 기본 추정치는 USD로 유지됩니다.' },
+    'usdConversionRate': { label: 'USD당 표시 단위', help: '수동 표시 배수입니다(예: EUR는 0.92). 변환값에는 ≈가 표시되며 $와 1은 USD 기준을 유지합니다.' },
     'tokenDecimalPlaces': { label: '토큰 소수점 자리수', help: '간략한 토큰 표시(1.2M / 345.6K)의 소수 자리수. 전체 정수 값에는 영향을 주지 않습니다.' },
     'compactNumbers': { label: '간략한 토큰 수 표시', help: '전체 숫자 대신 1.2M / 345K로 표시합니다.' },
     'releaseAnnouncements': { label: '릴리스 알림', help: '확장 업그레이드 후 새 기능 알림을 한 번 표시합니다.' },
@@ -3825,6 +3840,8 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'pt-BR': {
     'language': { label: 'Idioma de exibição', help: 'Idioma da interface. "auto" segue o VS Code.' },
     'decimalPlaces': { label: 'Casas decimais do custo', help: '' },
+    'displayCurrency': { label: 'Código ou símbolo da moeda do custo', help: 'Somente exibição. Digite um código de três letras (EUR) ou um símbolo curto (€). Nenhuma cotação é buscada; as estimativas subjacentes continuam em USD.' },
+    'usdConversionRate': { label: 'Unidades exibidas por USD', help: 'Multiplicador manual de exibição, por exemplo 0,92 para EUR. Valores convertidos recebem ≈; 1 com $ mantém a base em USD.' },
     'tokenDecimalPlaces': { label: 'Casas decimais de tokens', help: 'Casas decimais para a exibição compacta de tokens (1.2M / 345.6K). As contagens inteiras completas não são afetadas.' },
     'compactNumbers': { label: 'Contagem de tokens compacta', help: 'Mostra 1.2M / 345K em vez dos números completos.' },
     'releaseAnnouncements': { label: 'Avisos de versão', help: 'Mostra uma vez as novidades após atualizar a extensão.' },
@@ -3875,6 +3892,8 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'id': {
     'language': { label: 'Bahasa tampilan', help: 'Bahasa UI. "auto" mengikuti VS Code.' },
     'decimalPlaces': { label: 'Angka desimal biaya', help: '' },
+    'displayCurrency': { label: 'Kode atau simbol mata uang biaya', help: 'Hanya untuk tampilan. Masukkan kode tiga huruf (EUR) atau simbol singkat (€). Tidak ada kurs yang diambil; estimasi dasar tetap dalam USD.' },
+    'usdConversionRate': { label: 'Unit tampilan per USD', help: 'Pengali tampilan manual, misalnya 0,92 untuk EUR. Nilai konversi ditandai ≈; 1 dengan $ mempertahankan dasar USD.' },
     'tokenDecimalPlaces': { label: 'Angka desimal token', help: 'Angka desimal untuk tampilan token ringkas (1.2M / 345.6K). Jumlah bilangan bulat penuh tidak terpengaruh.' },
     'compactNumbers': { label: 'Jumlah token ringkas', help: 'Tampilkan 1.2M / 345K, bukan angka penuh.' },
     'releaseAnnouncements': { label: 'Pengumuman rilis', help: 'Tampilkan sekali hal baru setelah ekstensi ditingkatkan.' },
@@ -3926,6 +3945,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
 export class I18n {
   private static currentLanguage: SupportedLanguage = 'en';
   private static currentDecimalPlaces: number = 2;
+  private static currencyDisplay = normalizeCurrencyDisplay('$', 1);
   // Decimals for COMPACT token display only (1.2M / 345.6K) — separate from the
   // cost decimal places. Does not affect full integer token values.
   private static tokenDecimalPlaces: number = 1;
@@ -3971,6 +3991,28 @@ export class I18n {
     if (typeof places === 'number' && isFinite(places) && places >= 0 && places <= 4) {
       this.currentDecimalPlaces = Math.floor(places);
     }
+  }
+
+  static getDecimalPlaces(): number {
+    return this.currentDecimalPlaces;
+  }
+
+  /**
+   * Set a local-only presentation conversion. Every stored and calculated
+   * price remains USD; invalid labels/rates fail closed to the existing `$` / 1
+   * display. Three-letter codes and short letter/currency-symbol labels are
+   * accepted so user content can never become HTML or Markdown markup.
+   */
+  static setCurrencyDisplay(label: string, unitsPerUsd: number): void {
+    this.currencyDisplay = normalizeCurrencyDisplay(label, unitsPerUsd);
+  }
+
+  static getCurrencyDisplay(): Readonly<{
+    label: string;
+    unitsPerUsd: number;
+    converted: boolean;
+  }> {
+    return { ...this.currencyDisplay };
   }
 
   /** Decimals for compact token display, 0–2 (claudeCodeUsage.tokenDecimalPlaces). */
@@ -4052,7 +4094,17 @@ export class I18n {
 
   static formatCurrency(amount: number, decimalPlaces?: number): string {
     const places = decimalPlaces != null ? decimalPlaces : this.currentDecimalPlaces;
-    return `$${amount.toFixed(places)}`;
+    return formatUsdForDisplay(amount, {
+      label: this.currencyDisplay.label,
+      unitsPerUsd: this.currencyDisplay.unitsPerUsd,
+      decimalPlaces: places,
+    });
+  }
+
+  /** Provider-native USD money (for example actual usage credits), never the
+   * user's display conversion. */
+  static formatUsdBaseline(amount: number, decimalPlaces = 2): string {
+    return formatUsdBaselineValue(amount, decimalPlaces);
   }
 
   /** Always-compact token count (k / M / B) honouring the user's decimal

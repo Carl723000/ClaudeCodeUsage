@@ -18,3 +18,23 @@ test('weekly equivalent panel toggle refreshes dashboard UI without rebuilding p
     /DASHBOARD_ONLY_SETTINGS\.has\(key\)[\s\S]*?this\.syncProviderUi\(\);[\s\S]*?return;/,
   );
 });
+
+test('currency display settings reformat materialized data without rebuilding providers', () => {
+  const source = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'src', 'extension.ts'),
+    'utf8',
+  );
+
+  assert.match(
+    source,
+    /COST_DISPLAY_SETTINGS\s*=\s*new Set\(\[[\s\S]*?'decimalPlaces'[\s\S]*?'displayCurrency'[\s\S]*?'usdConversionRate'[\s\S]*?\]\)/,
+  );
+  const branch = source.match(
+    /if \(key && ClaudeCodeUsageExtension\.COST_DISPLAY_SETTINGS\.has\(key\)\) \{([\s\S]*?)\n    \}/,
+  )?.[1] ?? '';
+  assert.match(branch, /this\.applyFormattingConfiguration\(config\)/);
+  assert.match(branch, /this\.webviewProvider\.invalidateShareCardPreview\(\)/);
+  assert.match(branch, /this\.syncProviderUi\(\)/);
+  assert.match(branch, /return;/);
+  assert.doesNotMatch(branch, /restart|createCodexProvider|startWatcher|scan/i);
+});

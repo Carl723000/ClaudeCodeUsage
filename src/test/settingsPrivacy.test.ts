@@ -112,6 +112,24 @@ function fakeContext(options: {
   };
 }
 
+test('local currency preferences normalize before entering global state', async () => {
+  activeConfiguration = fakeConfiguration();
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
+  const context = fakeContext();
+  const store = new SettingsStore(context);
+
+  await store.set('displayCurrency', ' eur ');
+  await store.set('usdConversionRate', 0.92);
+  assert.equal(context._state.get('ccu.setting.displayCurrency'), 'EUR');
+  assert.equal(context._state.get('ccu.setting.usdConversionRate'), 0.92);
+
+  await store.set('displayCurrency', '<img onerror=x>');
+  await store.set('usdConversionRate', Number.POSITIVE_INFINITY);
+  assert.equal(context._state.get('ccu.setting.displayCurrency'), '$');
+  assert.equal(context._state.get('ccu.setting.usdConversionRate'), 1);
+});
+
 test('legacy plaintext BYOK migrates to SecretStorage and never enters a settings snapshot', async () => {
   const canary = 'sk-v2.3.1-privacy-canary';
   activeConfiguration = fakeConfiguration();

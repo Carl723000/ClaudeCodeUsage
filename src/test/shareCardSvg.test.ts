@@ -41,6 +41,15 @@ test('falls back to cost as the hero when tokens are hidden', () => {
   assert.match(svg, /\$12\.50/);
 });
 
+test('share cards accept the same display-only currency formatter as the dashboard', () => {
+  const svg = renderShareCardSvg(
+    { ...base, totalTokens: 1_000, estimatedCost: 10 },
+    { formatCurrency: (usd) => `≈EUR ${(usd * 0.92).toFixed(2)}` },
+  );
+  assert.match(svg, /≈EUR 9\.20/);
+  assert.doesNotMatch(svg, /\$10\.00/);
+});
+
 test('omits sections that are absent (privacy: only draws what is present)', () => {
   const svg = renderShareCardSvg(base);
   assert.doesNotMatch(svg, />sessions</);
