@@ -53,6 +53,7 @@ function claudeUsageFixture(): UsageData {
 
 test('Codex dashboard HTML uses only classes already rendered by the Claude dashboard', () => {
   const originalLoad = (Module as any)._load;
+  const originalNow = Date.now;
   (Module as any)._load = function(request: string, parent: unknown, isMain: boolean) {
     if (request === 'vscode') {
       return { workspace: { workspaceFolders: [] } };
@@ -60,6 +61,7 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
     return originalLoad.call(this, request, parent, isMain);
   };
   try {
+    Date.now = () => CODEX_WEBVIEW_NOW;
     const { UsageWebviewProvider } = require('../webview') as typeof import('../webview');
     const provider = new UsageWebviewProvider({} as any) as any;
     const usage = claudeUsageFixture();
@@ -177,6 +179,7 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
       /Duplicate session identity is ambiguous; both local copies are retained[^<]*2/,
     );
   } finally {
+    Date.now = originalNow;
     (Module as any)._load = originalLoad;
   }
 });

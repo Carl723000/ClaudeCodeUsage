@@ -120,7 +120,14 @@ import {
   UsageData,
   WorkflowUsage,
 } from './types';
-import { dayKeyInZone, resolveTimeZone, rollingDayKeys, rollingDayKeysFromDayKey } from './dateKeys';
+import {
+  dayKeyInZone,
+  formatHourLabel,
+  resolveTimeZone,
+  rollingDayKeys,
+  rollingDayKeysFromDayKey,
+} from './dateKeys';
+import { clockHourKeys, completeDisplayRange } from './displayRange';
 import {
   LocalDataAction,
   LocalDataActionResult,
@@ -141,6 +148,45 @@ interface CodexRenderProgress {
 }
 
 const OPTIMIZER_FEEDBACK_RECOMMENDATION_ID = 'recommendation-optimizer-result-v1';
+
+function emptyDisplayUsageData(): UsageData {
+  return {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheCreationTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCost: 0,
+    costBreakdown: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
+    messageCount: 0,
+    modelBreakdown: {},
+  };
+}
+
+function emptyCodexHourlyDisplayRow(hour: string): CodexHourlyUsageView {
+  const total: CodexMetricTotals = {
+    processed: 0,
+    fresh: 0,
+    input: 0,
+    cachedInput: 0,
+    output: 0,
+    reasoning: 0,
+  };
+  return {
+    hour,
+    label: formatHourLabel(hour),
+    total,
+    apiEquivalent: {
+      equivalentUsd: 0,
+      freshInputUsd: 0,
+      cachedInputUsd: 0,
+      outputUsd: 0,
+      pricedTokens: 0,
+      totalTokens: 0,
+      pricingCoverage: 0,
+    },
+    threads: 0,
+  };
+}
 
 interface LocalDataUiCopy {
   title: string;
@@ -3057,9 +3103,15 @@ export class UsageWebviewProvider {
           : '') + '</p>';
     const todaySummary = emptyRangeHint + this.renderUsageData(this.todayData, provider) +
       this.renderTodayInsights(provider);
+    const hourlyDisplayRows = completeDisplayRange(
+      clockHourKeys().map(formatHourLabel),
+      this.hourlyDataForToday,
+      (row) => row.hour,
+      (hour) => ({ hour, data: emptyDisplayUsageData() }),
+    ).map(({ value }) => value);
 
     let hourlyBreakdown = '';
-    if (this.hourlyDataForToday.length > 0) {
+    if (hourlyDisplayRows.length > 0) {
       const cost = I18n.t.popup.cost;
       const inputTokens = I18n.t.popup.inputTokens;
       const outputTokens = I18n.t.popup.outputTokens;
@@ -3068,7 +3120,7 @@ export class UsageWebviewProvider {
       const messages = I18n.t.popup.messages;
 
       let hourlyRows = '';
-      this.hourlyDataForToday.forEach(({ hour, data }) => {
+      hourlyDisplayRows.forEach(({ hour, data }) => {
         hourlyRows +=
           '<tr data-hour="' + this.escapeHtml(hour) + '">' +
           '<td class="date-cell">' +
@@ -3120,12 +3172,11 @@ export class UsageWebviewProvider {
         messages +
         '</button>' +
         '</div>' +
-        this.renderHourlyChart() +
+        this.renderHourlyChart(hourlyDisplayRows) +
         '<p class="chart-selection-detail" id="claude-today-hour-selection-detail" ' +
         'data-hour-selection-detail role="status" aria-live="polite" hidden></p>' +
         this.renderCompositionChart(
-          [...this.hourlyDataForToday]
-            .sort((a, b) => a.hour.localeCompare(b.hour))
+          hourlyDisplayRows
             .map((h) => ({ label: h.hour, data: h.data })),
           provider,
         ) +
@@ -3168,8 +3219,16 @@ export class UsageWebviewProvider {
   }
 
   private renderCodexTodayHourly(view: CodexUsageView): string {
+    const rows = view.todayCoverage.complete
+      ? completeDisplayRange(
+          clockHourKeys(),
+          view.todayHourly,
+          (row) => row.hour,
+          emptyCodexHourlyDisplayRow,
+        ).map(({ value }) => value)
+      : view.todayHourly;
     return this.renderCodexHourlyBreakdown(
-      view.todayHourly,
+      rows,
       view.todayCoverage,
     );
   }
@@ -3222,7 +3281,7 @@ export class UsageWebviewProvider {
           '<tr data-hour="' + this.escapeHtml(row.hour) + '"><td class="date-cell">' +
           this.escapeHtml(row.label) + '</td>' +
           '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
-          (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+          this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
@@ -3686,7 +3745,7 @@ export class UsageWebviewProvider {
       const rows = view.last30DaysDaily;
       const breakdown = rows.length === 0
         ? '<div class="no-data"><p>' + this.escapeHtml(copy.noDailyData) + '</p></div>'
-        : '<div class="daily-breakdown" data-codex-time-series data-codex-last30-daily><h3>' + this.escapeHtml(copy.daily) + '</h3>' +
+        : '<div class="daily-breakdown" data-codex-time-series data-codex-last30-daily data-last30-daily><h3>' + this.escapeHtml(copy.daily) + '</h3>' +
           '<div class="chart-tabs">' +
           '<button class="chart-tab active" data-metric="cost">' + this.escapeHtml(copy.apiEquivalentCost) + '</button>' +
           '<button class="chart-tab" data-metric="inputTokens">' + this.escapeHtml(copy.processed) + '</button>' +
@@ -3725,7 +3784,7 @@ export class UsageWebviewProvider {
               : '';
             return '<tr class="daily-row" data-date="' + day + '"><td class="date-cell">' + day + '</td>' +
             '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
-            (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+            this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
@@ -3742,11 +3801,20 @@ export class UsageWebviewProvider {
     }
 
     const rolling30Summary = this.renderUsageData(this.rolling30DayData, provider);
+    const dailyDisplayRows = completeDisplayRange(
+      rollingDayKeys(Date.now(), I18n.getTimezone(), 30),
+      this.dailyDataForRolling30Days,
+      (row) => row.date,
+      (date) => ({ date, data: emptyDisplayUsageData() }),
+    );
+    const observedDays = new Set(
+      dailyDisplayRows.filter((row) => row.observed).map((row) => row.key),
+    );
 
     const dailyBreakdown =
-      this.dailyDataForRolling30Days.length > 0
+      dailyDisplayRows.length > 0
         ? `
-      <div class="daily-breakdown">
+      <div class="daily-breakdown" data-claude-last30-daily data-last30-daily>
         <h3>${I18n.t.popup.dailyBreakdown}</h3>
 
         <!-- Chart Tabs -->
@@ -3761,13 +3829,18 @@ export class UsageWebviewProvider {
 
         <!-- Chart Container (hc-wrap is self-contained: Y-axis + gridlines + scroll) -->
         <div class="chart-content" id="dailyChart">
-          ${this.renderDailyChart(provider)}
+          ${this.renderDailyChart(
+            provider,
+            dailyDisplayRows.map(({ value }) => value),
+            observedDays,
+          )}
         </div>
 
         ${this.renderCompositionChart(
-          [...this.dailyDataForRolling30Days]
-            .sort((a, b) => a.date.localeCompare(b.date))
-            .map((d) => ({ label: this.getShortDate(d.date), data: d.data })),
+          dailyDisplayRows.map(({ value: row }) => ({
+            label: this.getShortDate(row.date),
+            data: row.data,
+          })),
           provider,
         )}
 
@@ -3787,9 +3860,9 @@ export class UsageWebviewProvider {
               </tr>
             </thead>
             <tbody>
-              ${this.dailyDataForRolling30Days
+              ${dailyDisplayRows
                 .map(
-                  ({ date, data }) => `
+                  ({ value: { date, data }, observed }) => `
                 <tr class="daily-row" data-date="${date}">
                   <td class="date-cell">${this.formatDate(date)}</td>
                   <td class="cost-cell">${I18n.formatCurrency(data.totalCost)}</td>
@@ -3800,22 +3873,22 @@ export class UsageWebviewProvider {
                   <td class="number-cell">${this.formatPercent(this.cacheHitRate(data))}</td>
                   <td class="number-cell">${I18n.formatNumber(data.messageCount)}</td>
                   <td class="detail-cell">
-                    <button class="detail-button" onclick="toggleHourlyDetail('${date}')"
+                    ${observed ? `<button class="detail-button" onclick="toggleHourlyDetail('${date}')"
                       aria-expanded="false" aria-controls="hourly-detail-${date}"
                       title="${this.escapeHtml(I18n.t.popup.hourlyBreakdown)}">
                       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
                         <path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
                       </svg>
-                    </button>
+                    </button>` : ''}
                   </td>
                 </tr>
-                <tr class="hourly-detail-row" data-date="${date}" style="display: none;">
+                ${observed ? `<tr class="hourly-detail-row" data-date="${date}" style="display: none;">
                   <td colspan="9">
                     <div class="hourly-detail-container" id="hourly-detail-${date}">
                       <div class="loading-indicator">${this.escapeHtml(I18n.t.statusBar.loading)}</div>
                     </div>
                   </td>
-                </tr>
+                </tr>` : ''}
               `
                 )
                 .join('')}
@@ -3858,7 +3931,7 @@ export class UsageWebviewProvider {
           '</tr></thead><tbody>' + rows.map((row) =>
             '<tr><td class="date-cell">' + this.escapeHtml(row.period) + '</td>' +
             '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
-            (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+            this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
@@ -6883,7 +6956,11 @@ export class UsageWebviewProvider {
     );
   }
 
-  private renderDailyChart(provider: SettingProvider = 'claude'): string {
+  private renderDailyChart(
+    provider: SettingProvider = 'claude',
+    claudeRows: { date: string; data: UsageData }[] = this.dailyDataForRolling30Days,
+    claudeInteractiveDays?: ReadonlySet<string>,
+  ): string {
     if (provider === 'codex') {
       const rows = this.codexView?.last30DaysDaily ?? [];
       return this.renderMainCostChart(
@@ -6895,8 +6972,8 @@ export class UsageWebviewProvider {
         provider,
       );
     }
-    const sortedData = [...this.dailyDataForRolling30Days].sort((a, b) => a.date.localeCompare(b.date));
-    return this.renderMainCostChart(sortedData, false, provider);
+    const sortedData = [...claudeRows].sort((a, b) => a.date.localeCompare(b.date));
+    return this.renderMainCostChart(sortedData, false, provider, claudeInteractiveDays);
   }
 
   private renderAllTimeChart(provider: SettingProvider = 'claude'): string {
@@ -6971,6 +7048,12 @@ export class UsageWebviewProvider {
     return I18n.t.providers.codex.apiEquivalentCostHelp.replace('{coverage}', coverage);
   }
 
+  private codexCostLabel(cost: EquivalentCostBreakdown, processedTokens: number): string {
+    return cost.pricedTokens > 0 || processedTokens === 0
+      ? I18n.formatCurrency(cost.equivalentUsd)
+      : '—';
+  }
+
   private renderMainCostChart(
     sortedData: Array<{
       date: string;
@@ -6982,6 +7065,7 @@ export class UsageWebviewProvider {
     }>,
     monthly = false,
     provider: SettingProvider = 'claude',
+    claudeInteractiveDays?: ReadonlySet<string>,
   ): string {
     if (sortedData.length === 0) {
       const message = provider === 'codex'
@@ -6999,14 +7083,15 @@ export class UsageWebviewProvider {
         };
       }>;
       const maxCost = Math.max(...rows.map((row) => row.data.apiEquivalent.equivalentUsd), 0);
+      const hasUsage = rows.some((row) => row.data.total.processed > 0);
       const hasPricedCost = rows.some((row) => row.data.apiEquivalent.pricedTokens > 0);
       const costAxisLabel = (value: number): string =>
-        hasPricedCost ? I18n.formatCurrency(value) : '—';
+        hasPricedCost || !hasUsage ? I18n.formatCurrency(value) : '—';
       const maxHeight = 120;
       const bars = rows.map(({ date, data }) => {
         const cost = data.apiEquivalent;
         const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
-        const costLabel = cost.pricedTokens > 0 ? I18n.formatCurrency(cost.equivalentUsd) : '—';
+        const costLabel = this.codexCostLabel(cost, data.total.processed);
         const hasHourlyDetail = !monthly && Object.prototype.hasOwnProperty.call(
           this.codexView?.last30DaysHourlyByDay ?? {},
           date,
@@ -7016,6 +7101,7 @@ export class UsageWebviewProvider {
           '<div class="chart-bar cost-bar cost-stacked' + (hasHourlyDetail ? ' clickable' : '') +
           '" style="height:' + height + 'px" ' +
           'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
+          'data-has-usage="' + (data.total.processed > 0 ? 'true' : 'false') + '" ' +
           'data-input="' + data.total.processed + '" data-output="' + data.total.fresh + '" ' +
           'data-cache-creation="' + data.total.output + '" data-cache-read="' + data.total.reasoning + '" ' +
           'data-messages="' + data.threads + '" ' +
@@ -7046,10 +7132,12 @@ export class UsageWebviewProvider {
       .map(({ date, data }) => {
         const barHeight = maxCost > 0 ? (data.totalCost / maxCost) * maxHeight : 0;
         const cb = data.costBreakdown;
+        const clickable = monthly || claudeInteractiveDays === undefined || claudeInteractiveDays.has(date);
         return (
           '<div class="hc-col" data-date="' + date + '">' +
           '<div class="hc-barval">' + I18n.formatCurrency(data.totalCost) + '</div>' +
-          '<div class="chart-bar cost-bar cost-stacked clickable" style="height: ' + barHeight + 'px;" ' +
+          '<div class="chart-bar cost-bar cost-stacked' + (clickable ? ' clickable' : '') +
+          '" style="height: ' + barHeight + 'px;" ' +
           'data-cost="' + data.totalCost + '" ' +
           'data-input="' + data.totalInputTokens + '" ' +
           'data-output="' + data.totalOutputTokens + '" ' +
@@ -7102,18 +7190,20 @@ export class UsageWebviewProvider {
         this.escapeHtml(I18n.t.providers.codex.noDailyData) + '</div>';
     }
     const maxCost = Math.max(...rows.map((row) => row.apiEquivalent.equivalentUsd), 0);
+    const hasUsage = rows.some((row) => row.total.processed > 0);
     const hasPricedCost = rows.some((row) => row.apiEquivalent.pricedTokens > 0);
     const costAxisLabel = (value: number): string =>
-      hasPricedCost ? I18n.formatCurrency(value) : '—';
+      hasPricedCost || !hasUsage ? I18n.formatCurrency(value) : '—';
     const maxHeight = 120;
     const bars = rows.map((row) => {
       const cost = row.apiEquivalent;
       const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
-      const costLabel = cost.pricedTokens > 0 ? I18n.formatCurrency(cost.equivalentUsd) : '—';
+      const costLabel = this.codexCostLabel(cost, row.total.processed);
       return '<div class="hc-col" data-hour="' + this.escapeHtml(row.hour) + '">' +
         '<div class="hc-barval">' + costLabel + '</div>' +
         '<div class="chart-bar cost-bar cost-stacked" style="height:' + height + 'px" ' +
         'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
+        'data-has-usage="' + (row.total.processed > 0 ? 'true' : 'false') + '" ' +
         'data-input="' + row.total.processed + '" data-output="' + row.total.fresh + '" ' +
         'data-cache-creation="' + row.total.output + '" data-cache-read="' + row.total.reasoning + '" ' +
         'data-messages="' + row.threads + '" ' +
@@ -7136,13 +7226,15 @@ export class UsageWebviewProvider {
       '<div class="hc-xlabels">' + labels + '</div></div></div></div>';
   }
 
-  private renderHourlyChart(): string {
-    if (this.hourlyDataForToday.length === 0) {
+  private renderHourlyChart(
+    hourlyRows: { hour: string; data: UsageData }[] = this.hourlyDataForToday,
+  ): string {
+    if (hourlyRows.length === 0) {
       return '<div class="no-chart-data" role="status">' +
         this.escapeHtml(I18n.t.statusBar.noData) + '</div>';
     }
 
-    const sortedData = [...this.hourlyDataForToday].sort((a, b) => a.hour.localeCompare(b.hour));
+    const sortedData = [...hourlyRows].sort((a, b) => a.hour.localeCompare(b.hour));
     const maxCost = Math.max(...sortedData.map((d) => d.data.totalCost), 0);
     const maxHeight = 120; // Plot height in pixels — kept in sync with updateMainChart.
 
@@ -9296,29 +9388,29 @@ export class UsageWebviewProvider {
         white-space: nowrap;
       }
 
-      /* Codex always renders a complete rolling 30-day track. Keep those
+      /* Both providers render a complete rolling 30-day track. Keep those
          dense charts and their table inside independent, keyboard-focusable
          horizontal scrollers instead of widening the entire dashboard. The
          explicit max-content track also keeps grid lines and labels aligned
          after scrolling in Chromium. */
-      [data-codex-last30-daily] {
+      [data-last30-daily] {
         width: 100%;
         max-width: 100%;
         min-width: 0;
       }
 
-      [data-codex-last30-daily] .chart-content,
-      [data-codex-last30-daily] .chart-content > .hc-wrap,
-      [data-codex-last30-daily] .composition-chart,
-      [data-codex-last30-daily] .hc-wrap,
-      [data-codex-last30-daily] .hc-main {
+      [data-last30-daily] .chart-content,
+      [data-last30-daily] .chart-content > .hc-wrap,
+      [data-last30-daily] .composition-chart,
+      [data-last30-daily] .hc-wrap,
+      [data-last30-daily] .hc-main {
         width: 100%;
         max-width: 100%;
         min-width: 0;
       }
 
-      [data-codex-last30-daily] .hc-scroll,
-      [data-codex-last30-daily] .daily-table-container {
+      [data-last30-daily] .hc-scroll,
+      [data-last30-daily] .daily-table-container {
         max-width: 100%;
         overflow-x: auto;
         overscroll-behavior-inline: contain;
@@ -9326,18 +9418,18 @@ export class UsageWebviewProvider {
         -webkit-overflow-scrolling: touch;
       }
 
-      [data-codex-last30-daily] .hc-plot,
-      [data-codex-last30-daily] .hc-xlabels {
+      [data-last30-daily] .hc-plot,
+      [data-last30-daily] .hc-xlabels {
         width: max-content;
         min-width: 100%;
       }
 
-      [data-codex-last30-daily] .daily-table {
+      [data-last30-daily] .daily-table {
         width: 100%;
         min-width: 960px;
       }
 
-      [data-codex-last30-daily] .daily-table th {
+      [data-last30-daily] .daily-table th {
         white-space: nowrap;
       }
 
@@ -9996,7 +10088,14 @@ function ccuScrollStateKey() {
 function saveScrollPosition() {
   if (!__ccuUiReady) { return; }
   var positions = ccuReadUiState().scrollPositions || {};
-  positions[ccuScrollStateKey()] = window.scrollY;
+  var key = ccuScrollStateKey();
+  var y = window.scrollY;
+  // Chromium may deliver one final scroll event after the debounce fires.
+  // Do not make pagehide or visibilitychange rewrite an identical position;
+  // setState is synchronous host work and duplicate writes make long Codex
+  // pages feel less responsive without preserving any additional state.
+  if (positions[key] === y) { return; }
+  positions[key] = y;
   ccuWriteUiState('scrollPositions', positions);
 }
 function restoreScrollPosition() {
@@ -12193,7 +12292,8 @@ function updateMainChart(metric, container) {
     }
 
     // Update tooltip + on-bar value label
-    const formattedValue = metric === 'cost' && bar.dataset.pricedTokens === '0'
+    const formattedValue = metric === 'cost' &&
+      bar.dataset.pricedTokens === '0' && bar.dataset.hasUsage === 'true'
       ? '—'
       : formatValue(value, metric);
     const container = bar.parentElement;
@@ -12230,12 +12330,16 @@ function updateMainChart(metric, container) {
   const wrap = firstBar && firstBar.closest ? firstBar.closest('.hc-wrap') : null;
   const yvals = wrap ? wrap.querySelectorAll('.hc-yaxis .hc-yval') : [];
   if (yvals.length === 3) {
-    const hasPricedCost = metric !== 'cost' || Array.from(chartBars).some(function(bar) {
-      return bar.dataset.pricedTokens !== '0';
+    const hasUsage = Array.from(chartBars).some(function(bar) {
+      return bar.dataset.hasUsage === 'true';
     });
-    yvals[0].textContent = hasPricedCost ? formatValue(maxValue, metric) : '—';
-    yvals[1].textContent = hasPricedCost ? formatValue(maxValue / 2, metric) : '—';
-    yvals[2].textContent = hasPricedCost ? formatValue(0, metric) : '—';
+    const hasPricedCost = Array.from(chartBars).some(function(bar) {
+      return bar.dataset.pricedTokens === undefined || bar.dataset.pricedTokens !== '0';
+    });
+    const hasDisplayableCost = metric !== 'cost' || hasPricedCost || !hasUsage;
+    yvals[0].textContent = hasDisplayableCost ? formatValue(maxValue, metric) : '—';
+    yvals[1].textContent = hasDisplayableCost ? formatValue(maxValue / 2, metric) : '—';
+    yvals[2].textContent = hasDisplayableCost ? formatValue(0, metric) : '—';
   }
 }
 
