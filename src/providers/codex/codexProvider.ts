@@ -38,7 +38,7 @@ import {
   CodexWorkerRefreshInput,
   CodexWorkerResult,
 } from './codexWorkerProtocol';
-import { loadCodexSessionTitles } from './codexIdentity';
+import { CodexSessionTitleCache } from './codexIdentity';
 import { classifyCodexSessionDuplicates } from './codexDedup';
 import {
   equivalentUsageFromProviderTokens,
@@ -346,6 +346,7 @@ export class CodexProvider {
   private lastProgress: CodexIndexProgress | undefined;
   private snapshotGeneration = 0;
   private persistedSnapshotLoad: Promise<CodexProviderSnapshot | null> | null = null;
+  private readonly sessionTitleCache = new CodexSessionTitleCache();
   private disposed = false;
   private disposal: Promise<void> | null = null;
 
@@ -389,7 +390,7 @@ export class CodexProvider {
       try {
         const [index, sessionTitles] = await Promise.all([
           loadCodexIndex(this.options.indexPath, this.options.timeZone),
-          loadCodexSessionTitles(this.options.codexHome, this.options.salt),
+          this.sessionTitleCache.load(this.options.codexHome, this.options.salt),
         ]);
         if (
           index.coverage.totalFiles === 0 &&
@@ -452,7 +453,7 @@ export class CodexProvider {
           onProgress?.(progress);
         },
       );
-      const sessionTitles = await loadCodexSessionTitles(
+      const sessionTitles = await this.sessionTitleCache.load(
         this.options.codexHome,
         this.options.salt,
       );
@@ -516,6 +517,7 @@ export class CodexProvider {
     if (this.disposal) return this.disposal;
     this.disposed = true;
     this.snapshotGeneration += 1;
+    this.sessionTitleCache.clear();
     const client = this.client;
     this.client = null;
     this.disposal = Promise.resolve()
