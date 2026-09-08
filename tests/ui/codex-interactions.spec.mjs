@@ -175,6 +175,71 @@ test('chart metric selection survives a full reload', async ({ page }) => {
   )).toHaveClass(/active/);
 });
 
+for (const provider of [
+  { name: 'Claude', open: openClaude },
+  { name: 'Codex', open: openCodex },
+]) {
+  test(`${provider.name} Today hourly selection stays synchronized and survives reload`, async ({ page }) => {
+    await provider.open(page, { locale: 'en' });
+
+    const overview = page.locator('#today [data-hourly-overview]');
+    const firstColumn = overview.locator('.hc-col[data-hour]').first();
+    const hour = (await firstColumn.getAttribute('data-hour')) ?? '';
+    expect(hour).not.toBe('');
+    const displayHour = hour.length === 2 ? `${hour}:00` : hour;
+    const bar = overview.locator(`.hc-col[data-hour="${hour}"] > .chart-bar`);
+    const row = overview.locator(`.daily-table tbody tr[data-hour="${hour}"]`);
+    const detail = overview.locator('[data-hour-selection-detail]');
+    const postedBefore = await page.evaluate(() => window.__ccuPostedMessages.length);
+
+    await expect(bar).toHaveAttribute('role', 'button');
+    await expect(bar).toHaveAttribute('tabindex', '0');
+    await expect(bar).toHaveAttribute('aria-pressed', 'false');
+    const detailId = (await detail.getAttribute('id')) ?? '';
+    expect(detailId).not.toBe('');
+    await expect(bar).toHaveAttribute('aria-controls', detailId);
+    await expect(detail).toBeHidden();
+
+    await bar.focus();
+    await bar.press('Enter');
+    await expect(bar).toBeFocused();
+    await expect(bar).toHaveClass(/selected/);
+    await expect(bar).toHaveAttribute('aria-pressed', 'true');
+    await expect(row).toHaveClass(/chart-selection-row/);
+    await expect(detail).toBeVisible();
+
+    const metric = overview.locator(':scope > .chart-tabs .chart-tab[data-metric="outputTokens"]');
+    await metric.click();
+    const expected = `${displayHour} · ${(await metric.textContent()).trim()}: ${(await firstColumn.locator('.hc-barval').textContent()).trim()}`;
+    await expect(detail).toHaveText(expected);
+    await expect(bar).toHaveAttribute('aria-label', expected);
+    await expect.poll(() => page.evaluate(() => {
+      const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+      return Object.values(state.hourlyChartSelections || {});
+    })).toContain(hour);
+    expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBefore);
+
+    await page.reload();
+
+    await expect(page.locator('#tab-today')).toHaveClass(/active/);
+    await expect(bar).toHaveAttribute('aria-pressed', 'true');
+    await expect(bar).toHaveClass(/selected/);
+    await expect(row).toHaveClass(/chart-selection-row/);
+    await expect(detail).toHaveText(expected);
+
+    await bar.press('Space');
+    await expect(bar).toHaveAttribute('aria-pressed', 'false');
+    await expect(row).not.toHaveClass(/chart-selection-row/);
+    await expect(detail).toBeHidden();
+
+    await bar.click();
+    await page.locator('#tab-month').click();
+    await page.locator('#tab-today').click();
+    await expect(bar).toHaveAttribute('aria-pressed', 'false');
+    await expect(detail).toBeHidden();
+  });
+}
+
 test('materialized Codex hourly detail sends no host message and survives a full reload', async ({ page }) => {
   await openCodex(page);
   await page.locator('#tab-month').click();

@@ -3070,7 +3070,7 @@ export class UsageWebviewProvider {
       let hourlyRows = '';
       this.hourlyDataForToday.forEach(({ hour, data }) => {
         hourlyRows +=
-          '<tr>' +
+          '<tr data-hour="' + this.escapeHtml(hour) + '">' +
           '<td class="date-cell">' +
           hour +
           '</td>' +
@@ -3096,7 +3096,7 @@ export class UsageWebviewProvider {
       });
 
       hourlyBreakdown =
-        '<div class="daily-breakdown">' +
+        '<div class="daily-breakdown" data-hourly-overview>' +
         '<h3>' +
         I18n.t.popup.hourlyBreakdown +
         '</h3>' +
@@ -3121,6 +3121,8 @@ export class UsageWebviewProvider {
         '</button>' +
         '</div>' +
         this.renderHourlyChart() +
+        '<p class="chart-selection-detail" id="claude-today-hour-selection-detail" ' +
+        'data-hour-selection-detail role="status" aria-live="polite" hidden></p>' +
         this.renderCompositionChart(
           [...this.hourlyDataForToday]
             .sort((a, b) => a.hour.localeCompare(b.hour))
@@ -3201,6 +3203,8 @@ export class UsageWebviewProvider {
     const chart = rows.length > 0
       ? '<div class="chart-content"' + (day ? '' : ' id="codexTodayHourlyChart"') + '>' +
         this.renderCodexHourlyChart(rows) + '</div>' +
+        (day ? '' : '<p class="chart-selection-detail" id="codex-today-hour-selection-detail" ' +
+          'data-hour-selection-detail role="status" aria-live="polite" hidden></p>') +
         this.renderCompositionChart(
           rows.map((row) => ({ label: row.label, data: row.total })),
           'codex',
@@ -3215,7 +3219,8 @@ export class UsageWebviewProvider {
         '<th>' + this.escapeHtml(copy.output) + '</th><th>' + this.escapeHtml(copy.reasoning) + '</th>' +
         '<th>' + this.escapeHtml(copy.threads) + '</th></tr></thead><tbody>' +
         rows.map((row) =>
-          '<tr><td class="date-cell">' + this.escapeHtml(row.label) + '</td>' +
+          '<tr data-hour="' + this.escapeHtml(row.hour) + '"><td class="date-cell">' +
+          this.escapeHtml(row.label) + '</td>' +
           '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
           (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
@@ -3234,7 +3239,7 @@ export class UsageWebviewProvider {
     return '<div class="' + (day ? 'hourly-breakdown' : 'daily-breakdown') +
       '" data-codex-time-series' + (day
         ? ' data-codex-materialized-hours="true" data-date="' + this.escapeHtml(day) + '"'
-        : ' data-codex-today-hourly') + '>' +
+        : ' data-codex-today-hourly data-hourly-overview') + '>' +
       heading + partial + tabs + chart + table + '</div>';
   }
 
@@ -8018,7 +8023,12 @@ export class UsageWebviewProvider {
         cursor: pointer;
       }
 
-      .chart-bar.clickable:hover {
+      .chart-bar[data-hour-selection-control] {
+        cursor: pointer;
+      }
+
+      .chart-bar.clickable:hover,
+      .chart-bar[data-hour-selection-control]:hover {
         opacity: 0.8;
         transform: scaleY(1.05);
       }
@@ -8026,6 +8036,22 @@ export class UsageWebviewProvider {
       .chart-bar.selected {
         border: 2px solid var(--vscode-focusBorder);
         box-shadow: 0 0 4px var(--vscode-focusBorder);
+      }
+
+      .chart-selection-detail {
+        margin: var(--ccu-space-2) 0 0;
+        padding-left: var(--ccu-space-2);
+        border-left: 2px solid var(--ccu-focus);
+        color: var(--vscode-descriptionForeground);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .daily-table tr.chart-selection-row > td {
+        background: var(--vscode-list-inactiveSelectionBackground, rgba(127, 127, 127, 0.12));
+      }
+
+      .daily-table tr.chart-selection-row > td:first-child {
+        box-shadow: inset 2px 0 0 var(--ccu-focus);
       }
 
       .cost-bar {
@@ -9922,7 +9948,11 @@ function clearPersistedDetails() {
     st.openDetails = [];
     st.claudeDrilldownDetails = {};
     st.codexHourlyDetails = {};
+    st.hourlyChartSelections = {};
     vscode.setState(st);
+    document.querySelectorAll('[data-hourly-overview]').forEach(function(container) {
+      clearHourlyOverviewSelection(container, false);
+    });
   } catch (e) {}
 }
 // 'toggle' doesn't bubble — listen in the capture phase.
@@ -9951,6 +9981,8 @@ function restoreUi() {
   restoreTableSorts();
   restoreChartMetrics();
   initializeChartDrilldowns();
+  initializeHourlyOverviewSelections();
+  restoreHourlyOverviewSelections();
   initializeStatusRegions();
   restoreCombinedHeatmapConfig();
   requestLocalDataInventoryForVisibleSettings();
@@ -11813,6 +11845,8 @@ function applyChartMetric(container, metric, persist) {
   } else {
     updateMainChart(metric, container);
   }
+  initializeHourlyOverviewSelections(container);
+  refreshHourlyOverviewSelection(container);
   if (persist) { saveChartMetric(container, metric); }
 }
 function restoreChartMetrics(root) {
@@ -11876,6 +11910,122 @@ function initializeChartDrilldowns(root) {
     control.setAttribute('aria-expanded', expanded ? 'true' : 'false');
   });
 }
+function hourlyOverviewSelectionKey(container) {
+  return ccuChartStateKey(container) + ':hour-selection';
+}
+function hourlyOverviewControlHour(control) {
+  var holder = control && control.closest ? control.closest('.hc-col[data-hour]') : null;
+  return holder ? (holder.getAttribute('data-hour') || '') : '';
+}
+function hourlyOverviewDisplayHour(hour) {
+  return /^[0-9]{2}$/.test(hour) ? hour + ':00' : hour;
+}
+function hourlyOverviewMetricLabel(container) {
+  var active = container.querySelector(':scope > .chart-tabs .chart-tab.active[data-metric]');
+  return active && active.textContent ? active.textContent.trim() : '';
+}
+function hourlyOverviewSelectionText(container, control) {
+  var holder = control && control.closest ? control.closest('.hc-col[data-hour]') : null;
+  var value = holder ? holder.querySelector('.hc-barval') : null;
+  var hour = hourlyOverviewDisplayHour(hourlyOverviewControlHour(control));
+  var metric = hourlyOverviewMetricLabel(container);
+  var formatted = value && value.textContent ? value.textContent.trim() : '';
+  return hour + (metric ? ' · ' + metric : '') + (formatted ? ': ' + formatted : '');
+}
+function clearHourlyOverviewSelection(container, persist) {
+  if (!container) { return; }
+  container.querySelectorAll('[data-hour-selection-control]').forEach(function(control) {
+    control.classList.remove('selected');
+    control.setAttribute('aria-pressed', 'false');
+  });
+  container.querySelectorAll('.daily-table tbody tr[data-hour]').forEach(function(row) {
+    row.classList.remove('chart-selection-row');
+  });
+  var detail = container.querySelector('[data-hour-selection-detail]');
+  if (detail) {
+    detail.hidden = true;
+    detail.textContent = '';
+  }
+  if (persist) {
+    var selections = ccuReadUiState().hourlyChartSelections || {};
+    delete selections[hourlyOverviewSelectionKey(container)];
+    ccuWriteUiState('hourlyChartSelections', selections);
+  }
+}
+function setHourlyOverviewSelection(container, hour, persist) {
+  if (!container || !hour) { return false; }
+  var selected = null;
+  container.querySelectorAll('.hc-col[data-hour] > .chart-bar').forEach(function(control) {
+    if (hourlyOverviewControlHour(control) === hour) { selected = control; }
+  });
+  if (!selected) { return false; }
+  clearHourlyOverviewSelection(container, false);
+  selected.classList.add('selected');
+  selected.setAttribute('aria-pressed', 'true');
+  var selectedText = hourlyOverviewSelectionText(container, selected);
+  selected.setAttribute('aria-label', selectedText);
+  container.querySelectorAll('.daily-table tbody tr[data-hour]').forEach(function(row) {
+    if (row.getAttribute('data-hour') === hour) { row.classList.add('chart-selection-row'); }
+  });
+  var detail = container.querySelector('[data-hour-selection-detail]');
+  if (detail) {
+    detail.textContent = selectedText;
+    detail.hidden = false;
+  }
+  if (persist) {
+    var selections = ccuReadUiState().hourlyChartSelections || {};
+    selections[hourlyOverviewSelectionKey(container)] = hour;
+    ccuWriteUiState('hourlyChartSelections', selections);
+  }
+  return true;
+}
+function refreshHourlyOverviewSelection(container) {
+  if (!container || !container.matches('[data-hourly-overview]')) { return; }
+  var selected = container.querySelector('[data-hour-selection-control][aria-pressed="true"]');
+  if (!selected) { return; }
+  var hour = hourlyOverviewControlHour(selected);
+  if (hour) { setHourlyOverviewSelection(container, hour, false); }
+}
+function activateHourlyOverviewSelection(control) {
+  var container = control && control.closest ? control.closest('[data-hourly-overview]') : null;
+  if (!container) { return; }
+  var hour = hourlyOverviewControlHour(control);
+  if (!hour) { return; }
+  if (control.getAttribute('aria-pressed') === 'true') {
+    clearHourlyOverviewSelection(container, true);
+  } else {
+    setHourlyOverviewSelection(container, hour, true);
+  }
+}
+function initializeHourlyOverviewSelections(root) {
+  var scope = root || document;
+  var containers = [];
+  if (scope.matches && scope.matches('[data-hourly-overview]')) { containers.push(scope); }
+  scope.querySelectorAll('[data-hourly-overview]').forEach(function(container) { containers.push(container); });
+  containers.forEach(function(container) {
+    var detail = container.querySelector('[data-hour-selection-detail]');
+    if (!detail || !detail.id) { return; }
+    container.querySelectorAll('.hc-col[data-hour] > .chart-bar').forEach(function(control) {
+      control.setAttribute('data-hour-selection-control', '');
+      control.setAttribute('role', 'button');
+      control.setAttribute('tabindex', '0');
+      control.setAttribute('aria-controls', detail.id);
+      if (!control.hasAttribute('aria-pressed')) { control.setAttribute('aria-pressed', 'false'); }
+      control.setAttribute('aria-label', hourlyOverviewSelectionText(container, control));
+    });
+  });
+}
+function restoreHourlyOverviewSelections(root) {
+  var scope = root || document;
+  var selections = ccuReadUiState().hourlyChartSelections || {};
+  var containers = [];
+  if (scope.matches && scope.matches('[data-hourly-overview]')) { containers.push(scope); }
+  scope.querySelectorAll('[data-hourly-overview]').forEach(function(container) { containers.push(container); });
+  containers.forEach(function(container) {
+    var hour = selections[hourlyOverviewSelectionKey(container)];
+    if (hour) { setHourlyOverviewSelection(container, hour, false); }
+  });
+}
 function initializeStatusRegions(root) {
   var scope = root || document;
   scope.querySelectorAll('.loading, .no-data, .no-chart-data').forEach(function(region) {
@@ -11914,6 +12064,15 @@ document.addEventListener('click', function(event) {
     }
   }
 
+  var hourlySelection = event.target.closest
+    ? event.target.closest('[data-hour-selection-control]')
+    : null;
+  if (hourlySelection) {
+    event.preventDefault();
+    activateHourlyOverviewSelection(hourlySelection);
+    return;
+  }
+
   // Handle chart bar clicks - only for clickable charts
   if (event.target.classList.contains('chart-bar') && event.target.classList.contains('clickable')) {
     event.preventDefault();
@@ -11931,6 +12090,15 @@ document.addEventListener('keydown', function(event) {
   if (!table || !key) { return; }
   event.preventDefault();
   sortTable(table, key, sortableTh);
+});
+
+document.addEventListener('keydown', function(event) {
+  var hourlySelection = event.target && event.target.closest
+    ? event.target.closest('[data-hour-selection-control]')
+    : null;
+  if (!hourlySelection || (event.key !== 'Enter' && event.key !== ' ')) { return; }
+  event.preventDefault();
+  activateHourlyOverviewSelection(hourlySelection);
 });
 
 document.addEventListener('keydown', function(event) {
