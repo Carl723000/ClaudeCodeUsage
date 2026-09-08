@@ -1219,7 +1219,10 @@ test('Claude recursive watcher forwards nested subagent JSONL writes to a watch 
     assert.equal(directory, path.join(root, 'projects'));
     assert.equal(options.recursive, true);
     listener = callback;
-    return { close: () => { watcherClosed += 1; } };
+    return {
+      close: () => { watcherClosed += 1; },
+      on: () => undefined,
+    };
   };
 
   try {
@@ -1243,13 +1246,20 @@ test('Claude recursive watcher forwards nested subagent JSONL writes to a watch 
   assert.equal(watcherClosed, 1);
 });
 
-test('Claude watcher errors close the watcher and fall back to polling', async () => {
+test('Claude watcher errors back off, recover, and cannot rearm after disposal', async () => {
   const extension = bareExtension();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-watch-error-'));
   fs.mkdirSync(path.join(root, 'projects'));
   const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
   const originalWatch = fs.watch;
-  let errorListener: ((error: Error) => void) | undefined;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const errorListeners: Array<(error: Error) => void> = [];
+  const retryCallbacks: Array<() => void> = [];
+  const retryDelays: number[] = [];
+  const clearedTimers: number[] = [];
+  let nextTimer = 0;
+  let watchCalls = 0;
   let watcherClosed = 0;
   const diagnostics: string[] = [];
   extension.windowActivity = new WindowActivityGate(true);
@@ -1263,33 +1273,177 @@ test('Claude watcher errors close the watcher and fall back to polling', async (
     dataDirectory: '',
   });
   (ClaudeDataLoader as any).findClaudeDataDirectory = async () => root;
-  const watcher = {
-    close: () => { watcherClosed += 1; },
-    on: (event: string, listener: (error: Error) => void) => {
-      if (event === 'error') errorListener = listener;
-      return watcher;
-    },
+  (fs as any).watch = () => {
+    watchCalls += 1;
+    const watcher = {
+      close: () => { watcherClosed += 1; },
+      on: (event: string, listener: (error: Error) => void) => {
+        if (event === 'error') errorListeners.push(listener);
+        return watcher;
+      },
+    };
+    return watcher;
   };
-  (fs as any).watch = () => watcher;
+  globalThis.setTimeout = ((callback: () => void, milliseconds?: number) => {
+    retryCallbacks.push(callback);
+    retryDelays.push(milliseconds ?? 0);
+    nextTimer += 1;
+    return nextTimer as unknown as NodeJS.Timeout;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer: NodeJS.Timeout) => {
+    clearedTimers.push(timer as unknown as number);
+  }) as typeof clearTimeout;
 
   try {
     await extension.startFileWatching();
-    assert.ok(errorListener, 'the watcher must handle asynchronous fs.watch errors');
-    const error = Object.assign(new Error('watch resources exhausted'), { code: 'EMFILE' });
-    errorListener(error);
-    await extension.drainResourceStops();
+    assert.equal(watchCalls, 1);
+    assert.equal(errorListeners.length, 1, 'the watcher must handle asynchronous fs.watch errors');
 
+    errorListeners[0](Object.assign(new Error('watch resources exhausted'), { code: 'EMFILE' }));
+    await extension.drainResourceStops();
     assert.equal(extension.fileWatcher, undefined);
     assert.equal(extension.watchedDir, null);
     assert.equal(watcherClosed, 1);
+    assert.deepEqual(retryDelays, [1_000]);
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 1);
+
+    retryCallbacks[0]();
+    await new Promise((resolve) => setImmediate(resolve));
+    await extension.drainResourceStops();
+    assert.equal(watchCalls, 2, 'the first retry rearms the watcher');
+    assert.equal(errorListeners.length, 2);
+
+    errorListeners[1](Object.assign(new Error('watch resources still exhausted'), { code: 'EMFILE' }));
+    await extension.drainResourceStops();
+    assert.deepEqual(retryDelays, [1_000, 2_000], 'consecutive failures back off instead of hot-looping');
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 1);
+
+    retryCallbacks[1]();
+    await new Promise((resolve) => setImmediate(resolve));
+    await extension.drainResourceStops();
+    assert.equal(watchCalls, 3, 'a later retry can recover');
+    assert.ok(extension.fileWatcher);
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.watcher, 1);
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 0);
+
+    errorListeners[2](Object.assign(new Error('watch failed again'), { code: 'ENOSPC' }));
+    await extension.drainResourceStops();
+    assert.deepEqual(retryDelays, [1_000, 2_000, 4_000]);
+    const staleRetry = retryCallbacks[2];
+    extension.disposed = true;
+    extension.stopFileWatching('extension-dispose');
+    await extension.drainResourceStops();
+    staleRetry();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(watchCalls, 3, 'a cancelled disposal retry cannot recreate a watcher');
+    assert.deepEqual(clearedTimers, [3]);
     assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
     assert.match(diagnostics.join('\n'), /EMFILE/);
+    assert.match(diagnostics.join('\n'), /ENOSPC/);
     assert.match(diagnostics.join('\n'), /poll/i);
   } finally {
     extension.stopFileWatching();
     (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
     (fs as any).watch = originalWatch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('Codex watcher errors close the whole set and recover with bounded backoff', async () => {
+  const extension = bareExtension();
+  const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-codex-watch-error-'));
+  fs.mkdirSync(path.join(codexHome, 'sessions'));
+  fs.mkdirSync(path.join(codexHome, 'archived_sessions'));
+  const originalWatch = fs.watch;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const errorListeners: Array<(error: Error) => void> = [];
+  const retryCallbacks: Array<() => void> = [];
+  const retryDelays: number[] = [];
+  const clearedTimers: number[] = [];
+  const diagnostics: string[] = [];
+  let nextTimer = 0;
+  let watchCalls = 0;
+  let watcherClosed = 0;
+
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.codexWatchDebounce = { clear: () => undefined };
+  extension.codexWatchers = [];
+  extension.codexWatchedHome = null;
+  extension.outputChannel = { appendLine: (line: string) => diagnostics.push(line) };
+  extension.getConfiguration = () => ({
+    codexEnabled: true,
+    codexFileWatchSeconds: 30,
+  });
+  extension.codexHome = () => codexHome;
+  (fs as any).watch = () => {
+    watchCalls += 1;
+    const watcher = {
+      close: () => { watcherClosed += 1; },
+      on: (event: string, listener: (error: Error) => void) => {
+        if (event === 'error') errorListeners.push(listener);
+        return watcher;
+      },
+    };
+    return watcher;
+  };
+  globalThis.setTimeout = ((callback: () => void, milliseconds?: number) => {
+    retryCallbacks.push(callback);
+    retryDelays.push(milliseconds ?? 0);
+    nextTimer += 1;
+    return nextTimer as unknown as NodeJS.Timeout;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout = ((timer: NodeJS.Timeout) => {
+    clearedTimers.push(timer as unknown as number);
+  }) as typeof clearTimeout;
+
+  try {
+    extension.startCodexWatching();
+    assert.equal(watchCalls, 2);
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.watcher, 2);
+
+    errorListeners[0](Object.assign(new Error('watch resources exhausted'), { code: 'EMFILE' }));
+    await extension.drainResourceStops();
+    assert.equal(watcherClosed, 2, 'one failed child watcher closes the entire Codex watcher set');
+    assert.equal(extension.codexWatchers.length, 0);
+    assert.deepEqual(retryDelays, [1_000]);
+
+    retryCallbacks[0]();
+    await extension.drainResourceStops();
+    assert.equal(watchCalls, 4);
+    assert.equal(extension.codexWatchers.length, 2);
+
+    errorListeners[2](Object.assign(new Error('watch resources still exhausted'), { code: 'EMFILE' }));
+    await extension.drainResourceStops();
+    assert.deepEqual(retryDelays, [1_000, 2_000]);
+
+    retryCallbacks[1]();
+    await extension.drainResourceStops();
+    assert.equal(watchCalls, 6, 'Codex watcher recovery eventually restores both roots');
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.watcher, 2);
+    assert.equal(extension.resourceOwnership.snapshotForTests().byKind.timer, 0);
+
+    errorListeners[4](Object.assign(new Error('watch failed again'), { code: 'ENOSPC' }));
+    await extension.drainResourceStops();
+    assert.deepEqual(retryDelays, [1_000, 2_000, 4_000]);
+    const staleRetry = retryCallbacks[2];
+    extension.disposed = true;
+    extension.stopCodexWatching('extension-dispose');
+    await extension.drainResourceStops();
+    staleRetry();
+    assert.equal(watchCalls, 6, 'a cancelled disposal retry cannot recreate Codex watchers');
+    assert.deepEqual(clearedTimers, [3]);
+    assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+    assert.match(diagnostics.join('\n'), /Codex/);
+    assert.match(diagnostics.join('\n'), /poll/i);
+  } finally {
+    extension.stopCodexWatching();
+    (fs as any).watch = originalWatch;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+    fs.rmSync(codexHome, { recursive: true, force: true });
   }
 });
 

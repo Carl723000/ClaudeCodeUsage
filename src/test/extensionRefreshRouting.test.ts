@@ -97,7 +97,10 @@ test('Codex watcher still schedules its own Codex-only refresh', () => {
     callback: (event: string, filename: string) => void,
   ) => {
     callbacks.push(callback);
-    return { close: () => undefined };
+    return {
+      close: () => undefined,
+      on: () => undefined,
+    };
   };
   try {
     extension.startCodexWatching();
