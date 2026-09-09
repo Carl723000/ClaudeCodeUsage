@@ -2,7 +2,7 @@
 
 [简体中文](provider-parity-matrix-v2.4.zh-CN.md) · English
 
-Snapshot: 2026-09-08, local candidate branch `codex/v2.3.2-stabilization`.
+Snapshot: 2026-09-09, local candidate branch `codex/v2.3.2-stabilization`.
 Commit identifiers are development evidence, not published-release claims.
 
 This matrix records interaction parity without pretending Claude and Codex
@@ -24,7 +24,7 @@ local branch and has passed its listed tests.
 | Today hourly selection | Selectable hour, synchronized detail line and table row | Same | Candidate (`fbaa693`) | Mouse, Enter, Space, metric synchronization, no host message, reload restoration, and tab-reset behavior pass in `codex-interactions.spec.mjs` |
 | Today token composition | Claude input, cache write, cache read, output | Fresh input, cached input, output; reasoning remains a subset note rather than a second output segment | Aligned with intentional token semantics | Shared composition renderer; Codex never double-counts reasoning |
 | Last-30-days primary chart | Daily values and metric switches | Same interaction with Codex-native metrics | Aligned | Shared chart stack and `chart-date-labels.spec.mjs`; configured-zone daily keys remain stable |
-| Last-30-days day → hour | Click/table disclosure asks the host to regroup already loaded in-memory Claude records | Click/table disclosure uses the persisted rolling-hour sidecar in the Webview | Partial | Neither path rereads JSONL on click. Codex is already materialized; Claude still performs an in-memory O(records) regroup and should move to the materialized recent-hour map |
+| Last-30-days day → hour | Click/table disclosure uses a bounded rolling-hour DTO already embedded in the Webview | Click/table disclosure uses the persisted rolling-hour sidecar in the Webview | Candidate (`84c84d7`) | Neither path sends a host message or rereads JSONL on click. Claude transfers sparse active-hour rows and completes the selected day to an exact 24-hour presentation in the browser; days without materialized detail expose no dead control |
 | All-time month → day | Click/table disclosure regroups already loaded records by configured-zone day | No entry: the Codex index currently exposes monthly all-time rows but only rolling-30-day daily rows | Intentional difference | Do not add a dead Codex control. Add parity only after an audited all-time daily aggregate exists with bounded storage |
 | Chart expansion semantics | One expanded period, matching table button and chart state, `aria-expanded` / `aria-controls` | Same for supported day → hour rows | Aligned | Reload and keyboard contracts pass in `codex-interactions.spec.mjs` and `codex-accessibility.spec.mjs` |
 | Empty / partial hourly detail | Claude no-data response inside the controlled row | Explicit no-data row plus hourly migration coverage | Aligned hierarchy, intentional provenance copy | Codex never falls back to unverified legacy totals |
@@ -45,7 +45,7 @@ local branch and has passed its listed tests.
 | Interaction | Source read allowed on activation | Persisted across Webview reload | Reset boundary |
 |:--|:--|:--|:--|
 | Today hour selection | None; DOM state only | Selected hour and selected metric | User switches the top dashboard tab |
-| Last 30 days day → hour (Claude) | Existing in-memory records only; no filesystem read | Expanded day and metric | User switches the top dashboard tab |
+| Last 30 days day → hour (Claude) | Existing materialized Webview DTO only; no host message | Expanded day and metric | User switches the top dashboard tab |
 | Last 30 days day → hour (Codex) | Existing materialized Webview DTO only; no host message | Expanded day and metric | User switches the top dashboard tab |
 | All time month → day (Claude) | Existing in-memory records only; no filesystem read | Expanded month and metric | User switches the top dashboard tab |
 | Sort / filter | Existing rendered DTO only | Sort, session range, and model filter | Explicit user change or UI reset |
@@ -57,12 +57,10 @@ bounded DTO before a new drill-down control is added.
 
 ## Next implementation order
 
-1. Transfer Claude rolling-hour materialization to the Webview so day → hour no
-   longer regroups all loaded records on activation.
-2. Preserve selection, expansion, keyboard focus, and the nearest scroll anchor
+1. Preserve selection, expansion, keyboard focus, and the nearest scroll anchor
    through a live data replacement, not only a full Webview reload.
-3. Add provider-qualified labelled chart regions or text alternatives and test
+2. Add provider-qualified labelled chart regions or text alternatives and test
    duplicate-looking Compare regions for unique accessible names.
-4. Decide whether an all-time Codex daily aggregate has acceptable storage and
+3. Decide whether an all-time Codex daily aggregate has acceptable storage and
    migration cost. Until then, month → day remains an explicit semantic
    difference rather than a nonfunctional control.
