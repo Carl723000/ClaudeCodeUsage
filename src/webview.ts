@@ -51,6 +51,7 @@ import {
   emptyCodexScopedInsights,
 } from './providers/codex/codexInsights';
 import {
+  CodexDailyUsageView,
   CodexMetricTotals,
   CodexHourlyUsageView,
   CodexProjectUsageView,
@@ -2222,21 +2223,36 @@ export class UsageWebviewProvider {
           }
           break;
         }
-        case 'getDailyData':
-          const monthString = message.month;
-          if (monthString && this.panel) {
-            // Get daily data for the specified month
-            const { ClaudeDataLoader } = await import('./dataLoader');
-            const dailyData = ClaudeDataLoader.getDailyDataForSpecificMonth(this.allRecords, monthString);
-
-            // Send data back to webview
-            this.panel.webview.postMessage({
-              command: 'dailyDataResponse',
-              month: monthString,
-              data: dailyData,
-            });
+        case 'getDailyData': {
+          const monthString = typeof message.month === 'string' ? message.month : '';
+          const requestedProvider = message.provider === 'codex' || message.provider === 'claude'
+            ? message.provider
+            : '';
+          if (!/^\d{4}-\d{2}$/.test(monthString) || !this.panel || requestedProvider !== this.currentProvider) {
+            break;
           }
+          if (requestedProvider === 'codex') {
+            const dailyRows = (this.codexView?.allTimeDaily ?? [])
+              .filter((row) => row.day.startsWith(monthString + '-'))
+              .sort((left, right) => left.day.localeCompare(right.day));
+            await this.panel.webview.postMessage({
+              command: 'dailyDataResponse',
+              provider: 'codex',
+              month: monthString,
+              html: this.renderCodexMonthDailyDetail(monthString, dailyRows),
+            });
+            break;
+          }
+          const { ClaudeDataLoader } = await import('./dataLoader');
+          const dailyData = ClaudeDataLoader.getDailyDataForSpecificMonth(this.allRecords, monthString);
+          await this.panel.webview.postMessage({
+            command: 'dailyDataResponse',
+            provider: 'claude',
+            month: monthString,
+            data: dailyData,
+          });
           break;
+        }
       }
     });
 
@@ -3961,7 +3977,7 @@ export class UsageWebviewProvider {
             const day = this.escapeHtml(row.day);
             const detailButton = canExpand
               ? '<button class="detail-button" data-codex-hourly-toggle data-date="' + day + '" ' +
-                'onclick="toggleCodexHourlyDetail(\'' + day + '\')" aria-expanded="false" ' +
+                'onclick="toggleCodexHourlyDetail(\'' + day + '\', this)" aria-expanded="false" ' +
                 'aria-controls="codex-hourly-detail-' + day + '" title="' +
                 this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '">' +
                 '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">' +
@@ -4100,6 +4116,85 @@ export class UsageWebviewProvider {
     return rolling30Summary + dailyBreakdown;
   }
 
+  private renderCodexMonthDailyDetail(
+    month: string,
+    rows: CodexDailyUsageView[],
+  ): string {
+    const view = this.codexView;
+    const copy = I18n.t.providers.codex;
+    if (!view || rows.length === 0) {
+      return '<div class="no-data"><p>' + this.escapeHtml(copy.noDailyData) + '</p></div>';
+    }
+    const chartRows = rows.map((row) => ({
+      date: row.day,
+      data: { total: row.total, apiEquivalent: row.apiEquivalent, threads: row.threads },
+    }));
+    const partial = view.allTime.indexedSubtotal
+      ? '<p class="model-details">' + this.escapeHtml(copy.partial) + '</p>'
+      : '';
+    const tableRows = rows.map((row) => {
+      const hourly = view.last30DaysHourlyByDay[row.day];
+      const canExpand = hourly !== undefined;
+      const dayCoverage = view.hourlyCoverage.days[row.day] ?? view.hourlyCoverage;
+      const day = this.escapeHtml(row.day);
+      const detailId = 'codex-alltime-hourly-detail-' + day;
+      const detailButton = canExpand
+        ? '<button class="detail-button" data-codex-hourly-toggle data-date="' + day + '" ' +
+          'onclick="toggleCodexHourlyDetail(\'' + day + '\', this)" aria-expanded="false" ' +
+          'aria-controls="' + detailId + '" title="' +
+          this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '">' +
+          '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">' +
+          '<path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>' +
+          '</svg></button>'
+        : '';
+      const detailRow = canExpand
+        ? '<tr class="hourly-detail-row" data-codex-hourly-detail-row data-date="' + day +
+          '" style="display: none;"><td colspan="10"><div class="hourly-detail-container" ' +
+          'id="' + detailId + '" data-loaded="true">' +
+          this.renderCodexHourlyBreakdown(hourly, dayCoverage, row.day) +
+          '</div></td></tr>'
+        : '';
+      return '<tr class="daily-row" data-date="' + day + '"><td class="date-cell">' +
+        this.escapeHtml(this.formatDate(row.day)) + '</td>' +
+        '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
+        this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td>' +
+        '<td class="detail-cell">' + detailButton + '</td></tr>' + detailRow;
+    }).join('');
+    return '<div class="daily-breakdown" data-codex-time-series data-codex-alltime-daily ' +
+      'data-month="' + this.escapeHtml(month) + '"><h4>' +
+      this.escapeHtml(this.formatDate(month, true) + ' · ' + I18n.t.popup.dailyBreakdown) + '</h4>' +
+      partial + '<div class="chart-tabs">' +
+      '<button class="chart-tab active" data-metric="cost">' + this.escapeHtml(copy.apiEquivalentCost) + '</button>' +
+      '<button class="chart-tab" data-metric="inputTokens">' + this.escapeHtml(copy.processed) + '</button>' +
+      '<button class="chart-tab" data-metric="outputTokens">' + this.escapeHtml(copy.fresh) + '</button>' +
+      '<button class="chart-tab" data-metric="cacheCreation">' + this.escapeHtml(copy.output) + '</button>' +
+      '<button class="chart-tab" data-metric="cacheRead">' + this.escapeHtml(copy.reasoning) + '</button>' +
+      '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
+      '</div><div class="chart-content" id="codex-daily-chart-' + this.escapeHtml(month) + '">' +
+      this.renderMainCostChart(chartRows, false, 'codex') + '</div>' +
+      this.renderCompositionChart(rows.map((row) => ({
+        label: this.getShortDate(row.day),
+        data: row.total,
+        key: Object.prototype.hasOwnProperty.call(view.last30DaysHourlyByDay, row.day)
+          ? row.day
+          : undefined,
+      })), 'codex', 'codex-hour') +
+      '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+      '<th>' + this.escapeHtml(copy.date) + '</th><th>' + this.escapeHtml(copy.apiEquivalentCost) + '</th>' +
+      '<th>' + this.escapeHtml(copy.processed) + '</th><th>' + this.escapeHtml(copy.fresh) + '</th>' +
+      '<th>' + this.escapeHtml(copy.input) + '</th><th>' + this.escapeHtml(copy.cachedInput) + '</th>' +
+      '<th>' + this.escapeHtml(copy.output) + '</th><th>' + this.escapeHtml(copy.reasoning) + '</th>' +
+      '<th>' + this.escapeHtml(copy.threads) + '</th><th></th></tr></thead><tbody>' + tableRows +
+      '</tbody></table></div></div>';
+  }
+
   private renderAllTimeData(provider: SettingProvider = 'claude'): string {
     if (provider === 'codex') {
       const view = this.codexView;
@@ -4119,15 +4214,19 @@ export class UsageWebviewProvider {
           '<button class="chart-tab" data-metric="cacheRead">' + this.escapeHtml(copy.reasoning) + '</button>' +
           '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
           '</div><div class="chart-content" id="allTimeChart">' + this.renderAllTimeChart(provider) + '</div>' +
-          this.renderCompositionChart(rows.map((row) => ({ label: row.period, data: row.total })), provider) +
+          this.renderCompositionChart(
+            rows.map((row) => ({ label: row.period, data: row.total, key: row.period })),
+            provider,
+          ) +
           '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
           '<th>' + this.escapeHtml(copy.date) + '</th><th>' + this.escapeHtml(copy.apiEquivalentCost) + '</th>' +
           '<th>' + this.escapeHtml(copy.processed) + '</th>' +
           '<th>' + this.escapeHtml(copy.fresh) + '</th><th>' + this.escapeHtml(copy.input) + '</th>' +
           '<th>' + this.escapeHtml(copy.cachedInput) + '</th><th>' + this.escapeHtml(copy.output) + '</th>' +
-          '<th>' + this.escapeHtml(copy.reasoning) + '</th><th>' + this.escapeHtml(copy.threads) + '</th>' +
-          '</tr></thead><tbody>' + rows.map((row) =>
-            '<tr><td class="date-cell">' + this.escapeHtml(row.period) + '</td>' +
+          '<th>' + this.escapeHtml(copy.reasoning) + '</th><th>' + this.escapeHtml(copy.threads) + '</th><th></th>' +
+          '</tr></thead><tbody>' + rows.map((row) => {
+            const month = this.escapeHtml(row.period);
+            return '<tr class="daily-row" data-date="' + month + '"><td class="date-cell">' + month + '</td>' +
             '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
             this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
@@ -4136,8 +4235,18 @@ export class UsageWebviewProvider {
             '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
-            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
-          ).join('') + '</tbody></table></div></div>';
+            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td>' +
+            '<td class="detail-cell"><button class="detail-button" onclick="toggleMonthlyDetail(\'' + month + '\')" ' +
+            'aria-expanded="false" aria-controls="monthly-detail-' + month + '" title="' +
+            this.escapeHtml(I18n.t.popup.dailyBreakdown) + '">' +
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">' +
+            '<path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>' +
+            '</svg></button></td></tr>' +
+            '<tr class="monthly-detail-row" data-date="' + month + '" style="display: none;">' +
+            '<td colspan="10"><div class="monthly-detail-container" id="monthly-detail-' + month + '">' +
+            '<div class="loading-indicator">' + this.escapeHtml(I18n.t.statusBar.loading) + '</div>' +
+            '</div></td></tr>';
+          }).join('') + '</tbody></table></div></div>';
       return this.renderUsageData(null, provider, view.allTime) +
         this.renderWeeklyValuePanel(provider) + breakdown;
     }
@@ -7043,6 +7152,9 @@ export class UsageWebviewProvider {
   private renderCompositionChart(
     items: { label: string; data: UsageData | CodexMetricTotals; key?: string }[],
     provider: SettingProvider = 'claude',
+    drilldown: 'month' | 'codex-hour' | 'none' = items.some((item) => item.key)
+      ? 'month'
+      : 'none',
   ): string {
     if (!items || items.length === 0) {
       return '';
@@ -7094,10 +7206,16 @@ export class UsageWebviewProvider {
       // In the all-time view each bar is a month (it.key = its date); make it
       // click-to-expand that month's per-day composition (reuses the table's
       // month-detail round-trip).
-      const colOpen = provider === 'claude' && it.key
+      const controls = drilldown === 'codex-hour'
+        ? 'codex-alltime-hourly-detail-'
+        : 'monthly-detail-';
+      const action = drilldown === 'codex-hour'
+        ? 'toggleCodexHourlyDetail(\'' + it.key + '\', this)'
+        : 'toggleMonthlyDetail(\'' + it.key + '\')';
+      const colOpen = drilldown !== 'none' && it.key
         ? '<div class="hc-col hc-col-clickable" data-date="' + this.escapeHtml(it.key) +
-          '" role="button" tabindex="0" aria-expanded="false" aria-controls="monthly-detail-' +
-          this.escapeHtml(it.key) + '" onclick="toggleMonthlyDetail(\'' + it.key + '\')" title="' +
+          '" role="button" tabindex="0" aria-expanded="false" aria-controls="' + controls +
+          this.escapeHtml(it.key) + '" onclick="' + action + '" title="' +
           this.escapeHtml(it.label) + ' — ' + I18n.formatNumber(total) + '">'
         : '<div class="hc-col">';
       bars +=
@@ -7294,9 +7412,10 @@ export class UsageWebviewProvider {
           this.codexView?.last30DaysHourlyByDay ?? {},
           date,
         );
+        const clickable = monthly || hasHourlyDetail;
         return '<div class="hc-col" data-date="' + this.escapeHtml(date) + '">' +
           '<div class="hc-barval">' + costLabel + '</div>' +
-          '<div class="chart-bar cost-bar cost-stacked' + (hasHourlyDetail ? ' clickable' : '') +
+          '<div class="chart-bar cost-bar cost-stacked' + (clickable ? ' clickable' : '') +
           '" style="height:' + height + 'px" ' +
           'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
           'data-has-usage="' + (data.total.processed > 0 ? 'true' : 'false') + '" ' +
@@ -11316,7 +11435,7 @@ document.addEventListener('keydown', function(event) {
 
 function claudeDrilldownStateKey(detailRow, kind) {
   const tab = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : null;
-  return 'claude:' + (tab ? tab.id : kind) + ':' + kind;
+  return ccuProviderName() + ':' + (tab ? tab.id : kind) + ':' + kind;
 }
 
 function persistClaudeDrilldown(detailRow, kind, date) {
@@ -11420,14 +11539,27 @@ function toggleHourlyDetail(date, restoring) {
   }
 }
 
-function codexHourlyDetailElements(date) {
-  const detailRow = document.querySelector('[data-codex-hourly-detail-row][data-date="' + date + '"]');
-  const scope = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : document;
+function codexHourlyDetailElements(date, source) {
+  const sourceScope = source && source.closest
+    ? source.closest('[data-codex-alltime-daily], [data-codex-last30-daily]')
+    : null;
+  const activeTab = document.querySelector('.tab-content.active');
+  const searchScope = sourceScope || activeTab || document;
+  const detailRow = searchScope.querySelector(
+    '[data-codex-hourly-detail-row][data-date="' + date + '"]',
+  );
+  const scope = sourceScope || (detailRow && detailRow.closest
+    ? detailRow.closest('[data-codex-alltime-daily], [data-codex-last30-daily], .tab-content')
+    : searchScope);
+  const container = detailRow
+    ? detailRow.querySelector('.hourly-detail-container[id]')
+    : null;
   return {
     detailRow: detailRow,
     button: scope ? scope.querySelector('[data-codex-hourly-toggle][data-date="' + date + '"]') : null,
     chartBar: scope ? scope.querySelector('.hc-col[data-date="' + date + '"] .chart-bar') : null,
     scope: scope,
+    controls: container ? container.id : '',
   };
 }
 
@@ -11453,23 +11585,25 @@ function closeAllCodexHourlyDetails(scope) {
     button.classList.remove('expanded');
     button.setAttribute('aria-expanded', 'false');
   });
-  root.querySelectorAll('[data-codex-last30-daily] .chart-bar.selected').forEach(function(bar) {
+  root.querySelectorAll('.chart-bar.selected').forEach(function(bar) {
     bar.classList.remove('selected');
   });
-  root.querySelectorAll('[aria-controls^="codex-hourly-detail-"]').forEach(function(control) {
+  root.querySelectorAll(
+    '[aria-controls^="codex-hourly-detail-"], [aria-controls^="codex-alltime-hourly-detail-"]',
+  ).forEach(function(control) {
     control.setAttribute('aria-expanded', 'false');
   });
 }
 
-function setCodexHourlyDetail(date, expanded, restoring) {
-  const elements = codexHourlyDetailElements(date);
-  if (!elements.detailRow || !elements.button) { return false; }
+function setCodexHourlyDetail(date, expanded, restoring, source) {
+  const elements = codexHourlyDetailElements(date, source);
+  if (!elements.detailRow || !elements.button || !elements.controls) { return false; }
   if (expanded) {
     closeAllCodexHourlyDetails(elements.scope);
     elements.detailRow.style.display = 'table-row';
     elements.button.classList.add('expanded');
     elements.button.setAttribute('aria-expanded', 'true');
-    setChartDrilldownExpanded('codex-hourly-detail-' + date, true);
+    setChartDrilldownExpanded(elements.controls, true);
     if (elements.chartBar) { elements.chartBar.classList.add('selected'); }
     persistCodexHourlyDetail(elements.detailRow, date);
     if (!restoring) {
@@ -11479,21 +11613,22 @@ function setCodexHourlyDetail(date, expanded, restoring) {
     elements.detailRow.style.display = 'none';
     elements.button.classList.remove('expanded');
     elements.button.setAttribute('aria-expanded', 'false');
-    setChartDrilldownExpanded('codex-hourly-detail-' + date, false);
+    setChartDrilldownExpanded(elements.controls, false);
     if (elements.chartBar) { elements.chartBar.classList.remove('selected'); }
     persistCodexHourlyDetail(elements.detailRow, '');
   }
   return true;
 }
 
-function toggleCodexHourlyDetail(date) {
+function toggleCodexHourlyDetail(date, source) {
   try {
-    const elements = codexHourlyDetailElements(date);
+    const elements = codexHourlyDetailElements(date, source);
     if (!elements.detailRow || !elements.button) { return; }
     setCodexHourlyDetail(
       date,
       elements.button.getAttribute('aria-expanded') !== 'true',
       false,
+      source,
     );
   } catch (error) {
     console.error('Error in toggleCodexHourlyDetail:', error);
@@ -11506,7 +11641,7 @@ function restoreCodexHourlyDetails() {
     document.querySelectorAll('[data-codex-hourly-detail-row]').forEach(function(row) {
       const date = row.getAttribute('data-date');
       if (date && saved[codexHourlyDetailStateKey(row)] === date) {
-        setCodexHourlyDetail(date, true, true);
+        setCodexHourlyDetail(date, true, true, row);
       }
     });
   } catch (e) {}
@@ -11566,7 +11701,7 @@ function toggleMonthlyDetail(monthDate, restoring) {
 
         // Request monthly data if not loaded
         if (!container.dataset.loaded) {
-          vscode.postMessage({ command: 'getDailyData', month: monthDate });
+          vscode.postMessage({ command: 'getDailyData', month: monthDate, provider: ccuProviderName() });
           container.dataset.loaded = 'true';
         }
 
@@ -11598,8 +11733,8 @@ function toggleMonthlyDetail(monthDate, restoring) {
 function closeAllMonthlyDetails() {
   // Close all expanded monthly detail rows
   const allDetailRows = document.querySelectorAll('.monthly-detail-row');
-  const allButtons = document.querySelectorAll('.detail-button.expanded');
-  const allChartBars = document.querySelectorAll('.chart-bar.selected');
+  const allButtons = document.querySelectorAll('[aria-controls^="monthly-detail-"].detail-button.expanded');
+  const allChartBars = document.querySelectorAll('[aria-controls^="monthly-detail-"].chart-bar.selected');
 
   allDetailRows.forEach(function(row) {
     row.style.display = 'none';
@@ -12091,13 +12226,18 @@ window.addEventListener('message', async function(event) {
 
   if (message.command === 'dailyDataResponse') {
     const container = document.getElementById('monthly-detail-' + message.month);
-    if (container && message.data) {
-      container.innerHTML = renderDailyData(message.data, message.month);
+    const responseProvider = message.provider === 'codex' ? 'codex' : 'claude';
+    if (container && responseProvider === ccuProviderName() &&
+        (Array.isArray(message.data) || typeof message.html === 'string')) {
+      container.innerHTML = responseProvider === 'codex'
+        ? message.html
+        : renderDailyData(message.data, message.month);
 
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
       restoreChartMetrics(container);
       initializeChartDrilldowns(container);
+      restoreCodexHourlyDetails();
       initializeStatusRegions(container);
     }
   }
@@ -12180,14 +12320,18 @@ function chartDrilldownInfo(element) {
   var date = holder ? holder.getAttribute('data-date') : '';
   if (!date) { return null; }
   var containingTab = element && element.closest ? element.closest('.tab-content') : null;
-  var kind = containingTab && containingTab.id === 'all'
-    ? 'monthly'
-    : element.closest('[data-codex-last30-daily]')
-      ? 'codex-hourly'
-      : 'hourly';
+  var kind = element.closest('[data-codex-alltime-daily]')
+    ? 'codex-alltime-hourly'
+    : containingTab && containingTab.id === 'all'
+      ? 'monthly'
+      : element.closest('[data-codex-last30-daily]')
+        ? 'codex-hourly'
+        : 'hourly';
   var prefix = kind === 'monthly'
     ? 'monthly-detail-'
-    : kind === 'codex-hourly'
+    : kind === 'codex-alltime-hourly'
+      ? 'codex-alltime-hourly-detail-'
+      : kind === 'codex-hourly'
       ? 'codex-hourly-detail-'
       : 'hourly-detail-';
   return { date: date, kind: kind, controls: prefix + date };
@@ -12201,7 +12345,9 @@ function activateChartDrilldown(element) {
   var info = chartDrilldownInfo(element);
   if (!info) { return; }
   if (info.kind === 'monthly') { toggleMonthlyDetail(info.date); }
-  else if (info.kind === 'codex-hourly') { toggleCodexHourlyDetail(info.date); }
+  else if (info.kind === 'codex-hourly' || info.kind === 'codex-alltime-hourly') {
+    toggleCodexHourlyDetail(info.date, element);
+  }
   else { toggleHourlyDetail(info.date); }
 }
 function initializeChartDrilldowns(root) {

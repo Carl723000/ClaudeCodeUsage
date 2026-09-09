@@ -189,6 +189,9 @@ export interface CodexUsageView {
   last30Days: CodexUsageScopeView;
   allTime: CodexUsageScopeView;
   projects: CodexProjectUsageView[];
+  /** Complete derived day series retained in host memory for month drill-downs. */
+  allTimeDaily: CodexDailyUsageView[];
+  /** Bounded recent day series used by the share heatmap payload. */
   daily: CodexDailyUsageView[];
   last7DaysDaily: CodexDailyUsageView[];
   last30DaysDaily: CodexDailyUsageView[];
@@ -615,7 +618,6 @@ function dailyRows(
   }
   return [...days.entries()]
     .sort(([left], [right]) => right.localeCompare(left))
-    .slice(0, MAX_DAILY_ROWS)
     .map(([day, row]) => {
       const total = metrics(row.tokens);
       return {
@@ -1085,7 +1087,8 @@ export function buildCodexUsageView(
     aggregateIndexIncomplete,
   );
   const allTime = scope(snapshot.files, aggregateIndexIncomplete);
-  const daily = dailyRows(snapshot.files, periodCoverage.timeZone);
+  const allTimeDaily = dailyRows(snapshot.files, periodCoverage.timeZone);
+  const daily = allTimeDaily.slice(0, MAX_DAILY_ROWS);
   const last30DaysHourlyByDay = Object.fromEntries(
     last30DayKeys.flatMap((day) => {
       const rows = hourlyRows(snapshot.files, day, periodCoverage.timeZone);
@@ -1178,6 +1181,7 @@ export function buildCodexUsageView(
           right.lastActiveAt - left.lastActiveAt ||
           left.projectKey.localeCompare(right.projectKey),
       ),
+    allTimeDaily,
     daily,
     last7DaysDaily: rollingDailyRows(daily, last7DayKeys),
     last30DaysDaily: rollingDailyRows(daily, last30DayKeys),

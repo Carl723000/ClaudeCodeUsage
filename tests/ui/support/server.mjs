@@ -60,6 +60,10 @@ const server = createServer(async (request, response) => {
       requestedFeedback === 'optimizer-helpful'
       ? requestedFeedback
       : 'none';
+    const requestedCodexMonth = url.searchParams.get('codexMonth') ?? '';
+    const codexMonth = /^\d{4}-\d{2}$/.test(requestedCodexMonth)
+      ? requestedCodexMonth
+      : '';
     const html = await renderHarness({
       provider,
       locale,
@@ -70,6 +74,7 @@ const server = createServer(async (request, response) => {
       shareStudio,
       adviceFeedback,
       timeZone,
+      codexMonth,
     });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',

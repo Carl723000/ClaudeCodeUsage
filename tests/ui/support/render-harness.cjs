@@ -405,6 +405,7 @@ exports.renderHarness = async function renderHarness({
   shareStudio = true,
   adviceFeedback = 'none',
   timeZone = 'Asia/Hong_Kong',
+  codexMonth = '',
 } = {}) {
   I18n.setLanguage(locale);
   I18n.setTimezone(timeZone);
@@ -515,6 +516,13 @@ exports.renderHarness = async function renderHarness({
       { claude: true, codex: true },
     );
     provider.currentProvider = selectedProvider;
+
+    if (/^\d{4}-\d{2}$/.test(codexMonth)) {
+      const rows = view.allTimeDaily
+        .filter((row) => row.day.startsWith(codexMonth + '-'))
+        .sort((left, right) => left.day.localeCompare(right.day));
+      return provider.renderCodexMonthDailyDetail(codexMonth, rows);
+    }
 
     const html = provider.getWebviewContent();
     const fixtureHtml = persistedDetailsFixture

@@ -137,6 +137,22 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
       .sort();
 
     assert.deepEqual(codexOnly, []);
+    const drilldownDay = Object.keys(codexView.last30DaysHourlyByDay)[0];
+    assert.ok(drilldownDay, 'fixture exposes one materialized hourly day');
+    const drilldownMonth = drilldownDay.slice(0, 7);
+    assert.match(
+      codexHtml,
+      new RegExp('class="chart-bar cost-bar cost-stacked clickable"[^>]+data-cost[^>]+title="' + drilldownMonth),
+    );
+    assert.match(codexHtml, new RegExp('aria-controls="monthly-detail-' + drilldownMonth + '"'));
+    const monthRows = codexView.allTimeDaily
+      .filter((row) => row.day.startsWith(drilldownMonth + '-'))
+      .sort((left, right) => left.day.localeCompare(right.day));
+    const monthHtml = provider.renderCodexMonthDailyDetail(drilldownMonth, monthRows);
+    assert.match(monthHtml, /data-codex-alltime-daily/);
+    assert.match(monthHtml, new RegExp('id="codex-alltime-hourly-detail-' + drilldownDay + '"'));
+    assert.match(monthHtml, /data-codex-materialized-hours="true"/);
+    assert.match(monthHtml, new RegExp('onclick="toggleCodexHourlyDetail\\(\\\'' + drilldownDay + '\\\', this\\)"'));
     const equivalentCostIndex = codexHtml.indexOf('API-equivalent cost');
     const processedIndex = codexHtml.indexOf('Processed');
     assert.ok(equivalentCostIndex >= 0, 'Codex summary shows API-equivalent cost');

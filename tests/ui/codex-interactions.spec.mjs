@@ -373,7 +373,90 @@ test('Claude monthly chart drill-down survives a full webview reload', async ({ 
   )).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
     (message) => message.command === 'getDailyData',
-  ))).toEqual({ command: 'getDailyData', month });
+  ))).toEqual({ command: 'getDailyData', month, provider: 'claude' });
+});
+
+test('Codex all-time months drill into indexed days and available hours on demand', async ({ page }) => {
+  await openCodex(page);
+  await page.locator('#tab-all').click();
+
+  const month = '2026-07';
+  const day = '2026-07-19';
+  const chartBar = page.locator(
+    `#all #allTimeChart .hc-col[data-date="${month}"] .chart-bar.clickable`,
+  );
+  const tableToggle = page.locator(
+    `#all > .daily-breakdown .daily-row[data-date="${month}"] .detail-button`,
+  );
+  const detail = page.locator(`#all .monthly-detail-row[data-date="${month}"]`);
+
+  await expect(chartBar).toHaveAttribute('aria-controls', `monthly-detail-${month}`);
+  await expect(tableToggle).toHaveAttribute('aria-controls', `monthly-detail-${month}`);
+  await chartBar.click();
+  await expect(detail).toBeVisible();
+  await expect(chartBar).toHaveAttribute('aria-expanded', 'true');
+  await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
+    (message) => message.command === 'getDailyData',
+  ))).toEqual({ command: 'getDailyData', month, provider: 'codex' });
+  await expect.poll(() => page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+    return state.claudeDrilldownDetails?.['codex:all:monthly'];
+  })).toBe(month);
+
+  const url = new URL(page.url());
+  url.searchParams.set('codexMonth', month);
+  const response = await page.context().request.get(url.toString());
+  const html = await response.text();
+  await page.evaluate(({ month, html }) => {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { command: 'dailyDataResponse', provider: 'codex', month, html },
+    }));
+  }, { month, html });
+
+  const daily = detail.locator('[data-codex-alltime-daily]');
+  await expect(daily).toBeVisible();
+  await expect(daily.locator('.daily-row')).toHaveCount(7);
+  const hourlyId = `codex-alltime-hourly-detail-${day}`;
+  const dailyBar = daily.locator(`.chart-content .hc-col[data-date="${day}"] .chart-bar.clickable`);
+  const dailyToggle = daily.locator(`[data-codex-hourly-toggle][data-date="${day}"]`);
+  await expect(dailyBar).toHaveAttribute('aria-controls', hourlyId);
+  await expect(dailyToggle).toHaveAttribute('aria-controls', hourlyId);
+
+  const postedBeforeHourlyOpen = await page.evaluate(() => window.__ccuPostedMessages.length);
+  await dailyBar.click();
+  await expect(daily.locator(`[data-codex-hourly-detail-row][data-date="${day}"]`)).toBeVisible();
+  await expect(daily.locator(`#${hourlyId} [data-codex-materialized-hours="true"]`)).toBeVisible();
+  await expect(dailyBar).toHaveAttribute('aria-expanded', 'true');
+  expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBeforeHourlyOpen);
+  await expect.poll(() => page.evaluate(() => {
+    const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
+    return state.codexHourlyDetails?.['codex:all'];
+  })).toBe(day);
+
+  await chartBar.click();
+  await expect(detail).toBeHidden();
+  await chartBar.click();
+  await expect(detail).toBeVisible();
+  await expect(daily.locator(`[data-codex-hourly-detail-row][data-date="${day}"]`)).toBeVisible();
+  await expect(dailyBar).toHaveAttribute('aria-expanded', 'true');
+
+  await page.reload({ waitUntil: 'load' });
+  await expect(page.locator('#tab-all')).toHaveClass(/active/);
+  await expect(page.locator(`#all .monthly-detail-row[data-date="${month}"]`)).toBeVisible();
+  await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
+    (message) => message.command === 'getDailyData',
+  ))).toEqual({ command: 'getDailyData', month, provider: 'codex' });
+  await page.evaluate(({ month, html }) => {
+    window.dispatchEvent(new MessageEvent('message', {
+      data: { command: 'dailyDataResponse', provider: 'codex', month, html },
+    }));
+  }, { month, html });
+  await expect(page.locator(
+    `#all [data-codex-alltime-daily] [data-codex-hourly-detail-row][data-date="${day}"]`,
+  )).toBeVisible();
+  await expect(page.locator(
+    `#all [data-codex-alltime-daily] .chart-content .hc-col[data-date="${day}"] .chart-bar.clickable`,
+  )).toHaveAttribute('aria-expanded', 'true');
 });
 
 test('a covered Codex date with no hourly token rows expands to an explicit empty state', async ({ page }) => {
