@@ -392,7 +392,8 @@ test('Codex all-time months drill into indexed days and available hours on deman
 
   await expect(chartBar).toHaveAttribute('aria-controls', `monthly-detail-${month}`);
   await expect(tableToggle).toHaveAttribute('aria-controls', `monthly-detail-${month}`);
-  await chartBar.click();
+  await chartBar.focus();
+  await page.keyboard.press('Enter');
   await expect(detail).toBeVisible();
   await expect(chartBar).toHaveAttribute('aria-expanded', 'true');
   await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
@@ -423,7 +424,8 @@ test('Codex all-time months drill into indexed days and available hours on deman
   await expect(dailyToggle).toHaveAttribute('aria-controls', hourlyId);
 
   const postedBeforeHourlyOpen = await page.evaluate(() => window.__ccuPostedMessages.length);
-  await dailyBar.click();
+  await dailyBar.focus();
+  await page.keyboard.press('Space');
   await expect(daily.locator(`[data-codex-hourly-detail-row][data-date="${day}"]`)).toBeVisible();
   await expect(daily.locator(`#${hourlyId} [data-codex-materialized-hours="true"]`)).toBeVisible();
   await expect(dailyBar).toHaveAttribute('aria-expanded', 'true');
