@@ -62,11 +62,20 @@ become release evidence only after maintainer review and merge.
   receives a stable localized name composed from its provider, dashboard range,
   section, chart type, and current metric. Names update with metric changes and
   stay unique across the two Compare allowance charts (`fc6f53b`).
+- **Done — Codex all-time month drill-down:** the host retains a complete daily
+  view derived from the period slices already present in the index, while the
+  share heatmap keeps its existing 370-day bound. Clicking a month transfers
+  only that month, never rereads JSONL, and continues to the materialized hourly
+  detail where rolling-hour coverage exists. Mouse, keyboard, nested state, and
+  full-reload restoration are covered without an index-schema migration
+  (`f51f29c`).
 
 ## P1: time-hierarchy chart drill-down
 
-- All-time month bar: click or Enter/Space opens that month's daily data.
-- Last-30-days day bar: click or Enter/Space opens that day's hourly data.
+- All-time month bar: click or Enter/Space opens that month's daily data. The
+  v2.3.2 candidate implements this for both providers (`f51f29c`).
+- Last-30-days day bar: click or Enter/Space opens that day's hourly data. The
+  v2.3.2 candidate materializes both provider paths (`84c84d7`).
 - Today hour bar: use the same selected/highlight/detail feedback without inventing unsupported granularity.
 - Claude and Codex share selection, `aria-expanded`, `aria-controls`, focus, empty-state, back/collapse, and responsive-layout behavior.
 - Drill-down must use materialized month/day/hour aggregates and perform zero JSONL reads on click. An incomplete hourly migration shows explicit subtotal/coverage state rather than unverified legacy totals.
