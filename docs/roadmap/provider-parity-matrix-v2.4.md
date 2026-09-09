@@ -37,7 +37,7 @@ local branch and has passed its listed tests.
 | Status-bar quota detail | Official `/usage`, shared progress table and thresholds | Last-observed local evidence, same progress table and thresholds | Aligned layout, intentional authority | Provider-specific provenance stays visible and must never be inferred from matching colors |
 | Sharing | Legacy Claude export remains compatible during v2.3.x | Compare studio exports privacy-safe provider components | Partial by decision | New sharing work goes only to the Compare studio; legacy removal waits for documentation and compatibility migration |
 | Settings | Concise provider-aware controls | Same | Aligned | Detailed local-data inventory and destructive controls remain repository documentation only |
-| Accessible chart alternatives | Interactive controls have names and state; empty states are live regions | Same | Partial | Every complete chart still needs one provider-qualified text alternative or labelled region, including duplicate-looking Compare regions |
+| Accessible chart alternatives | Every chart scroller and heatmap has a localized provider/range/type/metric-qualified region name | Same; metric changes update the name in place | Candidate (`fc6f53b`) | Claude, Codex, and Compare names are non-empty, unique, stable across repeat initialization, and covered by the full Axe/keyboard suite. Duplicate-looking Compare allowance charts remain distinct because their section headings retain the provider |
 | Installed VSIX evidence | Not yet captured for this branch | Not yet captured for this branch | Partial | Candidate packaging must capture privacy-safe real VS Code screenshots for status, quota, and both supported drill-down levels |
 
 ## Read and persistence boundaries
@@ -58,10 +58,8 @@ bounded DTO before a new drill-down control is added.
 
 ## Next implementation order
 
-1. Add provider-qualified labelled chart regions or text alternatives and test
-   duplicate-looking Compare regions for unique accessible names.
-2. Decide whether an all-time Codex daily aggregate has acceptable storage and
+1. Decide whether an all-time Codex daily aggregate has acceptable storage and
    migration cost. Until then, month → day remains an explicit semantic
    difference rather than a nonfunctional control.
-3. Capture the installed-VSIX status, quota, and supported drill-down evidence
+2. Capture the installed-VSIX status, quota, and supported drill-down evidence
    before candidate packaging.

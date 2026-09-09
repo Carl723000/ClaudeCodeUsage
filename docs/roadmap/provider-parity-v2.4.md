@@ -58,6 +58,10 @@ become release evidence only after maintainer review and merge.
   drill-down chain, chart/hour selection, transient Optimizer input, keyboard
   focus, and nearest visible scroll anchor survive; a shell change or failed
   delivery falls back to a complete document (`3b46c09`).
+- **Done — provider-qualified chart regions:** every chart scroller and heatmap
+  receives a stable localized name composed from its provider, dashboard range,
+  section, chart type, and current metric. Names update with metric changes and
+  stay unique across the two Compare allowance charts (`fc6f53b`).
 
 ## P1: time-hierarchy chart drill-down
 
@@ -82,7 +86,7 @@ become release evidence only after maintainer review and merge.
 - Align table sorting, numeric alignment, row expansion, scrollers, empty rows, and narrow layouts.
 - Align disclosure defaults, hit areas, focus treatment, and persistence rules.
 - Align loading, no-data, partial-index, stale-observation, and error hierarchy while retaining provider-specific causes.
-- Give every chart a provider-qualified accessible text alternative. In Compare, controls and regions must have unique accessible names even when the visible label is shared.
+- Give every chart a provider-qualified accessible text alternative. The v2.3.2 candidate now labels all chart scrollers and heatmaps and verifies unique Compare names with the full Axe/keyboard suite (`fc6f53b`).
 - Compare continues to combine only comparable activity; it never adds bills, allowances, or capability.
 
 ## P4: exit gate
