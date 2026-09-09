@@ -61,6 +61,7 @@ import {
 } from './providers/codex/codexUsage';
 import { createCodexLocalizedFormatters } from './codexFormat';
 import { getProviderNavClientScript } from './providerNavClient';
+import { getDashboardRefreshClientScript } from './dashboardRefreshClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -148,6 +149,10 @@ interface CodexRenderProgress {
 }
 
 const OPTIMIZER_FEEDBACK_RECOMMENDATION_ID = 'recommendation-optimizer-result-v1';
+const LIVE_PATCH_PANEL_START = '<!-- ccu-live-panel:start -->';
+const LIVE_PATCH_PANEL_END = '<!-- ccu-live-panel:end -->';
+const LIVE_PATCH_HOURS_START = '/* ccu-live-hours:start */';
+const LIVE_PATCH_HOURS_END = '/* ccu-live-hours:end */';
 
 function emptyDisplayUsageData(): UsageData {
   return {
@@ -221,6 +226,41 @@ function inlineScriptJson(value: unknown): string {
     .replace(/</g, '\\u003c')
     .replace(/\u2028/g, '\\u2028')
     .replace(/\u2029/g, '\\u2029');
+}
+
+interface DashboardLivePatch {
+  provider: 'claude' | 'codex';
+  tab: string;
+  panelHtml: string;
+  structureKey: string;
+  claudeLast30HoursByDay: ReturnType<typeof claudeHourlyDisplayDto>;
+}
+
+interface PendingDashboardLivePatch extends DashboardLivePatch {
+  documentHtml: string;
+  revision: number;
+}
+
+function markedContent(source: string, startMarker: string, endMarker: string): string | undefined {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return undefined;
+  const contentStart = start + startMarker.length;
+  const end = source.indexOf(endMarker, contentStart);
+  return end < 0 ? undefined : source.slice(contentStart, end);
+}
+
+function replaceMarkedContent(
+  source: string,
+  startMarker: string,
+  endMarker: string,
+  replacement: string,
+): string | undefined {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return undefined;
+  const contentStart = start + startMarker.length;
+  const end = source.indexOf(endMarker, contentStart);
+  if (end < 0) return undefined;
+  return source.slice(0, contentStart) + replacement + source.slice(end);
 }
 
 interface LocalDataUiCopy {
@@ -685,6 +725,12 @@ function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
 
 export class UsageWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
+  private webviewClientReady = false;
+  private dashboardLivePatchRevision = 0;
+  private pendingDashboardLivePatch: PendingDashboardLivePatch | undefined;
+  private scheduledDashboardLivePatch: PendingDashboardLivePatch | undefined;
+  private dashboardLivePatchSendScheduled = false;
+  private lastLivePatchStructureKey: string | undefined;
   private currentSessionData: SessionData | null = null;
   private todayData: UsageData | null = null;
   private rolling30DayData: UsageData | null = null;
@@ -1687,6 +1733,10 @@ export class UsageWebviewProvider {
 
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      this.webviewClientReady = false;
+      this.pendingDashboardLivePatch = undefined;
+      this.scheduledDashboardLivePatch = undefined;
+      this.lastLivePatchStructureKey = undefined;
       for (const requestId of [...this.localDataClientActionRequests.keys()]) {
         this.settleLocalDataClientAction(requestId, false);
       }
@@ -1738,8 +1788,24 @@ export class UsageWebviewProvider {
           await this.handleClearAdviceLocalDataMessage();
           break;
         case 'localDataClientReady':
+          this.webviewClientReady = true;
           this.onLocalDataClientReady?.();
           break;
+        case 'dashboardDataPatchAck': {
+          const pending = this.pendingDashboardLivePatch;
+          if (
+            pending &&
+            Number.isSafeInteger(message.revision) &&
+            message.revision === pending.revision
+          ) {
+            if (message.ok === true) {
+              this.pendingDashboardLivePatch = undefined;
+            } else {
+              this.replaceDocumentAfterPatchFailure(pending);
+            }
+          }
+          break;
+        }
         case 'requestLocalDataInventory': {
           const summary = message.clientSummary as Partial<LocalDataClientSummary> | undefined;
           const clientSummary: LocalDataClientSummary = {
@@ -2386,13 +2452,108 @@ export class UsageWebviewProvider {
   // is byte-identical — nothing visible would change anyway.
   private lastHtml: string = '';
 
+  private dashboardLivePatchFor(html: string): DashboardLivePatch | undefined {
+    if (this.currentProvider === 'compare') return undefined;
+    const panelHtml = markedContent(html, LIVE_PATCH_PANEL_START, LIVE_PATCH_PANEL_END);
+    if (panelHtml === undefined) return undefined;
+    const panelNeutral = replaceMarkedContent(
+      html,
+      LIVE_PATCH_PANEL_START,
+      LIVE_PATCH_PANEL_END,
+      '<provider-panel-data>',
+    );
+    if (panelNeutral === undefined) return undefined;
+    const structureHtml = replaceMarkedContent(
+      panelNeutral,
+      LIVE_PATCH_HOURS_START,
+      LIVE_PATCH_HOURS_END,
+      '<claude-hour-data>',
+    );
+    if (structureHtml === undefined) return undefined;
+    return {
+      provider: this.currentProvider,
+      tab: this.currentTab,
+      panelHtml,
+      structureKey: createHash('sha256').update(structureHtml, 'utf8').digest('hex'),
+      claudeLast30HoursByDay: claudeHourlyDisplayDto(
+        this.hourlyDataForRolling30DaysByDay,
+      ),
+    };
+  }
+
+  private replaceDocumentAfterPatchFailure(pending: PendingDashboardLivePatch): void {
+    if (!this.panel || this.pendingDashboardLivePatch?.revision !== pending.revision) return;
+    const fallback = this.scheduledDashboardLivePatch ?? pending;
+    this.pendingDashboardLivePatch = undefined;
+    this.scheduledDashboardLivePatch = undefined;
+    this.webviewClientReady = false;
+    this.lastHtml = fallback.documentHtml;
+    this.lastLivePatchStructureKey = fallback.structureKey;
+    this.panel.webview.html = fallback.documentHtml;
+  }
+
+  private scheduleDashboardLivePatch(pending: PendingDashboardLivePatch): void {
+    this.scheduledDashboardLivePatch = pending;
+    if (this.dashboardLivePatchSendScheduled) return;
+    this.dashboardLivePatchSendScheduled = true;
+    queueMicrotask(() => {
+      this.dashboardLivePatchSendScheduled = false;
+      const latest = this.scheduledDashboardLivePatch;
+      this.scheduledDashboardLivePatch = undefined;
+      if (
+        !latest ||
+        !this.panel ||
+        !this.webviewClientReady ||
+        this.lastHtml !== latest.documentHtml
+      ) {
+        return;
+      }
+      const panel = this.panel;
+      this.pendingDashboardLivePatch = latest;
+      void Promise.resolve(panel.webview.postMessage({
+        command: 'dashboardDataPatch',
+        provider: latest.provider,
+        tab: latest.tab,
+        revision: latest.revision,
+        html: latest.panelHtml,
+        claudeLast30HoursByDay: latest.claudeLast30HoursByDay,
+      })).then((delivered) => {
+        if (delivered === false) {
+          this.replaceDocumentAfterPatchFailure(latest);
+        }
+      }, () => {
+        this.replaceDocumentAfterPatchFailure(latest);
+      });
+    });
+  }
+
   private updateWebview(): void {
     if (!this.panel) return;
     const html = this.getWebviewContent();
     if (html === this.lastHtml) {
       return;
     }
+    const nextPatch = this.dashboardLivePatchFor(html);
+    if (
+      this.webviewClientReady &&
+      nextPatch &&
+      nextPatch.structureKey === this.lastLivePatchStructureKey
+    ) {
+      const pending: PendingDashboardLivePatch = {
+        ...nextPatch,
+        documentHtml: html,
+        revision: ++this.dashboardLivePatchRevision,
+      };
+      this.lastHtml = html;
+      this.lastLivePatchStructureKey = nextPatch.structureKey;
+      this.scheduleDashboardLivePatch(pending);
+      return;
+    }
+    this.pendingDashboardLivePatch = undefined;
+    this.scheduledDashboardLivePatch = undefined;
+    this.webviewClientReady = false;
     this.lastHtml = html;
+    this.lastLivePatchStructureKey = nextPatch?.structureKey;
     this.panel.webview.html = html;
   }
 
@@ -2826,6 +2987,7 @@ export class UsageWebviewProvider {
           </header>` +
       this.renderProviderTabs() +
       `<div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">` +
+      LIVE_PATCH_PANEL_START +
       this.renderQuotaBanner(provider) +
       `
           <div class="tabs" role="tablist" aria-label="${this.escapeHtml(title)}">
@@ -2852,7 +3014,8 @@ export class UsageWebviewProvider {
         ? dashboardPanel('branches', branchesActive, this.renderBranchData()) +
           dashboardPanel('workflows', workflowsActive, this.renderWorkflowData())
         : '') +
-      dashboardPanel('settings', settingsActive, this.renderSettingsPanel(provider)) + `
+      dashboardPanel('settings', settingsActive, this.renderSettingsPanel(provider)) +
+      LIVE_PATCH_PANEL_END + `
         </div>
         </div>
         <script>` +
@@ -9933,9 +10096,9 @@ export class UsageWebviewProvider {
 // Get VSCode API
 const vscode = acquireVsCodeApi();
 const __adviceCopy = ${JSON.stringify(I18n.t.popup.adviceEffectiveness)};
-const __claudeLast30HoursByDay = ${inlineScriptJson(
+let __claudeLast30HoursByDay = ${LIVE_PATCH_HOURS_START}${inlineScriptJson(
       claudeHourlyDisplayDto(this.hourlyDataForRolling30DaysByDay),
-    )};
+    )}${LIVE_PATCH_HOURS_END};
 
 function ccuReadUiState() {
   try { return vscode.getState() || {}; } catch (e) { return {}; }
@@ -10118,6 +10281,8 @@ function restoreUi() {
   restoreScrollPosition();
   vscode.postMessage({ command: 'localDataClientReady' });
 }
+
+${getDashboardRefreshClientScript()}
 function ccuScrollStateKey() {
   var active = document.querySelector('.tab.active');
   return ccuProviderName() + ':' + (active ? active.id.replace('tab-', '') : 'today');
@@ -11628,6 +11793,11 @@ document.addEventListener('click', function(event) {
 // Handle messages from extension
 window.addEventListener('message', async function(event) {
   const message = event.data;
+
+  if (message.command === 'dashboardDataPatch') {
+    ccuApplyDashboardDataPatch(message);
+    return;
+  }
 
   if (
     message.command === 'codexIndexProgress' &&

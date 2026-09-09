@@ -286,6 +286,71 @@ test('Codex index progress patches live text without rebuilding the webview', ()
   }
 });
 
+test('a ready dashboard receives a live data fragment and reloads only when delivery fails', async () => {
+  const originalLoad = (Module as any)._load;
+  (Module as any)._load = function(request: string, parent: unknown, isMain: boolean) {
+    if (request === 'vscode') {
+      return { workspace: { workspaceFolders: [] } };
+    }
+    return originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    const { UsageWebviewProvider } = require('../webview') as typeof import('../webview');
+    const provider = new UsageWebviewProvider({} as any) as any;
+    const base = claudeUsageFixture();
+    provider.currentProvider = 'claude';
+    provider.currentTab = 'today';
+    provider.todayData = base;
+    provider.rolling30DayData = base;
+    provider.allTimeData = base;
+    provider.providerAvailability = { claude: true, codex: false, codexData: false };
+
+    const documentAssignments: string[] = [];
+    const messages: Array<Record<string, unknown>> = [];
+    let delivered = true;
+    const webview = {
+      postMessage: (message: Record<string, unknown>) => {
+        messages.push(message);
+        return Promise.resolve(delivered);
+      },
+      set html(value: string) {
+        documentAssignments.push(value);
+      },
+    };
+    provider.panel = { webview };
+
+    provider.updateWebview();
+    assert.equal(documentAssignments.length, 1, 'the first paint assigns the full document');
+    provider.webviewClientReady = true;
+    provider.todayData = { ...base, totalCost: base.totalCost + 1 };
+    provider.updateWebview();
+    provider.todayData = { ...base, totalCost: base.totalCost + 1.5 };
+    provider.updateWebview();
+    await Promise.resolve();
+
+    assert.equal(documentAssignments.length, 1, 'a delivered refresh keeps the document alive');
+    assert.equal(messages.length, 1, 'same-turn data updates coalesce into one patch');
+    assert.equal(messages[0].command, 'dashboardDataPatch');
+    assert.equal(messages[0].provider, 'claude');
+    assert.equal(messages[0].tab, 'today');
+    assert.equal(typeof messages[0].html, 'string');
+    assert.doesNotMatch(String(messages[0].html), /<script(?:\s|>)/i);
+    assert.deepEqual(messages[0].claudeLast30HoursByDay, {});
+
+    delivered = false;
+    provider.todayData = { ...base, totalCost: base.totalCost + 2 };
+    provider.updateWebview();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(messages.length, 2);
+    assert.equal(documentAssignments.length, 2, 'failed delivery falls back to a full document');
+    assert.match(documentAssignments[1], /<!DOCTYPE html>/);
+    assert.equal(provider.webviewClientReady, false);
+  } finally {
+    (Module as any)._load = originalLoad;
+  }
+});
+
 test('webview provider changes are allowlisted and kept outside time tabs', () => {
   const source = readFileSync(
     path.resolve(__dirname, '..', '..', 'src', 'webview.ts'),

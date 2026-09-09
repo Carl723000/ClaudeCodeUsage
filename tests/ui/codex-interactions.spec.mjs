@@ -1,5 +1,35 @@
 import { test, expect, openClaude, openCodex } from './support/app.mjs';
 
+async function dispatchDashboardDataPatch(
+  page,
+  { provider, fixture = 'unknown-models', revision = 1, tab },
+) {
+  const url = new URL(page.url());
+  url.searchParams.set('provider', provider);
+  url.searchParams.set('fixture', fixture);
+  const response = await page.context().request.get(url.toString());
+  const documentText = await response.text();
+  await page.evaluate(({ provider: nextProvider, fixture: nextFixture, revision: nextRevision, nextTab, documentText }) => {
+    const activeTab = nextTab
+      || document.querySelector('.tabs [role="tab"].active')?.id.replace('tab-', '');
+    if (!activeTab) throw new Error('Current dashboard did not expose an active tab');
+    const nextDocument = new DOMParser().parseFromString(documentText, 'text/html');
+    const nextPanel = nextDocument.getElementById('provider-panel');
+    if (!nextPanel) throw new Error('Fixture did not render a provider panel');
+    nextPanel.firstElementChild?.setAttribute('data-live-patch-fixture', nextFixture);
+    window.dispatchEvent(new MessageEvent('message', {
+      data: {
+        command: 'dashboardDataPatch',
+        provider: nextProvider,
+        tab: activeTab,
+        revision: nextRevision,
+        html: nextPanel.innerHTML,
+        claudeLast30HoursByDay: {},
+      },
+    }));
+  }, { provider, fixture, revision, nextTab: tab, documentText });
+}
+
 test('Codex navigates through the same dashboard tabs as Claude', async ({ page }) => {
   await openCodex(page);
 
@@ -424,4 +454,84 @@ test('live Codex indexing progress patches text without replacing the page or mo
   expect(await page.locator('[data-codex-index-progress-text]').count()).toBeGreaterThan(1);
   await expect(page.locator('body')).toHaveAttribute('data-progress-patch-identity', 'preserved');
   expect(await page.evaluate(() => scrollY)).toBe(target);
+});
+
+for (const provider of [
+  { name: 'Claude', value: 'claude', open: openClaude },
+  { name: 'Codex', value: 'codex', open: openCodex },
+]) {
+  test(`${provider.name} live dashboard data patch preserves Today selection, focus, and document identity`, async ({ page }) => {
+    await provider.open(page);
+    const overview = page.locator('#today [data-hourly-overview]');
+    const selected = overview.locator('.hc-col[data-hour] > .chart-bar').first();
+    const hour = await selected.locator('..').getAttribute('data-hour');
+    expect(hour).toBeTruthy();
+
+    await selected.focus();
+    await selected.press('Enter');
+    await expect(selected).toHaveAttribute('aria-pressed', 'true');
+    await expect(selected).toBeFocused();
+    await page.locator('body').evaluate((body) => { body.dataset.livePatchIdentity = 'preserved'; });
+
+    await dispatchDashboardDataPatch(page, { provider: provider.value });
+
+    const refreshed = overview.locator(`.hc-col[data-hour="${hour}"] > .chart-bar`);
+    await expect(page.locator('#tab-today')).toHaveClass(/active/);
+    await expect(refreshed).toHaveAttribute('aria-pressed', 'true');
+    await expect(refreshed).toHaveClass(/selected/);
+    await expect(refreshed).toBeFocused();
+    await expect(page.locator('body')).toHaveAttribute('data-live-patch-identity', 'preserved');
+    await expect(page.locator('[data-live-patch-fixture="unknown-models"]')).toHaveCount(1);
+    await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.at(-1))).toEqual({
+      command: 'dashboardDataPatchAck',
+      revision: 1,
+      ok: true,
+    });
+  });
+}
+
+test('live dashboard data patch preserves an expanded day, chart metric, and scroll anchor', async ({ page }) => {
+  await openCodex(page, { height: 560 });
+  await page.locator('#tab-month').click();
+  const day = '2026-07-19';
+  const toggle = page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`);
+  await toggle.click();
+  const metric = page.locator(
+    '#month [data-codex-last30-daily] > .chart-tabs .chart-tab[data-metric="outputTokens"]',
+  );
+  await metric.click();
+  await toggle.focus();
+  await toggle.evaluate((element) => {
+    const top = element.getBoundingClientRect().top;
+    window.scrollBy(0, top - 120);
+  });
+  const anchorTop = await toggle.evaluate((element) => element.getBoundingClientRect().top);
+  expect(anchorTop).toBeGreaterThan(100);
+  expect(anchorTop).toBeLessThan(140);
+
+  await dispatchDashboardDataPatch(page, { provider: 'codex' });
+
+  const refreshedToggle = page.locator(`#month [data-codex-hourly-toggle][data-date="${day}"]`);
+  await expect(page.locator('#tab-month')).toHaveClass(/active/);
+  await expect(refreshedToggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator(`#month [data-codex-hourly-detail-row][data-date="${day}"]`)).toBeVisible();
+  await expect(page.locator(
+    '#month [data-codex-last30-daily] > .chart-tabs .chart-tab[data-metric="outputTokens"]',
+  )).toHaveClass(/active/);
+  await expect(refreshedToggle).toBeFocused();
+  await expect.poll(async () => refreshedToggle.evaluate(
+    (element) => Math.abs(element.getBoundingClientRect().top - 120),
+  )).toBeLessThanOrEqual(2);
+});
+
+test('live dashboard data patch follows a host-selected tab instead of stale local state', async ({ page }) => {
+  await openCodex(page);
+  await page.locator('#tab-today').click();
+  await expect(page.locator('#tab-today')).toHaveClass(/active/);
+
+  await dispatchDashboardDataPatch(page, { provider: 'codex', tab: 'month' });
+
+  await expect(page.locator('#tab-month')).toHaveClass(/active/);
+  await expect(page.locator('#month')).toBeVisible();
+  await expect(page.locator('#tab-today')).not.toHaveClass(/active/);
 });
