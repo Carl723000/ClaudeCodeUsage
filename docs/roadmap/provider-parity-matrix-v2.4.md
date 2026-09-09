@@ -30,8 +30,8 @@ local branch and has passed its listed tests.
 | Empty / partial hourly detail | Claude no-data response inside the controlled row | Explicit no-data row plus hourly migration coverage | Aligned hierarchy, intentional provenance copy | Codex never falls back to unverified legacy totals |
 | Missing-period zero fill | Today presents all 24 hours; Last 30 days presents exactly 30 configured-zone civil dates without widening source aggregates | Complete Today coverage presents all 24 hours; partial indexing stays sparse; Last 30 days presents exactly 30 dates | Candidate (`7b86a54`) | Synthetic zero rows render as real zero values rather than unpriced data. Claude zero days expose no dead drill-down control. Helper unit tests and `time-range-presentation.spec.mjs` cover the exact ranges |
 | Metric persistence | Selected metric survives full Webview reload | Same | Aligned | `chartMetrics` state and browser coverage |
-| Expansion / selection persistence | Expansion and Today-hour selection survive Webview reload and reset on a user-initiated top-tab switch | Same for supported interactions | Aligned on reload; partial on live refresh | Live replacement must additionally prove focus and scroll-anchor preservation |
-| Page scroll | Debounced per-provider/tab position | Same | Aligned on reload; candidate duplicate-write guard (`7b86a54`) | Continuous scrolling writes once after the gesture; late Chromium scroll/pagehide events cannot synchronously rewrite an identical position; reload restoration is covered in `codex-interactions.spec.mjs` |
+| Expansion / selection persistence | Expansion and Today-hour selection survive Webview reload and reset on a user-initiated top-tab switch | Same for supported interactions | Candidate (`3b46c09`) | Ordinary same-shell refresh replaces only the provider panel and preserves the host-selected tab, expanded chain, chart/hour selection, transient Optimizer input, keyboard focus, and nearest visible anchor. Same-turn updates coalesce; structural changes or failed delivery fall back to a complete document. Node and Playwright coverage exercise Claude and Codex |
+| Page scroll | Debounced per-provider/tab position plus nearest-anchor restoration during live replacement | Same | Candidate (`3b46c09`, `7b86a54`) | Continuous scrolling writes once after the gesture; late Chromium scroll/pagehide events cannot synchronously rewrite an identical position. Live replacement restores the nearest visible stable element; complete reload restoration remains covered in `codex-interactions.spec.mjs` |
 | Tables | Shared numeric alignment, sortable semantics where applicable, bounded horizontal scrollers | Same | Aligned | Keyboard sorting, 360 px, long-locale, and desktop overflow tests |
 | Weekly allowance-value detail | Provider-qualified Claude panel; details collapsed by default | Separate provider-qualified Codex panel; details collapsed by default | Aligned layout, intentional evidence authority | Claude uses official observations; Codex uses local last-observed evidence. Compare never sums them |
 | Status-bar quota detail | Official `/usage`, shared progress table and thresholds | Last-observed local evidence, same progress table and thresholds | Aligned layout, intentional authority | Provider-specific provenance stays visible and must never be inferred from matching colors |
@@ -50,6 +50,7 @@ local branch and has passed its listed tests.
 | All time month → day (Claude) | Existing in-memory records only; no filesystem read | Expanded month and metric | User switches the top dashboard tab |
 | Sort / filter | Existing rendered DTO only | Sort, session range, and model filter | Explicit user change or UI reset |
 | Scroll | Browser scroll position only | Per provider and dashboard tab | UI reset |
+| Live data replacement | Newly rendered provider-panel HTML plus the bounded Claude rolling-hour DTO; no source-log read in the client | Active tab, expansion chain, chart/hour selection, transient focused control, keyboard focus, and nearest visible anchor | Structural shell change, provider change, rejected delivery, or UI reset |
 
 No interaction in this table may initiate a JSONL rescan. A new aggregation
 must be built during the existing index/update pass and transferred through a
@@ -57,10 +58,10 @@ bounded DTO before a new drill-down control is added.
 
 ## Next implementation order
 
-1. Preserve selection, expansion, keyboard focus, and the nearest scroll anchor
-   through a live data replacement, not only a full Webview reload.
-2. Add provider-qualified labelled chart regions or text alternatives and test
+1. Add provider-qualified labelled chart regions or text alternatives and test
    duplicate-looking Compare regions for unique accessible names.
-3. Decide whether an all-time Codex daily aggregate has acceptable storage and
+2. Decide whether an all-time Codex daily aggregate has acceptable storage and
    migration cost. Until then, month → day remains an explicit semantic
    difference rather than a nonfunctional control.
+3. Capture the installed-VSIX status, quota, and supported drill-down evidence
+   before candidate packaging.

@@ -53,6 +53,11 @@ become release evidence only after maintainer review and merge.
   destructive clear-path reference in `LOCAL-DATA.md` /
   `LOCAL-DATA.zh-CN.md`; do not reintroduce the verbose panel into the normal
   plugin Settings surface.
+- **Done — state-preserving live refresh:** ordinary same-shell data updates
+  coalesce and replace only the active provider panel. The host-selected tab,
+  drill-down chain, chart/hour selection, transient Optimizer input, keyboard
+  focus, and nearest visible scroll anchor survive; a shell change or failed
+  delivery falls back to a complete document (`3b46c09`).
 
 ## P1: time-hierarchy chart drill-down
 
@@ -61,7 +66,7 @@ become release evidence only after maintainer review and merge.
 - Today hour bar: use the same selected/highlight/detail feedback without inventing unsupported granularity.
 - Claude and Codex share selection, `aria-expanded`, `aria-controls`, focus, empty-state, back/collapse, and responsive-layout behavior.
 - Drill-down must use materialized month/day/hour aggregates and perform zero JSONL reads on click. An incomplete hourly migration shows explicit subtotal/coverage state rather than unverified legacy totals.
-- Preserve the expanded chain, selected period, keyboard focus, and scroll anchor through live refresh. Define which of those states survives a webview reload and test that contract explicitly.
+- Preserve the expanded chain, selected period, keyboard focus, and scroll anchor through live refresh. The v2.3.2 candidate now implements and tests this contract for ordinary Claude/Codex same-shell updates (`3b46c09`); structural changes retain the complete-reload path.
 - Zero-fill missing calendar dates/hours inside a selected range so sparse activity does not distort axes or make the hierarchy appear shorter than the requested range.
 
 ## P2: status bar and quota detail
