@@ -62,6 +62,7 @@ import {
 import { createCodexLocalizedFormatters } from './codexFormat';
 import { getProviderNavClientScript } from './providerNavClient';
 import { getDashboardRefreshClientScript } from './dashboardRefreshClient';
+import { getChartAccessibilityClientScript } from './chartAccessibilityClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -10283,6 +10284,7 @@ function restoreUi() {
 }
 
 ${getDashboardRefreshClientScript()}
+${getChartAccessibilityClientScript()}
 function ccuScrollStateKey() {
   var active = document.querySelector('.tab.active');
   return ccuProviderName() + ':' + (active ? active.id.replace('tab-', '') : 'today');
@@ -12154,6 +12156,7 @@ function applyChartMetric(container, metric, persist) {
   }
   initializeHourlyOverviewSelections(container);
   refreshHourlyOverviewSelection(container);
+  initializeChartRegions(container);
   if (persist) { saveChartMetric(container, metric); }
 }
 function restoreChartMetrics(root) {
@@ -12167,6 +12170,7 @@ function restoreChartMetrics(root) {
     if (metric) { applyChartMetric(container, metric, false); }
     else { syncChartMetricState(container); }
   });
+  initializeChartRegions(scope);
 }
 
 function chartDrilldownInfo(element) {
