@@ -4294,6 +4294,7 @@ export class ClaudeCodeUsageExtension {
         const dailyDataForRolling30 = materialized.dailyForLast30Days;
         const dailyDataForAllTime = materialized.monthlyForAllTime;
         const hourlyDataForToday = materialized.hourlyForToday;
+        const hourlyDataForRolling30DaysByDay = materialized.hourlyForLast30DaysByDay;
         const sessionBreakdown = materialized.sessions;
         const projectBreakdown = materialized.projects;
         const branchBreakdown = materialized.branches;
@@ -4306,7 +4307,7 @@ export class ClaudeCodeUsageExtension {
         this.statusBar.updateUsageData(todayData, workspaceTodayData, undefined, undefined, calendarMonthData);
         this.statusBar.updateContext(materialized.context);
         if (updateWebview) {
-          this.webviewProvider.updateData(sessionData, todayData, rolling30Data, allTimeData, dailyDataForRolling30, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages);
+          this.webviewProvider.updateData(sessionData, todayData, rolling30Data, allTimeData, dailyDataForRolling30, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages, hourlyDataForRolling30DaysByDay);
         }
       }
 

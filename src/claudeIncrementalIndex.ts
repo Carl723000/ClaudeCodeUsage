@@ -184,6 +184,10 @@ export interface ClaudeUsageAggregateSnapshot {
   dailyForMonth: { date: string; data: UsageData }[];
   monthlyForAllTime: { date: string; data: UsageData }[];
   hourlyForToday: { hour: string; data: UsageData }[];
+  /** Sparse, already-materialized hours for active days in the rolling
+   * 30-day dashboard range. The Webview may complete the 24-hour presentation
+   * without asking the host to regroup records when a day is expanded. */
+  hourlyForLast30DaysByDay: Record<string, { hour: string; data: UsageData }[]>;
 }
 
 export interface ClaudeUsageDashboardSnapshot extends ClaudeUsageAggregateSnapshot {
@@ -1282,6 +1286,65 @@ function sessionMatchesWorkspace(index: ClaudeUsageIndex, sessionId: string, wor
   return false;
 }
 
+function rollingHourlyRowsByDay(
+  index: ClaudeUsageIndex,
+  dayKeys: readonly string[],
+): Record<string, { hour: string; data: UsageData }[]> {
+  const requestedDays = new Set(dayKeys);
+  const activeDays = new Set(
+    dayKeys.filter((day) => index.aggregates.byLocalDay.has(day)),
+  );
+  const buckets = new Map<string, Map<string, UsageData>>();
+
+  for (const [key, data] of index.aggregates.byLocalHour) {
+    const separator = key.indexOf('\0');
+    if (separator < 0) continue;
+    const day = key.slice(0, separator);
+    const hour = key.slice(separator + 1);
+    if (!requestedDays.has(day) || !hour) continue;
+    let dayBuckets = buckets.get(day);
+    if (!dayBuckets) {
+      dayBuckets = new Map();
+      buckets.set(day, dayBuckets);
+    }
+    dayBuckets.set(hour, cloneUsageData(data));
+  }
+
+  // Deterministic snapshots in tests/replay may request a historical rolling
+  // window after the index has already pruned that window's hourly buckets.
+  // Rebuild only those missing active days from visible in-memory records once
+  // during snapshot creation. Production snapshots use the materialized map.
+  const missingActiveDays = new Set(
+    [...activeDays].filter((day) => !buckets.has(day)),
+  );
+  if (missingActiveDays.size > 0) {
+    for (const record of index.visibleRecords.values()) {
+      const keys = configuredTimeKeys(index, new Date(record.timestamp));
+      if (!keys.day || !keys.hour || !missingActiveDays.has(keys.day)) continue;
+      let dayBuckets = buckets.get(keys.day);
+      if (!dayBuckets) {
+        dayBuckets = new Map();
+        buckets.set(keys.day, dayBuckets);
+      }
+      applyBucket(
+        dayBuckets,
+        keys.hour,
+        ClaudeDataLoader.calculateUsageData([record]),
+        1,
+      );
+    }
+  }
+
+  return Object.fromEntries(
+    dayKeys.flatMap((day) => {
+      const rows = [...(buckets.get(day)?.entries() ?? [])]
+        .map(([hour, data]) => ({ hour, data }))
+        .sort((left, right) => left.hour.localeCompare(right.hour));
+      return rows.length > 0 ? [[day, rows]] : [];
+    }),
+  );
+}
+
 export function claudeUsageAggregateSnapshot(
   index: ClaudeUsageIndex,
   now: Date = new Date(),
@@ -1303,25 +1366,8 @@ export function claudeUsageAggregateSnapshot(
   const monthlyForAllTime = [...index.aggregates.byMonth.entries()]
     .map(([month, data]) => ({ date: `${month}-01`, data: cloneUsageData(data) }))
     .sort((left, right) => right.date.localeCompare(left.date));
-  let hourlyForToday = [...index.aggregates.byLocalHour.entries()]
-    .filter(([key]) => key.startsWith(`${localToday}\0`))
-    .map(([key, data]) => ({ hour: key.slice(localToday.length + 1), data: cloneUsageData(data) }))
-    .sort((left, right) => left.hour.localeCompare(right.hour));
-  // Historical callers may ask for a deterministic snapshot date (tests,
-  // replay, or an already-rendered day). If that day is outside the rolling
-  // materialized hour window, derive its hours from the in-memory visible
-  // records only; never reopen JSONL.
-  if (hourlyForToday.length === 0 && index.aggregates.byLocalDay.has(localToday)) {
-    const fallback = new Map<string, UsageData>();
-    for (const record of index.visibleRecords.values()) {
-      const keys = configuredTimeKeys(index, new Date(record.timestamp));
-      if (keys.day !== localToday || !keys.hour) continue;
-      applyBucket(fallback, keys.hour, ClaudeDataLoader.calculateUsageData([record]), 1);
-    }
-    hourlyForToday = [...fallback.entries()]
-      .map(([hour, data]) => ({ hour, data }))
-      .sort((left, right) => left.hour.localeCompare(right.hour));
-  }
+  const hourlyForLast30DaysByDay = rollingHourlyRowsByDay(index, last30DayKeys);
+  const hourlyForToday = hourlyForLast30DaysByDay[localToday] ?? [];
   return {
     today: cloneUsageData(index.aggregates.byLocalDay.get(localToday) ?? emptyUsageData()),
     last30Days,
@@ -1331,6 +1377,7 @@ export function claudeUsageAggregateSnapshot(
     dailyForMonth,
     monthlyForAllTime,
     hourlyForToday,
+    hourlyForLast30DaysByDay,
   };
 }
 

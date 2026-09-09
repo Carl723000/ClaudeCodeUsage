@@ -108,6 +108,9 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
     provider.allTimeData = usage;
     provider.hourlyDataForToday = [{ hour: '12:00', data: usage }];
     provider.dailyDataForRolling30Days = [{ date: '2026-07-20', data: usage }];
+    provider.hourlyDataForRolling30DaysByDay = {
+      '2026-07-20': [{ hour: '12:00', data: usage }],
+    };
     provider.dailyDataForAllTime = [{ date: '2026-07', data: usage }];
     provider.sessionBreakdown = [session];
     provider.projectBreakdown = [project];

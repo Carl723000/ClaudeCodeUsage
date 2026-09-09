@@ -396,6 +396,10 @@ test('configured timezone rebuckets Claude Today and hours from the in-memory in
     assert.equal(hongKong.today.totalInputTokens, 10);
     assert.deepEqual(hongKong.hourlyForToday.map(({ hour }) => hour), ['07:00']);
     assert.deepEqual(
+      hongKong.hourlyForLast30DaysByDay['2026-07-21'].map(({ hour }) => hour),
+      ['07:00'],
+    );
+    assert.deepEqual(
       ClaudeDataLoader.getHourlyDataForDate(shifted.records, '2026-07-21')
         .map(({ hour }) => hour),
       ['07:00'],

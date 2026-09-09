@@ -318,6 +318,13 @@ function addClaudeData(provider, { fixture = 'default', enableContent = false } 
           skillUses: [],
         }
       : null,
+    [],
+    [],
+    [],
+    {
+      '2026-07-19': [{ hour: '09:00', data: claudeUsage(0.4) }],
+      '2026-07-20': [{ hour: '18:00', data: claudeUsage(0.6) }],
+    },
   );
   if (completedWeeklyFixture) {
     provider.updateWeeklyQuotaHistory([{

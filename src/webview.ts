@@ -188,6 +188,41 @@ function emptyCodexHourlyDisplayRow(hour: string): CodexHourlyUsageView {
   };
 }
 
+function claudeHourlyDisplayDto(
+  rowsByDay: Record<string, { hour: string; data: UsageData }[]>,
+): Record<string, Array<{ hour: string; data: Omit<UsageData, 'modelBreakdown'> }>> {
+  const projected: Record<
+    string,
+    Array<{ hour: string; data: Omit<UsageData, 'modelBreakdown'> }>
+  > = {};
+  for (const [day, rows] of Object.entries(rowsByDay)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    projected[day] = rows.flatMap(({ hour, data }) => {
+      if (!/^(?:[01]\d|2[0-3]):00$/.test(hour)) return [];
+      return [{
+        hour,
+        data: {
+          totalInputTokens: data.totalInputTokens,
+          totalOutputTokens: data.totalOutputTokens,
+          totalCacheCreationTokens: data.totalCacheCreationTokens,
+          totalCacheReadTokens: data.totalCacheReadTokens,
+          totalCost: data.totalCost,
+          costBreakdown: { ...data.costBreakdown },
+          messageCount: data.messageCount,
+        },
+      }];
+    });
+  }
+  return projected;
+}
+
+function inlineScriptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
 interface LocalDataUiCopy {
   title: string;
   intro: string;
@@ -657,6 +692,10 @@ export class UsageWebviewProvider {
   private dailyDataForRolling30Days: { date: string; data: UsageData }[] = [];
   private dailyDataForAllTime: { date: string; data: UsageData }[] = [];
   private hourlyDataForToday: { hour: string; data: UsageData }[] = [];
+  private hourlyDataForRolling30DaysByDay: Record<
+    string,
+    { hour: string; data: UsageData }[]
+  > = {};
   private isLoading: boolean = false;
   private error: string | null = null;
   private dataDirectory: string | null = null;
@@ -2116,21 +2155,6 @@ export class UsageWebviewProvider {
           }
           break;
         }
-        case 'getHourlyData':
-          const dateString = message.date;
-          if (dateString && this.panel) {
-            // Get hourly data for the specified date
-            const { ClaudeDataLoader } = await import('./dataLoader');
-            const hourlyData = ClaudeDataLoader.getHourlyDataForDate(this.allRecords, dateString);
-
-            // Send data back to webview
-            this.panel.webview.postMessage({
-              command: 'hourlyDataResponse',
-              date: dateString,
-              data: hourlyData,
-            });
-          }
-          break;
         case 'getDailyData':
           const monthString = message.month;
           if (monthString && this.panel) {
@@ -2168,7 +2192,11 @@ export class UsageWebviewProvider {
     contentAnalysis: ContentAnalysis | null = null,
     branchBreakdown: BranchUsage[] = [],
     workflowBreakdown: WorkflowUsage[] = [],
-    costliestMessages: CostlyMessage[] = []
+    costliestMessages: CostlyMessage[] = [],
+    hourlyDataForRolling30DaysByDay: Record<
+      string,
+      { hour: string; data: UsageData }[]
+    > = {},
   ): void {
     this.currentSessionData = sessionData;
     this.todayData = todayData;
@@ -2177,6 +2205,7 @@ export class UsageWebviewProvider {
     this.dailyDataForRolling30Days = dailyDataForRolling30Days;
     this.dailyDataForAllTime = dailyDataForAllTime;
     this.hourlyDataForToday = hourlyDataForToday;
+    this.hourlyDataForRolling30DaysByDay = hourlyDataForRolling30DaysByDay;
     this.error = error || null;
     this.dataDirectory = dataDirectory || null;
     this.isLoading = false;
@@ -3807,8 +3836,13 @@ export class UsageWebviewProvider {
       (row) => row.date,
       (date) => ({ date, data: emptyDisplayUsageData() }),
     );
-    const observedDays = new Set(
-      dailyDisplayRows.filter((row) => row.observed).map((row) => row.key),
+    const expandableDays = new Set(
+      dailyDisplayRows
+        .filter((row) => row.observed && Object.prototype.hasOwnProperty.call(
+          this.hourlyDataForRolling30DaysByDay,
+          row.key,
+        ))
+        .map((row) => row.key),
     );
 
     const dailyBreakdown =
@@ -3832,7 +3866,7 @@ export class UsageWebviewProvider {
           ${this.renderDailyChart(
             provider,
             dailyDisplayRows.map(({ value }) => value),
-            observedDays,
+            expandableDays,
           )}
         </div>
 
@@ -3873,7 +3907,7 @@ export class UsageWebviewProvider {
                   <td class="number-cell">${this.formatPercent(this.cacheHitRate(data))}</td>
                   <td class="number-cell">${I18n.formatNumber(data.messageCount)}</td>
                   <td class="detail-cell">
-                    ${observed ? `<button class="detail-button" onclick="toggleHourlyDetail('${date}')"
+                    ${expandableDays.has(date) ? `<button class="detail-button" onclick="toggleHourlyDetail('${date}')"
                       aria-expanded="false" aria-controls="hourly-detail-${date}"
                       title="${this.escapeHtml(I18n.t.popup.hourlyBreakdown)}">
                       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
@@ -3882,7 +3916,7 @@ export class UsageWebviewProvider {
                     </button>` : ''}
                   </td>
                 </tr>
-                ${observed ? `<tr class="hourly-detail-row" data-date="${date}" style="display: none;">
+                ${expandableDays.has(date) ? `<tr class="hourly-detail-row" data-date="${date}" style="display: none;">
                   <td colspan="9">
                     <div class="hourly-detail-container" id="hourly-detail-${date}">
                       <div class="loading-indicator">${this.escapeHtml(I18n.t.statusBar.loading)}</div>
@@ -9899,6 +9933,9 @@ export class UsageWebviewProvider {
 // Get VSCode API
 const vscode = acquireVsCodeApi();
 const __adviceCopy = ${JSON.stringify(I18n.t.popup.adviceEffectiveness)};
+const __claudeLast30HoursByDay = ${inlineScriptJson(
+      claudeHourlyDisplayDto(this.hourlyDataForRolling30DaysByDay),
+    )};
 
 function ccuReadUiState() {
   try { return vscode.getState() || {}; } catch (e) { return {}; }
@@ -11141,6 +11178,19 @@ function restoreClaudeDrilldownDetails() {
   } catch (e) {}
 }
 
+function installMaterializedClaudeHourlyDetail(container, date) {
+  if (!container || !Object.prototype.hasOwnProperty.call(__claudeLast30HoursByDay, date)) {
+    return false;
+  }
+  container.innerHTML = renderHourlyData(__claudeLast30HoursByDay[date], date);
+  container.dataset.loaded = 'true';
+  bindChartTabEvents(container);
+  restoreChartMetrics(container);
+  initializeChartDrilldowns(container);
+  initializeStatusRegions(container);
+  return true;
+}
+
 function toggleHourlyDetail(date, restoring) {
   try {
     const detailRow = document.querySelector('.hourly-detail-row[data-date="' + date + '"]');
@@ -11169,10 +11219,11 @@ function toggleHourlyDetail(date, restoring) {
         }
         persistClaudeDrilldown(detailRow, 'hourly', date);
 
-        // Request hourly data if not loaded
+        // Materialize from the bounded rolling-hour DTO already embedded in
+        // this Webview. Expanding a day must never ask the host to regroup all
+        // loaded Claude records or touch JSONL.
         if (!container.dataset.loaded) {
-          vscode.postMessage({ command: 'getHourlyData', date: date });
-          container.dataset.loaded = 'true';
+          installMaterializedClaudeHourlyDetail(container, date);
         }
 
         // Scroll the newly-revealed detail into view — clicking a bar at the
@@ -11866,19 +11917,6 @@ window.addEventListener('message', async function(event) {
     }
   }
 
-  if (message.command === 'hourlyDataResponse') {
-    const container = document.getElementById('hourly-detail-' + message.date);
-    if (container && message.data) {
-      container.innerHTML = renderHourlyData(message.data, message.date);
-
-      // Re-bind chart tab events after rendering
-      bindChartTabEvents(container);
-      restoreChartMetrics(container);
-      initializeChartDrilldowns(container);
-      initializeStatusRegions(container);
-    }
-  }
-
   if (message.command === 'dailyDataResponse') {
     const container = document.getElementById('monthly-detail-' + message.month);
     if (container && message.data) {
@@ -12448,7 +12486,29 @@ function renderHourlyData(hourlyData, date) {
     return '<div class="no-data">${I18n.t.popup.noDataMessage}</div>';
   }
 
-  let html = '<div class="hourly-breakdown">';
+  const rowsByHour = new Map();
+  hourlyData.forEach(function(item) {
+    if (item && /^(?:[01]\\d|2[0-3]):00$/.test(item.hour) && !rowsByHour.has(item.hour)) {
+      rowsByHour.set(item.hour, item);
+    }
+  });
+  hourlyData = Array.from({ length: 24 }, function(_unused, hour) {
+    const label = String(hour).padStart(2, '0') + ':00';
+    return rowsByHour.get(label) || {
+      hour: label,
+      data: {
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheCreationTokens: 0,
+        totalCacheReadTokens: 0,
+        totalCost: 0,
+        costBreakdown: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
+        messageCount: 0
+      }
+    };
+  });
+
+  let html = '<div class="hourly-breakdown" data-claude-materialized-hours="true">';
   html += '<h4>' + ccuFormatUsageDateKey(date) + ' ${I18n.t.popup.hourlyBreakdown}</h4>';
 
   html += '<div class="chart-tabs">';
@@ -12478,7 +12538,7 @@ function renderHourlyData(hourlyData, date) {
   html += '</tr></thead><tbody>';
 
   hourlyData.forEach(function(item) {
-    html += '<tr>';
+    html += '<tr data-hour="' + item.hour + '">';
     html += '<td class="date-cell">' + item.hour + '</td>';
     html += '<td class="cost-cell">' + formatValue(item.data.totalCost, 'cost') + '</td>';
     html += '<td class="number-cell">' + item.data.totalInputTokens.toLocaleString(__locale) + '</td>';

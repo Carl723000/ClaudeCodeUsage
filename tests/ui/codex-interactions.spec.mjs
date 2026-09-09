@@ -279,7 +279,7 @@ test('materialized Codex hourly detail sends no host message and survives a full
   ))).toEqual([]);
 });
 
-test('Claude daily chart drill-down survives a full webview reload', async ({ page }) => {
+test('materialized Claude hourly detail sends no host message and survives a full reload', async ({ page }) => {
   await openClaude(page);
   await page.locator('#tab-month').click();
 
@@ -288,10 +288,15 @@ test('Claude daily chart drill-down survives a full webview reload', async ({ pa
     `#month #dailyChart .hc-col[data-date="${day}"] .chart-bar.clickable`,
   );
   const detail = page.locator(`#month .hourly-detail-row[data-date="${day}"]`);
+  const postedBefore = await page.evaluate(() => window.__ccuPostedMessages.length);
 
   await chartBar.click();
   await expect(detail).toBeVisible();
   await expect(chartBar).toHaveAttribute('aria-expanded', 'true');
+  await expect(detail.locator('[data-claude-materialized-hours="true"]')).toBeVisible();
+  await expect(detail.locator('.daily-table tbody tr')).toHaveCount(24);
+  await expect(detail.locator('.daily-table tbody .date-cell').first()).toHaveText('00:00');
+  expect(await page.evaluate(() => window.__ccuPostedMessages.length)).toBe(postedBefore);
   await expect.poll(() => page.evaluate(() => {
     const state = JSON.parse(localStorage.getItem('__ccu-vscode-state') || '{}');
     return state.claudeDrilldownDetails?.['claude:month:hourly'];
@@ -304,9 +309,11 @@ test('Claude daily chart drill-down survives a full webview reload', async ({ pa
   await expect(page.locator(
     `#month #dailyChart .hc-col[data-date="${day}"] .chart-bar.clickable`,
   )).toHaveAttribute('aria-expanded', 'true');
-  await expect.poll(() => page.evaluate(() => window.__ccuPostedMessages.find(
-    (message) => message.command === 'getHourlyData',
-  ))).toEqual({ command: 'getHourlyData', date: day });
+  await expect(page.locator(`#month .hourly-detail-row[data-date="${day}"] [data-claude-materialized-hours="true"]`))
+    .toBeVisible();
+  expect(await page.evaluate(() => window.__ccuPostedMessages.filter(
+    (message) => message.command !== 'localDataClientReady',
+  ))).toEqual([]);
 });
 
 test('Claude monthly chart drill-down survives a full webview reload', async ({ page }) => {

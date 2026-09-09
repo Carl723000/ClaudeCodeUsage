@@ -63,7 +63,7 @@ test('manual display currency reaches Claude and client-rendered drill-downs', a
     const hourly = parse(window.renderHourlyData([{ hour: '09:00', data: usage }], '2026-07-20'));
     const daily = parse(window.renderDailyData([{ date: '2026-07-20', data: usage }], '2026-07'));
     return {
-      hourlyCost: hourly.querySelector('tbody .cost-cell')?.textContent,
+      hourlyCost: hourly.querySelector('tbody tr[data-hour="09:00"] .cost-cell')?.textContent,
       hourlyAxis: hourly.querySelector('.hc-yaxis .hc-yval')?.textContent,
       dailyCost: daily.querySelector('tbody .cost-cell')?.textContent,
       dailyAxis: daily.querySelector('.hc-yaxis .hc-yval')?.textContent,
