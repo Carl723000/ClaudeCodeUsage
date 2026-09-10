@@ -12386,12 +12386,23 @@ function hourlyOverviewMetricLabel(container) {
   var active = container.querySelector(':scope > .chart-tabs .chart-tab.active[data-metric]');
   return active && active.textContent ? active.textContent.trim() : '';
 }
+function hourlyOverviewMetric(container) {
+  var active = container.querySelector(':scope > .chart-tabs .chart-tab.active[data-metric]');
+  return active ? (active.getAttribute('data-metric') || 'cost') : 'cost';
+}
+function formattedChartBarValue(control, metric) {
+  var value = parseFloat(control.dataset[getDataAttribute(metric)]) || 0;
+  return metric === 'cost' &&
+    control.dataset.pricedTokens === '0' && control.dataset.hasUsage === 'true'
+    ? '—'
+    : formatValue(value, metric);
+}
 function hourlyOverviewSelectionText(container, control) {
-  var holder = control && control.closest ? control.closest('.hc-col[data-hour]') : null;
-  var value = holder ? holder.querySelector('.hc-barval') : null;
   var hour = hourlyOverviewDisplayHour(hourlyOverviewControlHour(control));
   var metric = hourlyOverviewMetricLabel(container);
-  var formatted = value && value.textContent ? value.textContent.trim() : '';
+  // The visible bar-top label intentionally suppresses zeroes. Selection
+  // status and accessible names still announce the exact zero value.
+  var formatted = formattedChartBarValue(control, hourlyOverviewMetric(container));
   return hour + (metric ? ' · ' + metric : '') + (formatted ? ': ' + formatted : '');
 }
 function clearHourlyOverviewSelection(container, persist) {
@@ -12655,10 +12666,7 @@ function updateMainChart(metric, container) {
     }
 
     // Update tooltip + on-bar value label
-    const formattedValue = metric === 'cost' &&
-      bar.dataset.pricedTokens === '0' && bar.dataset.hasUsage === 'true'
-      ? '—'
-      : formatValue(value, metric);
+    const formattedValue = formattedChartBarValue(bar, metric);
     const container = bar.parentElement;
     const date = container.dataset.date;
     const hour = container.dataset.hour;

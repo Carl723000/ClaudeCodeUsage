@@ -240,7 +240,10 @@ for (const provider of [
 
     const metric = overview.locator(':scope > .chart-tabs .chart-tab[data-metric="outputTokens"]');
     await metric.click();
-    const expected = `${displayHour} · ${(await metric.textContent()).trim()}: ${(await firstColumn.locator('.hc-barval').textContent()).trim()}`;
+    await expect(firstColumn.locator('.hc-barval')).toBeEmpty();
+    const selectedValue = ((await bar.getAttribute('title')) ?? '').trim();
+    expect(selectedValue).not.toBe('');
+    const expected = `${displayHour} · ${(await metric.textContent()).trim()}: ${selectedValue}`;
     await expect(detail).toHaveText(expected);
     await expect(bar).toHaveAttribute('aria-label', expected);
     await expect.poll(() => page.evaluate(() => {
