@@ -16,7 +16,7 @@ v2.3.1 normative field-level contract is in
 | Codex usage records | `$CODEX_HOME/sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl` | A versioned incremental index of pseudonymous file keys, offsets, numeric usage, dates, model/effort, and sanitized structural aggregates | Until rebuild, explicit clear, schema replacement, or host removal | None |
 | Codex titles | Exactly `$CODEX_HOME/session_index.jsonl` | `id → thread_name` is streamed for runtime display; titles are not written to the index | Runtime only | None |
 | Quota observations | Claude's official quota response or structured Codex rate-limit events | Provider, machine-local anonymous account epoch, observed/reset time, period, used/remaining fraction, anonymous window identity, source, confidence, and quality flags | At most 180 days and 512 observations per provider/account/period after boundary-preserving compaction; clear separately or with all derived data | Claude quota lookup contacts Anthropic when enabled; Codex quota evidence is local |
-| Settings and UI preferences | User choices | Typed extension settings, selected tab/filters, bounded background-work state, heatmap title/range/privacy preview, and the optional display-currency label plus manually entered units-per-USD rate | Until reset, clear, or uninstall; ordinary VS Code settings may participate in Settings Sync | No extension-initiated transfer; no exchange-rate lookup |
+| Settings and UI preferences | User choices | Typed extension settings, selected tab/filters, bounded background-work state, heatmap title/range/privacy preview, and the optional display-currency preset | Until reset, clear, or uninstall; ordinary VS Code settings may participate in Settings Sync | No extension-initiated transfer; no exchange-rate lookup |
 | Share destination | User-entered GitHub target | Optional `owner/repository/path`; no GitHub credential | Until sharing preferences are reset | Only after an explicit publish action and exact destination confirmation |
 | Advice evidence | Derived local aggregates and explicit feedback | Coarse observations, recommendations, ratings, snoozes, comparable-task metrics, coverage, and versions | Bounded local ledger; clear independently | Nothing by default; only the exact previewed request is sent after a separate action |
 | Advice API key | User-provided secret | Secret value in VS Code SecretStorage only | Until the key or all derived data is cleared | Used only as the authorization credential for the explicitly configured endpoint |
@@ -39,9 +39,11 @@ allowance.
 
 Display-currency conversion is presentation-only. Pricing, aggregation,
 persistence, sorting, and comparisons remain USD-denominated. The extension
-stores only the validated label and user-entered multiplier, performs no rate
-lookup, marks converted estimates with `≈`, and leaves provider-native money
-such as actual usage credits in its reported currency.
+stores only one validated preset code and resolves it against bundled reference
+rates dated 2026-09-09. Rates are not editable and no lookup is performed.
+Converted estimates carry `≈`; provider-native money such as actual usage
+credits remains in its reported currency. The snapshot derives currency-per-USD
+values from the [ECB euro reference rates](https://www.ecb.europa.eu/stats/policy_and_exchange_rates/euro_reference_exchange_rates/html/index.en.html).
 
 ## Combined heatmap and exports
 

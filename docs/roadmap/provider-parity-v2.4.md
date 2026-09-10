@@ -44,11 +44,12 @@ become release evidence only after maintainer review and merge.
   removes the old panel only after documentation migration and compatibility
   tests. New sharing capabilities go only into the unified studio.
 - **Done — [#91](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/91):**
-  local display preferences accept a user-entered units-per-USD rate and bounded
-  currency code/symbol. Formatting is deterministic and carries `≈`; underlying
-  prices, aggregates, sorting, and persistence remain USD. No exchange-rate
-  transport exists, provider-native usage credits bypass conversion, and both
-  static and client-rendered drill-downs share the same formatter (`12bd21b`).
+  one compact dropdown selects a bundled currency preset and defaults to USD.
+  The reference-rate snapshot is fixed and not user-editable; formatting is
+  deterministic and carries `≈`, while underlying prices, aggregates, sorting,
+  and persistence remain USD. No exchange-rate transport exists, provider-native
+  usage credits bypass conversion, and both static and client-rendered drill-downs
+  share the same formatter (`12bd21b`, refined in `c991d4f`).
 - **Preserved — concise Settings:** keep the detailed local-data inventory and
   destructive clear-path reference in `LOCAL-DATA.md` /
   `LOCAL-DATA.zh-CN.md`; do not reintroduce the verbose panel into the normal
@@ -81,6 +82,9 @@ become release evidence only after maintainer review and merge.
 - Drill-down must use materialized month/day/hour aggregates and perform zero JSONL reads on click. An incomplete hourly migration shows explicit subtotal/coverage state rather than unverified legacy totals.
 - Preserve the expanded chain, selected period, keyboard focus, and scroll anchor through live refresh. The v2.3.2 candidate now implements and tests this contract for ordinary Claude/Codex same-shell updates (`3b46c09`); structural changes retain the complete-reload path.
 - Zero-fill missing calendar dates/hours inside a selected range so sparse activity does not distort axes or make the hierarchy appear shorter than the requested range.
+- Hourly charts retain all zero-filled slots, axis labels, and table rows, but
+  omit repeated zero value labels above the bars; genuine unpriced usage still
+  shows `—` instead of being mistaken for no activity (`c991d4f`).
 
 ## P2: status bar and quota detail
 
