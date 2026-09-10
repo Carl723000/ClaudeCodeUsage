@@ -598,6 +598,8 @@ export class ClaudeCodeUsageExtension {
     // Rename showOpusWeekly -> showScopedWeekly (the API stopped naming Opus).
     // Runs once.
     this.queueInitializationWrite(() => this.settings.migrateScopedWeekly());
+    // Collapse the early 2.3.2 free-form currency/rate pair into one preset.
+    this.queueInitializationWrite(() => this.settings.migrateCurrencyPreset());
     // Usage Optimizer (Phase 9c): the webview posts a draft prompt; we run it
     // through the same model backend as the advice feature and post back a
     // tightened prompt + a settings recommendation. Consent gate lives here.
@@ -2094,7 +2096,7 @@ export class ClaudeCodeUsageExtension {
   private applyFormattingConfiguration(config: ExtensionConfig): void {
     I18n.setLanguage(config.language as any);
     I18n.setDecimalPlaces(config.decimalPlaces);
-    I18n.setCurrencyDisplay(config.displayCurrency, config.usdConversionRate);
+    I18n.setCurrencyDisplay(config.displayCurrency);
     I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
     I18n.setCompactNumbers(config.compactNumbers);
     I18n.setTimezone(config.timezone);
@@ -2121,7 +2123,6 @@ export class ClaudeCodeUsageExtension {
       language: s.get<string>('language'),
       decimalPlaces: s.get<number>('decimalPlaces'),
       displayCurrency: s.get<string>('displayCurrency'),
-      usdConversionRate: s.get<number>('usdConversionRate'),
       tokenDecimalPlaces: s.get<number>('tokenDecimalPlaces'),
       compactNumbers: s.get<boolean>('compactNumbers'),
       releaseAnnouncements: s.get<boolean>('releaseAnnouncements'),
@@ -3093,7 +3094,7 @@ export class ClaudeCodeUsageExtension {
   // These values only reformat already-materialized USD estimates. They must
   // not restart file watchers, recreate providers, or rescan either corpus.
   private static readonly COST_DISPLAY_SETTINGS = new Set([
-    'decimalPlaces', 'displayCurrency', 'usdConversionRate',
+    'decimalPlaces', 'displayCurrency',
   ]);
 
   /** Dashboard Settings change — status-bar-only toggles apply in place, others reload. */

@@ -27,7 +27,11 @@ test('currency display settings reformat materialized data without rebuilding pr
 
   assert.match(
     source,
-    /COST_DISPLAY_SETTINGS\s*=\s*new Set\(\[[\s\S]*?'decimalPlaces'[\s\S]*?'displayCurrency'[\s\S]*?'usdConversionRate'[\s\S]*?\]\)/,
+    /COST_DISPLAY_SETTINGS\s*=\s*new Set\(\[[\s\S]*?'decimalPlaces'[\s\S]*?'displayCurrency'[\s\S]*?\]\)/,
+  );
+  assert.doesNotMatch(
+    source.match(/COST_DISPLAY_SETTINGS\s*=\s*new Set\(\[([\s\S]*?)\]\)/)?.[1] ?? '',
+    /usdConversionRate/,
   );
   const branch = source.match(
     /if \(key && ClaudeCodeUsageExtension\.COST_DISPLAY_SETTINGS\.has\(key\)\) \{([\s\S]*?)\n    \}/,

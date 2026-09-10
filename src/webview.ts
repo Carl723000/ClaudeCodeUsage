@@ -7498,8 +7498,8 @@ export class UsageWebviewProvider {
 
   /**
    * Today's hourly chart. Unlike the other charts it has a Y-axis, two dashed
-   * reference lines and a value label on top of every bar, so figures are
-   * readable without hovering.
+   * reference lines and a value label on top of every non-zero bar, so figures
+   * stay readable without filling quiet hours with repeated zeroes.
    */
   private renderCodexHourlyChart(rows: CodexHourlyUsageView[]): string {
     if (rows.length === 0) {
@@ -7516,8 +7516,11 @@ export class UsageWebviewProvider {
       const cost = row.apiEquivalent;
       const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
       const costLabel = this.codexCostLabel(cost, row.total.processed);
+      const visibleCostLabel = cost.equivalentUsd === 0 && row.total.processed === 0
+        ? ''
+        : costLabel;
       return '<div class="hc-col" data-hour="' + this.escapeHtml(row.hour) + '">' +
-        '<div class="hc-barval">' + costLabel + '</div>' +
+        '<div class="hc-barval">' + visibleCostLabel + '</div>' +
         '<div class="chart-bar cost-bar cost-stacked" style="height:' + height + 'px" ' +
         'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
         'data-has-usage="' + (row.total.processed > 0 ? 'true' : 'false') + '" ' +
@@ -7561,7 +7564,9 @@ export class UsageWebviewProvider {
         const cb = data.costBreakdown;
         return (
           '<div class="hc-col" data-hour="' + hour + '">' +
-          '<div class="hc-barval">' + I18n.formatCurrency(data.totalCost) + '</div>' +
+          '<div class="hc-barval">' +
+          (data.totalCost === 0 ? '' : I18n.formatCurrency(data.totalCost)) +
+          '</div>' +
           '<div class="chart-bar cost-bar cost-stacked" style="height: ' + height + 'px;" ' +
           'data-cost="' + data.totalCost + '" ' +
           'data-input="' + data.totalInputTokens + '" ' +
@@ -12675,7 +12680,9 @@ function updateMainChart(metric, container) {
 
     const barVal = container.querySelector('.hc-barval');
     if (barVal) {
-      barVal.textContent = formattedValue;
+      barVal.textContent = hour && value === 0 && formattedValue !== '—'
+        ? ''
+        : formattedValue;
     }
   });
 
@@ -12986,8 +12993,11 @@ function griddedChart(items, metric, opts) {
     }
     if (opts.clickable) { cls += ' clickable'; }
 
+    const visibleValue = opts.hideZeroLabels && value === 0
+      ? ''
+      : formatValue(value, metric);
     bars += '<div class="hc-col" ' + keyAttr + '="' + key + '">' +
-      '<div class="hc-barval">' + formatValue(value, metric) + '</div>' +
+      '<div class="hc-barval">' + visibleValue + '</div>' +
       '<div class="' + cls + '" style="height: ' + height + 'px;" ' +
       'data-cost="' + d.totalCost + '" data-input="' + d.totalInputTokens + '" data-output="' + d.totalOutputTokens + '" ' +
       'data-cache-creation="' + d.totalCacheCreationTokens + '" data-cache-read="' + d.totalCacheReadTokens + '" data-messages="' + d.messageCount + '" ' +
@@ -13035,6 +13045,7 @@ function renderHourlyChart(hourlyData, metric) {
   return griddedChart(hourlyData, metric, {
     keyName: 'hour',
     clickable: false,
+    hideZeroLabels: true,
     getLabel: function(it) { return it.hour; },
     getTitle: function(it, v) { return it.hour + ': ' + formatValue(v, metric); }
   });

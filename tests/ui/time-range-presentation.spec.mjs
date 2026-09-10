@@ -16,8 +16,10 @@ test('Claude presents exact Today and rolling-30 ranges without dead zero-day dr
   )).toEqual(hourLabels);
   await expect(today.locator('.daily-table tbody tr[data-hour="00:00"] .cost-cell'))
     .toHaveText('$0.00');
+  await expect(today.locator('.hc-col[data-hour="00:00"] .hc-barval')).toBeEmpty();
   await expect(today.locator('.daily-table tbody tr[data-hour="18:00"] .cost-cell'))
     .not.toHaveText('$0.00');
+  await expect(today.locator('.hc-col[data-hour="18:00"] .hc-barval')).not.toBeEmpty();
 
   await page.locator('#tab-month').click();
   const month = page.locator('#month [data-claude-last30-daily]');
@@ -51,7 +53,13 @@ test('Codex presents 24 complete Today hours and distinguishes zero usage from u
   )).toEqual(hours);
   await expect(today.locator('.daily-table tbody tr[data-hour="00"] .cost-cell'))
     .toHaveText('$0.00');
-  await expect(today.locator('.hc-col[data-hour="00"] .hc-barval')).toHaveText('$0.00');
+  await expect(today.locator('.hc-col[data-hour="00"] .hc-barval')).toBeEmpty();
+  expect(await today.locator('.hc-col[data-hour] .hc-barval:not(:empty)').count())
+    .toBeGreaterThan(0);
+
+  await today.locator('.chart-tab[data-metric="inputTokens"]').click();
+  await expect(today.locator('.hc-col[data-hour="00"] .hc-barval')).toBeEmpty();
+  await expect(today.locator('.daily-table tbody tr[data-hour="00"]')).toContainText('0');
 
   await page.locator('#tab-month').click();
   const month = page.locator('#month [data-codex-last30-daily]');

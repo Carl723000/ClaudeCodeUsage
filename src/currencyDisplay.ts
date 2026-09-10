@@ -1,67 +1,109 @@
 /**
  * Local-only display conversion for USD-denominated estimates.
  *
- * Pricing, aggregation, and persistence continue to use USD. This module is
- * deliberately pure and has no exchange-rate transport: callers supply the
- * display label and the number of display units per USD.
+ * Pricing, aggregation, sorting, and persistence continue to use USD. The
+ * selected currency resolves to one bundled reference-rate snapshot: there is
+ * no exchange-rate transport and no user-editable multiplier.
  */
 
+export type DisplayCurrencyCode =
+  | 'USD'
+  | 'EUR'
+  | 'GBP'
+  | 'JPY'
+  | 'CNY'
+  | 'HKD'
+  | 'KRW'
+  | 'IDR'
+  | 'BRL'
+  | 'AUD'
+  | 'CAD'
+  | 'CHF'
+  | 'INR'
+  | 'SGD';
+
 export interface CurrencyDisplayPreference {
+  code: DisplayCurrencyCode;
   label: string;
+  unitsPerUsd: number;
+  converted: boolean;
+  referenceDate: string;
+}
+
+interface CurrencyPreset {
+  code: DisplayCurrencyCode;
+  symbol: string;
   unitsPerUsd: number;
 }
 
-export interface CurrencyDisplayFormat extends CurrencyDisplayPreference {
-  decimalPlaces: number;
-}
+// ECB euro reference rates published for 2026-09-09, converted from currency
+// units per EUR to currency units per USD. USD stays the invariant source unit.
+export const CURRENCY_REFERENCE_DATE = '2026-09-09';
 
-export interface NormalizedCurrencyDisplay extends CurrencyDisplayPreference {
-  converted: boolean;
-}
+const PRESETS: readonly CurrencyPreset[] = [
+  { code: 'USD', symbol: '$', unitsPerUsd: 1 },
+  { code: 'EUR', symbol: '€', unitsPerUsd: 0.85822176 },
+  { code: 'GBP', symbol: '£', unitsPerUsd: 0.73719533 },
+  { code: 'JPY', symbol: '¥', unitsPerUsd: 153.26982492 },
+  { code: 'CNY', symbol: '¥', unitsPerUsd: 6.70777549 },
+  { code: 'HKD', symbol: 'HK$', unitsPerUsd: 7.84225884 },
+  { code: 'KRW', symbol: '₩', unitsPerUsd: 1336.19979403 },
+  { code: 'IDR', symbol: 'Rp', unitsPerUsd: 17475.79814624 },
+  { code: 'BRL', symbol: 'R$', unitsPerUsd: 5.08891177 },
+  { code: 'AUD', symbol: 'A$', unitsPerUsd: 1.38414006 },
+  { code: 'CAD', symbol: 'C$', unitsPerUsd: 1.37684518 },
+  { code: 'CHF', symbol: 'CHF', unitsPerUsd: 0.80707175 },
+  { code: 'INR', symbol: '₹', unitsPerUsd: 95.1102815 },
+  { code: 'SGD', symbol: 'S$', unitsPerUsd: 1.26338826 },
+] as const;
 
-const DEFAULT_LABEL = '$';
-const DEFAULT_RATE = 1;
-const MAX_LABEL_CODE_POINTS = 8;
-const MAX_RATE = 1_000_000;
+export const DISPLAY_CURRENCY_CODES: DisplayCurrencyCode[] = PRESETS.map(
+  (preset) => preset.code,
+);
 
-function validLabel(raw: unknown): string | null {
-  if (typeof raw !== 'string') return null;
-  const trimmed = raw.trim();
-  if (
-    trimmed === '' ||
-    Array.from(trimmed).length > MAX_LABEL_CODE_POINTS ||
-    !/^[\p{L}\p{Sc}]+$/u.test(trimmed)
-  ) {
-    return null;
+export const DISPLAY_CURRENCY_LABELS: string[] = PRESETS.map(
+  (preset) => `${preset.code} (${preset.symbol})`,
+);
+
+const PRESETS_BY_CODE = new Map<DisplayCurrencyCode, CurrencyPreset>(
+  PRESETS.map((preset) => [preset.code, preset]),
+);
+
+// Compatibility with values stored by the early 2.3.2 test build. Ambiguous
+// yen/yuan symbols are deliberately omitted; their ISO codes remain accepted.
+const LEGACY_SYMBOL_CODES = new Map<string, DisplayCurrencyCode>([
+  ['$', 'USD'],
+  ['US$', 'USD'],
+  ['€', 'EUR'],
+  ['£', 'GBP'],
+  ['HK$', 'HKD'],
+  ['₩', 'KRW'],
+  ['RP', 'IDR'],
+  ['R$', 'BRL'],
+  ['A$', 'AUD'],
+  ['C$', 'CAD'],
+  ['₹', 'INR'],
+  ['S$', 'SGD'],
+]);
+
+export function normalizeDisplayCurrencyCode(raw: unknown): DisplayCurrencyCode {
+  if (typeof raw !== 'string') return 'USD';
+  const normalized = raw.trim().toUpperCase();
+  if (PRESETS_BY_CODE.has(normalized as DisplayCurrencyCode)) {
+    return normalized as DisplayCurrencyCode;
   }
-  return /^[A-Za-z]{3}$/.test(trimmed) ? trimmed.toUpperCase() : trimmed;
+  return LEGACY_SYMBOL_CODES.get(normalized) ?? 'USD';
 }
 
-/** Fail closed to the unchanged USD display if either user input is invalid. */
-export function normalizeCurrencyDisplay(
-  label: unknown,
-  unitsPerUsd: unknown,
-): NormalizedCurrencyDisplay {
-  const normalizedLabel = validLabel(label);
-  const normalizedRate = typeof unitsPerUsd === 'number'
-    ? unitsPerUsd
-    : Number(unitsPerUsd);
-  if (
-    normalizedLabel === null ||
-    !Number.isFinite(normalizedRate) ||
-    normalizedRate <= 0 ||
-    normalizedRate > MAX_RATE
-  ) {
-    return {
-      label: DEFAULT_LABEL,
-      unitsPerUsd: DEFAULT_RATE,
-      converted: false,
-    };
-  }
+export function resolveCurrencyDisplay(raw: unknown): CurrencyDisplayPreference {
+  const code = normalizeDisplayCurrencyCode(raw);
+  const preset = PRESETS_BY_CODE.get(code) ?? PRESETS[0];
   return {
-    label: normalizedLabel,
-    unitsPerUsd: normalizedRate,
-    converted: normalizedLabel !== DEFAULT_LABEL || normalizedRate !== DEFAULT_RATE,
+    code,
+    label: code === 'USD' ? '$' : code,
+    unitsPerUsd: preset.unitsPerUsd,
+    converted: code !== 'USD',
+    referenceDate: CURRENCY_REFERENCE_DATE,
   };
 }
 
@@ -77,19 +119,16 @@ export function formatUsdBaseline(amountUsd: number, decimalPlaces = 2): string 
   return `$${amountUsd.toFixed(normalizedDecimalPlaces(decimalPlaces))}`;
 }
 
-/**
- * Format one USD estimate using a user-supplied local display rate. Converted
- * values carry an approximation marker; three-letter codes use a separating
- * space while compact symbols remain attached to the number.
- */
+/** Format one USD estimate using the selected bundled display preset. */
 export function formatUsdForDisplay(
   amountUsd: number,
-  options: CurrencyDisplayFormat,
+  currency: unknown,
+  decimalPlaces = 2,
 ): string {
   if (!Number.isFinite(amountUsd)) return '—';
-  const preference = normalizeCurrencyDisplay(options.label, options.unitsPerUsd);
+  const preference = resolveCurrencyDisplay(currency);
   const amount = (amountUsd * preference.unitsPerUsd)
-    .toFixed(normalizedDecimalPlaces(options.decimalPlaces));
-  const separator = /^[A-Z]{3}$/.test(preference.label) ? ' ' : '';
-  return `${preference.converted ? '≈' : ''}${preference.label}${separator}${amount}`;
+    .toFixed(normalizedDecimalPlaces(decimalPlaces));
+  if (!preference.converted) return `$${amount}`;
+  return `≈${preference.label} ${amount}`;
 }

@@ -112,7 +112,7 @@ function fakeContext(options: {
   };
 }
 
-test('local currency preferences normalize before entering global state', async () => {
+test('local currency selection normalizes before entering global state', async () => {
   activeConfiguration = fakeConfiguration();
   activeWorkspaceFolders = [];
   activeFolderConfigurations = new Map();
@@ -120,14 +120,31 @@ test('local currency preferences normalize before entering global state', async 
   const store = new SettingsStore(context);
 
   await store.set('displayCurrency', ' eur ');
-  await store.set('usdConversionRate', 0.92);
   assert.equal(context._state.get('ccu.setting.displayCurrency'), 'EUR');
-  assert.equal(context._state.get('ccu.setting.usdConversionRate'), 0.92);
 
   await store.set('displayCurrency', '<img onerror=x>');
-  await store.set('usdConversionRate', Number.POSITIVE_INFINITY);
-  assert.equal(context._state.get('ccu.setting.displayCurrency'), '$');
-  assert.equal(context._state.get('ccu.setting.usdConversionRate'), 1);
+  assert.equal(context._state.get('ccu.setting.displayCurrency'), 'USD');
+  assert.equal(store.snapshot().some((entry) => entry.key === 'usdConversionRate'), false);
+});
+
+test('early test-build currency state migrates to one preset and drops its manual rate', async () => {
+  activeConfiguration = fakeConfiguration();
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
+  const context = fakeContext({
+    state: new Map<string, unknown>([
+      ['ccu.setting.displayCurrency', ' eur '],
+      ['ccu.setting.usdConversionRate', 0.92],
+    ]),
+  });
+  const store = new SettingsStore(context);
+
+  assert.equal(store.get('displayCurrency'), 'EUR');
+  await store.migrateCurrencyPreset();
+
+  assert.equal(context._state.get('ccu.setting.displayCurrency'), 'EUR');
+  assert.equal(context._state.has('ccu.setting.usdConversionRate'), false);
+  assert.equal(context._state.get('ccu.migrated.currencyPreset.v2.3.2'), true);
 });
 
 test('legacy plaintext BYOK migrates to SecretStorage and never enters a settings snapshot', async () => {

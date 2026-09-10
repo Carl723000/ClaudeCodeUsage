@@ -309,9 +309,8 @@ export interface ExtensionConfig {
   codexStatusMetric: 'fresh' | 'processed' | 'output';
   language: string;
   decimalPlaces: number;
-  // Local-only presentation label/rate. All source pricing and aggregates stay USD.
+  // Local-only presentation preset. All source pricing and aggregates stay USD.
   displayCurrency: string;
-  usdConversionRate: number;
   // Decimals for compact token display only (1.2M / 345.6K).
   tokenDecimalPlaces: number;
   compactNumbers: boolean;

@@ -3,7 +3,11 @@ import {
   CODEX_LIVE_REFRESH_SECONDS,
   LIVE_REFRESH_SECONDS,
 } from './refreshPolicy';
-import { normalizeCurrencyDisplay } from './currencyDisplay';
+import {
+  DISPLAY_CURRENCY_CODES,
+  DISPLAY_CURRENCY_LABELS,
+  normalizeDisplayCurrencyCode,
+} from './currencyDisplay';
 
 // Single source of truth for every user setting (V2.1: "settings in the
 // dashboard"). Most settings moved OUT of VS Code's Settings UI to keep it
@@ -74,6 +78,9 @@ const AUTOREFRESH_MIGRATION_FLAG = 'ccu.migrated.dashboardAutoRefresh';
 // caps itself, so a setting naming one model could no longer describe the thing
 // it controls. Own flag so it runs regardless of the earlier migrations.
 const SCOPED_WEEKLY_MIGRATION_FLAG = 'ccu.migrated.showScopedWeekly';
+// The early 2.3.2 test build exposed a free-form label and manual USD
+// multiplier. The release candidate replaces both with one fixed preset.
+const CURRENCY_PRESET_MIGRATION_FLAG = 'ccu.migrated.currencyPreset.v2.3.2';
 
 // Exact configuration/globalState names used by released predecessors but no
 // longer present in SETTINGS. They are migration inputs, never a prefix-based
@@ -84,6 +91,7 @@ const RETIRED_SETTING_KEYS = [
   'showOpusWeekly',
   'advice.backend',
   'advice.subscriptionModel',
+  'usdConversionRate',
 ] as const;
 
 export type SettingsSecretMigrationErrorCode =
@@ -235,26 +243,14 @@ export const SETTINGS: SettingDef[] = [
   },
   {
     key: 'displayCurrency',
-    type: 'string',
-    default: '$',
+    type: 'enum',
+    default: 'USD',
     storage: 'state',
     group: 'general',
-    label: 'Cost currency code or symbol',
-    help: 'Display only. Enter a three-letter code (EUR) or a short symbol (€). No exchange rate is fetched; underlying estimates remain USD.',
-    maxLength: 8,
-    providers: ['claude', 'codex'],
-  },
-  {
-    key: 'usdConversionRate',
-    type: 'number',
-    default: 1,
-    storage: 'state',
-    group: 'general',
-    label: 'Display units per USD',
-    help: 'Manual display multiplier, for example 0.92 for EUR. Converted values are marked ≈; 1 with $ preserves the USD baseline.',
-    min: 0.000001,
-    max: 1_000_000,
-    step: 0.000001,
+    label: 'Cost display currency',
+    help: 'Display only. Uses bundled reference rates dated 2026-09-09; rates are not editable or fetched, and underlying estimates remain USD.',
+    enumValues: DISPLAY_CURRENCY_CODES,
+    enumLabels: DISPLAY_CURRENCY_LABELS,
     providers: ['claude', 'codex'],
   },
   {
@@ -901,7 +897,13 @@ export class SettingsStore {
     if (def.storage === 'secret') {
       return (this.secretValues.get(def.key) ?? def.default) as unknown as T;
     }
-    return this.context.globalState.get<T>(STATE_PREFIX + def.key, def.default as unknown as T);
+    const value = this.context.globalState.get<T>(
+      STATE_PREFIX + def.key,
+      def.default as unknown as T,
+    );
+    return (def.key === 'displayCurrency'
+      ? normalizeDisplayCurrencyCode(value)
+      : value) as T;
   }
 
   /** Persist a value to whichever store owns the key. */
@@ -1095,9 +1097,6 @@ export class SettingsStore {
       if (!Number.isFinite(n)) {
         n = def.default as number;
       }
-      if (def.key === 'usdConversionRate') {
-        return normalizeCurrencyDisplay('$', n).unitsPerUsd;
-      }
       if (def.min !== undefined) {
         n = Math.max(def.min, n);
       }
@@ -1107,11 +1106,11 @@ export class SettingsStore {
       return n;
     }
     if (def.type === 'enum') {
+      if (def.key === 'displayCurrency') {
+        return normalizeDisplayCurrencyCode(value);
+      }
       const allowed = def.enumValues || [];
       return allowed.includes(String(value)) ? String(value) : (def.default as string);
-    }
-    if (def.key === 'displayCurrency') {
-      return normalizeCurrencyDisplay(String(value), 1).label;
     }
     const stringValue = String(value);
     return def.maxLength === undefined
@@ -1221,5 +1220,26 @@ export class SettingsStore {
       }
     }
     await this.context.globalState.update(SCOPED_WEEKLY_MIGRATION_FLAG, true);
+  }
+
+  /**
+   * Replace the early 2.3.2 free-form currency pair with one preset code.
+   * Existing supported codes and unambiguous symbols survive; the obsolete
+   * manual multiplier is removed because bundled rates are now authoritative.
+   */
+  async migrateCurrencyPreset(): Promise<void> {
+    if (this.context.globalState.get<boolean>(CURRENCY_PRESET_MIGRATION_FLAG, false)) {
+      return;
+    }
+    const currencyKey = STATE_PREFIX + 'displayCurrency';
+    const storedCurrency = this.context.globalState.get<unknown>(currencyKey);
+    if (storedCurrency !== undefined) {
+      await this.context.globalState.update(
+        currencyKey,
+        normalizeDisplayCurrencyCode(storedCurrency),
+      );
+    }
+    await this.context.globalState.update(STATE_PREFIX + 'usdConversionRate', undefined);
+    await this.context.globalState.update(CURRENCY_PRESET_MIGRATION_FLAG, true);
   }
 }

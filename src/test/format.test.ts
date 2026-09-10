@@ -57,18 +57,20 @@ test('setTokenDecimalPlaces clamps to 0..2 (out-of-range ignored)', () => {
   assert.equal(I18n.formatTokensCompact(1_200_000), '1.2M');
 });
 
-test('I18n applies manual currency conversion only to estimated-cost display', () => {
+test('I18n applies the selected currency preset only to estimated-cost display', () => {
   I18n.setDecimalPlaces(2);
-  I18n.setCurrencyDisplay('EUR', 0.92);
+  I18n.setCurrencyDisplay('EUR');
   try {
-    assert.equal(I18n.formatCurrency(10), '≈EUR 9.20');
+    assert.equal(I18n.formatCurrency(10), '≈EUR 8.58');
     assert.equal(I18n.formatUsdBaseline(10), '$10.00');
     assert.deepEqual(I18n.getCurrencyDisplay(), {
+      code: 'EUR',
       label: 'EUR',
-      unitsPerUsd: 0.92,
+      unitsPerUsd: 0.85822176,
       converted: true,
+      referenceDate: '2026-09-09',
     });
   } finally {
-    I18n.setCurrencyDisplay('$', 1);
+    I18n.setCurrencyDisplay('USD');
   }
 });

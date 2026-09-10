@@ -1,6 +1,6 @@
 import { test, expect, openClaude, openCodex } from './support/app.mjs';
 
-test('manual display currency reaches Codex summaries, charts, weekly values, and settings', async ({ page }) => {
+test('currency preset reaches Codex summaries, charts, weekly values, and settings', async ({ page }) => {
   await openCodex(page, { fixture: 'local-currency' });
 
   const summary = page.locator('#today .usage-summary').first();
@@ -33,13 +33,14 @@ test('manual display currency reaches Codex summaries, charts, weekly values, an
 
   await page.locator('#tab-settings').click();
   await expect(page.locator('#set_displayCurrency')).toHaveValue('EUR');
-  await expect(page.locator('#set_displayCurrency')).toHaveAttribute('maxlength', '8');
-  await expect(page.locator('#set_usdConversionRate')).toHaveValue('0.92');
-  await expect(page.locator('#set_usdConversionRate')).toHaveAttribute('step', '0.000001');
-  await expect(page.locator('#settings')).toContainText('No exchange rate is fetched');
+  await expect(page.locator('#set_displayCurrency')).toHaveJSProperty('tagName', 'SELECT');
+  await expect(page.locator('#set_displayCurrency option').first()).toHaveText('USD ($)');
+  await expect(page.locator('#set_displayCurrency option')).toHaveCount(14);
+  await expect(page.locator('#set_usdConversionRate')).toHaveCount(0);
+  await expect(page.locator('#settings')).toContainText('rates are not editable or fetched');
 });
 
-test('manual display currency reaches Claude and client-rendered drill-downs', async ({ page }) => {
+test('currency preset reaches Claude and client-rendered drill-downs', async ({ page }) => {
   await openClaude(page, { fixture: 'local-currency' });
   await page.locator('#tab-today').click();
   await expect(page.locator('#today .usage-summary .summary-item').first().locator('.value'))
@@ -60,20 +61,36 @@ test('manual display currency reaches Claude and client-rendered drill-downs', a
       root.innerHTML = html;
       return root;
     };
-    const hourly = parse(window.renderHourlyData([{ hour: '09:00', data: usage }], '2026-07-20'));
+    const emptyUsage = {
+      totalCost: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      totalCacheCreationTokens: 0,
+      totalCacheReadTokens: 0,
+      messageCount: 0,
+      costBreakdown: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
+    };
+    const hourly = parse(window.renderHourlyData([
+      { hour: '00:00', data: emptyUsage },
+      { hour: '09:00', data: usage },
+    ], '2026-07-20'));
     const daily = parse(window.renderDailyData([{ date: '2026-07-20', data: usage }], '2026-07'));
     return {
       hourlyCost: hourly.querySelector('tbody tr[data-hour="09:00"] .cost-cell')?.textContent,
       hourlyAxis: hourly.querySelector('.hc-yaxis .hc-yval')?.textContent,
+      emptyHourlyLabel: hourly.querySelector('.hc-col[data-hour="00:00"] .hc-barval')?.textContent,
+      emptyHourlyTableCost: hourly.querySelector('tbody tr[data-hour="00:00"] .cost-cell')?.textContent,
       dailyCost: daily.querySelector('tbody .cost-cell')?.textContent,
       dailyAxis: daily.querySelector('.hc-yaxis .hc-yval')?.textContent,
     };
   });
 
   expect(dynamic).toEqual({
-    hourlyCost: '≈EUR 9.20',
-    hourlyAxis: '≈EUR 9.20',
-    dailyCost: '≈EUR 9.20',
-    dailyAxis: '≈EUR 9.20',
+    hourlyCost: '≈EUR 8.58',
+    hourlyAxis: '≈EUR 8.58',
+    emptyHourlyLabel: '',
+    emptyHourlyTableCost: '≈EUR 0.00',
+    dailyCost: '≈EUR 8.58',
+    dailyAxis: '≈EUR 8.58',
   });
 });

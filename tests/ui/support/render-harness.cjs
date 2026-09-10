@@ -149,8 +149,7 @@ function settingsStore({
   shareStudio = true,
   adviceEffectiveness = false,
   adviceOptimizer = false,
-  displayCurrency = '$',
-  usdConversionRate = 1,
+  displayCurrency = 'USD',
 } = {}) {
   const values = new Map(SETTINGS.map((definition) => [definition.key, definition.default]));
   values.set('codex.optimization.enabled', true);
@@ -160,7 +159,6 @@ function settingsStore({
   values.set('advice.effectiveness.enabled', adviceEffectiveness);
   values.set('advice.optimizer.enabled', adviceOptimizer);
   values.set('displayCurrency', displayCurrency);
-  values.set('usdConversionRate', usdConversionRate);
   return {
     get: (key) => values.get(key),
     snapshot: () => SETTINGS.map((definition) => ({
@@ -411,9 +409,8 @@ exports.renderHarness = async function renderHarness({
   I18n.setTimezone(timeZone);
   I18n.setDecimalPlaces(2);
   const localCurrencyFixture = fixture === 'local-currency';
-  const displayCurrency = localCurrencyFixture ? 'EUR' : '$';
-  const usdConversionRate = localCurrencyFixture ? 0.92 : 1;
-  I18n.setCurrencyDisplay(displayCurrency, usdConversionRate);
+  const displayCurrency = localCurrencyFixture ? 'EUR' : 'USD';
+  I18n.setCurrencyDisplay(displayCurrency);
   vscodeHost.window.activeColorTheme.kind = theme === 'dark' ? 2 : 1;
   const originalNow = Date.now;
   try {
@@ -461,7 +458,6 @@ exports.renderHarness = async function renderHarness({
       adviceEffectiveness: adviceEffectivenessFixture,
       adviceOptimizer: adviceOptimizerFixture,
       displayCurrency,
-      usdConversionRate,
     });
     addClaudeData(provider, { fixture, enableContent: adviceContentFixture });
     if (adviceEffectivenessFixture) {

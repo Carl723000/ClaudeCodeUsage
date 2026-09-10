@@ -126,13 +126,13 @@ test('item background follows the same level as the bar', () => {
   assert.equal(bg(95, CONTEXT_FILL_THRESHOLDS), 'statusBarItem.errorBackground');
 });
 
-test('provider money bypasses the manual estimate conversion', () => {
-  I18n.setCurrencyDisplay('EUR', 0.92);
+test('provider money bypasses the display-currency estimate conversion', () => {
+  I18n.setCurrencyDisplay('EUR');
   try {
     assert.equal(bareStatusBar().formatCreditAmount(12.34, 'USD'), '$12.34');
     assert.equal(bareStatusBar().formatCreditAmount(12.34, 'GBP'), '12.34 GBP');
   } finally {
-    I18n.setCurrencyDisplay('$', 1);
+    I18n.setCurrencyDisplay('USD');
   }
 });
 

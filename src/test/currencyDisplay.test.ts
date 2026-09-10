@@ -4,66 +4,53 @@ import * as fs from 'fs';
 import * as path from 'path';
 
 import {
+  CURRENCY_REFERENCE_DATE,
+  DISPLAY_CURRENCY_CODES,
+  DISPLAY_CURRENCY_LABELS,
   formatUsdBaseline,
   formatUsdForDisplay,
-  normalizeCurrencyDisplay,
+  normalizeDisplayCurrencyCode,
+  resolveCurrencyDisplay,
 } from '../currencyDisplay';
 
-test('default currency display preserves the existing USD format', () => {
-  assert.equal(formatUsdForDisplay(12.345, {
-    label: '$',
-    unitsPerUsd: 1,
-    decimalPlaces: 2,
-  }), '$12.35');
+test('USD is the default and preserves the existing format', () => {
+  assert.equal(normalizeDisplayCurrencyCode(undefined), 'USD');
+  assert.equal(formatUsdForDisplay(12.345, 'USD', 2), '$12.35');
+  assert.equal(DISPLAY_CURRENCY_CODES[0], 'USD');
+  assert.equal(DISPLAY_CURRENCY_LABELS[0], 'USD ($)');
 });
 
-test('manual conversion accepts either a compact code or a safe symbol', () => {
-  assert.equal(formatUsdForDisplay(10, {
-    label: 'eur',
-    unitsPerUsd: 0.92,
-    decimalPlaces: 2,
-  }), '≈EUR 9.20');
-  assert.equal(formatUsdForDisplay(10, {
-    label: '€',
-    unitsPerUsd: 0.92,
-    decimalPlaces: 2,
-  }), '≈€9.20');
+test('curated dropdown currencies resolve to fixed bundled reference rates', () => {
+  assert.equal(CURRENCY_REFERENCE_DATE, '2026-09-09');
+  assert.deepEqual(resolveCurrencyDisplay('EUR'), {
+    code: 'EUR',
+    label: 'EUR',
+    unitsPerUsd: 0.85822176,
+    converted: true,
+    referenceDate: '2026-09-09',
+  });
+  assert.equal(formatUsdForDisplay(10, 'EUR', 2), '≈EUR 8.58');
+  assert.equal(formatUsdForDisplay(123.456, 'CNY', 2), '≈CNY 828.12');
+});
+
+test('legacy test-build codes and unambiguous symbols migrate into presets', () => {
+  assert.equal(normalizeDisplayCurrencyCode(' eur '), 'EUR');
+  assert.equal(normalizeDisplayCurrencyCode('$'), 'USD');
+  assert.equal(normalizeDisplayCurrencyCode('€'), 'EUR');
+  assert.equal(normalizeDisplayCurrencyCode('HK$'), 'HKD');
+});
+
+test('unsupported or markup-shaped values fail closed to USD', () => {
+  assert.equal(normalizeDisplayCurrencyCode('<img onerror=x>'), 'USD');
+  assert.equal(normalizeDisplayCurrencyCode('XYZ'), 'USD');
+  assert.equal(formatUsdForDisplay(10, 'XYZ', 2), '$10.00');
 });
 
 test('conversion is display-only and the auditable USD baseline stays available', () => {
   const usd = 123.456;
-  const display = formatUsdForDisplay(usd, {
-    label: 'CNY',
-    unitsPerUsd: 7.2,
-    decimalPlaces: 2,
-  });
-
-  assert.equal(display, '≈CNY 888.88');
+  assert.equal(formatUsdForDisplay(usd, 'CNY', 2), '≈CNY 828.12');
   assert.equal(usd, 123.456);
   assert.equal(formatUsdBaseline(usd, 2), '$123.46');
-});
-
-test('invalid rates and markup-shaped labels fail closed to the USD baseline', () => {
-  assert.deepEqual(normalizeCurrencyDisplay('<img onerror=x>', 0), {
-    label: '$',
-    unitsPerUsd: 1,
-    converted: false,
-  });
-  assert.deepEqual(normalizeCurrencyDisplay('TOO-LONG-CODE', Number.POSITIVE_INFINITY), {
-    label: '$',
-    unitsPerUsd: 1,
-    converted: false,
-  });
-});
-
-test('custom labels are bounded to letters and currency symbols only', () => {
-  assert.deepEqual(normalizeCurrencyDisplay('  HK$  ', 7.8), {
-    label: 'HK$',
-    unitsPerUsd: 7.8,
-    converted: true,
-  });
-  assert.equal(normalizeCurrencyDisplay('USD<script>', 1).label, '$');
-  assert.equal(normalizeCurrencyDisplay('A'.repeat(9), 1).label, '$');
 });
 
 test('the display converter has no exchange-rate transport dependency', () => {
