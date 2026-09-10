@@ -53,6 +53,24 @@ These four v2.3.1 captures use the production renderer, synthetic fixtures, and 
 - **Multi-vendor pricing** — Opus 4.x / Sonnet 4.x / Haiku 4.5 verified against Anthropic's public pricing; reference rates for OpenAI / Gemini / DeepSeek / Kimi / GLM / Qwen with family-aware fallback. `Refresh Token Pricing` pulls live LiteLLM data.
 - **Personalisation** — language, timezone, decimal places, compact numbers, project grouping, dashboard auto-refresh toggle.
 
+## What's new in v2.3.2
+
+- Settings now uses one curated currency dropdown, defaulting to USD. Thirteen
+  additional display currencies use a bundled, fixed 2026-09-09 ECB-derived
+  snapshot; rates are not editable or fetched, and source estimates remain USD.
+- Claude and Codex now share complete All time month → day and Last 30 days day
+  → hour drill-down wherever materialized aggregates exist, with matching mouse,
+  keyboard, focus, nested-collapse, and reload behavior and no JSONL read on click.
+- Normal live refresh preserves the active tab, expansion chain, selected
+  metric/hour, Optimizer draft, keyboard focus, and nearby scroll anchor.
+- Every chart exposes a localized provider-qualified accessible name. Empty
+  hours keep their axis, table, tooltip, and selectable zero value without
+  repeating `0` above every bar; genuinely unpriced activity still shows `—`.
+- Provider watchers recover with bounded backoff, and unchanged Codex
+  thread-title indexes use a validated memory cache to reduce background work.
+
+The reviewed draft is `v2.3.2`; the human-controlled publish workflow stamps package metadata from that release tag.
+
 ## What's new in v2.3.1
 
 - Exact pricing and context metadata now cover **GPT-6 Astra**
@@ -76,8 +94,6 @@ These four v2.3.1 captures use the production renderer, synthetic fixtures, and 
 - OpenAI-compatible optimizer requests now send `reasoning_effort` without the unsupported top-level `thinking` parameter, resolving [#94](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/94).
 - Claude and Codex now share dashboard density, hierarchy, disclosure, focus, ARIA, narrow-width, and light/dark design tokens while retaining provider-specific metric meanings.
 - Get AI Advice and Usage Optimizer share one exact-preview and explicit-send boundary. There is no default or background AI request, and local evidence/feedback remains bounded.
-
-The reviewed draft is `v2.3.1`; the human-controlled publish workflow stamps package metadata from that release tag.
 
 ## Codex Beta in v2.3
 

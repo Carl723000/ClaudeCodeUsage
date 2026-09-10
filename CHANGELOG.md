@@ -4,7 +4,50 @@ All notable changes to this fork compared to upstream
 [`ClaudeCodeUsage/ClaudeCodeUsage`](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage) (last
 upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangelog.com).
 
-## [2.3.1] — Unreleased
+## [2.3.2] — 2026-09-10
+
+### Added
+- **Curated display currencies (#91)** — a single compact Settings dropdown now
+  selects USD (default) or one of thirteen common display currencies. Conversion
+  uses a bundled 2026-09-09 ECB-derived snapshot; rates are deterministic,
+  offline, and not user-editable. Stored prices, aggregation, sorting, and
+  persistence remain in USD, converted estimates carry an `≈` marker, and
+  provider-native usage credits are never converted.
+- **Complete chart drill-down paths** — both providers support All time month →
+  day and Last 30 days day → hour expansion wherever materialized aggregates
+  exist. Mouse, Enter, and Space share the same selection, disclosure, focus,
+  nested-collapse, and reload-restoration behavior without reading JSONL on
+  click.
+- **Provider-qualified chart names** — chart regions and heatmaps expose stable,
+  localized provider, scope, chart-type, and selected-metric names. Names update
+  with metric switches and remain unique across Compare.
+
+### Changed
+- **State-preserving live refresh** — ordinary updates replace only the active
+  provider panel and preserve the selected tab, drill-down chain, chart/hour
+  selection, temporary Optimizer input, keyboard focus, and nearest scroll
+  anchor. Structural changes and failed delivery still fall back safely to a
+  complete Webview document.
+- **Exact dashboard ranges** — Today remains 24 configured-zone hours and Last
+  30 days remains today plus the preceding 29 calendar dates. Missing buckets
+  are represented as zero without extending source aggregates.
+- **Quieter hourly charts** — zero-usage hours retain their axis positions,
+  table rows, click details, tooltips, and accessible values, but no longer
+  repeat `0` above every empty bar. Real activity with unavailable pricing still
+  displays `—`.
+
+### Fixed
+- **Resilient provider watchers** — failed Claude or Codex watchers re-arm with
+  bounded exponential backoff while polling remains available; recovery and
+  disposal cannot create a retry hot loop.
+- **Efficient Codex title lookup** — validated file identity and stat metadata
+  avoid repeatedly streaming an unchanged `session_index.jsonl`; titles remain
+  memory-only and path-redacted.
+- **Quota and Webview boundaries** — bounded quota compaction preserves series
+  endpoints and reset boundaries, and dynamic sharing failures render as text
+  instead of interpreted HTML.
+
+## [2.3.1] — 2026-09-08
 
 ### Added
 - **GPT-6 Astra and Claude Fable 5.1 pricing** — exact model IDs now use their

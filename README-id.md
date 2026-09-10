@@ -53,6 +53,26 @@ Empat gambar v2.3.1 ini menggunakan renderer produksi, data sintetis, dan variab
 - **Harga multi-vendor** — Opus 4.x / Sonnet 4.x / Haiku 4.5 diverifikasi terhadap harga publik Anthropic; tarif referensi untuk OpenAI / Gemini / DeepSeek / Kimi / GLM / Qwen dengan fallback berbasis family model. `Refresh Token Pricing` menarik data LiteLLM langsung.
 - **Personalisasi** — bahasa, zona waktu, angka desimal, angka ringkas, pengelompokan proyek, toggle penyegaran otomatis dashboard.
 
+## Yang baru di v2.3.2
+
+- Settings kini memakai satu dropdown mata uang dengan USD sebagai default.
+  Tiga belas mata uang tampilan lain memakai snapshot tetap kurs referensi ECB
+  tanggal 2026-09-09. Kurs tidak dapat diedit atau diambil secara online, dan
+  estimasi dasar tetap disimpan dalam USD.
+- Claude dan Codex mendukung drill-down Sepanjang Waktu bulan → hari serta 30
+  Hari Terakhir hari → jam jika agregatnya tersedia. Mouse, keyboard, fokus,
+  penutupan bertingkat, dan pemulihan setelah reload konsisten tanpa membaca JSONL saat diklik.
+- Refresh langsung biasa mempertahankan tab, rantai ekspansi, metrik/jam terpilih,
+  draf Optimizer, fokus keyboard, dan posisi gulir terdekat.
+- Setiap grafik memiliki nama aksesibel lokal yang menyertakan provider. Jam
+  kosong tetap memiliki sumbu, tabel, tooltip, dan nilai 0 yang dapat dipilih,
+  tetapi tidak lagi menampilkan 0 di atas setiap batang kosong. Aktivitas yang
+  benar-benar belum memiliki harga tetap menampilkan `—`.
+- Watcher provider pulih dengan backoff terbatas, sedangkan indeks judul thread
+  Codex yang tidak berubah memakai cache memori tervalidasi untuk mengurangi kerja latar.
+
+Draft Release yang ditinjau adalah `v2.3.2`; alur publikasi manual menetapkan versi paket dari tag tersebut.
+
 ## Yang baru di v2.3.1
 
 - Metadata harga dan konteks yang tepat kini mencakup **GPT-6 Astra**
@@ -76,8 +96,6 @@ Empat gambar v2.3.1 ini menggunakan renderer produksi, data sintetis, dan variab
 - Codex tetap dapat digulir dengan mulus saat pengindeksan: status gulir disimpan sekali setelah gerakan selesai dan progres indeks langsung hanya memperbarui teks tanpa membangun ulang halaman. Ringkasan hijau per model kini mengikuti makna Claude, yaitu harga ekuivalen API untuk model yang cocok tepat beserta cakupan harga. Model tak dikenal menampilkan `—`, sedangkan effort tetap memakai nilai Token tanpa cache berwarna netral.
 - Permintaan Optimizer yang kompatibel dengan OpenAI kini hanya mengirim `reasoning_effort` tanpa parameter tingkat atas `thinking` yang tidak didukung, menyelesaikan [#94](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/94).
 - Claude/Codex berbagi token desain untuk kepadatan, hierarki, fokus, ARIA, lebar sempit, serta tema terang/gelap tanpa menyamakan arti metrik.
-
-Draft Release yang ditinjau adalah `v2.3.1`; alur publikasi manual menetapkan versi paket dari tag tersebut.
 
 ## Codex Beta di v2.3
 
