@@ -4,7 +4,7 @@ All notable changes to this fork compared to upstream
 [`ClaudeCodeUsage/ClaudeCodeUsage`](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage) (last
 upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangelog.com).
 
-## [2.3.2] — 2026-09-10
+## [2.3.2] — Unreleased
 
 ### Added
 - **Curated display currencies (#91)** — a single compact Settings dropdown now
@@ -47,7 +47,7 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   endpoints and reset boundaries, and dynamic sharing failures render as text
   instead of interpreted HTML.
 
-## [2.3.1] — 2026-09-08
+## [2.3.1] — Unreleased
 
 ### Added
 - **GPT-6 Astra and Claude Fable 5.1 pricing** — exact model IDs now use their
