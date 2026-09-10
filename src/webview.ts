@@ -51,6 +51,7 @@ import {
   emptyCodexScopedInsights,
 } from './providers/codex/codexInsights';
 import {
+  CodexDailyUsageView,
   CodexMetricTotals,
   CodexHourlyUsageView,
   CodexProjectUsageView,
@@ -61,6 +62,8 @@ import {
 } from './providers/codex/codexUsage';
 import { createCodexLocalizedFormatters } from './codexFormat';
 import { getProviderNavClientScript } from './providerNavClient';
+import { getDashboardRefreshClientScript } from './dashboardRefreshClient';
+import { getChartAccessibilityClientScript } from './chartAccessibilityClient';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -120,7 +123,14 @@ import {
   UsageData,
   WorkflowUsage,
 } from './types';
-import { dayKeyInZone, resolveTimeZone, rollingDayKeys, rollingDayKeysFromDayKey } from './dateKeys';
+import {
+  dayKeyInZone,
+  formatHourLabel,
+  resolveTimeZone,
+  rollingDayKeys,
+  rollingDayKeysFromDayKey,
+} from './dateKeys';
+import { clockHourKeys, completeDisplayRange } from './displayRange';
 import {
   LocalDataAction,
   LocalDataActionResult,
@@ -141,6 +151,119 @@ interface CodexRenderProgress {
 }
 
 const OPTIMIZER_FEEDBACK_RECOMMENDATION_ID = 'recommendation-optimizer-result-v1';
+const LIVE_PATCH_PANEL_START = '<!-- ccu-live-panel:start -->';
+const LIVE_PATCH_PANEL_END = '<!-- ccu-live-panel:end -->';
+const LIVE_PATCH_HOURS_START = '/* ccu-live-hours:start */';
+const LIVE_PATCH_HOURS_END = '/* ccu-live-hours:end */';
+
+function emptyDisplayUsageData(): UsageData {
+  return {
+    totalInputTokens: 0,
+    totalOutputTokens: 0,
+    totalCacheCreationTokens: 0,
+    totalCacheReadTokens: 0,
+    totalCost: 0,
+    costBreakdown: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
+    messageCount: 0,
+    modelBreakdown: {},
+  };
+}
+
+function emptyCodexHourlyDisplayRow(hour: string): CodexHourlyUsageView {
+  const total: CodexMetricTotals = {
+    processed: 0,
+    fresh: 0,
+    input: 0,
+    cachedInput: 0,
+    output: 0,
+    reasoning: 0,
+  };
+  return {
+    hour,
+    label: formatHourLabel(hour),
+    total,
+    apiEquivalent: {
+      equivalentUsd: 0,
+      freshInputUsd: 0,
+      cachedInputUsd: 0,
+      outputUsd: 0,
+      pricedTokens: 0,
+      totalTokens: 0,
+      pricingCoverage: 0,
+    },
+    threads: 0,
+  };
+}
+
+function claudeHourlyDisplayDto(
+  rowsByDay: Record<string, { hour: string; data: UsageData }[]>,
+): Record<string, Array<{ hour: string; data: Omit<UsageData, 'modelBreakdown'> }>> {
+  const projected: Record<
+    string,
+    Array<{ hour: string; data: Omit<UsageData, 'modelBreakdown'> }>
+  > = {};
+  for (const [day, rows] of Object.entries(rowsByDay)) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) continue;
+    projected[day] = rows.flatMap(({ hour, data }) => {
+      if (!/^(?:[01]\d|2[0-3]):00$/.test(hour)) return [];
+      return [{
+        hour,
+        data: {
+          totalInputTokens: data.totalInputTokens,
+          totalOutputTokens: data.totalOutputTokens,
+          totalCacheCreationTokens: data.totalCacheCreationTokens,
+          totalCacheReadTokens: data.totalCacheReadTokens,
+          totalCost: data.totalCost,
+          costBreakdown: { ...data.costBreakdown },
+          messageCount: data.messageCount,
+        },
+      }];
+    });
+  }
+  return projected;
+}
+
+function inlineScriptJson(value: unknown): string {
+  return JSON.stringify(value)
+    .replace(/</g, '\\u003c')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
+}
+
+interface DashboardLivePatch {
+  provider: 'claude' | 'codex';
+  tab: string;
+  panelHtml: string;
+  structureKey: string;
+  claudeLast30HoursByDay: ReturnType<typeof claudeHourlyDisplayDto>;
+}
+
+interface PendingDashboardLivePatch extends DashboardLivePatch {
+  documentHtml: string;
+  revision: number;
+}
+
+function markedContent(source: string, startMarker: string, endMarker: string): string | undefined {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return undefined;
+  const contentStart = start + startMarker.length;
+  const end = source.indexOf(endMarker, contentStart);
+  return end < 0 ? undefined : source.slice(contentStart, end);
+}
+
+function replaceMarkedContent(
+  source: string,
+  startMarker: string,
+  endMarker: string,
+  replacement: string,
+): string | undefined {
+  const start = source.indexOf(startMarker);
+  if (start < 0) return undefined;
+  const contentStart = start + startMarker.length;
+  const end = source.indexOf(endMarker, contentStart);
+  if (end < 0) return undefined;
+  return source.slice(0, contentStart) + replacement + source.slice(end);
+}
 
 interface LocalDataUiCopy {
   title: string;
@@ -604,13 +727,23 @@ function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
 
 export class UsageWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
+  private webviewClientReady = false;
+  private dashboardLivePatchRevision = 0;
+  private pendingDashboardLivePatch: PendingDashboardLivePatch | undefined;
+  private scheduledDashboardLivePatch: PendingDashboardLivePatch | undefined;
+  private dashboardLivePatchSendScheduled = false;
+  private lastLivePatchStructureKey: string | undefined;
   private currentSessionData: SessionData | null = null;
   private todayData: UsageData | null = null;
-  private monthData: UsageData | null = null;
+  private rolling30DayData: UsageData | null = null;
   private allTimeData: UsageData | null = null;
-  private dailyDataForMonth: { date: string; data: UsageData }[] = [];
+  private dailyDataForRolling30Days: { date: string; data: UsageData }[] = [];
   private dailyDataForAllTime: { date: string; data: UsageData }[] = [];
   private hourlyDataForToday: { hour: string; data: UsageData }[] = [];
+  private hourlyDataForRolling30DaysByDay: Record<
+    string,
+    { hour: string; data: UsageData }[]
+  > = {};
   private isLoading: boolean = false;
   private error: string | null = null;
   private dataDirectory: string | null = null;
@@ -622,7 +755,6 @@ export class UsageWebviewProvider {
   private codexLoading = false;
   private codexProgress: CodexRenderProgress | null = null;
   private providerSelectionInitialized = false;
-  private hourlyDataCache: Map<string, { hour: string; data: UsageData }[]> = new Map();
   private configuredDateTimeFormatter?: {
     configuredTimeZone: string;
     formatter: Intl.DateTimeFormat;
@@ -1248,6 +1380,12 @@ export class UsageWebviewProvider {
     this.lastShareCardConfig = undefined;
   }
 
+  /** A display-format change invalidates rendered money but not the user's
+   * chosen share-card range, scope, sections, or theme. */
+  public invalidateShareCardPreview(): void {
+    this.lastShareCardSvg = undefined;
+  }
+
   private async handleClearAdviceLocalDataMessage(): Promise<void> {
     const ok = await this.clearAdviceLocalData();
     this.postAdviceMessage({ command: 'adviceClearResult', ok });
@@ -1597,6 +1735,10 @@ export class UsageWebviewProvider {
 
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+      this.webviewClientReady = false;
+      this.pendingDashboardLivePatch = undefined;
+      this.scheduledDashboardLivePatch = undefined;
+      this.lastLivePatchStructureKey = undefined;
       for (const requestId of [...this.localDataClientActionRequests.keys()]) {
         this.settleLocalDataClientAction(requestId, false);
       }
@@ -1648,8 +1790,24 @@ export class UsageWebviewProvider {
           await this.handleClearAdviceLocalDataMessage();
           break;
         case 'localDataClientReady':
+          this.webviewClientReady = true;
           this.onLocalDataClientReady?.();
           break;
+        case 'dashboardDataPatchAck': {
+          const pending = this.pendingDashboardLivePatch;
+          if (
+            pending &&
+            Number.isSafeInteger(message.revision) &&
+            message.revision === pending.revision
+          ) {
+            if (message.ok === true) {
+              this.pendingDashboardLivePatch = undefined;
+            } else {
+              this.replaceDocumentAfterPatchFailure(pending);
+            }
+          }
+          break;
+        }
         case 'requestLocalDataInventory': {
           const summary = message.clientSummary as Partial<LocalDataClientSummary> | undefined;
           const clientSummary: LocalDataClientSummary = {
@@ -2065,36 +2223,36 @@ export class UsageWebviewProvider {
           }
           break;
         }
-        case 'getHourlyData':
-          const dateString = message.date;
-          if (dateString && this.panel) {
-            // Get hourly data for the specified date
-            const { ClaudeDataLoader } = await import('./dataLoader');
-            const hourlyData = ClaudeDataLoader.getHourlyDataForDate(this.allRecords, dateString);
-
-            // Send data back to webview
-            this.panel.webview.postMessage({
-              command: 'hourlyDataResponse',
-              date: dateString,
-              data: hourlyData,
-            });
+        case 'getDailyData': {
+          const monthString = typeof message.month === 'string' ? message.month : '';
+          const requestedProvider = message.provider === 'codex' || message.provider === 'claude'
+            ? message.provider
+            : '';
+          if (!/^\d{4}-\d{2}$/.test(monthString) || !this.panel || requestedProvider !== this.currentProvider) {
+            break;
           }
-          break;
-        case 'getDailyData':
-          const monthString = message.month;
-          if (monthString && this.panel) {
-            // Get daily data for the specified month
-            const { ClaudeDataLoader } = await import('./dataLoader');
-            const dailyData = ClaudeDataLoader.getDailyDataForSpecificMonth(this.allRecords, monthString);
-
-            // Send data back to webview
-            this.panel.webview.postMessage({
+          if (requestedProvider === 'codex') {
+            const dailyRows = (this.codexView?.allTimeDaily ?? [])
+              .filter((row) => row.day.startsWith(monthString + '-'))
+              .sort((left, right) => left.day.localeCompare(right.day));
+            await this.panel.webview.postMessage({
               command: 'dailyDataResponse',
+              provider: 'codex',
               month: monthString,
-              data: dailyData,
+              html: this.renderCodexMonthDailyDetail(monthString, dailyRows),
             });
+            break;
           }
+          const { ClaudeDataLoader } = await import('./dataLoader');
+          const dailyData = ClaudeDataLoader.getDailyDataForSpecificMonth(this.allRecords, monthString);
+          await this.panel.webview.postMessage({
+            command: 'dailyDataResponse',
+            provider: 'claude',
+            month: monthString,
+            data: dailyData,
+          });
           break;
+        }
       }
     });
 
@@ -2104,9 +2262,9 @@ export class UsageWebviewProvider {
   updateData(
     sessionData: SessionData | null,
     todayData: UsageData | null,
-    monthData: UsageData | null,
+    rolling30DayData: UsageData | null,
     allTimeData: UsageData | null,
-    dailyDataForMonth: { date: string; data: UsageData }[] = [],
+    dailyDataForRolling30Days: { date: string; data: UsageData }[] = [],
     dailyDataForAllTime: { date: string; data: UsageData }[] = [],
     hourlyDataForToday: { hour: string; data: UsageData }[] = [],
     error?: string,
@@ -2117,15 +2275,20 @@ export class UsageWebviewProvider {
     contentAnalysis: ContentAnalysis | null = null,
     branchBreakdown: BranchUsage[] = [],
     workflowBreakdown: WorkflowUsage[] = [],
-    costliestMessages: CostlyMessage[] = []
+    costliestMessages: CostlyMessage[] = [],
+    hourlyDataForRolling30DaysByDay: Record<
+      string,
+      { hour: string; data: UsageData }[]
+    > = {},
   ): void {
     this.currentSessionData = sessionData;
     this.todayData = todayData;
-    this.monthData = monthData;
+    this.rolling30DayData = rolling30DayData;
     this.allTimeData = allTimeData;
-    this.dailyDataForMonth = dailyDataForMonth;
+    this.dailyDataForRolling30Days = dailyDataForRolling30Days;
     this.dailyDataForAllTime = dailyDataForAllTime;
     this.hourlyDataForToday = hourlyDataForToday;
+    this.hourlyDataForRolling30DaysByDay = hourlyDataForRolling30DaysByDay;
     this.error = error || null;
     this.dataDirectory = dataDirectory || null;
     this.isLoading = false;
@@ -2139,7 +2302,7 @@ export class UsageWebviewProvider {
     this.workflowBreakdown = workflowBreakdown;
     this.costliestMessages = costliestMessages;
     this.providerAvailability.claude = Boolean(
-      sessionData || todayData || monthData || allTimeData,
+      sessionData || todayData || rolling30DayData || allTimeData,
     );
 
     if (this.panel) {
@@ -2306,13 +2469,108 @@ export class UsageWebviewProvider {
   // is byte-identical — nothing visible would change anyway.
   private lastHtml: string = '';
 
+  private dashboardLivePatchFor(html: string): DashboardLivePatch | undefined {
+    if (this.currentProvider === 'compare') return undefined;
+    const panelHtml = markedContent(html, LIVE_PATCH_PANEL_START, LIVE_PATCH_PANEL_END);
+    if (panelHtml === undefined) return undefined;
+    const panelNeutral = replaceMarkedContent(
+      html,
+      LIVE_PATCH_PANEL_START,
+      LIVE_PATCH_PANEL_END,
+      '<provider-panel-data>',
+    );
+    if (panelNeutral === undefined) return undefined;
+    const structureHtml = replaceMarkedContent(
+      panelNeutral,
+      LIVE_PATCH_HOURS_START,
+      LIVE_PATCH_HOURS_END,
+      '<claude-hour-data>',
+    );
+    if (structureHtml === undefined) return undefined;
+    return {
+      provider: this.currentProvider,
+      tab: this.currentTab,
+      panelHtml,
+      structureKey: createHash('sha256').update(structureHtml, 'utf8').digest('hex'),
+      claudeLast30HoursByDay: claudeHourlyDisplayDto(
+        this.hourlyDataForRolling30DaysByDay,
+      ),
+    };
+  }
+
+  private replaceDocumentAfterPatchFailure(pending: PendingDashboardLivePatch): void {
+    if (!this.panel || this.pendingDashboardLivePatch?.revision !== pending.revision) return;
+    const fallback = this.scheduledDashboardLivePatch ?? pending;
+    this.pendingDashboardLivePatch = undefined;
+    this.scheduledDashboardLivePatch = undefined;
+    this.webviewClientReady = false;
+    this.lastHtml = fallback.documentHtml;
+    this.lastLivePatchStructureKey = fallback.structureKey;
+    this.panel.webview.html = fallback.documentHtml;
+  }
+
+  private scheduleDashboardLivePatch(pending: PendingDashboardLivePatch): void {
+    this.scheduledDashboardLivePatch = pending;
+    if (this.dashboardLivePatchSendScheduled) return;
+    this.dashboardLivePatchSendScheduled = true;
+    queueMicrotask(() => {
+      this.dashboardLivePatchSendScheduled = false;
+      const latest = this.scheduledDashboardLivePatch;
+      this.scheduledDashboardLivePatch = undefined;
+      if (
+        !latest ||
+        !this.panel ||
+        !this.webviewClientReady ||
+        this.lastHtml !== latest.documentHtml
+      ) {
+        return;
+      }
+      const panel = this.panel;
+      this.pendingDashboardLivePatch = latest;
+      void Promise.resolve(panel.webview.postMessage({
+        command: 'dashboardDataPatch',
+        provider: latest.provider,
+        tab: latest.tab,
+        revision: latest.revision,
+        html: latest.panelHtml,
+        claudeLast30HoursByDay: latest.claudeLast30HoursByDay,
+      })).then((delivered) => {
+        if (delivered === false) {
+          this.replaceDocumentAfterPatchFailure(latest);
+        }
+      }, () => {
+        this.replaceDocumentAfterPatchFailure(latest);
+      });
+    });
+  }
+
   private updateWebview(): void {
     if (!this.panel) return;
     const html = this.getWebviewContent();
     if (html === this.lastHtml) {
       return;
     }
+    const nextPatch = this.dashboardLivePatchFor(html);
+    if (
+      this.webviewClientReady &&
+      nextPatch &&
+      nextPatch.structureKey === this.lastLivePatchStructureKey
+    ) {
+      const pending: PendingDashboardLivePatch = {
+        ...nextPatch,
+        documentHtml: html,
+        revision: ++this.dashboardLivePatchRevision,
+      };
+      this.lastHtml = html;
+      this.lastLivePatchStructureKey = nextPatch.structureKey;
+      this.scheduleDashboardLivePatch(pending);
+      return;
+    }
+    this.pendingDashboardLivePatch = undefined;
+    this.scheduledDashboardLivePatch = undefined;
+    this.webviewClientReady = false;
     this.lastHtml = html;
+    this.lastLivePatchStructureKey = nextPatch?.structureKey;
     this.panel.webview.html = html;
   }
 
@@ -2333,7 +2591,7 @@ export class UsageWebviewProvider {
     if (
       !this.currentSessionData &&
       !this.todayData &&
-      !this.monthData &&
+      !this.rolling30DayData &&
       !this.providerAvailability.codex
     ) {
       return this.getNoDataContent();
@@ -2658,7 +2916,7 @@ export class UsageWebviewProvider {
     // Keep the navigation familiar across providers. Codex still renders the
     // provider-native "Recent task" heading and aggregation inside this tab.
     const today = I18n.t.popup.today;
-    const thisMonth = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.last30days;
+    const middleRangeLabel = provider === 'codex' ? codexCopy.last30Days : I18n.t.popup.last30days;
     const allTime = provider === 'codex' ? codexCopy.allTime : I18n.t.popup.allTime;
     const sessions = provider === 'codex' ? codexCopy.sessions : I18n.t.popup.sessions;
     const projects = provider === 'codex' ? codexCopy.projects : I18n.t.popup.projects;
@@ -2668,7 +2926,7 @@ export class UsageWebviewProvider {
     const settingsTab = I18n.t.popup.settingsTab;
 
     const todayActive = this.currentTab === 'today' ? 'active' : '';
-    const monthActive = this.currentTab === 'month' ? 'active' : '';
+    const rolling30Active = this.currentTab === 'month' ? 'active' : '';
     const allActive = this.currentTab === 'all' ? 'active' : '';
     const sessionsActive = this.currentTab === 'sessions' ? 'active' : '';
     const projectsActive = this.currentTab === 'projects' ? 'active' : '';
@@ -2746,11 +3004,12 @@ export class UsageWebviewProvider {
           </header>` +
       this.renderProviderTabs() +
       `<div id="provider-panel" role="tabpanel" aria-labelledby="provider-tab-${this.currentProvider}">` +
+      LIVE_PATCH_PANEL_START +
       this.renderQuotaBanner(provider) +
       `
           <div class="tabs" role="tablist" aria-label="${this.escapeHtml(title)}">
             ` + dashboardTab('today', today, todayActive) +
-      dashboardTab('month', thisMonth, monthActive) +
+      dashboardTab('month', middleRangeLabel, rolling30Active) +
       dashboardTab('all', allTime, allActive) +
       dashboardTab('sessions', sessions, sessionsActive) +
       dashboardTab('projects', projects, projectsActive) +
@@ -2763,7 +3022,7 @@ export class UsageWebviewProvider {
           </div>
 
           ` + dashboardPanel('today', todayActive, this.renderTodayData(provider)) +
-      dashboardPanel('month', monthActive, this.renderMonthData(provider)) +
+      dashboardPanel('month', rolling30Active, this.renderMonthData(provider)) +
       dashboardPanel('all', allActive, this.renderAllTimeData(provider)) +
       dashboardPanel('sessions', sessionsActive, this.renderSessionData(provider)) +
       dashboardPanel('projects', projectsActive, this.renderProjectData(provider)) +
@@ -2772,7 +3031,8 @@ export class UsageWebviewProvider {
         ? dashboardPanel('branches', branchesActive, this.renderBranchData()) +
           dashboardPanel('workflows', workflowsActive, this.renderWorkflowData())
         : '') +
-      dashboardPanel('settings', settingsActive, this.renderSettingsPanel(provider)) + `
+      dashboardPanel('settings', settingsActive, this.renderSettingsPanel(provider)) +
+      LIVE_PATCH_PANEL_END + `
         </div>
         </div>
         <script>` +
@@ -2918,6 +3178,7 @@ export class UsageWebviewProvider {
         '"' +
         (it.min !== undefined ? ' min="' + it.min + '"' : '') +
         (it.max !== undefined ? ' max="' + it.max + '"' : '') +
+        (it.step !== undefined ? ' step="' + it.step + '"' : '') +
         onCh('number') +
         '>';
     } else if (it.multiline) {
@@ -2932,6 +3193,7 @@ export class UsageWebviewProvider {
         '" value="' +
         esc(String(it.value)) +
         '"' +
+        (it.maxLength !== undefined ? ' maxlength="' + it.maxLength + '"' : '') +
         (it.secret
           ? ' autocomplete="new-password" placeholder="' + (it.configured ? '••••••••' : '') + '"'
           : '') +
@@ -3036,7 +3298,7 @@ export class UsageWebviewProvider {
       this.todayData.totalOutputTokens > 0 ||
       this.todayData.totalCacheCreationTokens > 0 ||
       this.todayData.totalCacheReadTokens > 0;
-    const latestActivityDate = this.dailyDataForMonth.reduce<string | undefined>(
+    const latestActivityDate = this.dailyDataForRolling30Days.reduce<string | undefined>(
       (latest, row) => latest === undefined || row.date > latest ? row.date : latest,
       undefined,
     );
@@ -3050,9 +3312,15 @@ export class UsageWebviewProvider {
           : '') + '</p>';
     const todaySummary = emptyRangeHint + this.renderUsageData(this.todayData, provider) +
       this.renderTodayInsights(provider);
+    const hourlyDisplayRows = completeDisplayRange(
+      clockHourKeys().map(formatHourLabel),
+      this.hourlyDataForToday,
+      (row) => row.hour,
+      (hour) => ({ hour, data: emptyDisplayUsageData() }),
+    ).map(({ value }) => value);
 
     let hourlyBreakdown = '';
-    if (this.hourlyDataForToday.length > 0) {
+    if (hourlyDisplayRows.length > 0) {
       const cost = I18n.t.popup.cost;
       const inputTokens = I18n.t.popup.inputTokens;
       const outputTokens = I18n.t.popup.outputTokens;
@@ -3061,9 +3329,9 @@ export class UsageWebviewProvider {
       const messages = I18n.t.popup.messages;
 
       let hourlyRows = '';
-      this.hourlyDataForToday.forEach(({ hour, data }) => {
+      hourlyDisplayRows.forEach(({ hour, data }) => {
         hourlyRows +=
-          '<tr>' +
+          '<tr data-hour="' + this.escapeHtml(hour) + '">' +
           '<td class="date-cell">' +
           hour +
           '</td>' +
@@ -3089,7 +3357,7 @@ export class UsageWebviewProvider {
       });
 
       hourlyBreakdown =
-        '<div class="daily-breakdown">' +
+        '<div class="daily-breakdown" data-hourly-overview>' +
         '<h3>' +
         I18n.t.popup.hourlyBreakdown +
         '</h3>' +
@@ -3113,10 +3381,11 @@ export class UsageWebviewProvider {
         messages +
         '</button>' +
         '</div>' +
-        this.renderHourlyChart() +
+        this.renderHourlyChart(hourlyDisplayRows) +
+        '<p class="chart-selection-detail" id="claude-today-hour-selection-detail" ' +
+        'data-hour-selection-detail role="status" aria-live="polite" hidden></p>' +
         this.renderCompositionChart(
-          [...this.hourlyDataForToday]
-            .sort((a, b) => a.hour.localeCompare(b.hour))
+          hourlyDisplayRows
             .map((h) => ({ label: h.hour, data: h.data })),
           provider,
         ) +
@@ -3159,8 +3428,16 @@ export class UsageWebviewProvider {
   }
 
   private renderCodexTodayHourly(view: CodexUsageView): string {
+    const rows = view.todayCoverage.complete
+      ? completeDisplayRange(
+          clockHourKeys(),
+          view.todayHourly,
+          (row) => row.hour,
+          emptyCodexHourlyDisplayRow,
+        ).map(({ value }) => value)
+      : view.todayHourly;
     return this.renderCodexHourlyBreakdown(
-      view.todayHourly,
+      rows,
       view.todayCoverage,
     );
   }
@@ -3194,6 +3471,8 @@ export class UsageWebviewProvider {
     const chart = rows.length > 0
       ? '<div class="chart-content"' + (day ? '' : ' id="codexTodayHourlyChart"') + '>' +
         this.renderCodexHourlyChart(rows) + '</div>' +
+        (day ? '' : '<p class="chart-selection-detail" id="codex-today-hour-selection-detail" ' +
+          'data-hour-selection-detail role="status" aria-live="polite" hidden></p>') +
         this.renderCompositionChart(
           rows.map((row) => ({ label: row.label, data: row.total })),
           'codex',
@@ -3208,9 +3487,10 @@ export class UsageWebviewProvider {
         '<th>' + this.escapeHtml(copy.output) + '</th><th>' + this.escapeHtml(copy.reasoning) + '</th>' +
         '<th>' + this.escapeHtml(copy.threads) + '</th></tr></thead><tbody>' +
         rows.map((row) =>
-          '<tr><td class="date-cell">' + this.escapeHtml(row.label) + '</td>' +
+          '<tr data-hour="' + this.escapeHtml(row.hour) + '"><td class="date-cell">' +
+          this.escapeHtml(row.label) + '</td>' +
           '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
-          (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+          this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
           '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
@@ -3227,7 +3507,7 @@ export class UsageWebviewProvider {
     return '<div class="' + (day ? 'hourly-breakdown' : 'daily-breakdown') +
       '" data-codex-time-series' + (day
         ? ' data-codex-materialized-hours="true" data-date="' + this.escapeHtml(day) + '"'
-        : ' data-codex-today-hourly') + '>' +
+        : ' data-codex-today-hourly data-hourly-overview') + '>' +
       heading + partial + tabs + chart + table + '</div>';
   }
 
@@ -3674,7 +3954,7 @@ export class UsageWebviewProvider {
       const rows = view.last30DaysDaily;
       const breakdown = rows.length === 0
         ? '<div class="no-data"><p>' + this.escapeHtml(copy.noDailyData) + '</p></div>'
-        : '<div class="daily-breakdown" data-codex-time-series data-codex-last30-daily><h3>' + this.escapeHtml(copy.daily) + '</h3>' +
+        : '<div class="daily-breakdown" data-codex-time-series data-codex-last30-daily data-last30-daily><h3>' + this.escapeHtml(copy.daily) + '</h3>' +
           '<div class="chart-tabs">' +
           '<button class="chart-tab active" data-metric="cost">' + this.escapeHtml(copy.apiEquivalentCost) + '</button>' +
           '<button class="chart-tab" data-metric="inputTokens">' + this.escapeHtml(copy.processed) + '</button>' +
@@ -3697,7 +3977,7 @@ export class UsageWebviewProvider {
             const day = this.escapeHtml(row.day);
             const detailButton = canExpand
               ? '<button class="detail-button" data-codex-hourly-toggle data-date="' + day + '" ' +
-                'onclick="toggleCodexHourlyDetail(\'' + day + '\')" aria-expanded="false" ' +
+                'onclick="toggleCodexHourlyDetail(\'' + day + '\', this)" aria-expanded="false" ' +
                 'aria-controls="codex-hourly-detail-' + day + '" title="' +
                 this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '">' +
                 '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">' +
@@ -3713,7 +3993,7 @@ export class UsageWebviewProvider {
               : '';
             return '<tr class="daily-row" data-date="' + day + '"><td class="date-cell">' + day + '</td>' +
             '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
-            (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+            this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
@@ -3725,16 +4005,30 @@ export class UsageWebviewProvider {
           }).join('') + '</tbody></table></div></div>';
       return this.renderUsageData(null, provider, view.last30Days) + breakdown;
     }
-    if (!this.monthData) {
+    if (!this.rolling30DayData) {
       return `<div class="no-data"><p>${I18n.t.popup.noDataMessage}</p></div>`;
     }
 
-    const monthSummary = this.renderUsageData(this.monthData, provider);
+    const rolling30Summary = this.renderUsageData(this.rolling30DayData, provider);
+    const dailyDisplayRows = completeDisplayRange(
+      rollingDayKeys(Date.now(), I18n.getTimezone(), 30),
+      this.dailyDataForRolling30Days,
+      (row) => row.date,
+      (date) => ({ date, data: emptyDisplayUsageData() }),
+    );
+    const expandableDays = new Set(
+      dailyDisplayRows
+        .filter((row) => row.observed && Object.prototype.hasOwnProperty.call(
+          this.hourlyDataForRolling30DaysByDay,
+          row.key,
+        ))
+        .map((row) => row.key),
+    );
 
     const dailyBreakdown =
-      this.dailyDataForMonth.length > 0
+      dailyDisplayRows.length > 0
         ? `
-      <div class="daily-breakdown">
+      <div class="daily-breakdown" data-claude-last30-daily data-last30-daily>
         <h3>${I18n.t.popup.dailyBreakdown}</h3>
 
         <!-- Chart Tabs -->
@@ -3749,13 +4043,18 @@ export class UsageWebviewProvider {
 
         <!-- Chart Container (hc-wrap is self-contained: Y-axis + gridlines + scroll) -->
         <div class="chart-content" id="dailyChart">
-          ${this.renderDailyChart(provider)}
+          ${this.renderDailyChart(
+            provider,
+            dailyDisplayRows.map(({ value }) => value),
+            expandableDays,
+          )}
         </div>
 
         ${this.renderCompositionChart(
-          [...this.dailyDataForMonth]
-            .sort((a, b) => a.date.localeCompare(b.date))
-            .map((d) => ({ label: this.getShortDate(d.date), data: d.data })),
+          dailyDisplayRows.map(({ value: row }) => ({
+            label: this.getShortDate(row.date),
+            data: row.data,
+          })),
           provider,
         )}
 
@@ -3775,9 +4074,9 @@ export class UsageWebviewProvider {
               </tr>
             </thead>
             <tbody>
-              ${this.dailyDataForMonth
+              ${dailyDisplayRows
                 .map(
-                  ({ date, data }) => `
+                  ({ value: { date, data }, observed }) => `
                 <tr class="daily-row" data-date="${date}">
                   <td class="date-cell">${this.formatDate(date)}</td>
                   <td class="cost-cell">${I18n.formatCurrency(data.totalCost)}</td>
@@ -3788,22 +4087,22 @@ export class UsageWebviewProvider {
                   <td class="number-cell">${this.formatPercent(this.cacheHitRate(data))}</td>
                   <td class="number-cell">${I18n.formatNumber(data.messageCount)}</td>
                   <td class="detail-cell">
-                    <button class="detail-button" onclick="toggleHourlyDetail('${date}')"
+                    ${expandableDays.has(date) ? `<button class="detail-button" onclick="toggleHourlyDetail('${date}')"
                       aria-expanded="false" aria-controls="hourly-detail-${date}"
                       title="${this.escapeHtml(I18n.t.popup.hourlyBreakdown)}">
                       <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">
                         <path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>
                       </svg>
-                    </button>
+                    </button>` : ''}
                   </td>
                 </tr>
-                <tr class="hourly-detail-row" data-date="${date}" style="display: none;">
+                ${expandableDays.has(date) ? `<tr class="hourly-detail-row" data-date="${date}" style="display: none;">
                   <td colspan="9">
                     <div class="hourly-detail-container" id="hourly-detail-${date}">
                       <div class="loading-indicator">${this.escapeHtml(I18n.t.statusBar.loading)}</div>
                     </div>
                   </td>
-                </tr>
+                </tr>` : ''}
               `
                 )
                 .join('')}
@@ -3814,7 +4113,86 @@ export class UsageWebviewProvider {
     `
         : '';
 
-    return monthSummary + dailyBreakdown;
+    return rolling30Summary + dailyBreakdown;
+  }
+
+  private renderCodexMonthDailyDetail(
+    month: string,
+    rows: CodexDailyUsageView[],
+  ): string {
+    const view = this.codexView;
+    const copy = I18n.t.providers.codex;
+    if (!view || rows.length === 0) {
+      return '<div class="no-data"><p>' + this.escapeHtml(copy.noDailyData) + '</p></div>';
+    }
+    const chartRows = rows.map((row) => ({
+      date: row.day,
+      data: { total: row.total, apiEquivalent: row.apiEquivalent, threads: row.threads },
+    }));
+    const partial = view.allTime.indexedSubtotal
+      ? '<p class="model-details">' + this.escapeHtml(copy.partial) + '</p>'
+      : '';
+    const tableRows = rows.map((row) => {
+      const hourly = view.last30DaysHourlyByDay[row.day];
+      const canExpand = hourly !== undefined;
+      const dayCoverage = view.hourlyCoverage.days[row.day] ?? view.hourlyCoverage;
+      const day = this.escapeHtml(row.day);
+      const detailId = 'codex-alltime-hourly-detail-' + day;
+      const detailButton = canExpand
+        ? '<button class="detail-button" data-codex-hourly-toggle data-date="' + day + '" ' +
+          'onclick="toggleCodexHourlyDetail(\'' + day + '\', this)" aria-expanded="false" ' +
+          'aria-controls="' + detailId + '" title="' +
+          this.escapeHtml(I18n.t.popup.hourlyBreakdown) + '">' +
+          '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">' +
+          '<path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>' +
+          '</svg></button>'
+        : '';
+      const detailRow = canExpand
+        ? '<tr class="hourly-detail-row" data-codex-hourly-detail-row data-date="' + day +
+          '" style="display: none;"><td colspan="10"><div class="hourly-detail-container" ' +
+          'id="' + detailId + '" data-loaded="true">' +
+          this.renderCodexHourlyBreakdown(hourly, dayCoverage, row.day) +
+          '</div></td></tr>'
+        : '';
+      return '<tr class="daily-row" data-date="' + day + '"><td class="date-cell">' +
+        this.escapeHtml(this.formatDate(row.day)) + '</td>' +
+        '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
+        this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
+        '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td>' +
+        '<td class="detail-cell">' + detailButton + '</td></tr>' + detailRow;
+    }).join('');
+    return '<div class="daily-breakdown" data-codex-time-series data-codex-alltime-daily ' +
+      'data-month="' + this.escapeHtml(month) + '"><h4>' +
+      this.escapeHtml(this.formatDate(month, true) + ' · ' + I18n.t.popup.dailyBreakdown) + '</h4>' +
+      partial + '<div class="chart-tabs">' +
+      '<button class="chart-tab active" data-metric="cost">' + this.escapeHtml(copy.apiEquivalentCost) + '</button>' +
+      '<button class="chart-tab" data-metric="inputTokens">' + this.escapeHtml(copy.processed) + '</button>' +
+      '<button class="chart-tab" data-metric="outputTokens">' + this.escapeHtml(copy.fresh) + '</button>' +
+      '<button class="chart-tab" data-metric="cacheCreation">' + this.escapeHtml(copy.output) + '</button>' +
+      '<button class="chart-tab" data-metric="cacheRead">' + this.escapeHtml(copy.reasoning) + '</button>' +
+      '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
+      '</div><div class="chart-content" id="codex-daily-chart-' + this.escapeHtml(month) + '">' +
+      this.renderMainCostChart(chartRows, false, 'codex') + '</div>' +
+      this.renderCompositionChart(rows.map((row) => ({
+        label: this.getShortDate(row.day),
+        data: row.total,
+        key: Object.prototype.hasOwnProperty.call(view.last30DaysHourlyByDay, row.day)
+          ? row.day
+          : undefined,
+      })), 'codex', 'codex-hour') +
+      '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
+      '<th>' + this.escapeHtml(copy.date) + '</th><th>' + this.escapeHtml(copy.apiEquivalentCost) + '</th>' +
+      '<th>' + this.escapeHtml(copy.processed) + '</th><th>' + this.escapeHtml(copy.fresh) + '</th>' +
+      '<th>' + this.escapeHtml(copy.input) + '</th><th>' + this.escapeHtml(copy.cachedInput) + '</th>' +
+      '<th>' + this.escapeHtml(copy.output) + '</th><th>' + this.escapeHtml(copy.reasoning) + '</th>' +
+      '<th>' + this.escapeHtml(copy.threads) + '</th><th></th></tr></thead><tbody>' + tableRows +
+      '</tbody></table></div></div>';
   }
 
   private renderAllTimeData(provider: SettingProvider = 'claude'): string {
@@ -3836,25 +4214,39 @@ export class UsageWebviewProvider {
           '<button class="chart-tab" data-metric="cacheRead">' + this.escapeHtml(copy.reasoning) + '</button>' +
           '<button class="chart-tab" data-metric="messages">' + this.escapeHtml(copy.threads) + '</button>' +
           '</div><div class="chart-content" id="allTimeChart">' + this.renderAllTimeChart(provider) + '</div>' +
-          this.renderCompositionChart(rows.map((row) => ({ label: row.period, data: row.total })), provider) +
+          this.renderCompositionChart(
+            rows.map((row) => ({ label: row.period, data: row.total, key: row.period })),
+            provider,
+          ) +
           '<div class="daily-table-container" tabindex="0"><table class="daily-table"><thead><tr>' +
           '<th>' + this.escapeHtml(copy.date) + '</th><th>' + this.escapeHtml(copy.apiEquivalentCost) + '</th>' +
           '<th>' + this.escapeHtml(copy.processed) + '</th>' +
           '<th>' + this.escapeHtml(copy.fresh) + '</th><th>' + this.escapeHtml(copy.input) + '</th>' +
           '<th>' + this.escapeHtml(copy.cachedInput) + '</th><th>' + this.escapeHtml(copy.output) + '</th>' +
-          '<th>' + this.escapeHtml(copy.reasoning) + '</th><th>' + this.escapeHtml(copy.threads) + '</th>' +
-          '</tr></thead><tbody>' + rows.map((row) =>
-            '<tr><td class="date-cell">' + this.escapeHtml(row.period) + '</td>' +
+          '<th>' + this.escapeHtml(copy.reasoning) + '</th><th>' + this.escapeHtml(copy.threads) + '</th><th></th>' +
+          '</tr></thead><tbody>' + rows.map((row) => {
+            const month = this.escapeHtml(row.period);
+            return '<tr class="daily-row" data-date="' + month + '"><td class="date-cell">' + month + '</td>' +
             '<td class="cost-cell" title="' + this.escapeHtml(this.codexCostHelp(row.apiEquivalent)) + '">' +
-            (row.apiEquivalent.pricedTokens > 0 ? I18n.formatCurrency(row.apiEquivalent.equivalentUsd) : '—') + '</td>' +
+            this.codexCostLabel(row.apiEquivalent, row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.processed) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.fresh) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.input) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.cachedInput) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.output) + '</td>' +
             '<td class="number-cell">' + I18n.formatNumber(row.total.reasoning) + '</td>' +
-            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td></tr>',
-          ).join('') + '</tbody></table></div></div>';
+            '<td class="number-cell">' + I18n.formatNumber(row.threads) + '</td>' +
+            '<td class="detail-cell"><button class="detail-button" onclick="toggleMonthlyDetail(\'' + month + '\')" ' +
+            'aria-expanded="false" aria-controls="monthly-detail-' + month + '" title="' +
+            this.escapeHtml(I18n.t.popup.dailyBreakdown) + '">' +
+            '<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true" focusable="false">' +
+            '<path class="expand-icon" d="M1.646 4.646a.5.5 0 0 1 .708 0L8 10.293l5.646-5.647a.5.5 0 0 1 .708.708l-6 6a.5.5 0 0 1-.708 0l-6-6a.5.5 0 0 1 0-.708z"/>' +
+            '</svg></button></td></tr>' +
+            '<tr class="monthly-detail-row" data-date="' + month + '" style="display: none;">' +
+            '<td colspan="10"><div class="monthly-detail-container" id="monthly-detail-' + month + '">' +
+            '<div class="loading-indicator">' + this.escapeHtml(I18n.t.statusBar.loading) + '</div>' +
+            '</div></td></tr>';
+          }).join('') + '</tbody></table></div></div>';
       return this.renderUsageData(null, provider, view.allTime) +
         this.renderWeeklyValuePanel(provider) + breakdown;
     }
@@ -4110,7 +4502,8 @@ export class UsageWebviewProvider {
         : '') +
       '</div><div class="hc-wrap"><div class="hc-yaxis"><span class="hc-yval">' +
       I18n.formatCurrency(maxValue) + '</span><span class="hc-yval">' +
-      I18n.formatCurrency(maxValue / 2) + '</span><span class="hc-yval">$0</span></div>' +
+      I18n.formatCurrency(maxValue / 2) + '</span><span class="hc-yval">' +
+      I18n.formatCurrency(0) + '</span></div>' +
       '<div class="hc-main"><div class="hc-scroll" tabindex="0"><div class="hc-plot">' +
       '<div class="hc-grid hc-grid-top"></div><div class="hc-grid hc-grid-mid"></div>' +
       '<div class="hc-bars">' + bars + '</div></div><div class="hc-xlabels">' +
@@ -4271,7 +4664,12 @@ export class UsageWebviewProvider {
     const kind = vscode.window.activeColorTheme?.kind;
     const isDark = kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
     // Landscape only for now (other sizes need per-size tuning — a later patch).
-    return renderShareCardSvg(buildShareCardData(input, merged), { ...opts, isDark, lang: I18n.getLocale() });
+    return renderShareCardSvg(buildShareCardData(input, merged), {
+      ...opts,
+      isDark,
+      lang: I18n.getLocale(),
+      formatCurrency: (amountUsd) => I18n.formatCurrency(amountUsd),
+    });
   }
 
   /** Fetch the signed-in GitHub user's avatar (data: URI) and display name,
@@ -5107,7 +5505,7 @@ export class UsageWebviewProvider {
       (sum, w) => sum + w.data.totalCost + (w.orchestration ? w.orchestration.totalCost : 0),
       0
     );
-    const rollingTotalCost = this.monthData ? this.monthData.totalCost : 0;
+    const rollingTotalCost = this.rolling30DayData ? this.rolling30DayData.totalCost : 0;
     const rollingShare = rollingTotalCost > 0 ? rollingWorkflowCost / rollingTotalCost : null;
     const summaryStrip =
       '<p class="table-hint">' +
@@ -6754,6 +7152,9 @@ export class UsageWebviewProvider {
   private renderCompositionChart(
     items: { label: string; data: UsageData | CodexMetricTotals; key?: string }[],
     provider: SettingProvider = 'claude',
+    drilldown: 'month' | 'codex-hour' | 'none' = items.some((item) => item.key)
+      ? 'month'
+      : 'none',
   ): string {
     if (!items || items.length === 0) {
       return '';
@@ -6805,10 +7206,16 @@ export class UsageWebviewProvider {
       // In the all-time view each bar is a month (it.key = its date); make it
       // click-to-expand that month's per-day composition (reuses the table's
       // month-detail round-trip).
-      const colOpen = provider === 'claude' && it.key
+      const controls = drilldown === 'codex-hour'
+        ? 'codex-alltime-hourly-detail-'
+        : 'monthly-detail-';
+      const action = drilldown === 'codex-hour'
+        ? 'toggleCodexHourlyDetail(\'' + it.key + '\', this)'
+        : 'toggleMonthlyDetail(\'' + it.key + '\')';
+      const colOpen = drilldown !== 'none' && it.key
         ? '<div class="hc-col hc-col-clickable" data-date="' + this.escapeHtml(it.key) +
-          '" role="button" tabindex="0" aria-expanded="false" aria-controls="monthly-detail-' +
-          this.escapeHtml(it.key) + '" onclick="toggleMonthlyDetail(\'' + it.key + '\')" title="' +
+          '" role="button" tabindex="0" aria-expanded="false" aria-controls="' + controls +
+          this.escapeHtml(it.key) + '" onclick="' + action + '" title="' +
           this.escapeHtml(it.label) + ' — ' + I18n.formatNumber(total) + '">'
         : '<div class="hc-col">';
       bars +=
@@ -6865,7 +7272,11 @@ export class UsageWebviewProvider {
     );
   }
 
-  private renderDailyChart(provider: SettingProvider = 'claude'): string {
+  private renderDailyChart(
+    provider: SettingProvider = 'claude',
+    claudeRows: { date: string; data: UsageData }[] = this.dailyDataForRolling30Days,
+    claudeInteractiveDays?: ReadonlySet<string>,
+  ): string {
     if (provider === 'codex') {
       const rows = this.codexView?.last30DaysDaily ?? [];
       return this.renderMainCostChart(
@@ -6877,8 +7288,8 @@ export class UsageWebviewProvider {
         provider,
       );
     }
-    const sortedData = [...this.dailyDataForMonth].sort((a, b) => a.date.localeCompare(b.date));
-    return this.renderMainCostChart(sortedData, false, provider);
+    const sortedData = [...claudeRows].sort((a, b) => a.date.localeCompare(b.date));
+    return this.renderMainCostChart(sortedData, false, provider, claudeInteractiveDays);
   }
 
   private renderAllTimeChart(provider: SettingProvider = 'claude'): string {
@@ -6953,6 +7364,12 @@ export class UsageWebviewProvider {
     return I18n.t.providers.codex.apiEquivalentCostHelp.replace('{coverage}', coverage);
   }
 
+  private codexCostLabel(cost: EquivalentCostBreakdown, processedTokens: number): string {
+    return cost.pricedTokens > 0 || processedTokens === 0
+      ? I18n.formatCurrency(cost.equivalentUsd)
+      : '—';
+  }
+
   private renderMainCostChart(
     sortedData: Array<{
       date: string;
@@ -6964,6 +7381,7 @@ export class UsageWebviewProvider {
     }>,
     monthly = false,
     provider: SettingProvider = 'claude',
+    claudeInteractiveDays?: ReadonlySet<string>,
   ): string {
     if (sortedData.length === 0) {
       const message = provider === 'codex'
@@ -6981,23 +7399,26 @@ export class UsageWebviewProvider {
         };
       }>;
       const maxCost = Math.max(...rows.map((row) => row.data.apiEquivalent.equivalentUsd), 0);
+      const hasUsage = rows.some((row) => row.data.total.processed > 0);
       const hasPricedCost = rows.some((row) => row.data.apiEquivalent.pricedTokens > 0);
       const costAxisLabel = (value: number): string =>
-        hasPricedCost ? I18n.formatCurrency(value) : '—';
+        hasPricedCost || !hasUsage ? I18n.formatCurrency(value) : '—';
       const maxHeight = 120;
       const bars = rows.map(({ date, data }) => {
         const cost = data.apiEquivalent;
         const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
-        const costLabel = cost.pricedTokens > 0 ? I18n.formatCurrency(cost.equivalentUsd) : '—';
+        const costLabel = this.codexCostLabel(cost, data.total.processed);
         const hasHourlyDetail = !monthly && Object.prototype.hasOwnProperty.call(
           this.codexView?.last30DaysHourlyByDay ?? {},
           date,
         );
+        const clickable = monthly || hasHourlyDetail;
         return '<div class="hc-col" data-date="' + this.escapeHtml(date) + '">' +
           '<div class="hc-barval">' + costLabel + '</div>' +
-          '<div class="chart-bar cost-bar cost-stacked' + (hasHourlyDetail ? ' clickable' : '') +
+          '<div class="chart-bar cost-bar cost-stacked' + (clickable ? ' clickable' : '') +
           '" style="height:' + height + 'px" ' +
           'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
+          'data-has-usage="' + (data.total.processed > 0 ? 'true' : 'false') + '" ' +
           'data-input="' + data.total.processed + '" data-output="' + data.total.fresh + '" ' +
           'data-cache-creation="' + data.total.output + '" data-cache-read="' + data.total.reasoning + '" ' +
           'data-messages="' + data.threads + '" ' +
@@ -7028,10 +7449,12 @@ export class UsageWebviewProvider {
       .map(({ date, data }) => {
         const barHeight = maxCost > 0 ? (data.totalCost / maxCost) * maxHeight : 0;
         const cb = data.costBreakdown;
+        const clickable = monthly || claudeInteractiveDays === undefined || claudeInteractiveDays.has(date);
         return (
           '<div class="hc-col" data-date="' + date + '">' +
           '<div class="hc-barval">' + I18n.formatCurrency(data.totalCost) + '</div>' +
-          '<div class="chart-bar cost-bar cost-stacked clickable" style="height: ' + barHeight + 'px;" ' +
+          '<div class="chart-bar cost-bar cost-stacked' + (clickable ? ' clickable' : '') +
+          '" style="height: ' + barHeight + 'px;" ' +
           'data-cost="' + data.totalCost + '" ' +
           'data-input="' + data.totalInputTokens + '" ' +
           'data-output="' + data.totalOutputTokens + '" ' +
@@ -7075,8 +7498,8 @@ export class UsageWebviewProvider {
 
   /**
    * Today's hourly chart. Unlike the other charts it has a Y-axis, two dashed
-   * reference lines and a value label on top of every bar, so figures are
-   * readable without hovering.
+   * reference lines and a value label on top of every non-zero bar, so figures
+   * stay readable without filling quiet hours with repeated zeroes.
    */
   private renderCodexHourlyChart(rows: CodexHourlyUsageView[]): string {
     if (rows.length === 0) {
@@ -7084,18 +7507,23 @@ export class UsageWebviewProvider {
         this.escapeHtml(I18n.t.providers.codex.noDailyData) + '</div>';
     }
     const maxCost = Math.max(...rows.map((row) => row.apiEquivalent.equivalentUsd), 0);
+    const hasUsage = rows.some((row) => row.total.processed > 0);
     const hasPricedCost = rows.some((row) => row.apiEquivalent.pricedTokens > 0);
     const costAxisLabel = (value: number): string =>
-      hasPricedCost ? I18n.formatCurrency(value) : '—';
+      hasPricedCost || !hasUsage ? I18n.formatCurrency(value) : '—';
     const maxHeight = 120;
     const bars = rows.map((row) => {
       const cost = row.apiEquivalent;
       const height = maxCost > 0 ? (cost.equivalentUsd / maxCost) * maxHeight : 2;
-      const costLabel = cost.pricedTokens > 0 ? I18n.formatCurrency(cost.equivalentUsd) : '—';
+      const costLabel = this.codexCostLabel(cost, row.total.processed);
+      const visibleCostLabel = cost.equivalentUsd === 0 && row.total.processed === 0
+        ? ''
+        : costLabel;
       return '<div class="hc-col" data-hour="' + this.escapeHtml(row.hour) + '">' +
-        '<div class="hc-barval">' + costLabel + '</div>' +
+        '<div class="hc-barval">' + visibleCostLabel + '</div>' +
         '<div class="chart-bar cost-bar cost-stacked" style="height:' + height + 'px" ' +
         'data-cost="' + cost.equivalentUsd + '" data-priced-tokens="' + cost.pricedTokens + '" ' +
+        'data-has-usage="' + (row.total.processed > 0 ? 'true' : 'false') + '" ' +
         'data-input="' + row.total.processed + '" data-output="' + row.total.fresh + '" ' +
         'data-cache-creation="' + row.total.output + '" data-cache-read="' + row.total.reasoning + '" ' +
         'data-messages="' + row.threads + '" ' +
@@ -7118,13 +7546,15 @@ export class UsageWebviewProvider {
       '<div class="hc-xlabels">' + labels + '</div></div></div></div>';
   }
 
-  private renderHourlyChart(): string {
-    if (this.hourlyDataForToday.length === 0) {
+  private renderHourlyChart(
+    hourlyRows: { hour: string; data: UsageData }[] = this.hourlyDataForToday,
+  ): string {
+    if (hourlyRows.length === 0) {
       return '<div class="no-chart-data" role="status">' +
         this.escapeHtml(I18n.t.statusBar.noData) + '</div>';
     }
 
-    const sortedData = [...this.hourlyDataForToday].sort((a, b) => a.hour.localeCompare(b.hour));
+    const sortedData = [...hourlyRows].sort((a, b) => a.hour.localeCompare(b.hour));
     const maxCost = Math.max(...sortedData.map((d) => d.data.totalCost), 0);
     const maxHeight = 120; // Plot height in pixels — kept in sync with updateMainChart.
 
@@ -7134,7 +7564,9 @@ export class UsageWebviewProvider {
         const cb = data.costBreakdown;
         return (
           '<div class="hc-col" data-hour="' + hour + '">' +
-          '<div class="hc-barval">' + I18n.formatCurrency(data.totalCost) + '</div>' +
+          '<div class="hc-barval">' +
+          (data.totalCost === 0 ? '' : I18n.formatCurrency(data.totalCost)) +
+          '</div>' +
           '<div class="chart-bar cost-bar cost-stacked" style="height: ' + height + 'px;" ' +
           'data-cost="' + data.totalCost + '" ' +
           'data-input="' + data.totalInputTokens + '" ' +
@@ -8005,7 +8437,12 @@ export class UsageWebviewProvider {
         cursor: pointer;
       }
 
-      .chart-bar.clickable:hover {
+      .chart-bar[data-hour-selection-control] {
+        cursor: pointer;
+      }
+
+      .chart-bar.clickable:hover,
+      .chart-bar[data-hour-selection-control]:hover {
         opacity: 0.8;
         transform: scaleY(1.05);
       }
@@ -8013,6 +8450,22 @@ export class UsageWebviewProvider {
       .chart-bar.selected {
         border: 2px solid var(--vscode-focusBorder);
         box-shadow: 0 0 4px var(--vscode-focusBorder);
+      }
+
+      .chart-selection-detail {
+        margin: var(--ccu-space-2) 0 0;
+        padding-left: var(--ccu-space-2);
+        border-left: 2px solid var(--ccu-focus);
+        color: var(--vscode-descriptionForeground);
+        font-variant-numeric: tabular-nums;
+      }
+
+      .daily-table tr.chart-selection-row > td {
+        background: var(--vscode-list-inactiveSelectionBackground, rgba(127, 127, 127, 0.12));
+      }
+
+      .daily-table tr.chart-selection-row > td:first-child {
+        box-shadow: inset 2px 0 0 var(--ccu-focus);
       }
 
       .cost-bar {
@@ -9257,29 +9710,29 @@ export class UsageWebviewProvider {
         white-space: nowrap;
       }
 
-      /* Codex always renders a complete rolling 30-day track. Keep those
+      /* Both providers render a complete rolling 30-day track. Keep those
          dense charts and their table inside independent, keyboard-focusable
          horizontal scrollers instead of widening the entire dashboard. The
          explicit max-content track also keeps grid lines and labels aligned
          after scrolling in Chromium. */
-      [data-codex-last30-daily] {
+      [data-last30-daily] {
         width: 100%;
         max-width: 100%;
         min-width: 0;
       }
 
-      [data-codex-last30-daily] .chart-content,
-      [data-codex-last30-daily] .chart-content > .hc-wrap,
-      [data-codex-last30-daily] .composition-chart,
-      [data-codex-last30-daily] .hc-wrap,
-      [data-codex-last30-daily] .hc-main {
+      [data-last30-daily] .chart-content,
+      [data-last30-daily] .chart-content > .hc-wrap,
+      [data-last30-daily] .composition-chart,
+      [data-last30-daily] .hc-wrap,
+      [data-last30-daily] .hc-main {
         width: 100%;
         max-width: 100%;
         min-width: 0;
       }
 
-      [data-codex-last30-daily] .hc-scroll,
-      [data-codex-last30-daily] .daily-table-container {
+      [data-last30-daily] .hc-scroll,
+      [data-last30-daily] .daily-table-container {
         max-width: 100%;
         overflow-x: auto;
         overscroll-behavior-inline: contain;
@@ -9287,18 +9740,18 @@ export class UsageWebviewProvider {
         -webkit-overflow-scrolling: touch;
       }
 
-      [data-codex-last30-daily] .hc-plot,
-      [data-codex-last30-daily] .hc-xlabels {
+      [data-last30-daily] .hc-plot,
+      [data-last30-daily] .hc-xlabels {
         width: max-content;
         min-width: 100%;
       }
 
-      [data-codex-last30-daily] .daily-table {
+      [data-last30-daily] .daily-table {
         width: 100%;
         min-width: 960px;
       }
 
-      [data-codex-last30-daily] .daily-table th {
+      [data-last30-daily] .daily-table th {
         white-space: nowrap;
       }
 
@@ -9768,6 +10221,9 @@ export class UsageWebviewProvider {
 // Get VSCode API
 const vscode = acquireVsCodeApi();
 const __adviceCopy = ${JSON.stringify(I18n.t.popup.adviceEffectiveness)};
+let __claudeLast30HoursByDay = ${LIVE_PATCH_HOURS_START}${inlineScriptJson(
+      claudeHourlyDisplayDto(this.hourlyDataForRolling30DaysByDay),
+    )}${LIVE_PATCH_HOURS_END};
 
 function ccuReadUiState() {
   try { return vscode.getState() || {}; } catch (e) { return {}; }
@@ -9909,7 +10365,11 @@ function clearPersistedDetails() {
     st.openDetails = [];
     st.claudeDrilldownDetails = {};
     st.codexHourlyDetails = {};
+    st.hourlyChartSelections = {};
     vscode.setState(st);
+    document.querySelectorAll('[data-hourly-overview]').forEach(function(container) {
+      clearHourlyOverviewSelection(container, false);
+    });
   } catch (e) {}
 }
 // 'toggle' doesn't bubble — listen in the capture phase.
@@ -9938,12 +10398,17 @@ function restoreUi() {
   restoreTableSorts();
   restoreChartMetrics();
   initializeChartDrilldowns();
+  initializeHourlyOverviewSelections();
+  restoreHourlyOverviewSelections();
   initializeStatusRegions();
   restoreCombinedHeatmapConfig();
   requestLocalDataInventoryForVisibleSettings();
   restoreScrollPosition();
   vscode.postMessage({ command: 'localDataClientReady' });
 }
+
+${getDashboardRefreshClientScript()}
+${getChartAccessibilityClientScript()}
 function ccuScrollStateKey() {
   var active = document.querySelector('.tab.active');
   return ccuProviderName() + ':' + (active ? active.id.replace('tab-', '') : 'today');
@@ -9951,7 +10416,14 @@ function ccuScrollStateKey() {
 function saveScrollPosition() {
   if (!__ccuUiReady) { return; }
   var positions = ccuReadUiState().scrollPositions || {};
-  positions[ccuScrollStateKey()] = window.scrollY;
+  var key = ccuScrollStateKey();
+  var y = window.scrollY;
+  // Chromium may deliver one final scroll event after the debounce fires.
+  // Do not make pagehide or visibilitychange rewrite an identical position;
+  // setState is synchronous host work and duplicate writes make long Codex
+  // pages feel less responsive without preserving any additional state.
+  if (positions[key] === y) { return; }
+  positions[key] = y;
   ccuWriteUiState('scrollPositions', positions);
 }
 function restoreScrollPosition() {
@@ -9998,6 +10470,10 @@ if (document.readyState === 'loading') {
 // that the original used in this script body).
 const __locale = ${JSON.stringify(I18n.getLocale())};
 const __tz = ${JSON.stringify(resolveTimeZone(I18n.getTimezone()))};
+const __currencyDisplay = ${JSON.stringify({
+  ...I18n.getCurrencyDisplay(),
+  decimalPlaces: I18n.getDecimalPlaces(),
+})};
 const __combinedHeatmapCopy = ${JSON.stringify(combinedHeatmapUiCopy(I18n.getLocale()))};
 const __localDataCopy = ${JSON.stringify(localDataUiCopy(I18n.getLocale()))};
 const __dateOpts = (extra) => {
@@ -10964,7 +11440,7 @@ document.addEventListener('keydown', function(event) {
 
 function claudeDrilldownStateKey(detailRow, kind) {
   const tab = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : null;
-  return 'claude:' + (tab ? tab.id : kind) + ':' + kind;
+  return ccuProviderName() + ':' + (tab ? tab.id : kind) + ':' + kind;
 }
 
 function persistClaudeDrilldown(detailRow, kind, date) {
@@ -10991,6 +11467,19 @@ function restoreClaudeDrilldownDetails() {
       }
     });
   } catch (e) {}
+}
+
+function installMaterializedClaudeHourlyDetail(container, date) {
+  if (!container || !Object.prototype.hasOwnProperty.call(__claudeLast30HoursByDay, date)) {
+    return false;
+  }
+  container.innerHTML = renderHourlyData(__claudeLast30HoursByDay[date], date);
+  container.dataset.loaded = 'true';
+  bindChartTabEvents(container);
+  restoreChartMetrics(container);
+  initializeChartDrilldowns(container);
+  initializeStatusRegions(container);
+  return true;
 }
 
 function toggleHourlyDetail(date, restoring) {
@@ -11021,10 +11510,11 @@ function toggleHourlyDetail(date, restoring) {
         }
         persistClaudeDrilldown(detailRow, 'hourly', date);
 
-        // Request hourly data if not loaded
+        // Materialize from the bounded rolling-hour DTO already embedded in
+        // this Webview. Expanding a day must never ask the host to regroup all
+        // loaded Claude records or touch JSONL.
         if (!container.dataset.loaded) {
-          vscode.postMessage({ command: 'getHourlyData', date: date });
-          container.dataset.loaded = 'true';
+          installMaterializedClaudeHourlyDetail(container, date);
         }
 
         // Scroll the newly-revealed detail into view — clicking a bar at the
@@ -11054,14 +11544,27 @@ function toggleHourlyDetail(date, restoring) {
   }
 }
 
-function codexHourlyDetailElements(date) {
-  const detailRow = document.querySelector('[data-codex-hourly-detail-row][data-date="' + date + '"]');
-  const scope = detailRow && detailRow.closest ? detailRow.closest('.tab-content') : document;
+function codexHourlyDetailElements(date, source) {
+  const sourceScope = source && source.closest
+    ? source.closest('[data-codex-alltime-daily], [data-codex-last30-daily]')
+    : null;
+  const activeTab = document.querySelector('.tab-content.active');
+  const searchScope = sourceScope || activeTab || document;
+  const detailRow = searchScope.querySelector(
+    '[data-codex-hourly-detail-row][data-date="' + date + '"]',
+  );
+  const scope = sourceScope || (detailRow && detailRow.closest
+    ? detailRow.closest('[data-codex-alltime-daily], [data-codex-last30-daily], .tab-content')
+    : searchScope);
+  const container = detailRow
+    ? detailRow.querySelector('.hourly-detail-container[id]')
+    : null;
   return {
     detailRow: detailRow,
     button: scope ? scope.querySelector('[data-codex-hourly-toggle][data-date="' + date + '"]') : null,
     chartBar: scope ? scope.querySelector('.hc-col[data-date="' + date + '"] .chart-bar') : null,
     scope: scope,
+    controls: container ? container.id : '',
   };
 }
 
@@ -11087,23 +11590,25 @@ function closeAllCodexHourlyDetails(scope) {
     button.classList.remove('expanded');
     button.setAttribute('aria-expanded', 'false');
   });
-  root.querySelectorAll('[data-codex-last30-daily] .chart-bar.selected').forEach(function(bar) {
+  root.querySelectorAll('.chart-bar.selected').forEach(function(bar) {
     bar.classList.remove('selected');
   });
-  root.querySelectorAll('[aria-controls^="codex-hourly-detail-"]').forEach(function(control) {
+  root.querySelectorAll(
+    '[aria-controls^="codex-hourly-detail-"], [aria-controls^="codex-alltime-hourly-detail-"]',
+  ).forEach(function(control) {
     control.setAttribute('aria-expanded', 'false');
   });
 }
 
-function setCodexHourlyDetail(date, expanded, restoring) {
-  const elements = codexHourlyDetailElements(date);
-  if (!elements.detailRow || !elements.button) { return false; }
+function setCodexHourlyDetail(date, expanded, restoring, source) {
+  const elements = codexHourlyDetailElements(date, source);
+  if (!elements.detailRow || !elements.button || !elements.controls) { return false; }
   if (expanded) {
     closeAllCodexHourlyDetails(elements.scope);
     elements.detailRow.style.display = 'table-row';
     elements.button.classList.add('expanded');
     elements.button.setAttribute('aria-expanded', 'true');
-    setChartDrilldownExpanded('codex-hourly-detail-' + date, true);
+    setChartDrilldownExpanded(elements.controls, true);
     if (elements.chartBar) { elements.chartBar.classList.add('selected'); }
     persistCodexHourlyDetail(elements.detailRow, date);
     if (!restoring) {
@@ -11113,21 +11618,22 @@ function setCodexHourlyDetail(date, expanded, restoring) {
     elements.detailRow.style.display = 'none';
     elements.button.classList.remove('expanded');
     elements.button.setAttribute('aria-expanded', 'false');
-    setChartDrilldownExpanded('codex-hourly-detail-' + date, false);
+    setChartDrilldownExpanded(elements.controls, false);
     if (elements.chartBar) { elements.chartBar.classList.remove('selected'); }
     persistCodexHourlyDetail(elements.detailRow, '');
   }
   return true;
 }
 
-function toggleCodexHourlyDetail(date) {
+function toggleCodexHourlyDetail(date, source) {
   try {
-    const elements = codexHourlyDetailElements(date);
+    const elements = codexHourlyDetailElements(date, source);
     if (!elements.detailRow || !elements.button) { return; }
     setCodexHourlyDetail(
       date,
       elements.button.getAttribute('aria-expanded') !== 'true',
       false,
+      source,
     );
   } catch (error) {
     console.error('Error in toggleCodexHourlyDetail:', error);
@@ -11140,7 +11646,7 @@ function restoreCodexHourlyDetails() {
     document.querySelectorAll('[data-codex-hourly-detail-row]').forEach(function(row) {
       const date = row.getAttribute('data-date');
       if (date && saved[codexHourlyDetailStateKey(row)] === date) {
-        setCodexHourlyDetail(date, true, true);
+        setCodexHourlyDetail(date, true, true, row);
       }
     });
   } catch (e) {}
@@ -11200,7 +11706,7 @@ function toggleMonthlyDetail(monthDate, restoring) {
 
         // Request monthly data if not loaded
         if (!container.dataset.loaded) {
-          vscode.postMessage({ command: 'getDailyData', month: monthDate });
+          vscode.postMessage({ command: 'getDailyData', month: monthDate, provider: ccuProviderName() });
           container.dataset.loaded = 'true';
         }
 
@@ -11232,8 +11738,8 @@ function toggleMonthlyDetail(monthDate, restoring) {
 function closeAllMonthlyDetails() {
   // Close all expanded monthly detail rows
   const allDetailRows = document.querySelectorAll('.monthly-detail-row');
-  const allButtons = document.querySelectorAll('.detail-button.expanded');
-  const allChartBars = document.querySelectorAll('.chart-bar.selected');
+  const allButtons = document.querySelectorAll('[aria-controls^="monthly-detail-"].detail-button.expanded');
+  const allChartBars = document.querySelectorAll('[aria-controls^="monthly-detail-"].chart-bar.selected');
 
   allDetailRows.forEach(function(row) {
     row.style.display = 'none';
@@ -11429,6 +11935,11 @@ document.addEventListener('click', function(event) {
 // Handle messages from extension
 window.addEventListener('message', async function(event) {
   const message = event.data;
+
+  if (message.command === 'dashboardDataPatch') {
+    ccuApplyDashboardDataPatch(message);
+    return;
+  }
 
   if (
     message.command === 'codexIndexProgress' &&
@@ -11670,9 +12181,14 @@ window.addEventListener('message', async function(event) {
   if (message.command === 'shareCardResult') {
     const prev = document.getElementById('scPreview');
     if (prev) {
-      prev.innerHTML = message.error
-        ? '<p class="table-hint">Could not build the card: ' + message.error + '</p>'
-        : (message.svg || '');
+      if (message.error) {
+        var shareCardError = document.createElement('p');
+        shareCardError.className = 'table-hint';
+        shareCardError.textContent = 'Could not build the card: ' + String(message.error);
+        prev.replaceChildren(shareCardError);
+      } else {
+        prev.innerHTML = message.svg || '';
+      }
     }
   }
 
@@ -11713,28 +12229,20 @@ window.addEventListener('message', async function(event) {
     }
   }
 
-  if (message.command === 'hourlyDataResponse') {
-    const container = document.getElementById('hourly-detail-' + message.date);
-    if (container && message.data) {
-      container.innerHTML = renderHourlyData(message.data, message.date);
-
-      // Re-bind chart tab events after rendering
-      bindChartTabEvents(container);
-      restoreChartMetrics(container);
-      initializeChartDrilldowns(container);
-      initializeStatusRegions(container);
-    }
-  }
-
   if (message.command === 'dailyDataResponse') {
     const container = document.getElementById('monthly-detail-' + message.month);
-    if (container && message.data) {
-      container.innerHTML = renderDailyData(message.data, message.month);
+    const responseProvider = message.provider === 'codex' ? 'codex' : 'claude';
+    if (container && responseProvider === ccuProviderName() &&
+        (Array.isArray(message.data) || typeof message.html === 'string')) {
+      container.innerHTML = responseProvider === 'codex'
+        ? message.html
+        : renderDailyData(message.data, message.month);
 
       // Re-bind chart tab events after rendering
       bindChartTabEvents(container);
       restoreChartMetrics(container);
       initializeChartDrilldowns(container);
+      restoreCodexHourlyDetails();
       initializeStatusRegions(container);
     }
   }
@@ -11791,6 +12299,9 @@ function applyChartMetric(container, metric, persist) {
   } else {
     updateMainChart(metric, container);
   }
+  initializeHourlyOverviewSelections(container);
+  refreshHourlyOverviewSelection(container);
+  initializeChartRegions(container);
   if (persist) { saveChartMetric(container, metric); }
 }
 function restoreChartMetrics(root) {
@@ -11804,6 +12315,7 @@ function restoreChartMetrics(root) {
     if (metric) { applyChartMetric(container, metric, false); }
     else { syncChartMetricState(container); }
   });
+  initializeChartRegions(scope);
 }
 
 function chartDrilldownInfo(element) {
@@ -11813,14 +12325,18 @@ function chartDrilldownInfo(element) {
   var date = holder ? holder.getAttribute('data-date') : '';
   if (!date) { return null; }
   var containingTab = element && element.closest ? element.closest('.tab-content') : null;
-  var kind = containingTab && containingTab.id === 'all'
-    ? 'monthly'
-    : element.closest('[data-codex-last30-daily]')
-      ? 'codex-hourly'
-      : 'hourly';
+  var kind = element.closest('[data-codex-alltime-daily]')
+    ? 'codex-alltime-hourly'
+    : containingTab && containingTab.id === 'all'
+      ? 'monthly'
+      : element.closest('[data-codex-last30-daily]')
+        ? 'codex-hourly'
+        : 'hourly';
   var prefix = kind === 'monthly'
     ? 'monthly-detail-'
-    : kind === 'codex-hourly'
+    : kind === 'codex-alltime-hourly'
+      ? 'codex-alltime-hourly-detail-'
+      : kind === 'codex-hourly'
       ? 'codex-hourly-detail-'
       : 'hourly-detail-';
   return { date: date, kind: kind, controls: prefix + date };
@@ -11834,7 +12350,9 @@ function activateChartDrilldown(element) {
   var info = chartDrilldownInfo(element);
   if (!info) { return; }
   if (info.kind === 'monthly') { toggleMonthlyDetail(info.date); }
-  else if (info.kind === 'codex-hourly') { toggleCodexHourlyDetail(info.date); }
+  else if (info.kind === 'codex-hourly' || info.kind === 'codex-alltime-hourly') {
+    toggleCodexHourlyDetail(info.date, element);
+  }
   else { toggleHourlyDetail(info.date); }
 }
 function initializeChartDrilldowns(root) {
@@ -11852,6 +12370,133 @@ function initializeChartDrilldowns(root) {
       ? getComputedStyle(detail.closest('tr')).display !== 'none'
       : false;
     control.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+  });
+}
+function hourlyOverviewSelectionKey(container) {
+  return ccuChartStateKey(container) + ':hour-selection';
+}
+function hourlyOverviewControlHour(control) {
+  var holder = control && control.closest ? control.closest('.hc-col[data-hour]') : null;
+  return holder ? (holder.getAttribute('data-hour') || '') : '';
+}
+function hourlyOverviewDisplayHour(hour) {
+  return /^[0-9]{2}$/.test(hour) ? hour + ':00' : hour;
+}
+function hourlyOverviewMetricLabel(container) {
+  var active = container.querySelector(':scope > .chart-tabs .chart-tab.active[data-metric]');
+  return active && active.textContent ? active.textContent.trim() : '';
+}
+function hourlyOverviewMetric(container) {
+  var active = container.querySelector(':scope > .chart-tabs .chart-tab.active[data-metric]');
+  return active ? (active.getAttribute('data-metric') || 'cost') : 'cost';
+}
+function formattedChartBarValue(control, metric) {
+  var value = parseFloat(control.dataset[getDataAttribute(metric)]) || 0;
+  return metric === 'cost' &&
+    control.dataset.pricedTokens === '0' && control.dataset.hasUsage === 'true'
+    ? '—'
+    : formatValue(value, metric);
+}
+function hourlyOverviewSelectionText(container, control) {
+  var hour = hourlyOverviewDisplayHour(hourlyOverviewControlHour(control));
+  var metric = hourlyOverviewMetricLabel(container);
+  // The visible bar-top label intentionally suppresses zeroes. Selection
+  // status and accessible names still announce the exact zero value.
+  var formatted = formattedChartBarValue(control, hourlyOverviewMetric(container));
+  return hour + (metric ? ' · ' + metric : '') + (formatted ? ': ' + formatted : '');
+}
+function clearHourlyOverviewSelection(container, persist) {
+  if (!container) { return; }
+  container.querySelectorAll('[data-hour-selection-control]').forEach(function(control) {
+    control.classList.remove('selected');
+    control.setAttribute('aria-pressed', 'false');
+  });
+  container.querySelectorAll('.daily-table tbody tr[data-hour]').forEach(function(row) {
+    row.classList.remove('chart-selection-row');
+  });
+  var detail = container.querySelector('[data-hour-selection-detail]');
+  if (detail) {
+    detail.hidden = true;
+    detail.textContent = '';
+  }
+  if (persist) {
+    var selections = ccuReadUiState().hourlyChartSelections || {};
+    delete selections[hourlyOverviewSelectionKey(container)];
+    ccuWriteUiState('hourlyChartSelections', selections);
+  }
+}
+function setHourlyOverviewSelection(container, hour, persist) {
+  if (!container || !hour) { return false; }
+  var selected = null;
+  container.querySelectorAll('.hc-col[data-hour] > .chart-bar').forEach(function(control) {
+    if (hourlyOverviewControlHour(control) === hour) { selected = control; }
+  });
+  if (!selected) { return false; }
+  clearHourlyOverviewSelection(container, false);
+  selected.classList.add('selected');
+  selected.setAttribute('aria-pressed', 'true');
+  var selectedText = hourlyOverviewSelectionText(container, selected);
+  selected.setAttribute('aria-label', selectedText);
+  container.querySelectorAll('.daily-table tbody tr[data-hour]').forEach(function(row) {
+    if (row.getAttribute('data-hour') === hour) { row.classList.add('chart-selection-row'); }
+  });
+  var detail = container.querySelector('[data-hour-selection-detail]');
+  if (detail) {
+    detail.textContent = selectedText;
+    detail.hidden = false;
+  }
+  if (persist) {
+    var selections = ccuReadUiState().hourlyChartSelections || {};
+    selections[hourlyOverviewSelectionKey(container)] = hour;
+    ccuWriteUiState('hourlyChartSelections', selections);
+  }
+  return true;
+}
+function refreshHourlyOverviewSelection(container) {
+  if (!container || !container.matches('[data-hourly-overview]')) { return; }
+  var selected = container.querySelector('[data-hour-selection-control][aria-pressed="true"]');
+  if (!selected) { return; }
+  var hour = hourlyOverviewControlHour(selected);
+  if (hour) { setHourlyOverviewSelection(container, hour, false); }
+}
+function activateHourlyOverviewSelection(control) {
+  var container = control && control.closest ? control.closest('[data-hourly-overview]') : null;
+  if (!container) { return; }
+  var hour = hourlyOverviewControlHour(control);
+  if (!hour) { return; }
+  if (control.getAttribute('aria-pressed') === 'true') {
+    clearHourlyOverviewSelection(container, true);
+  } else {
+    setHourlyOverviewSelection(container, hour, true);
+  }
+}
+function initializeHourlyOverviewSelections(root) {
+  var scope = root || document;
+  var containers = [];
+  if (scope.matches && scope.matches('[data-hourly-overview]')) { containers.push(scope); }
+  scope.querySelectorAll('[data-hourly-overview]').forEach(function(container) { containers.push(container); });
+  containers.forEach(function(container) {
+    var detail = container.querySelector('[data-hour-selection-detail]');
+    if (!detail || !detail.id) { return; }
+    container.querySelectorAll('.hc-col[data-hour] > .chart-bar').forEach(function(control) {
+      control.setAttribute('data-hour-selection-control', '');
+      control.setAttribute('role', 'button');
+      control.setAttribute('tabindex', '0');
+      control.setAttribute('aria-controls', detail.id);
+      if (!control.hasAttribute('aria-pressed')) { control.setAttribute('aria-pressed', 'false'); }
+      control.setAttribute('aria-label', hourlyOverviewSelectionText(container, control));
+    });
+  });
+}
+function restoreHourlyOverviewSelections(root) {
+  var scope = root || document;
+  var selections = ccuReadUiState().hourlyChartSelections || {};
+  var containers = [];
+  if (scope.matches && scope.matches('[data-hourly-overview]')) { containers.push(scope); }
+  scope.querySelectorAll('[data-hourly-overview]').forEach(function(container) { containers.push(container); });
+  containers.forEach(function(container) {
+    var hour = selections[hourlyOverviewSelectionKey(container)];
+    if (hour) { setHourlyOverviewSelection(container, hour, false); }
   });
 }
 function initializeStatusRegions(root) {
@@ -11892,6 +12537,15 @@ document.addEventListener('click', function(event) {
     }
   }
 
+  var hourlySelection = event.target.closest
+    ? event.target.closest('[data-hour-selection-control]')
+    : null;
+  if (hourlySelection) {
+    event.preventDefault();
+    activateHourlyOverviewSelection(hourlySelection);
+    return;
+  }
+
   // Handle chart bar clicks - only for clickable charts
   if (event.target.classList.contains('chart-bar') && event.target.classList.contains('clickable')) {
     event.preventDefault();
@@ -11909,6 +12563,15 @@ document.addEventListener('keydown', function(event) {
   if (!table || !key) { return; }
   event.preventDefault();
   sortTable(table, key, sortableTh);
+});
+
+document.addEventListener('keydown', function(event) {
+  var hourlySelection = event.target && event.target.closest
+    ? event.target.closest('[data-hour-selection-control]')
+    : null;
+  if (!hourlySelection || (event.key !== 'Enter' && event.key !== ' ')) { return; }
+  event.preventDefault();
+  activateHourlyOverviewSelection(hourlySelection);
 });
 
 document.addEventListener('keydown', function(event) {
@@ -12003,9 +12666,7 @@ function updateMainChart(metric, container) {
     }
 
     // Update tooltip + on-bar value label
-    const formattedValue = metric === 'cost' && bar.dataset.pricedTokens === '0'
-      ? '—'
-      : formatValue(value, metric);
+    const formattedValue = formattedChartBarValue(bar, metric);
     const container = bar.parentElement;
     const date = container.dataset.date;
     const hour = container.dataset.hour;
@@ -12027,7 +12688,9 @@ function updateMainChart(metric, container) {
 
     const barVal = container.querySelector('.hc-barval');
     if (barVal) {
-      barVal.textContent = formattedValue;
+      barVal.textContent = hour && value === 0 && formattedValue !== '—'
+        ? ''
+        : formattedValue;
     }
   });
 
@@ -12040,12 +12703,16 @@ function updateMainChart(metric, container) {
   const wrap = firstBar && firstBar.closest ? firstBar.closest('.hc-wrap') : null;
   const yvals = wrap ? wrap.querySelectorAll('.hc-yaxis .hc-yval') : [];
   if (yvals.length === 3) {
-    const hasPricedCost = metric !== 'cost' || Array.from(chartBars).some(function(bar) {
-      return bar.dataset.pricedTokens !== '0';
+    const hasUsage = Array.from(chartBars).some(function(bar) {
+      return bar.dataset.hasUsage === 'true';
     });
-    yvals[0].textContent = hasPricedCost ? formatValue(maxValue, metric) : '—';
-    yvals[1].textContent = hasPricedCost ? formatValue(maxValue / 2, metric) : '—';
-    yvals[2].textContent = hasPricedCost ? formatValue(0, metric) : '—';
+    const hasPricedCost = Array.from(chartBars).some(function(bar) {
+      return bar.dataset.pricedTokens === undefined || bar.dataset.pricedTokens !== '0';
+    });
+    const hasDisplayableCost = metric !== 'cost' || hasPricedCost || !hasUsage;
+    yvals[0].textContent = hasDisplayableCost ? formatValue(maxValue, metric) : '—';
+    yvals[1].textContent = hasDisplayableCost ? formatValue(maxValue / 2, metric) : '—';
+    yvals[2].textContent = hasDisplayableCost ? formatValue(0, metric) : '—';
   }
 }
 
@@ -12091,7 +12758,13 @@ function buildCostStack(bar, barHeight) {
 
 function formatValue(value, metric) {
   if (metric === 'cost') {
-    return '$' + value.toFixed(2);
+    if (!Number.isFinite(value)) { return '—'; }
+    var converted = value * __currencyDisplay.unitsPerUsd;
+    var separator = /^[A-Z]{3}$/.test(__currencyDisplay.label) ? ' ' : '';
+    return (__currencyDisplay.converted ? '≈' : '')
+      + __currencyDisplay.label
+      + separator
+      + converted.toFixed(__currencyDisplay.decimalPlaces);
   } else {
     return value.toLocaleString();
   }
@@ -12148,7 +12821,29 @@ function renderHourlyData(hourlyData, date) {
     return '<div class="no-data">${I18n.t.popup.noDataMessage}</div>';
   }
 
-  let html = '<div class="hourly-breakdown">';
+  const rowsByHour = new Map();
+  hourlyData.forEach(function(item) {
+    if (item && /^(?:[01]\\d|2[0-3]):00$/.test(item.hour) && !rowsByHour.has(item.hour)) {
+      rowsByHour.set(item.hour, item);
+    }
+  });
+  hourlyData = Array.from({ length: 24 }, function(_unused, hour) {
+    const label = String(hour).padStart(2, '0') + ':00';
+    return rowsByHour.get(label) || {
+      hour: label,
+      data: {
+        totalInputTokens: 0,
+        totalOutputTokens: 0,
+        totalCacheCreationTokens: 0,
+        totalCacheReadTokens: 0,
+        totalCost: 0,
+        costBreakdown: { input: 0, output: 0, cacheWrite: 0, cacheRead: 0 },
+        messageCount: 0
+      }
+    };
+  });
+
+  let html = '<div class="hourly-breakdown" data-claude-materialized-hours="true">';
   html += '<h4>' + ccuFormatUsageDateKey(date) + ' ${I18n.t.popup.hourlyBreakdown}</h4>';
 
   html += '<div class="chart-tabs">';
@@ -12178,9 +12873,9 @@ function renderHourlyData(hourlyData, date) {
   html += '</tr></thead><tbody>';
 
   hourlyData.forEach(function(item) {
-    html += '<tr>';
+    html += '<tr data-hour="' + item.hour + '">';
     html += '<td class="date-cell">' + item.hour + '</td>';
-    html += '<td class="cost-cell">$' + item.data.totalCost.toFixed(2) + '</td>';
+    html += '<td class="cost-cell">' + formatValue(item.data.totalCost, 'cost') + '</td>';
     html += '<td class="number-cell">' + item.data.totalInputTokens.toLocaleString(__locale) + '</td>';
     html += '<td class="number-cell">' + item.data.totalOutputTokens.toLocaleString(__locale) + '</td>';
     html += '<td class="number-cell">' + item.data.totalCacheCreationTokens.toLocaleString(__locale) + '</td>';
@@ -12243,7 +12938,7 @@ function renderDailyData(dailyData, monthDate) {
 
     html += '<tr>';
     html += '<td class="date-cell">' + formattedDate + '</td>';
-    html += '<td class="cost-cell">$' + item.data.totalCost.toFixed(2) + '</td>';
+    html += '<td class="cost-cell">' + formatValue(item.data.totalCost, 'cost') + '</td>';
     html += '<td class="number-cell">' + item.data.totalInputTokens.toLocaleString(__locale) + '</td>';
     html += '<td class="number-cell">' + item.data.totalOutputTokens.toLocaleString(__locale) + '</td>';
     html += '<td class="number-cell">' + item.data.totalCacheCreationTokens.toLocaleString(__locale) + '</td>';
@@ -12306,8 +13001,11 @@ function griddedChart(items, metric, opts) {
     }
     if (opts.clickable) { cls += ' clickable'; }
 
+    const visibleValue = opts.hideZeroLabels && value === 0
+      ? ''
+      : formatValue(value, metric);
     bars += '<div class="hc-col" ' + keyAttr + '="' + key + '">' +
-      '<div class="hc-barval">' + formatValue(value, metric) + '</div>' +
+      '<div class="hc-barval">' + visibleValue + '</div>' +
       '<div class="' + cls + '" style="height: ' + height + 'px;" ' +
       'data-cost="' + d.totalCost + '" data-input="' + d.totalInputTokens + '" data-output="' + d.totalOutputTokens + '" ' +
       'data-cache-creation="' + d.totalCacheCreationTokens + '" data-cache-read="' + d.totalCacheReadTokens + '" data-messages="' + d.messageCount + '" ' +
@@ -12355,6 +13053,7 @@ function renderHourlyChart(hourlyData, metric) {
   return griddedChart(hourlyData, metric, {
     keyName: 'hour',
     clickable: false,
+    hideZeroLabels: true,
     getLabel: function(it) { return it.hour; },
     getTitle: function(it, v) { return it.hour + ': ' + formatValue(v, metric); }
   });

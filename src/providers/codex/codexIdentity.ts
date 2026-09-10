@@ -7,6 +7,30 @@ import { createInterface } from 'node:readline';
 const MAX_TITLE_LENGTH = 200;
 const MAX_PROJECT_LABEL_LENGTH = 120;
 
+interface SessionIndexFileStamp {
+  size: number;
+  mtimeMs: number;
+  dev: number;
+  ino: number;
+}
+
+interface SessionTitleCacheIo {
+  stat(indexPath: string): Promise<SessionIndexFileStamp | undefined>;
+  read(indexPath: string, salt: string): Promise<Map<string, string> | undefined>;
+}
+
+interface SessionTitleCacheEntry extends SessionIndexFileStamp {
+  indexPath: string;
+  saltFingerprint: string;
+  titles: Map<string, string>;
+}
+
+interface SessionTitleCachePending extends SessionIndexFileStamp {
+  indexPath: string;
+  saltFingerprint: string;
+  promise: Promise<Map<string, string>>;
+}
+
 export interface CodexProjectIdentity {
   keySource?: string;
   name?: string;
@@ -245,20 +269,46 @@ function sessionTitleRecord(
   }
 }
 
-export async function loadCodexSessionTitles(
-  codexHome: string,
-  salt: string,
-): Promise<Map<string, string>> {
-  const indexPath = path.join(codexHome, 'session_index.jsonl');
+async function sessionIndexFileStamp(
+  indexPath: string,
+): Promise<SessionIndexFileStamp | undefined> {
   try {
     const info = await lstat(indexPath);
     if (!info.isFile() || info.isSymbolicLink()) {
-      return new Map();
+      return undefined;
     }
+    if (
+      !Number.isFinite(info.size) ||
+      info.size < 0 ||
+      !Number.isFinite(info.mtimeMs)
+    ) {
+      return undefined;
+    }
+    return {
+      size: info.size,
+      mtimeMs: info.mtimeMs,
+      dev: Number.isFinite(info.dev) ? info.dev : 0,
+      ino: Number.isFinite(info.ino) ? info.ino : 0,
+    };
   } catch {
-    return new Map();
+    return undefined;
   }
+}
 
+function sameSessionIndexFile(
+  left: SessionIndexFileStamp,
+  right: SessionIndexFileStamp,
+): boolean {
+  return left.size === right.size &&
+    left.mtimeMs === right.mtimeMs &&
+    left.dev === right.dev &&
+    left.ino === right.ino;
+}
+
+async function readCodexSessionTitles(
+  indexPath: string,
+  salt: string,
+): Promise<Map<string, string> | undefined> {
   const titleRecords = new Map<
     string,
     { title: string; updatedAt?: number; ordinal: number }
@@ -295,8 +345,111 @@ export async function loadCodexSessionTitles(
       [...titleRecords.entries()].map(([key, record]) => [key, record.title]),
     );
   } catch {
-    return new Map();
+    return undefined;
   } finally {
     lines.close();
   }
+}
+
+const SESSION_TITLE_CACHE_IO: SessionTitleCacheIo = {
+  stat: sessionIndexFileStamp,
+  read: readCodexSessionTitles,
+};
+
+function sessionTitleSaltFingerprint(salt: string): string {
+  return createHash('sha256')
+    .update('codex-session-title-cache\0')
+    .update(salt)
+    .digest('hex');
+}
+
+function sameSessionTitleCacheInput(
+  left: SessionTitleCacheEntry | SessionTitleCachePending,
+  indexPath: string,
+  saltFingerprint: string,
+  stamp: SessionIndexFileStamp,
+): boolean {
+  return left.indexPath === indexPath &&
+    left.saltFingerprint === saltFingerprint &&
+    sameSessionIndexFile(left, stamp);
+}
+
+/** Runtime-only cache for the allowlisted Codex title index. The cache key is
+ * accepted only after a regular-file lstat before and after the streaming read;
+ * titles and the derived salt fingerprint are never persisted. */
+export class CodexSessionTitleCache {
+  private cached: SessionTitleCacheEntry | undefined;
+  private pending: SessionTitleCachePending | undefined;
+
+  constructor(private readonly io: SessionTitleCacheIo = SESSION_TITLE_CACHE_IO) {}
+
+  async load(codexHome: string, salt: string): Promise<Map<string, string>> {
+    const indexPath = path.join(codexHome, 'session_index.jsonl');
+    const saltFingerprint = sessionTitleSaltFingerprint(salt);
+    const before = await this.io.stat(indexPath);
+    if (!before) {
+      this.clear();
+      return new Map();
+    }
+    if (
+      this.cached &&
+      sameSessionTitleCacheInput(this.cached, indexPath, saltFingerprint, before)
+    ) {
+      return this.cached.titles;
+    }
+    if (
+      this.pending &&
+      sameSessionTitleCacheInput(this.pending, indexPath, saltFingerprint, before)
+    ) {
+      return this.pending.promise;
+    }
+
+    let promise!: Promise<Map<string, string>>;
+    promise = (async () => {
+      const titles = await this.io.read(indexPath, salt);
+      if (!titles) {
+        this.cached = undefined;
+        return new Map();
+      }
+      const after = await this.io.stat(indexPath);
+      if (after && sameSessionIndexFile(before, after)) {
+        this.cached = {
+          indexPath,
+          saltFingerprint,
+          ...after,
+          titles,
+        };
+        return titles;
+      }
+      // A writer or path replacement raced this stream. Fail closed for this
+      // snapshot and require the next refresh to read one stable regular file.
+      this.cached = undefined;
+      return new Map();
+    })();
+    this.pending = {
+      indexPath,
+      saltFingerprint,
+      ...before,
+      promise,
+    };
+    try {
+      return await promise;
+    } finally {
+      if (this.pending?.promise === promise) {
+        this.pending = undefined;
+      }
+    }
+  }
+
+  clear(): void {
+    this.cached = undefined;
+    this.pending = undefined;
+  }
+}
+
+export async function loadCodexSessionTitles(
+  codexHome: string,
+  salt: string,
+): Promise<Map<string, string>> {
+  return new CodexSessionTitleCache().load(codexHome, salt);
 }

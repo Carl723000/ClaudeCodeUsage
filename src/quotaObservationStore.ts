@@ -434,17 +434,35 @@ function compactBySeries(
       mandatory.set(observationIdentity(window[0]), window[0]);
       mandatory.set(observationIdentity(window[window.length - 1]), window[window.length - 1]);
     }
-    const selected = [...mandatory.values()]
-      .sort((left, right) => right.observedAt - left.observedAt)
-      .slice(0, limit);
-    const selectedIds = new Set(selected.map(observationIdentity));
+    const selected: QuotaObservationV2[] = [];
+    const selectedIds = new Set<string>();
+    const retain = (item: QuotaObservationV2): void => {
+      if (selected.length >= limit) return;
+      const identity = observationIdentity(item);
+      if (selectedIds.has(identity)) return;
+      selected.push(item);
+      selectedIds.add(identity);
+    };
+    // A one-row budget must retain the freshest fact. With any larger budget,
+    // keep both ends of the series before prioritising flagged/migration and
+    // per-window boundary observations. Otherwise a migration in which every
+    // imported row is mandatory can evict the oldest baseline and make later
+    // confidence calculations depend on an already-compacted middle slice.
+    if (limit === 1) {
+      retain(ordered[ordered.length - 1]);
+    } else {
+      retain(ordered[0]);
+      retain(ordered[ordered.length - 1]);
+    }
+    for (const item of [...mandatory.values()].sort(
+      (left, right) => right.observedAt - left.observedAt,
+    )) {
+      if (selected.length >= limit) break;
+      retain(item);
+    }
     for (const item of [...ordered].reverse()) {
       if (selected.length >= limit) break;
-      const identity = observationIdentity(item);
-      if (!selectedIds.has(identity)) {
-        selected.push(item);
-        selectedIds.add(identity);
-      }
+      retain(item);
     }
     retained.push(...selected);
   }

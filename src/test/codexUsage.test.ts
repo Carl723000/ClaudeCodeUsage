@@ -927,6 +927,9 @@ test('daily activity view retains a complete leap-year share window plus boundar
 
   const view = buildCodexUsageView(snapshot, NOW);
 
+  assert.equal(view.allTimeDaily.length, 371);
+  assert.equal(view.allTimeDaily[0].day, '2026-07-20');
+  assert.equal(view.allTimeDaily[view.allTimeDaily.length - 1]?.day, '2025-07-15');
   assert.equal(view.daily.length, 370);
   assert.equal(view.daily[0].day, '2026-07-20');
   assert.equal(view.daily[view.daily.length - 1]?.day, '2025-07-16');

@@ -74,6 +74,7 @@ import {
   reportColdRefreshFailure,
   shouldCommitUsageLoad,
   shouldReloadUsage,
+  watcherFailureBackoffMs,
   WindowActivityGate,
 } from './refreshPolicy';
 import {
@@ -172,11 +173,40 @@ interface QuotaObservationRuntime {
   salt: string;
 }
 
+interface WatcherRecoveryState {
+  timer: NodeJS.Timeout | undefined;
+  timerLease: ResourceLease | undefined;
+  failureStreak: number;
+  lastFailureAt: number;
+}
+
+type WatcherProvider = 'claude' | 'codex';
+type WatcherStopCondition = Extract<
+  ResourceStopCondition,
+  | 'settled'
+  | 'cancelled'
+  | 'window-blur'
+  | 'feature-disabled'
+  | 'extension-dispose'
+  | 'settings-change'
+  | 'profile-change'
+>;
+
+function createWatcherRecoveryState(): WatcherRecoveryState {
+  return {
+    timer: undefined,
+    timerLease: undefined,
+    failureStreak: 0,
+    lastFailureAt: 0,
+  };
+}
+
 const QUOTA_FINGERPRINT_SALT_KEY = 'ccu.quota.fingerprintSalt.v1';
 const QUOTA_P5_MIGRATION_KEY = 'ccu.quota.migratedCodexIndex.v2';
 const LEGACY_QUOTA_PREFIX = 'ccu.usageLimits.';
 const LEGACY_WEEKLY_PREFIX = 'ccu.weeklyQuotaHistory.v1.';
 const LOCAL_DATA_QUOTA_SCOPE_TTL_MS = 5 * 60_000;
+const WATCHER_FAILURE_STREAK_RESET_MS = 5 * 60_000;
 const LOCAL_DATA_EXACT_GLOBAL_STATE_KEYS = [
   ...new Set([
     ...LOCAL_DATA_GLOBAL_STATE_KEYS,
@@ -371,8 +401,10 @@ export class ClaudeCodeUsageExtension {
   private refreshTimerLease: ResourceLease | undefined;
   private fileWatcher: fs.FSWatcher | undefined;
   private fileWatcherLease: ResourceLease | undefined;
+  private claudeWatcherRecovery = createWatcherRecoveryState();
   private codexWatchers: fs.FSWatcher[] = [];
   private readonly codexWatcherLeases = new Map<fs.FSWatcher, ResourceLease>();
+  private codexWatcherRecovery = createWatcherRecoveryState();
   private readonly debounceTimerLeases = new Map<NodeJS.Timeout, ResourceLease>();
   private readonly codexWatchDebounce = this.createOwnedRefreshDebounce('codex');
   private codexWatchedHome: string | null = null;
@@ -566,6 +598,8 @@ export class ClaudeCodeUsageExtension {
     // Rename showOpusWeekly -> showScopedWeekly (the API stopped naming Opus).
     // Runs once.
     this.queueInitializationWrite(() => this.settings.migrateScopedWeekly());
+    // Collapse the early 2.3.2 free-form currency/rate pair into one preset.
+    this.queueInitializationWrite(() => this.settings.migrateCurrencyPreset());
     // Usage Optimizer (Phase 9c): the webview posts a draft prompt; we run it
     // through the same model backend as the advice feature and post back a
     // tightened prompt + a settings recommendation. Consent gate lives here.
@@ -1905,7 +1939,12 @@ export class ClaudeCodeUsageExtension {
     const data = buildShareCardData(input, DEFAULT_SECTIONS);
     const kind = vscode.window.activeColorTheme?.kind;
     const isDark = kind === vscode.ColorThemeKind.Dark || kind === vscode.ColorThemeKind.HighContrast;
-    const svg = renderShareCardSvg(data, { theme: 'claudeClassic', isDark, lang: I18n.getLocale() });
+    const svg = renderShareCardSvg(data, {
+      theme: 'claudeClassic',
+      isDark,
+      lang: I18n.getLocale(),
+      formatCurrency: (amountUsd) => I18n.formatCurrency(amountUsd),
+    });
     const defaultName = shareCardFilename(picked.range).replace(/\.png$/, '.svg');
     const uri = await vscode.window.showSaveDialog({
       defaultUri: vscode.Uri.file(path.join(os.homedir(), defaultName)),
@@ -2031,11 +2070,7 @@ export class ClaudeCodeUsageExtension {
     const config = this.getConfiguration();
     this.activePricingBackend = config.pricingBackend;
     setPricingBackend(config.pricingBackend);
-    I18n.setLanguage(config.language as any);
-    I18n.setDecimalPlaces(config.decimalPlaces);
-    I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
-    I18n.setCompactNumbers(config.compactNumbers);
-    I18n.setTimezone(config.timezone);
+    this.applyFormattingConfiguration(config);
     this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
 
     // Listen for configuration changes
@@ -2058,6 +2093,15 @@ export class ClaudeCodeUsageExtension {
     });
   }
 
+  private applyFormattingConfiguration(config: ExtensionConfig): void {
+    I18n.setLanguage(config.language as any);
+    I18n.setDecimalPlaces(config.decimalPlaces);
+    I18n.setCurrencyDisplay(config.displayCurrency);
+    I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
+    I18n.setCompactNumbers(config.compactNumbers);
+    I18n.setTimezone(config.timezone);
+  }
+
   private getConfiguration(): ExtensionConfig {
     // All settings flow through SettingsStore: language and dataDirectory live
     // in VS Code config, BYOK secrets live in SecretStorage, and the rest use
@@ -2078,6 +2122,7 @@ export class ClaudeCodeUsageExtension {
       ),
       language: s.get<string>('language'),
       decimalPlaces: s.get<number>('decimalPlaces'),
+      displayCurrency: s.get<string>('displayCurrency'),
       tokenDecimalPlaces: s.get<number>('tokenDecimalPlaces'),
       compactNumbers: s.get<boolean>('compactNumbers'),
       releaseAnnouncements: s.get<boolean>('releaseAnnouncements'),
@@ -3046,9 +3091,22 @@ export class ClaudeCodeUsageExtension {
     'showWeeklyEquivalentValue',
   ]);
 
+  // These values only reformat already-materialized USD estimates. They must
+  // not restart file watchers, recreate providers, or rescan either corpus.
+  private static readonly COST_DISPLAY_SETTINGS = new Set([
+    'decimalPlaces', 'displayCurrency',
+  ]);
+
   /** Dashboard Settings change — status-bar-only toggles apply in place, others reload. */
   private onSettingsChangedFromPanel(key?: string): void {
     if (this.disposed) return;
+    if (key && ClaudeCodeUsageExtension.COST_DISPLAY_SETTINGS.has(key)) {
+      const config = this.getConfiguration();
+      this.applyFormattingConfiguration(config);
+      this.webviewProvider.invalidateShareCardPreview();
+      this.syncProviderUi();
+      return;
+    }
     if (key && ClaudeCodeUsageExtension.DASHBOARD_ONLY_SETTINGS.has(key)) {
       this.syncProviderUi();
       return;
@@ -3122,11 +3180,7 @@ export class ClaudeCodeUsageExtension {
     if (pricingBackendChanged) {
       this.invalidateClaudeUsagePricingCache();
     }
-    I18n.setLanguage(config.language as any);
-    I18n.setDecimalPlaces(config.decimalPlaces);
-    I18n.setTokenDecimalPlaces(config.tokenDecimalPlaces);
-    I18n.setCompactNumbers(config.compactNumbers);
-    I18n.setTimezone(config.timezone);
+    this.applyFormattingConfiguration(config);
     this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat);
 
     // Restart auto-refresh with new interval
@@ -3214,11 +3268,111 @@ export class ClaudeCodeUsageExtension {
   /**
    * Watch the Claude projects directory for new/changed jsonl lines so the
    * status bar reflects new usage within ~1.5 seconds instead of waiting for
-   * the polling timer. Falls back silently if fs.watch fails (some platforms /
-   * filesystems do not support recursive watching).
+   * the polling timer. Polling remains active while a failed watcher is
+   * rearmed with bounded exponential backoff.
    */
-  private async startFileWatching(): Promise<void> {
+  private watcherRecoveryState(provider: WatcherProvider): WatcherRecoveryState {
+    if (provider === 'claude') {
+      this.claudeWatcherRecovery ??= createWatcherRecoveryState();
+      return this.claudeWatcherRecovery;
+    }
+    this.codexWatcherRecovery ??= createWatcherRecoveryState();
+    return this.codexWatcherRecovery;
+  }
+
+  private markWatcherHealthy(provider: WatcherProvider): void {
+    const state = this.watcherRecoveryState(provider);
+    if (state.timer) return;
+    state.failureStreak = 0;
+    state.lastFailureAt = 0;
+  }
+
+  private resetWatcherRecovery(
+    provider: WatcherProvider,
+    condition: Exclude<WatcherStopCondition, 'settled'>,
+  ): void {
+    const state = this.watcherRecoveryState(provider);
+    const timer = state.timer;
+    const lease = state.timerLease;
+    state.timer = undefined;
+    state.timerLease = undefined;
+    state.failureStreak = 0;
+    state.lastFailureAt = 0;
+    if (!timer) return;
+    if (lease?.active) {
+      this.trackResourceStop(lease.stop(condition, () => clearTimeout(timer)));
+    } else {
+      clearTimeout(timer);
+    }
+  }
+
+  private scheduleWatcherRecovery(
+    provider: WatcherProvider,
+    error: unknown,
+  ): void {
+    if (this.disposed || !this.windowActivity.focused) return;
+    const state = this.watcherRecoveryState(provider);
+    if (state.timer) return;
+    const now = Date.now();
+    if (
+      state.lastFailureAt <= 0 ||
+      now < state.lastFailureAt ||
+      now - state.lastFailureAt > WATCHER_FAILURE_STREAK_RESET_MS
+    ) {
+      state.failureStreak = 0;
+    }
+    state.failureStreak += 1;
+    state.lastFailureAt = now;
+    const delayMs = watcherFailureBackoffMs(state.failureStreak);
+    const rawCode = (error as NodeJS.ErrnoException | undefined)?.code;
+    const code = typeof rawCode === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(rawCode)
+      ? rawCode
+      : 'watch-error';
+    const label = provider === 'claude' ? 'Claude' : 'Codex';
+    this.outputChannel.appendLine(
+      `${label} file watcher stopped (${code}); retrying in ${delayMs / 1000}s; polling remains active.`,
+    );
+
+    const lease = this.resourceOwnership.register({
+      kind: 'timer',
+      capability: provider === 'claude' ? 'refresh' : 'codex-index',
+      scope: provider,
+      creator: 'refresh-coordinator',
+      stopConditions: [
+        'settled',
+        'cancelled',
+        'window-blur',
+        'feature-disabled',
+        'extension-dispose',
+        'settings-change',
+        'profile-change',
+      ],
+      boundedException: 'none',
+    });
+    let timer!: NodeJS.Timeout;
+    timer = setTimeout(() => {
+      if (state.timer !== timer) return;
+      state.timer = undefined;
+      state.timerLease = undefined;
+      if (lease.active) {
+        this.trackResourceStop(lease.stop('settled', () => undefined));
+      }
+      if (this.disposed || !this.windowActivity.focused) return;
+      if (provider === 'claude') {
+        void this.startFileWatching(true);
+      } else {
+        this.startCodexWatching(true);
+      }
+    }, delayMs);
+    state.timer = timer;
+    state.timerLease = lease;
+  }
+
+  private async startFileWatching(recoveryAttempt = false): Promise<void> {
     if (this.disposed || this.localDataClearedRequiresReload) return;
+    if (!recoveryAttempt) {
+      this.resetWatcherRecovery('claude', 'cancelled');
+    }
     const requestGeneration = ++this.fileWatcherGeneration;
     if (!this.windowActivity.focused) {
       this.stopFileWatching('window-blur');
@@ -3229,7 +3383,15 @@ export class ClaudeCodeUsageExtension {
       this.stopFileWatching('feature-disabled'); // "Off"
       return;
     }
-    const dataDirectory = await ClaudeDataLoader.findClaudeDataDirectory(config.dataDirectory || undefined);
+    let dataDirectory: string | null;
+    try {
+      dataDirectory = await ClaudeDataLoader.findClaudeDataDirectory(config.dataDirectory || undefined);
+    } catch (error) {
+      if (requestGeneration === this.fileWatcherGeneration) {
+        this.scheduleWatcherRecovery('claude', error);
+      }
+      return;
+    }
     if (
       this.disposed ||
       requestGeneration !== this.fileWatcherGeneration
@@ -3254,11 +3416,12 @@ export class ClaudeCodeUsageExtension {
     if (!fs.existsSync(projectsDir) || this.watchedDir === projectsDir) {
       return;
     }
-    this.stopFileWatching();
+    this.closeFileWatcher('settings-change');
     const activeGeneration = this.fileWatcherGeneration;
     try {
       const watcher = fs.watch(projectsDir, { recursive: true }, (_event, filename) => {
         if (this.disposed || activeGeneration !== this.fileWatcherGeneration) return;
+        this.markWatcherHealthy('claude');
         if (!filename || !String(filename).endsWith('.jsonl')) {
           return;
         }
@@ -3294,18 +3457,16 @@ export class ClaudeCodeUsageExtension {
       });
       watcher.on('error', (error) => {
         if (this.fileWatcher !== watcher || activeGeneration !== this.fileWatcherGeneration) return;
-        const code = (error as NodeJS.ErrnoException).code || 'watch-error';
-        this.outputChannel.appendLine(
-          `Claude file watcher stopped (${code}); polling remains active.`,
-        );
-        this.stopFileWatching('cancelled');
+        this.closeFileWatcher('cancelled');
+        this.scheduleWatcherRecovery('claude', error);
       });
-    } catch {
-      // Recursive watching unsupported — the polling timer is enough.
+    } catch (error) {
+      this.closeFileWatcher('cancelled');
+      this.scheduleWatcherRecovery('claude', error);
     }
   }
 
-  private stopFileWatching(
+  private closeFileWatcher(
     condition: Extract<
       ResourceStopCondition,
       'cancelled' | 'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change' | 'profile-change'
@@ -3331,8 +3492,21 @@ export class ClaudeCodeUsageExtension {
     this.watchedDir = null;
   }
 
-  private startCodexWatching(): void {
+  private stopFileWatching(
+    condition: Extract<
+      ResourceStopCondition,
+      'cancelled' | 'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change' | 'profile-change'
+    > = 'settings-change',
+  ): void {
+    this.resetWatcherRecovery('claude', condition);
+    this.closeFileWatcher(condition);
+  }
+
+  private startCodexWatching(recoveryAttempt = false): void {
     if (this.disposed || this.localDataClearedRequiresReload) return;
+    if (!recoveryAttempt) {
+      this.resetWatcherRecovery('codex', 'cancelled');
+    }
     if (!this.windowActivity.focused) {
       this.stopCodexWatching('window-blur');
       return;
@@ -3343,11 +3517,16 @@ export class ClaudeCodeUsageExtension {
       return;
     }
     const codexHome = this.codexHome(config);
-    if (this.codexWatchedHome === codexHome && this.codexWatchers.length > 0) {
+    if (
+      !recoveryAttempt &&
+      this.codexWatchedHome === codexHome &&
+      this.codexWatchers.length > 0
+    ) {
       return;
     }
-    this.stopCodexWatching();
+    this.closeCodexWatchers('settings-change');
     const activeGeneration = this.codexWatcherGeneration;
+    let watchFailure: unknown;
     for (const child of ['sessions', 'archived_sessions']) {
       const directory = path.join(codexHome, child);
       if (!fs.existsSync(directory)) {
@@ -3359,6 +3538,7 @@ export class ClaudeCodeUsageExtension {
           { recursive: true },
           (_event, filename) => {
             if (this.disposed || activeGeneration !== this.codexWatcherGeneration) return;
+            this.markWatcherHealthy('codex');
             if (!filename || !String(filename).endsWith('.jsonl')) {
               return;
             }
@@ -3373,6 +3553,14 @@ export class ClaudeCodeUsageExtension {
           },
         );
         this.codexWatchers.push(watcher);
+        watcher.on('error', (error) => {
+          if (
+            activeGeneration !== this.codexWatcherGeneration ||
+            !this.codexWatchers.includes(watcher)
+          ) return;
+          this.closeCodexWatchers('cancelled');
+          this.scheduleWatcherRecovery('codex', error);
+        });
         this.codexWatcherLeases.set(watcher, this.resourceOwnership.register({
           kind: 'watcher',
           capability: 'codex-index',
@@ -3383,21 +3571,25 @@ export class ClaudeCodeUsageExtension {
             'feature-disabled',
             'extension-dispose',
             'settings-change',
+            'cancelled',
           ],
           boundedException: 'none',
         }));
-      } catch {
-        // Polling remains available when recursive watches are unsupported.
+      } catch (error) {
+        watchFailure ??= error;
       }
     }
     this.codexWatchedHome =
       this.codexWatchers.length > 0 ? codexHome : null;
+    if (watchFailure) {
+      this.scheduleWatcherRecovery('codex', watchFailure);
+    }
   }
 
-  private stopCodexWatching(
+  private closeCodexWatchers(
     condition: Extract<
       ResourceStopCondition,
-      'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change'
+      'cancelled' | 'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change'
     > = 'settings-change',
   ): void {
     this.codexWatcherGeneration += 1;
@@ -3417,6 +3609,16 @@ export class ClaudeCodeUsageExtension {
     this.codexWatchers = [];
     this.codexWatcherLeases.clear();
     this.codexWatchedHome = null;
+  }
+
+  private stopCodexWatching(
+    condition: Extract<
+      ResourceStopCondition,
+      'cancelled' | 'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change'
+    > = 'settings-change',
+  ): void {
+    this.resetWatcherRecovery('codex', condition);
+    this.closeCodexWatchers(condition);
   }
 
   /**
@@ -4093,6 +4295,7 @@ export class ClaudeCodeUsageExtension {
         const dailyDataForRolling30 = materialized.dailyForLast30Days;
         const dailyDataForAllTime = materialized.monthlyForAllTime;
         const hourlyDataForToday = materialized.hourlyForToday;
+        const hourlyDataForRolling30DaysByDay = materialized.hourlyForLast30DaysByDay;
         const sessionBreakdown = materialized.sessions;
         const projectBreakdown = materialized.projects;
         const branchBreakdown = materialized.branches;
@@ -4105,7 +4308,7 @@ export class ClaudeCodeUsageExtension {
         this.statusBar.updateUsageData(todayData, workspaceTodayData, undefined, undefined, calendarMonthData);
         this.statusBar.updateContext(materialized.context);
         if (updateWebview) {
-          this.webviewProvider.updateData(sessionData, todayData, rolling30Data, allTimeData, dailyDataForRolling30, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages);
+          this.webviewProvider.updateData(sessionData, todayData, rolling30Data, allTimeData, dailyDataForRolling30, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages, hourlyDataForRolling30DaysByDay);
         }
       }
 

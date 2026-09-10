@@ -39,10 +39,12 @@ const server = createServer(async (request, response) => {
       'zero-input',
       'covered-day-without-hourly-rows',
       'advice-effectiveness',
+      'advice-effectiveness-snoozed',
       'advice-effectiveness-disabled',
       'advice-optimizer',
       'combined-heatmap',
       'session-timezone-boundaries',
+      'local-currency',
     ].includes(requestedFixture)
       ? requestedFixture
       : 'default';
@@ -58,6 +60,10 @@ const server = createServer(async (request, response) => {
       requestedFeedback === 'optimizer-helpful'
       ? requestedFeedback
       : 'none';
+    const requestedCodexMonth = url.searchParams.get('codexMonth') ?? '';
+    const codexMonth = /^\d{4}-\d{2}$/.test(requestedCodexMonth)
+      ? requestedCodexMonth
+      : '';
     const html = await renderHarness({
       provider,
       locale,
@@ -68,6 +74,7 @@ const server = createServer(async (request, response) => {
       shareStudio,
       adviceFeedback,
       timeZone,
+      codexMonth,
     });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',

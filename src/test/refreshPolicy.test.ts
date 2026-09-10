@@ -13,6 +13,7 @@ import {
   reportColdRefreshFailure,
   shouldCommitUsageLoad,
   shouldReloadUsage,
+  watcherFailureBackoffMs,
   WindowActivityGate,
 } from '../refreshPolicy';
 
@@ -29,6 +30,13 @@ test('quota failure backoff grows exponentially and caps at one hour', () => {
   assert.deepEqual(
     [0, 1, 2, 3, 6, 7, 20].map(quotaFailureBackoffMs),
     [0, 60_000, 120_000, 240_000, 1_920_000, 3_600_000, 3_600_000],
+  );
+});
+
+test('watcher failure backoff starts promptly and caps without hot-looping', () => {
+  assert.deepEqual(
+    [0, 1, 2, 3, 6, 7, 20].map(watcherFailureBackoffMs),
+    [0, 1_000, 2_000, 4_000, 32_000, 60_000, 60_000],
   );
 });
 

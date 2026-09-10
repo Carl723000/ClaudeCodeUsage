@@ -309,6 +309,8 @@ export interface ExtensionConfig {
   codexStatusMetric: 'fresh' | 'processed' | 'output';
   language: string;
   decimalPlaces: number;
+  // Local-only presentation preset. All source pricing and aggregates stay USD.
+  displayCurrency: string;
   // Decimals for compact token display only (1.2M / 345.6K).
   tokenDecimalPlaces: number;
   compactNumbers: boolean;

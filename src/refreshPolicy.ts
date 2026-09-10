@@ -47,6 +47,15 @@ export function quotaFailureBackoffMs(failStreak: number): number {
   return Math.min(3_600_000, 60_000 * Math.pow(2, exponent));
 }
 
+/** Filesystem watchers are only an acceleration path; polling remains active.
+ * Retry quickly enough to recover from a transient OS handle failure, but cap
+ * the retry cadence so an unsupported or exhausted filesystem cannot hot-loop. */
+export function watcherFailureBackoffMs(failStreak: number): number {
+  if (!Number.isFinite(failStreak) || failStreak <= 0) return 0;
+  const exponent = Math.max(0, Math.floor(failStreak) - 1);
+  return Math.min(60_000, 1_000 * Math.pow(2, exponent));
+}
+
 const TRIGGER_PRIORITY: Record<RefreshTrigger, number> = {
   startup: 0,
   poll: 1,

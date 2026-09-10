@@ -602,12 +602,11 @@ export class StatusBarManager {
       .replace(/'/g, '&#39;');
   }
 
-  /** Credit amounts always carry two decimals (they are real money, unlike the
-   * estimated token costs elsewhere, which follow the user's decimalPlaces).
-   * I18n.formatCurrency is USD-only, so any other currency prints its code
-   * rather than a wrong "$". */
+  /** Credit amounts always carry two decimals and remain in the provider's
+   * actual currency. Unlike estimated token costs, they never use the user's
+   * manual display conversion. */
   private formatCreditAmount(amount: number, currency: string): string {
-    return currency === 'USD' ? I18n.formatCurrency(amount, 2) : `${amount.toFixed(2)} ${currency}`;
+    return currency === 'USD' ? I18n.formatUsdBaseline(amount, 2) : `${amount.toFixed(2)} ${currency}`;
   }
 
   /** Tooltip label for a window. Scoped rows are named by the API ("Fable"), so

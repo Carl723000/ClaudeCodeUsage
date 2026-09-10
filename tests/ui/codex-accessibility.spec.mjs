@@ -196,6 +196,47 @@ test('shared chart controls expose and update aria-pressed from the keyboard', a
   await expect(output).toHaveAttribute('aria-pressed', 'false');
 });
 
+for (const scenario of [
+  { name: 'Claude', label: 'Claude', open: openClaude },
+  { name: 'Codex', label: 'Codex Beta', open: openCodex },
+  { name: 'Compare', label: 'Compare', open: openCompare },
+]) {
+  test(`${scenario.name} chart regions have unique provider-qualified accessible names`, async ({ page }) => {
+    await scenario.open(page, { locale: 'en' });
+    const regions = page.locator('#provider-panel [data-chart-region="true"]');
+    await expect.poll(() => regions.count()).toBeGreaterThan(0);
+    const labels = await regions.evaluateAll((elements) => elements.map((element) => ({
+      role: element.getAttribute('role'),
+      label: element.getAttribute('aria-label') || '',
+    })));
+
+    expect(labels.every((item) => item.role === 'region')).toBe(true);
+    expect(labels.every((item) => item.label.startsWith(`${scenario.label} ·`))).toBe(true);
+    expect(new Set(labels.map((item) => item.label)).size).toBe(labels.length);
+
+    await page.evaluate(() => {
+      initializeChartRegions();
+      initializeChartRegions();
+    });
+    expect(await regions.evaluateAll((elements) =>
+      elements.map((element) => element.getAttribute('aria-label') || ''),
+    )).toEqual(labels.map((item) => item.label));
+  });
+}
+
+test('a chart region name follows the selected metric', async ({ page }) => {
+  await openCodex(page, { locale: 'en' });
+  await page.locator('#tab-month').click();
+  const chart = page.locator('#month #dailyChart .hc-scroll');
+  const output = page.locator(
+    '#month [data-codex-last30-daily] > .chart-tabs .chart-tab[data-metric="cacheCreation"]',
+  );
+
+  await expect(chart).toHaveAttribute('aria-label', /API-equivalent cost$/);
+  await output.click();
+  await expect(chart).toHaveAttribute('aria-label', /Output$/);
+});
+
 test('sortable headers expose keyboard sorting state for Enter and Space', async ({ page }) => {
   await openCodex(page, { locale: 'en' });
   await page.locator('#tab-sessions').click();

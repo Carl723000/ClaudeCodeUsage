@@ -5,6 +5,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
+  CodexSessionTitleCache,
   loadCodexSessionTitles,
   normalizeRepositoryIdentity,
   parsePseudonymousIdentityKey,
@@ -15,6 +16,64 @@ import {
 } from '../providers/codex/codexIdentity';
 
 const SALT = 'identity-test-salt';
+
+test('session title cache reuses only an identical verified file stamp', async () => {
+  let stamp = { size: 100, mtimeMs: 1_000, dev: 2, ino: 3 };
+  let reads = 0;
+  const cache = new CodexSessionTitleCache({
+    stat: async () => ({ ...stamp }),
+    read: async (_indexPath: string, salt: string) => {
+      reads += 1;
+      return new Map([
+        [pseudonymousIdentityKey(salt, 'raw-session'), `title-${reads}`],
+      ]);
+    },
+  });
+
+  const first = await cache.load('/virtual-codex-home', SALT);
+  const second = await cache.load('/virtual-codex-home', SALT);
+  assert.strictEqual(second, first);
+  assert.equal(reads, 1, 'unchanged size/mtime/dev/ino avoids another stream');
+
+  stamp = { ...stamp, mtimeMs: 2_000 };
+  const changed = await cache.load('/virtual-codex-home', SALT);
+  assert.equal(reads, 2);
+  assert.equal(
+    changed.get(pseudonymousIdentityKey(SALT, 'raw-session')),
+    'title-2',
+  );
+
+  const otherSalt = await cache.load('/virtual-codex-home', 'other-salt');
+  assert.equal(reads, 3, 'a different machine salt cannot reuse pseudonymous keys');
+  assert.equal(
+    otherSalt.get(pseudonymousIdentityKey('other-salt', 'raw-session')),
+    'title-3',
+  );
+});
+
+test('session title cache never retains a map read across a metadata race', async () => {
+  let stamp = { size: 100, mtimeMs: 1_000, dev: 2, ino: 3 };
+  let reads = 0;
+  const cache = new CodexSessionTitleCache({
+    stat: async () => ({ ...stamp }),
+    read: async (_indexPath: string, salt: string) => {
+      reads += 1;
+      if (reads === 1) {
+        stamp = { ...stamp, size: 120, mtimeMs: 2_000 };
+      }
+      return new Map([
+        [pseudonymousIdentityKey(salt, 'raw-session'), `title-${reads}`],
+      ]);
+    },
+  });
+
+  const raced = await cache.load('/virtual-codex-home', SALT);
+  assert.equal(raced.size, 0, 'an unstable title stream fails closed for this snapshot');
+  const stable = await cache.load('/virtual-codex-home', SALT);
+  const reused = await cache.load('/virtual-codex-home', SALT);
+  assert.equal(reads, 2, 'the raced stream is retried once and the stable result is cached');
+  assert.strictEqual(reused, stable);
+});
 
 test('session index keeps the latest clean title behind an anonymous key', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-title-'));

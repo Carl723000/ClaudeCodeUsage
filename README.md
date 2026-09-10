@@ -154,6 +154,31 @@ same full-request preview and separate explicit Send action as AI advice.
 
 ---
 
+## What's new in v2.3.2
+
+- **One currency control** — Settings now offers one curated currency dropdown,
+  defaulting to USD. Thirteen additional display currencies use a bundled,
+  fixed 2026-09-09 ECB-derived snapshot; there is no editable multiplier or
+  exchange-rate network request. Source estimates remain USD and converted
+  values are visibly approximate.
+- **Complete time drill-down** — Claude and Codex All time month bars expand to
+  days, and populated Last 30 days bars expand to materialized hours. Mouse and
+  keyboard paths share disclosure state, focus, nested collapse, and reload
+  restoration, with no JSONL read on click.
+- **Refresh without losing your place** — normal live updates preserve the
+  active tab, expansion chain, selected metric/hour, draft Optimizer text,
+  keyboard focus, and nearby scroll anchor.
+- **Clearer, accessible charts** — every chart has a provider-qualified,
+  localized accessible name. Empty hours keep their axis, table, tooltip, and
+  selectable zero value without repeating `0` above every bar; genuinely
+  unpriced activity still shows `—`.
+- **Lower background overhead** — provider watchers recover with bounded
+  backoff, while unchanged Codex thread-title indexes are reused from a
+  validated in-memory cache.
+
+The reviewed draft is `v2.3.2`; the human-controlled publish workflow stamps
+package metadata from that release tag.
+
 ## What's new in v2.3.1
 
 - **GPT-6 Astra and Fable 5.1 support** — exact pricing and context metadata now
@@ -233,9 +258,6 @@ same full-request preview and separate explicit Send action as AI advice.
   stale/inflated period projections and use verified daily aggregates until the
   zone projection catches up. First-use work persists bounded progress and does
   not hot-loop or repeat after completion.
-
-The reviewed draft is `v2.3.1`; the human-controlled publish workflow stamps
-package metadata from that release tag.
 
 ## What's new in 2.3
 

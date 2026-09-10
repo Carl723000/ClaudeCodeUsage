@@ -7,6 +7,7 @@ import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
 import { CONTEXT_FILL_THRESHOLDS, QUOTA_FILL_THRESHOLDS, fillLevel } from '../quotaFormat';
+import { I18n } from '../i18n';
 
 const GREEN = '#4caf50';
 const AMBER = '#ff9800';
@@ -123,6 +124,16 @@ test('item background follows the same level as the bar', () => {
   assert.equal(bg(77, CONTEXT_FILL_THRESHOLDS), undefined);
   assert.equal(bg(80, CONTEXT_FILL_THRESHOLDS), 'statusBarItem.warningBackground');
   assert.equal(bg(95, CONTEXT_FILL_THRESHOLDS), 'statusBarItem.errorBackground');
+});
+
+test('provider money bypasses the display-currency estimate conversion', () => {
+  I18n.setCurrencyDisplay('EUR');
+  try {
+    assert.equal(bareStatusBar().formatCreditAmount(12.34, 'USD'), '$12.34');
+    assert.equal(bareStatusBar().formatCreditAmount(12.34, 'GBP'), '12.34 GBP');
+  } finally {
+    I18n.setCurrencyDisplay('USD');
+  }
 });
 
 test('Codex quota tooltip reuses the Claude table, progress bar, and line-broken notes', () => {

@@ -386,6 +386,29 @@ test('snooze posts only opaque recommendation identity and does not send a netwo
   expect(JSON.stringify(message)).not.toMatch(/prompt|body|path|session|payload/i);
 });
 
+test('host-persisted advice snooze remains closed and resumable after a full webview reload', async ({ page }) => {
+  await openClaude(page, { fixture: 'advice-effectiveness-snoozed' });
+  await page.locator('#tab-content').click();
+
+  const snoozed = page.locator(
+    '[data-advice-provider="claude"] .advice-recommendation-snoozed',
+  );
+  const resume = snoozed.locator('[data-advice-action="snooze"]');
+  await expect(snoozed).toHaveCount(1);
+  await expect(snoozed).not.toHaveAttribute('open', '');
+  await expect(resume).toHaveAttribute('data-snooze-mode', 'resume');
+
+  await page.reload({ waitUntil: 'load' });
+  await page.locator('#tab-content').click();
+  const reloaded = page.locator(
+    '[data-advice-provider="claude"] .advice-recommendation-snoozed',
+  );
+  await expect(reloaded).toHaveCount(1);
+  await expect(reloaded).not.toHaveAttribute('open', '');
+  await expect(reloaded.locator('[data-advice-action="snooze"]'))
+    .toHaveAttribute('data-snooze-mode', 'resume');
+});
+
 test('one recommendation feedback leaves sibling recommendations interactive and recovers on failure', async ({ page }) => {
   const root = await openCandidate(page, 'codex');
   const groups = root.locator('.advice-feedback-group');

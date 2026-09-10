@@ -149,6 +149,7 @@ function settingsStore({
   shareStudio = true,
   adviceEffectiveness = false,
   adviceOptimizer = false,
+  displayCurrency = 'USD',
 } = {}) {
   const values = new Map(SETTINGS.map((definition) => [definition.key, definition.default]));
   values.set('codex.optimization.enabled', true);
@@ -157,6 +158,7 @@ function settingsStore({
   values.set('enableShareCard', shareStudio);
   values.set('advice.effectiveness.enabled', adviceEffectiveness);
   values.set('advice.optimizer.enabled', adviceOptimizer);
+  values.set('displayCurrency', displayCurrency);
   return {
     get: (key) => values.get(key),
     snapshot: () => SETTINGS.map((definition) => ({
@@ -314,6 +316,13 @@ function addClaudeData(provider, { fixture = 'default', enableContent = false } 
           skillUses: [],
         }
       : null,
+    [],
+    [],
+    [],
+    {
+      '2026-07-19': [{ hour: '09:00', data: claudeUsage(0.4) }],
+      '2026-07-20': [{ hour: '18:00', data: claudeUsage(0.6) }],
+    },
   );
   if (completedWeeklyFixture) {
     provider.updateWeeklyQuotaHistory([{
@@ -394,9 +403,14 @@ exports.renderHarness = async function renderHarness({
   shareStudio = true,
   adviceFeedback = 'none',
   timeZone = 'Asia/Hong_Kong',
+  codexMonth = '',
 } = {}) {
   I18n.setLanguage(locale);
   I18n.setTimezone(timeZone);
+  I18n.setDecimalPlaces(2);
+  const localCurrencyFixture = fixture === 'local-currency';
+  const displayCurrency = localCurrencyFixture ? 'EUR' : 'USD';
+  I18n.setCurrencyDisplay(displayCurrency);
   vscodeHost.window.activeColorTheme.kind = theme === 'dark' ? 2 : 1;
   const originalNow = Date.now;
   try {
@@ -430,7 +444,9 @@ exports.renderHarness = async function renderHarness({
     // consent or feedback control. Let that same path settle in the harness.
     await new Promise((resolve) => setImmediate(resolve));
     const persistedDetailsFixture = fixture === 'persisted-details';
-    const adviceEffectivenessFixture = fixture === 'advice-effectiveness';
+    const adviceEffectivenessFixture = fixture === 'advice-effectiveness'
+      || fixture === 'advice-effectiveness-snoozed';
+    const adviceSnoozedFixture = fixture === 'advice-effectiveness-snoozed';
     const adviceOptimizerFixture = fixture === 'advice-optimizer';
     const adviceContentFixture = adviceEffectivenessFixture
       || adviceOptimizerFixture
@@ -441,12 +457,25 @@ exports.renderHarness = async function renderHarness({
       shareStudio,
       adviceEffectiveness: adviceEffectivenessFixture,
       adviceOptimizer: adviceOptimizerFixture,
+      displayCurrency,
     });
     addClaudeData(provider, { fixture, enableContent: adviceContentFixture });
     if (adviceEffectivenessFixture) {
       provider.updateAdviceEffectivenessData(
         buildAdviceEffectivenessFixture({ locale }).states,
       );
+      if (adviceSnoozedFixture) {
+        provider.adviceLocalState = {
+          ...provider.adviceLocalState,
+          suppression: [{
+            provider: 'claude',
+            surface: 'advice',
+            recommendationId: 'recommendation-claude-clear-between-tasks',
+            updatedAtEpochMs: CODEX_WEBVIEW_NOW,
+            snoozedUntilEpochMs: CODEX_WEBVIEW_NOW + 7 * 24 * 60 * 60_000,
+          }],
+        };
+      }
     }
     if (adviceOptimizerFixture) {
       provider.optimizerState = {
@@ -483,6 +512,13 @@ exports.renderHarness = async function renderHarness({
       { claude: true, codex: true },
     );
     provider.currentProvider = selectedProvider;
+
+    if (/^\d{4}-\d{2}$/.test(codexMonth)) {
+      const rows = view.allTimeDaily
+        .filter((row) => row.day.startsWith(codexMonth + '-'))
+        .sort((left, right) => left.day.localeCompare(right.day));
+      return provider.renderCodexMonthDailyDetail(codexMonth, rows);
+    }
 
     const html = provider.getWebviewContent();
     const fixtureHtml = persistedDetailsFixture

@@ -112,6 +112,41 @@ function fakeContext(options: {
   };
 }
 
+test('local currency selection normalizes before entering global state', async () => {
+  activeConfiguration = fakeConfiguration();
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
+  const context = fakeContext();
+  const store = new SettingsStore(context);
+
+  await store.set('displayCurrency', ' eur ');
+  assert.equal(context._state.get('ccu.setting.displayCurrency'), 'EUR');
+
+  await store.set('displayCurrency', '<img onerror=x>');
+  assert.equal(context._state.get('ccu.setting.displayCurrency'), 'USD');
+  assert.equal(store.snapshot().some((entry) => entry.key === 'usdConversionRate'), false);
+});
+
+test('early test-build currency state migrates to one preset and drops its manual rate', async () => {
+  activeConfiguration = fakeConfiguration();
+  activeWorkspaceFolders = [];
+  activeFolderConfigurations = new Map();
+  const context = fakeContext({
+    state: new Map<string, unknown>([
+      ['ccu.setting.displayCurrency', ' eur '],
+      ['ccu.setting.usdConversionRate', 0.92],
+    ]),
+  });
+  const store = new SettingsStore(context);
+
+  assert.equal(store.get('displayCurrency'), 'EUR');
+  await store.migrateCurrencyPreset();
+
+  assert.equal(context._state.get('ccu.setting.displayCurrency'), 'EUR');
+  assert.equal(context._state.has('ccu.setting.usdConversionRate'), false);
+  assert.equal(context._state.get('ccu.migrated.currencyPreset.v2.3.2'), true);
+});
+
 test('legacy plaintext BYOK migrates to SecretStorage and never enters a settings snapshot', async () => {
   const canary = 'sk-v2.3.1-privacy-canary';
   activeConfiguration = fakeConfiguration();

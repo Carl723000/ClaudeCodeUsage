@@ -1,4 +1,9 @@
 import { SupportedLanguage } from './types';
+import {
+  formatUsdBaseline as formatUsdBaselineValue,
+  formatUsdForDisplay,
+  resolveCurrencyDisplay,
+} from './currencyDisplay';
 import { CODEX_COPY_EN, CodexViewCopy } from './codexView';
 
 export interface ProviderTranslations {
@@ -601,6 +606,7 @@ const TASK8_CODEX_COPY: Record<
       'missing-token-info': 'Fehlende Token-Informationen',
       'invalid-token-count': 'Ungültige Token-Anzahl',
       'counter-regression': 'Rückläufiger Nutzungszähler',
+      'component-delta-clamped': 'Delta für Cache- oder Reasoning-Tokens überschritt die übergeordnete Summe und wurde begrenzt',
       'missing-parent': 'Protokoll der übergeordneten Sitzung fehlt; konservative Nutzung beibehalten',
       'index-backfill-incomplete': 'Nutzungsindex wird noch aufgebaut; aktuelle Werte sind unvollständig und die Indexierung wird automatisch fortgesetzt',
       'ambiguous-session-identity': 'Doppelte Sitzungsidentität ist mehrdeutig; beide lokalen Kopien werden beibehalten',
@@ -644,6 +650,7 @@ const TASK8_CODEX_COPY: Record<
       'missing-token-info': '缺少 Token 資訊',
       'invalid-token-count': '無效的 Token 數量',
       'counter-regression': '用量計數器回退',
+      'component-delta-clamped': '快取或推理 Token 增量超過其上層總量，已限制於總量內',
       'missing-parent': '缺少父工作階段記錄；已保留保守用量',
       'index-backfill-incomplete': '用量索引仍在建立；目前數字不完整，索引會自動繼續',
       'ambiguous-session-identity': '重複工作階段身分無法安全判定；兩份本機副本均已保留',
@@ -687,6 +694,7 @@ const TASK8_CODEX_COPY: Record<
       'missing-token-info': '缺少 Token 信息',
       'invalid-token-count': '无效的 Token 数量',
       'counter-regression': '用量计数器回退',
+      'component-delta-clamped': '缓存或推理 Token 增量超过其上层总量，已限制在总量内',
       'missing-parent': '缺少父会话日志；已保留保守用量',
       'index-backfill-incomplete': '用量索引仍在建立；当前数字不完整，索引会自动继续',
       'ambiguous-session-identity': '重复会话身份无法安全判定；两个本地副本均已保留',
@@ -730,6 +738,7 @@ const TASK8_CODEX_COPY: Record<
       'missing-token-info': 'トークン情報がありません',
       'invalid-token-count': '無効なトークン数',
       'counter-regression': '使用量カウンターの後退',
+      'component-delta-clamped': 'キャッシュまたは推論トークンの差分が親の合計を超えたため上限を適用',
       'missing-parent': '親セッションのログがないため、保守的な使用量を保持',
       'index-backfill-incomplete': '使用量インデックスを作成中です。現在の数値は不完全で、インデックス作成は自動的に続行されます',
       'ambiguous-session-identity': '重複セッションの同一性を確定できないため、両方のローカルコピーを保持しています',
@@ -773,6 +782,7 @@ const TASK8_CODEX_COPY: Record<
       'missing-token-info': '토큰 정보 누락',
       'invalid-token-count': '잘못된 토큰 수',
       'counter-regression': '사용량 카운터 역행',
+      'component-delta-clamped': '캐시 또는 추론 토큰 증가분이 상위 합계를 초과하여 상한을 적용함',
       'missing-parent': '부모 세션 로그 누락; 보수적 사용량 유지',
       'index-backfill-incomplete': '사용량 인덱스를 만드는 중입니다. 현재 수치는 불완전하며 인덱싱은 자동으로 계속됩니다',
       'ambiguous-session-identity': '중복 세션의 동일성을 확정할 수 없어 두 로컬 사본을 모두 유지합니다',
@@ -816,6 +826,7 @@ const TASK8_CODEX_COPY: Record<
       'missing-token-info': 'Informações de token ausentes',
       'invalid-token-count': 'Contagem de tokens inválida',
       'counter-regression': 'Regressão do contador de uso',
+      'component-delta-clamped': 'O delta de tokens em cache ou de raciocínio excedeu o total pai e foi limitado',
       'missing-parent': 'Log da sessão pai ausente; uso conservador mantido',
       'index-backfill-incomplete': 'O índice de uso ainda está sendo criado; os números atuais estão incompletos e a indexação continuará automaticamente',
       'ambiguous-session-identity': 'A identidade da sessão duplicada é ambígua; ambas as cópias locais foram mantidas',
@@ -859,6 +870,7 @@ const TASK8_CODEX_COPY: Record<
       'missing-token-info': 'Informasi token tidak ada',
       'invalid-token-count': 'Jumlah token tidak valid',
       'counter-regression': 'Penghitung penggunaan mundur',
+      'component-delta-clamped': 'Delta token cache atau penalaran melebihi total induknya dan telah dibatasi',
       'missing-parent': 'Log sesi induk tidak ada; penggunaan konservatif dipertahankan',
       'index-backfill-incomplete': 'Indeks penggunaan masih dibuat; angka saat ini belum lengkap dan pengindeksan akan berlanjut otomatis',
       'ambiguous-session-identity': 'Identitas sesi duplikat ambigu; kedua salinan lokal dipertahankan',
@@ -3573,6 +3585,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'de-DE': {
     'language': { label: 'Anzeigesprache', help: 'UI-Sprache. "auto" folgt VS Code.' },
     'decimalPlaces': { label: 'Kosten-Dezimalstellen', help: '' },
+    'displayCurrency': { label: 'Anzeigewährung', help: 'Nur Anzeige. Verwendet integrierte Referenzkurse vom 09.09.2026; Kurse sind weder bearbeitbar noch werden sie abgerufen, die Basis bleibt USD.' },
     'tokenDecimalPlaces': { label: 'Token-Dezimalstellen', help: 'Dezimalstellen für kompakte Token-Anzeige (1.2M / 345.6K). Volle Ganzzahlen bleiben unberührt.' },
     'compactNumbers': { label: 'Kompakte Token-Zahlen', help: 'Zeige 1.2M / 345K statt voller Zahlen.' },
     'releaseAnnouncements': { label: 'Release-Hinweise', help: 'Nach einem Erweiterungs-Upgrade einmal die Neuerungen anzeigen.' },
@@ -3622,6 +3635,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'zh-TW': {
     'language': { label: '顯示語言', help: 'UI 語言。"auto" 會跟隨 VS Code。' },
     'decimalPlaces': { label: '費用小數位數', help: '' },
+    'displayCurrency': { label: '費用顯示幣別', help: '僅影響顯示。使用 2026-09-09 內建參考匯率；匯率不可調整且不會連線擷取，底層估算仍維持 USD。' },
     'tokenDecimalPlaces': { label: 'Token 小數位數', help: '緊湊 token 顯示（1.2M / 345.6K）的小數位數。完整整數值不受影響。' },
     'compactNumbers': { label: '簡潔的 Token 計數', help: '顯示 1.2M / 345K 而非完整數字。' },
     'releaseAnnouncements': { label: '版本更新通知', help: '擴充套件升級後顯示一次「新功能」通知。' },
@@ -3671,6 +3685,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'zh-CN': {
     'language': { label: '显示语言', help: 'UI 语言。"auto" 会跟随 VS Code。' },
     'decimalPlaces': { label: '费用小数位数', help: '' },
+    'displayCurrency': { label: '费用显示币种', help: '仅影响显示。使用 2026-09-09 内置参考汇率；汇率不可调整且不会联网获取，底层估算仍保持 USD。' },
     'tokenDecimalPlaces': { label: 'Token 小数位数', help: '紧凑 token 显示（1.2M / 345.6K）的小数位数。完整整数值不受影响。' },
     'compactNumbers': { label: '简洁的 token 计数', help: '显示 1.2M / 345K 而非完整数字。' },
     'releaseAnnouncements': { label: '版本更新通知', help: '扩展升级后显示一次“新功能”通知。' },
@@ -3720,6 +3735,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'ja': {
     'language': { label: '表示言語', help: 'UI 言語。"auto" は VS Code に従います。' },
     'decimalPlaces': { label: 'コストの小数点以下桁数', help: '' },
+    'displayCurrency': { label: 'コスト表示通貨', help: '表示専用です。2026-09-09 時点の内蔵参考レートを使用します。レートは編集も取得もせず、基礎となる推定値は USD のままです。' },
     'tokenDecimalPlaces': { label: 'トークンの小数点以下桁数', help: 'トークンの短縮表示（1.2M / 345.6K）の小数桁数。完全な整数値には影響しません。' },
     'compactNumbers': { label: 'トークン数を短縮表記', help: '完全な数値の代わりに 1.2M / 345K と表示します。' },
     'releaseAnnouncements': { label: 'リリース通知', help: '拡張機能のアップグレード後に新機能を一度通知します。' },
@@ -3769,6 +3785,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'ko': {
     'language': { label: '표시 언어', help: 'UI 언어. "auto"는 VS Code를 따릅니다.' },
     'decimalPlaces': { label: '비용 소수점 자리수', help: '' },
+    'displayCurrency': { label: '비용 표시 통화', help: '표시에만 사용됩니다. 2026-09-09 기준 내장 환율을 사용하며 수정하거나 가져오지 않습니다. 기본 추정치는 USD로 유지됩니다.' },
     'tokenDecimalPlaces': { label: '토큰 소수점 자리수', help: '간략한 토큰 표시(1.2M / 345.6K)의 소수 자리수. 전체 정수 값에는 영향을 주지 않습니다.' },
     'compactNumbers': { label: '간략한 토큰 수 표시', help: '전체 숫자 대신 1.2M / 345K로 표시합니다.' },
     'releaseAnnouncements': { label: '릴리스 알림', help: '확장 업그레이드 후 새 기능 알림을 한 번 표시합니다.' },
@@ -3818,6 +3835,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'pt-BR': {
     'language': { label: 'Idioma de exibição', help: 'Idioma da interface. "auto" segue o VS Code.' },
     'decimalPlaces': { label: 'Casas decimais do custo', help: '' },
+    'displayCurrency': { label: 'Moeda de exibição do custo', help: 'Somente exibição. Usa taxas de referência integradas de 09/09/2026; elas não são editáveis nem buscadas, e as estimativas continuam em USD.' },
     'tokenDecimalPlaces': { label: 'Casas decimais de tokens', help: 'Casas decimais para a exibição compacta de tokens (1.2M / 345.6K). As contagens inteiras completas não são afetadas.' },
     'compactNumbers': { label: 'Contagem de tokens compacta', help: 'Mostra 1.2M / 345K em vez dos números completos.' },
     'releaseAnnouncements': { label: 'Avisos de versão', help: 'Mostra uma vez as novidades após atualizar a extensão.' },
@@ -3868,6 +3886,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
   'id': {
     'language': { label: 'Bahasa tampilan', help: 'Bahasa UI. "auto" mengikuti VS Code.' },
     'decimalPlaces': { label: 'Angka desimal biaya', help: '' },
+    'displayCurrency': { label: 'Mata uang tampilan biaya', help: 'Hanya untuk tampilan. Menggunakan kurs referensi bawaan per 2026-09-09; kurs tidak dapat diedit atau diambil, dan estimasi dasar tetap USD.' },
     'tokenDecimalPlaces': { label: 'Angka desimal token', help: 'Angka desimal untuk tampilan token ringkas (1.2M / 345.6K). Jumlah bilangan bulat penuh tidak terpengaruh.' },
     'compactNumbers': { label: 'Jumlah token ringkas', help: 'Tampilkan 1.2M / 345K, bukan angka penuh.' },
     'releaseAnnouncements': { label: 'Pengumuman rilis', help: 'Tampilkan sekali hal baru setelah ekstensi ditingkatkan.' },
@@ -3919,6 +3938,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
 export class I18n {
   private static currentLanguage: SupportedLanguage = 'en';
   private static currentDecimalPlaces: number = 2;
+  private static currencyDisplay = resolveCurrencyDisplay('USD');
   // Decimals for COMPACT token display only (1.2M / 345.6K) — separate from the
   // cost decimal places. Does not affect full integer token values.
   private static tokenDecimalPlaces: number = 1;
@@ -3964,6 +3984,25 @@ export class I18n {
     if (typeof places === 'number' && isFinite(places) && places >= 0 && places <= 4) {
       this.currentDecimalPlaces = Math.floor(places);
     }
+  }
+
+  static getDecimalPlaces(): number {
+    return this.currentDecimalPlaces;
+  }
+
+  /** Set the local-only display preset; invalid values fail closed to USD. */
+  static setCurrencyDisplay(currency: string): void {
+    this.currencyDisplay = resolveCurrencyDisplay(currency);
+  }
+
+  static getCurrencyDisplay(): Readonly<{
+    code: string;
+    label: string;
+    unitsPerUsd: number;
+    converted: boolean;
+    referenceDate: string;
+  }> {
+    return { ...this.currencyDisplay };
   }
 
   /** Decimals for compact token display, 0–2 (claudeCodeUsage.tokenDecimalPlaces). */
@@ -4045,7 +4084,13 @@ export class I18n {
 
   static formatCurrency(amount: number, decimalPlaces?: number): string {
     const places = decimalPlaces != null ? decimalPlaces : this.currentDecimalPlaces;
-    return `$${amount.toFixed(places)}`;
+    return formatUsdForDisplay(amount, this.currencyDisplay.code, places);
+  }
+
+  /** Provider-native USD money (for example actual usage credits), never the
+   * user's display conversion. */
+  static formatUsdBaseline(amount: number, decimalPlaces = 2): string {
+    return formatUsdBaselineValue(amount, decimalPlaces);
   }
 
   /** Always-compact token count (k / M / B) honouring the user's decimal
