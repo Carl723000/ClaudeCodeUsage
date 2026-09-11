@@ -26,6 +26,10 @@ import {
 import { I18n } from './i18n';
 import { isRetryDuplicatePrompt } from './promptDedup';
 import {
+  buildProjectUsageMatrixSnapshot,
+  ProjectUsageMatrixSnapshot,
+} from './projectUsageMatrix';
+import {
   defaultCodexJsonlReader,
   scanCodexJsonlLines,
 } from './providers/codex/codexJsonlScanner';
@@ -84,6 +88,8 @@ interface UsageAggregates {
   byMonth: Map<string, UsageData>;
   byLocalDay: Map<string, UsageData>;
   byLocalHour: Map<string, UsageData>;
+  /** Bounded configured-day project buckets used by the Projects matrix. */
+  byProjectDay: Map<string, UsageData>;
   bySession: Map<string, UsageData>;
   byProject: Map<string, UsageData>;
   byBranch: Map<string, UsageData>;
@@ -110,6 +116,7 @@ interface CopyOnWriteKeys {
 interface ConfiguredTimeKeyers {
   formatter: Intl.DateTimeFormat;
   hourWindowStartDay: string;
+  projectWindowStartDay: string;
 }
 
 export interface ClaudeUsageIndex {
@@ -199,6 +206,7 @@ export interface ClaudeUsageDashboardSnapshot extends ClaudeUsageAggregateSnapsh
   workflows: WorkflowUsage[];
   costliestMessages: CostlyMessage[];
   context: ContextWindowInfo | null;
+  projectUsageMatrix: ProjectUsageMatrixSnapshot;
   /** Present only for the default-off advice capability; built from materialized aggregates. */
   adviceWindow?: {
     windowDays: number;
@@ -243,6 +251,7 @@ function emptyAggregates(): UsageAggregates {
     byMonth: new Map(),
     byLocalDay: new Map(),
     byLocalHour: new Map(),
+    byProjectDay: new Map(),
     bySession: new Map(),
     byProject: new Map(),
     byBranch: new Map(),
@@ -283,6 +292,7 @@ function createConfiguredTimeKeyers(timeZone: string, now = Date.now()): Configu
       timeZone: resolved,
     }),
     hourWindowStartDay: rollingDayKeys(now, resolved, 30)[0] ?? '',
+    projectWindowStartDay: rollingDayKeys(now, resolved, 90)[0] ?? '',
   };
 }
 
@@ -744,6 +754,11 @@ function applyConfiguredTimeAggregate(
   if (day >= index.timeKeyers.hourWindowStartDay) {
     applyBucket(index.aggregates.byLocalHour, dayHour, contribution, sign);
   }
+  if (day >= index.timeKeyers.projectWindowStartDay) {
+    const rawProject = record._projectPath || record._projectName || 'unknown';
+    const project = ClaudeDataLoader.normalizePath(rawProject) || 'unknown';
+    applyBucket(index.aggregates.byProjectDay, `${project}\0${day}`, contribution, sign);
+  }
 }
 
 function applyAggregate(index: ClaudeUsageIndex, record: ClaudeUsageRecord, sign: 1 | -1): void {
@@ -876,6 +891,7 @@ function rebuildConfiguredTimeAggregates(index: ClaudeUsageIndex): void {
   index.aggregates.byMonth = new Map();
   index.aggregates.byLocalDay = new Map();
   index.aggregates.byLocalHour = new Map();
+  index.aggregates.byProjectDay = new Map();
   index.visibleKeysByLocalDay = new Map();
   index.copyOnWrite.visibleLocalDays = new Set();
   for (const [visibleKey, record] of index.visibleRecords) {
@@ -1081,6 +1097,7 @@ function cloneIndexForCommit(previous: ClaudeUsageIndex): ClaudeUsageIndex {
       byMonth: new Map(previous.aggregates.byMonth),
       byLocalDay: new Map(previous.aggregates.byLocalDay),
       byLocalHour: new Map(previous.aggregates.byLocalHour),
+      byProjectDay: new Map(previous.aggregates.byProjectDay),
       bySession: new Map(previous.aggregates.bySession),
       byProject: new Map(previous.aggregates.byProject),
       byBranch: new Map(previous.aggregates.byBranch),
@@ -1094,6 +1111,17 @@ function pruneHourlyBuckets(index: ClaudeUsageIndex): void {
   if (!cutoff) return;
   for (const key of index.aggregates.byLocalHour.keys()) {
     if (key.slice(0, 10) < cutoff) index.aggregates.byLocalHour.delete(key);
+  }
+}
+
+function pruneProjectDayBuckets(index: ClaudeUsageIndex): void {
+  const cutoff = index.timeKeyers.projectWindowStartDay;
+  if (!cutoff) return;
+  for (const key of index.aggregates.byProjectDay.keys()) {
+    const separator = key.lastIndexOf('\0');
+    if (separator >= 0 && key.slice(separator + 1) < cutoff) {
+      index.aggregates.byProjectDay.delete(key);
+    }
   }
 }
 
@@ -1381,6 +1409,36 @@ export function claudeUsageAggregateSnapshot(
   };
 }
 
+function claudeProjectUsageMatrixSnapshot(
+  index: ClaudeUsageIndex,
+  now: Date,
+): ProjectUsageMatrixSnapshot {
+  const asOfDay = dayKeyInZone(now, index.timeZone);
+  const points = [...index.aggregates.byProjectDay.entries()].flatMap(([key, data]) => {
+    const separator = key.lastIndexOf('\0');
+    if (separator < 0) return [];
+    const projectKey = key.slice(0, separator);
+    const day = key.slice(separator + 1);
+    const project = index.projectRows.get(projectKey);
+    const projectName = project?.projectName ||
+      projectKey.split('/').filter(Boolean).pop() ||
+      '';
+    return [{
+      projectKey: `claude:${projectKey}`,
+      projectName,
+      day,
+      tokens: data.totalInputTokens + data.totalOutputTokens +
+        data.totalCacheCreationTokens + data.totalCacheReadTokens,
+      coverage: 'complete' as const,
+    }];
+  });
+  return buildProjectUsageMatrixSnapshot('claude', points, {
+    asOfDay,
+    timeZone: index.timeZone,
+    coverage: 'complete',
+  });
+}
+
 export function claudeUsageDashboardSnapshot(
   index: ClaudeUsageIndex,
   options: {
@@ -1479,6 +1537,7 @@ export function claudeUsageDashboardSnapshot(
       .slice(0, 50),
     costliestMessages,
     context,
+    projectUsageMatrix: claudeProjectUsageMatrixSnapshot(index, now),
     ...(adviceWindow ? { adviceWindow } : {}),
   };
 }
@@ -1632,6 +1691,7 @@ export async function updateClaudeUsageIndex(
   next.timeZone = configuredTimeZone;
   next.timeKeyers = timeKeyers;
   pruneHourlyBuckets(next);
+  pruneProjectDayBuckets(next);
   if (timeZoneChanged) {
     rebuildConfiguredTimeAggregates(next);
   }
