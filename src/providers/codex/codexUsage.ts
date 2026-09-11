@@ -36,6 +36,11 @@ import {
   summarizeEquivalentCostBreakdowns,
   WeeklyValueInputs,
 } from '../../weeklyValue';
+import {
+  buildProjectUsageMatrixSnapshot,
+  ProjectMatrixCoverage,
+  ProjectUsageMatrixSnapshot,
+} from '../../projectUsageMatrix';
 
 export interface CodexMetricTotals {
   processed: number;
@@ -189,6 +194,7 @@ export interface CodexUsageView {
   last30Days: CodexUsageScopeView;
   allTime: CodexUsageScopeView;
   projects: CodexProjectUsageView[];
+  projectUsageMatrix: ProjectUsageMatrixSnapshot;
   /** Complete derived day series retained in host memory for month drill-downs. */
   allTimeDaily: CodexDailyUsageView[];
   /** Bounded recent day series used by the share heatmap payload. */
@@ -1057,6 +1063,39 @@ export function buildCodexUsageView(
     group.push(file);
     projects.set(key, group);
   }
+  const exactMatrixPeriods = snapshot.files.every((file) =>
+    file.period?.timeZone === periodCoverage.timeZone &&
+    (file.period.lineageVersion === undefined ||
+      file.period.lineageVersion === CODEX_PERIOD_LINEAGE_VERSION) &&
+    codexPeriodFitsAggregate(file.period, file.total),
+  );
+  const matrixCoverage: ProjectMatrixCoverage =
+    snapshot.coverage.complete && periodCoverage.allTime.complete && exactMatrixPeriods
+      ? 'complete'
+      : 'partial';
+  const projectUsageMatrix = buildProjectUsageMatrixSnapshot(
+    'codex',
+    [...projects.entries()].flatMap(([projectKey, files]) => {
+      const projectName = identityValue(files, 'projectName') ??
+        identityValue(files, 'projectDirectoryName') ??
+        '';
+      const viewKey = `codex:${stableCodexViewKey(projectKey)}`;
+      return files.flatMap((file) =>
+        periodSlicesForFile(file, periodCoverage.timeZone).map(([day, slice]) => ({
+          projectKey: viewKey,
+          projectName,
+          day,
+          tokens: processedTokens(slice.total),
+          coverage: matrixCoverage,
+        })),
+      );
+    }),
+    {
+      asOfDay: periodCoverage.asOfDay,
+      timeZone: periodCoverage.timeZone,
+      coverage: matrixCoverage,
+    },
+  );
   const aggregateIndexIncomplete =
     !snapshot.coverage.complete ||
     !periodCoverage.last7Days.complete ||
@@ -1181,6 +1220,7 @@ export function buildCodexUsageView(
           right.lastActiveAt - left.lastActiveAt ||
           left.projectKey.localeCompare(right.projectKey),
       ),
+    projectUsageMatrix,
     allTimeDaily,
     daily,
     last7DaysDaily: rollingDailyRows(daily, last7DayKeys),

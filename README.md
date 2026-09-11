@@ -45,7 +45,7 @@ the same data.
 
 ### v2.3 Claude, Codex and Compare
 
-The four v2.3 images below are reproducible captures of the production dashboard
+The five v2.3 images below are reproducible captures of the production dashboard
 renderer with synthetic fixtures and VS Code Light+/Dark+ theme variables, not
 personal usage or billing evidence. Native VSIX installation is verified separately.
 
@@ -75,6 +75,12 @@ default, curated/custom colors, deterministic local SVG, and privacy-safe
 Markdown. It is enabled by default and can be hidden with the single sharing
 workspace setting. Card settings sit below the preview; intensity can use quantile,
 logarithmic, or linear scaling. The metric is activity volume, not productivity or billing.*
+
+![Project activity matrix in English, dark theme](images/v2.3.2/project-activity-matrix-en-dark.png)
+
+*Projects now adds a Token-only 30/90-day project × day heatmap and stacked
+daily trend for both providers. Exact tooltips, explicit coverage, bounded rows,
+and an Other-projects tail keep the view auditable without rereading source logs.*
 
 ### Claude status bar
 
@@ -158,8 +164,9 @@ same full-request preview and separate explicit Send action as AI advice.
 
 - **Refined throughout the v2.3 line** — GPT-6 Astra and Fable 5.1 model
   metadata, optional AWS Bedrock pricing, a fixed-reference display-currency
-  selector, complete month/day/hour drill-downs, state-preserving refresh,
-  accessible charts, and lower watcher/title-index overhead. Patch-level
+  selector, a Token-only 30/90-day project activity matrix, complete
+  month/day/hour drill-downs, state-preserving refresh, accessible charts, and
+  lower watcher/title-index overhead. Patch-level
   details stay in the changelog and GitHub Releases.
 - **Codex Beta, enabled by default** — usage records are discovered only from
   `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; credential,

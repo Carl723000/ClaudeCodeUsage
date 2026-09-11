@@ -1053,7 +1053,34 @@ test('an empty snapshot has no recent task and safe zero scopes', () => {
   assert.equal(view.allTime.total.processed, 0);
   assert.equal(view.behavior.processedToFreshRatio, 0);
   assert.equal(view.behaviorScopes.recent, null);
+  assert.deepEqual(view.projectUsageMatrix.points, []);
   assert.equal(view.behaviorScopes.last7Days.processedToFreshRatio, 0);
+});
+
+test('Codex project matrix reuses verified daily slices and exposes only safe display identities', () => {
+  const snapshot = snapshotFixture();
+  const rawProjectKeys = new Set(snapshot.files.map((file) => file.session.projectKey));
+  const view = buildCodexUsageView(snapshot, NOW);
+
+  assert.equal(view.projectUsageMatrix.days.length, 90);
+  assert.equal(view.projectUsageMatrix.asOfDay, '2026-07-20');
+  assert.equal(view.projectUsageMatrix.coverage, 'partial');
+  assert.equal(
+    view.projectUsageMatrix.points.some((point) => rawProjectKeys.has(point.projectName)),
+    false,
+  );
+  assert.deepEqual(
+    view.projectUsageMatrix.points.map((point) => ({
+      name: point.projectName,
+      day: point.day,
+      tokens: point.tokens,
+    })),
+    [
+      { name: 'TianGong', day: '2026-06-01', tokens: 120 },
+      { name: 'ClaudeCodeUsage', day: '2026-07-10', tokens: 240 },
+      { name: 'ClaudeCodeUsage', day: '2026-07-20', tokens: 1_200 },
+    ],
+  );
 });
 
 test('missing model and effort values are grouped as unknown', () => {

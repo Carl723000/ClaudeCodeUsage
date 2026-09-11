@@ -16,6 +16,8 @@ var __ccuRefreshIdentityAttributes = [
   'data-group',
   'data-sortkey',
   'data-metric',
+  'data-project-matrix-range',
+  'data-project-matrix-view',
   'name'
 ];
 var __ccuFocusableSelector = 'a[href],button,input,select,textarea,summary,[tabindex]';
@@ -213,6 +215,7 @@ function ccuRestoreDashboardUiAfterPatch(context, panel, tab) {
   restoreHourlyOverviewSelections(panel);
   initializeStatusRegions(panel);
   restoreCombinedHeatmapConfig();
+  restoreProjectMatrixState(panel);
   ccuRestoreTransientControls(context, panel);
   formatOptSettings();
   requestLocalDataInventoryForVisibleSettings();

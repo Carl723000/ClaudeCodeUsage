@@ -7,6 +7,14 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ## [2.3.2] — Unreleased
 
 ### Added
+- **Project activity matrix (brought forward from the planned v2.3.3)** — the
+  existing Projects page now gives Claude and Codex the same Token-only 30/90-day
+  project × day heatmap and daily stacked trend. Exact tooltips and explicit
+  complete/partial coverage keep the view auditable; bounded project rows,
+  matrix cells, and trend series roll the long tail into **Other projects**.
+  It reuses provider indexes already built during normal refresh, so opening,
+  switching, or expanding the view performs no source-JSONL read and adds no
+  watcher, timer, cache, worker, dependency, or network path.
 - **Curated display currencies (#91)** — a single compact Settings dropdown now
   selects USD (default) or one of thirteen common display currencies. Conversion
   uses a bundled 2026-09-09 ECB-derived snapshot; rates are deterministic,
@@ -23,6 +31,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   with metric switches and remain unique across Compare.
 
 ### Changed
+- **Project insight schedule** — the formerly planned v2.3.3 project matrix is
+  included in this v2.3.2 candidate; the later roadmap now starts after X-06
+  instead of carrying a duplicate implementation phase.
 - **State-preserving live refresh** — ordinary updates replace only the active
   provider panel and preserve the selected tab, drill-down chain, chart/hour
   selection, temporary Optimizer input, keyboard focus, and nearest scroll

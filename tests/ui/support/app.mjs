@@ -31,11 +31,11 @@ export { expect };
 
 export async function openCodex(
   page,
-  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, shareStudio = true, width = 1280, height = 900 } = {},
+  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, shareStudio = true, projectMatrix = true, width = 1280, height = 900 } = {},
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `${uiBaseUrl}/?provider=codex&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}&shareStudio=${shareStudio}`,
+    `${uiBaseUrl}/?provider=codex&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}&shareStudio=${shareStudio}&projectMatrix=${projectMatrix}`,
     { waitUntil: 'load' },
   );
   await page.locator('.tab-content.active').waitFor();
@@ -44,11 +44,11 @@ export async function openCodex(
 
 export async function openClaude(
   page,
-  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, shareStudio = true, timeZone = 'Asia/Hong_Kong', width = 1280, height = 900 } = {},
+  { locale = 'en', theme = 'light', fixture = 'default', autoRefresh = false, weeklyValue = true, shareStudio = true, projectMatrix = true, timeZone = 'Asia/Hong_Kong', width = 1280, height = 900 } = {},
 ) {
   await page.setViewportSize({ width, height });
   await page.goto(
-    `${uiBaseUrl}/?provider=claude&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}&shareStudio=${shareStudio}&timeZone=${encodeURIComponent(timeZone)}`,
+    `${uiBaseUrl}/?provider=claude&locale=${encodeURIComponent(locale)}&theme=${theme}&fixture=${encodeURIComponent(fixture)}&autoRefresh=${autoRefresh}&weeklyValue=${weeklyValue}&shareStudio=${shareStudio}&projectMatrix=${projectMatrix}&timeZone=${encodeURIComponent(timeZone)}`,
     { waitUntil: 'load' },
   );
   await page.locator('.tab-content.active').waitFor();

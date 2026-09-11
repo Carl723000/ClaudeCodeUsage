@@ -115,6 +115,7 @@ export interface Translations {
   releaseAnnouncement: {
     v230: string;
     v231: string;
+    v232: string;
   };
   providers: ProviderTranslations;
   weeklyValue: WeeklyValueCopy;
@@ -1188,6 +1189,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: "What's new — Codex Beta usage and local optimization guidance, exact-version release notes, and removal of the obsolete model-specific weekly Opus option.",
       v231: 'Accurate 30-day Codex totals, reset-aware weekly allowance estimates, and a private combined activity heatmap with local SVG and Markdown sharing.',
+      v232: 'New in 2.3.2: a 30/90-day project activity matrix for Claude and Codex, complete chart drill-downs, state-preserving refresh, and a compact fixed-rate currency selector.',
     },
     providers: PROVIDERS.en,
     weeklyValue: WEEKLY_VALUE_COPY.en,
@@ -1488,6 +1490,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: 'Neu: Codex-Beta-Nutzung und lokale Optimierungshinweise, versionsgenaue Release-Hinweise und Entfernung der veralteten modellspezifischen wöchentlichen Opus-Option.',
       v231: 'Neu: korrekte 30-Tage-Codex-Werte, reset-bewusste Wochenschätzungen und eine private kombinierte Aktivitäts-Heatmap mit lokalem SVG- und Markdown-Export.',
+      v232: 'Neu in 2.3.2: eine 30-/90-Tage-Projektaktivitätsmatrix für Claude und Codex, vollständige Diagramm-Drilldowns, zustandserhaltende Aktualisierung und eine kompakte Währungsauswahl mit festen Referenzkursen.',
     },
     providers: PROVIDERS['de-DE'],
     weeklyValue: WEEKLY_VALUE_COPY['de-DE'],
@@ -1791,6 +1794,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: '新功能：Codex Beta 用量與本機優化建議、與安裝版本精確對應的更新說明，並移除已過時的特定模型每週 Opus 選項。',
       v231: '新功能：正確的 Codex 最近 30 天統計、可識別重置的每週額度估算，以及可匯出本機 SVG／Markdown 的隱私安全綜合活動熱力圖。',
+      v232: '2.3.2 新功能：Claude 與 Codex 的 30／90 天專案活動矩陣、完整圖表下鑽、保留介面狀態的重新整理，以及採用固定參考匯率的精簡幣別下拉選單。',
     },
     providers: PROVIDERS['zh-TW'],
     weeklyValue: WEEKLY_VALUE_COPY['zh-TW'],
@@ -2087,6 +2091,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: '新功能：Codex Beta 用量与本地优化建议、与安装版本精确对应的更新说明，并移除已过时的特定模型每周 Opus 选项。',
       v231: '新功能：准确的 Codex 最近 30 天统计、可识别重置的每周额度估算，以及可导出本地 SVG／Markdown 的隐私安全综合活动热力图。',
+      v232: '2.3.2 新功能：Claude 与 Codex 的 30／90 天项目活动矩阵、完整图表下钻、保留界面状态的刷新，以及采用固定参考汇率的紧凑币种下拉栏。',
     },
     providers: PROVIDERS['zh-CN'],
     weeklyValue: WEEKLY_VALUE_COPY['zh-CN'],
@@ -2383,6 +2388,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: '新機能：Codex Beta の使用量とローカル最適化ガイド、完全なバージョンに対応するリリース通知、および古いモデル別の週間 Opus オプションの削除。',
       v231: '新機能：正確な Codex の直近 30 日集計、リセットを考慮した週間枠の推定、ローカル SVG／Markdown 共有に対応したプライバシー保護の統合アクティビティヒートマップ。',
+      v232: '2.3.2 の新機能：Claude と Codex の30／90日プロジェクト活動マトリクス、完全なチャートドリルダウン、状態を保つ更新、固定参照レートのコンパクトな通貨選択。',
     },
     providers: PROVIDERS.ja,
     weeklyValue: WEEKLY_VALUE_COPY.ja,
@@ -2684,6 +2690,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: '새 기능: Codex Beta 사용량과 로컬 최적화 안내, 설치된 전체 버전에 맞는 릴리스 알림, 그리고 오래된 모델별 주간 Opus 옵션 제거.',
       v231: '새 기능: 정확한 Codex 최근 30일 통계, 재설정을 인식하는 주간 한도 추정, 로컬 SVG/Markdown 공유를 지원하는 개인정보 보호 통합 활동 히트맵.',
+      v232: '2.3.2 새 기능: Claude와 Codex의 30/90일 프로젝트 활동 매트릭스, 완전한 차트 드릴다운, 상태를 보존하는 새로 고침, 고정 기준 환율의 간결한 통화 선택.',
     },
     providers: PROVIDERS.ko,
     weeklyValue: WEEKLY_VALUE_COPY.ko,
@@ -2985,6 +2992,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: 'Novidades: uso do Codex Beta e orientações locais de otimização, avisos da versão exata instalada e remoção da opção semanal obsoleta do Opus por modelo.',
       v231: 'Novidades: totais corretos dos últimos 30 dias do Codex, estimativas semanais cientes de redefinições e um mapa de calor combinado e privado com exportação local em SVG e Markdown.',
+      v232: 'Novidades da 2.3.2: matriz de atividade por projeto em 30/90 dias para Claude e Codex, detalhamento completo dos gráficos, atualização que preserva o estado e seletor compacto de moeda com taxas de referência fixas.',
     },
     providers: PROVIDERS['pt-BR'],
     weeklyValue: WEEKLY_VALUE_COPY['pt-BR'],
@@ -3285,6 +3293,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: 'Yang baru: penggunaan Codex Beta dan panduan optimasi lokal, catatan rilis yang sesuai dengan versi lengkap terpasang, serta penghapusan opsi Opus mingguan khusus model yang sudah usang.',
       v231: 'Yang baru: statistik 30 hari Codex yang akurat, estimasi batas mingguan yang mengenali reset, dan heatmap aktivitas gabungan privat dengan ekspor SVG serta Markdown lokal.',
+      v232: 'Baru di 2.3.2: matriks aktivitas proyek 30/90 hari untuk Claude dan Codex, drill-down grafik lengkap, refresh yang mempertahankan state, serta pemilih mata uang ringkas dengan kurs referensi tetap.',
     },
     providers: PROVIDERS.id,
     weeklyValue: WEEKLY_VALUE_COPY.id,
@@ -3598,6 +3607,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.statusMetric': { label: 'Codex-Statusmetrik', help: 'Heutige Nutzung ohne Cache, verarbeitete Token oder Ausgabe-Token.' },
     'timezone': { label: 'Zeitzone für Daten', help: 'Gängige Zone oder UTC-Offset (jeder Offset abgedeckt) oder Systemstandard. Labels zeigen den aktuellen UTC-Offset.' },
     'showWeeklyEquivalentValue': { label: 'Wöchentlichen API-Gegenwert anzeigen', help: 'Standardmäßig an. Zeigt den historischen wöchentlichen API-Gegenwert in „Seit Aufzeichnungsbeginn“ und „Vergleich“. Dies ist eine Schätzung, keine Rechnung und kein Abonnementkontingent.' },
+    'showProjectUsageMatrix': { label: 'Projekt-Nutzungsmatrix anzeigen', help: 'Standardmäßig an. Ergänzt Projekte um eine lokale 30/90-Tage-Token-Heatmap und einen gestapelten Trend. Nutzt bestehende Indexaggregate und ordnet Projekten kein Abonnementkontingent zu.' },
     'showHeatmap': { label: 'Token-Heatmap zeigen (Tab „Seit Aufzeichnungsbeginn“)', help: 'Standardmäßig aus. GitHub-artige Jahres-Heatmap; als SVG exportieren oder auf dein GitHub-Profil veröffentlichen.' },
     'showEfficiency': { label: 'Effizienz-Einblicke zeigen', help: 'Standardmäßig aus. Kosten/Nachricht, Token/Nachricht, Cache-Ersparnis und die Cache-Warmzeit-Schätzung.' },
     'showCostliestMessages': { label: '„Top 10 teuerste Nachrichten“ zeigen', help: 'Standardmäßig aus. Reiht deine teuersten Einzel-Turns; das Aufklappen zeigt den Prompt (dein eigener Text).' },
@@ -3648,6 +3658,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.statusMetric': { label: 'Codex 狀態列指標', help: '今日未快取用量、已處理 Token 或輸出 Token。' },
     'timezone': { label: '日期時區', help: '常用時區或 UTC 偏移（涵蓋所有偏移），或系統預設。標籤顯示目前的 UTC 偏移。' },
     'showWeeklyEquivalentValue': { label: '顯示每週 API 等效價值', help: '預設開啟。在「所有」與「比較」中顯示歷史每週 API 等效價值；屬於估算，不是帳單或訂閱額度。' },
+    'showProjectUsageMatrix': { label: '顯示專案用量矩陣', help: '預設開啟。在「專案」加入本機 30/90 天 Token 熱力圖與堆疊趨勢；沿用既有索引彙總，不會把訂閱額度分配到專案。' },
     'showHeatmap': { label: '顯示 Token 熱力圖（「所有」分頁）', help: '預設關閉。全部分頁上的 GitHub 風格年度熱力圖；可匯出 SVG 或發佈到你的 GitHub 首頁。' },
     'showEfficiency': { label: '顯示效率洞察', help: '預設關閉。加入每則成本、每則 token、快取節省與快取保溫估計。' },
     'showCostliestMessages': { label: '顯示「最貴 10 則訊息」', help: '預設關閉。列出最貴的單則對話；展開會顯示 prompt（隱私：你自己的文字）。' },
@@ -3698,6 +3709,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.statusMetric': { label: 'Codex 状态栏指标', help: '今日未缓存用量、已处理 Token 或输出 Token。' },
     'timezone': { label: '日期时区', help: '常用时区或 UTC 偏移（涵盖所有偏移），或系统默认。标签显示当前的 UTC 偏移。' },
     'showWeeklyEquivalentValue': { label: '显示每周 API 等效价值', help: '默认开启。在“全部时间”和“对比”中显示历史每周 API 等效价值；属于估算，不是账单或订阅额度。' },
+    'showProjectUsageMatrix': { label: '显示项目用量矩阵', help: '默认开启。在“项目”中加入本地 30/90 天 Token 热力图与堆叠趋势；复用现有索引汇总，不会把订阅额度分配到项目。' },
     'showHeatmap': { label: '显示 Token 热力图（“所有”选项卡）', help: '默认关闭。全部标签上的 GitHub 风格年度热力图；可导出 SVG 或发布到你的 GitHub 主页。' },
     'showEfficiency': { label: '显示效率洞察', help: '默认关闭。加入每条成本、每条 token、缓存节省与缓存保温估计。' },
     'showCostliestMessages': { label: '显示“最贵 10 条消息”', help: '默认关闭。列出最贵的单条对话；展开会显示 prompt（隐私：你自己的文字）。' },
@@ -3748,6 +3760,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.statusMetric': { label: 'Codex ステータスメトリック', help: '今日の非キャッシュ使用量、処理済みトークン、または出力トークン。' },
     'timezone': { label: '日付のタイムゾーン', help: '一般的なゾーンまたは UTC オフセット（全オフセット対応）、あるいはシステム既定。ラベルは現在の UTC オフセットを表示。' },
     'showWeeklyEquivalentValue': { label: '週間 API 等価価値を表示', help: '既定でオン。「すべて」と「比較」に過去の週間 API 等価価値を表示します。これは推定値であり、請求額やサブスクリプション利用枠ではありません。' },
+    'showProjectUsageMatrix': { label: 'プロジェクト使用量マトリクスを表示', help: '既定でオン。「プロジェクト」にローカルの30/90日トークンヒートマップと積み上げトレンドを追加します。既存のインデックス集計を再利用し、サブスクリプション枠をプロジェクト別に配分しません。' },
     'showHeatmap': { label: 'トークンヒートマップを表示（「すべて」タブ）', help: '既定でオフ。GitHub 風の年間ヒートマップ。SVG 書き出しや GitHub プロフィールへの公開が可能。' },
     'showEfficiency': { label: '効率インサイトを表示', help: '既定でオフ。メッセージ単価、メッセージ当たりトークン、キャッシュ節約、キャッシュ保温推定を追加。' },
     'showCostliestMessages': { label: '「最も高価なメッセージ Top 10」を表示', help: '既定でオフ。最も高価な単一ターンを順位付け。展開でプロンプト表示（自分の文章）。' },
@@ -3798,6 +3811,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.statusMetric': { label: 'Codex 상태 지표', help: '오늘의 캐시되지 않은 사용량, 처리된 토큰 또는 출력 토큰.' },
     'timezone': { label: '날짜 시간대', help: '일반 지역 또는 UTC 오프셋(모든 오프셋 지원), 또는 시스템 기본값. 라벨에 현재 UTC 오프셋 표시.' },
     'showWeeklyEquivalentValue': { label: '주간 API 등가 가치 표시', help: '기본값 켜짐. 전체 및 비교 화면에 과거 주간 API 등가 가치를 표시합니다. 이는 추정치이며 청구서나 구독 할당량이 아닙니다.' },
+    'showProjectUsageMatrix': { label: '프로젝트 사용량 매트릭스 표시', help: '기본값 켜짐. 프로젝트에 로컬 30/90일 토큰 히트맵과 누적 추세를 추가합니다. 기존 인덱스 집계를 재사용하며 구독 할당량을 프로젝트별로 배분하지 않습니다.' },
     'showHeatmap': { label: '토큰 히트맵 표시(전체 탭)', help: '기본 꺼짐. GitHub 스타일 연간 히트맵. SVG 내보내기 또는 GitHub 프로필에 게시 가능.' },
     'showEfficiency': { label: '효율 인사이트 표시', help: '기본 꺼짐. 메시지당 비용/토큰, 캐시 절감, 캐시 보온 추정치를 추가.' },
     'showCostliestMessages': { label: '“가장 비싼 메시지 Top 10” 표시', help: '기본 꺼짐. 가장 비싼 단일 턴을 순위화. 펼치면 프롬프트 표시(본인 텍스트).' },
@@ -3848,6 +3862,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.statusMetric': { label: 'Métrica de status do Codex', help: 'Uso de hoje sem cache, tokens processados ou tokens de saída.' },
     'timezone': { label: 'Fuso horário das datas', help: 'Zona comum ou deslocamento UTC (todos cobertos), ou padrão do sistema. Os rótulos mostram o deslocamento UTC atual.' },
     'showWeeklyEquivalentValue': { label: 'Mostrar valor equivalente semanal da API', help: 'Ligado por padrão. Mostra o valor equivalente semanal histórico da API em Todo o período e Comparar. É uma estimativa, não uma fatura nem uma franquia de assinatura.' },
+    'showProjectUsageMatrix': { label: 'Mostrar matriz de uso por projeto', help: 'Ligado por padrão. Adiciona a Projetos um heatmap local de tokens de 30/90 dias e uma tendência empilhada. Reutiliza agregados indexados e não distribui a franquia da assinatura por projeto.' },
     'showHeatmap': { label: 'Mostrar heatmap de tokens (aba Todo o período)', help: 'Desligado por padrão. Heatmap anual estilo GitHub; exporte SVG ou publique no seu perfil do GitHub.' },
     'showEfficiency': { label: 'Mostrar insights de eficiência', help: 'Desligado por padrão. Custo/mensagem, tokens/mensagem, economia de cache e a estimativa de aquecimento do cache.' },
     'showCostliestMessages': { label: 'Mostrar "10 mensagens mais caras"', help: 'Desligado por padrão. Ranqueia seus turnos mais caros; ao expandir mostra o prompt (seu próprio texto).' },
@@ -3899,6 +3914,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.statusMetric': { label: 'Metrik status Codex', help: 'Penggunaan hari ini tanpa cache, token diproses, atau token output.' },
     'timezone': { label: 'Zona waktu untuk tanggal', help: 'Pilih zona umum atau offset UTC (semua offset tersedia), atau default sistem. Label menampilkan offset UTC saat ini.' },
     'showWeeklyEquivalentValue': { label: 'Tampilkan nilai ekuivalen API mingguan', help: 'Aktif secara default. Tampilkan riwayat nilai ekuivalen API mingguan di Sepanjang Waktu dan Perbandingan. Ini perkiraan, bukan tagihan atau jatah langganan.' },
+    'showProjectUsageMatrix': { label: 'Tampilkan matriks penggunaan proyek', help: 'Aktif secara default. Menambahkan heatmap Token lokal 30/90 hari dan tren bertumpuk ke Proyek. Menggunakan kembali agregat indeks dan tidak membagi jatah langganan per proyek.' },
     'showHeatmap': { label: 'Tampilkan heatmap token (tab Sepanjang Waktu)', help: 'Nonaktif secara default. Heatmap token tahunan bergaya GitHub di tab All; ekspor sebagai SVG atau publikasikan ke profil GitHub Anda.' },
     'showEfficiency': { label: 'Tampilkan wawasan efisiensi', help: 'Nonaktif secara default. Menambahkan biaya/pesan, token/pesan, penghematan cache, dan perkiraan cache warmth.' },
     'showCostliestMessages': { label: 'Tampilkan "10 pesan termahal"', help: 'Nonaktif secara default. Menampilkan giliran termahal; membuka detail menampilkan prompt-nya (teks Anda sendiri).' },

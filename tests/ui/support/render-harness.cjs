@@ -32,6 +32,7 @@ const { I18n } = require('../../../out/i18n.js');
 const { SETTINGS } = require('../../../out/settings.js');
 const { buildCodexUsageView } = require('../../../out/providers/codex/codexUsage.js');
 const { buildScopedCodexInsights } = require('../../../out/providers/codex/codexInsights.js');
+const { buildProjectUsageMatrixSnapshot } = require('../../../out/projectUsageMatrix.js');
 const {
   CODEX_WEBVIEW_NOW,
   codexWebviewFixture,
@@ -150,6 +151,7 @@ function settingsStore({
   adviceEffectiveness = false,
   adviceOptimizer = false,
   displayCurrency = 'USD',
+  projectMatrix = true,
 } = {}) {
   const values = new Map(SETTINGS.map((definition) => [definition.key, definition.default]));
   values.set('codex.optimization.enabled', true);
@@ -159,6 +161,7 @@ function settingsStore({
   values.set('advice.effectiveness.enabled', adviceEffectiveness);
   values.set('advice.optimizer.enabled', adviceOptimizer);
   values.set('displayCurrency', displayCurrency);
+  values.set('showProjectUsageMatrix', projectMatrix);
   return {
     get: (key) => values.get(key),
     snapshot: () => SETTINGS.map((definition) => ({
@@ -167,6 +170,28 @@ function settingsStore({
       isDefault: values.get(definition.key) === definition.default,
     })),
   };
+}
+
+function claudeProjectUsageMatrix() {
+  const points = [];
+  for (let project = 1; project <= 16; project += 1) {
+    for (let offset = 0; offset < 10; offset += 1) {
+      const day = new Date(Date.UTC(2026, 6, 20 - offset * 3 - (project % 3)))
+        .toISOString().slice(0, 10);
+      points.push({
+        projectKey: `claude:project-${String(project).padStart(2, '0')}`,
+        projectName: `Research Project ${String(project).padStart(2, '0')}`,
+        day,
+        tokens: project * 100_000 + offset * 13_000,
+        coverage: 'complete',
+      });
+    }
+  }
+  return buildProjectUsageMatrixSnapshot('claude', points, {
+    asOfDay: '2026-07-20',
+    timeZone: 'Asia/Hong_Kong',
+    coverage: 'complete',
+  });
 }
 
 function memoryGlobalState() {
@@ -323,6 +348,7 @@ function addClaudeData(provider, { fixture = 'default', enableContent = false } 
       '2026-07-19': [{ hour: '09:00', data: claudeUsage(0.4) }],
       '2026-07-20': [{ hour: '18:00', data: claudeUsage(0.6) }],
     },
+    claudeProjectUsageMatrix(),
   );
   if (completedWeeklyFixture) {
     provider.updateWeeklyQuotaHistory([{
@@ -401,6 +427,7 @@ exports.renderHarness = async function renderHarness({
   autoRefresh = false,
   weeklyValue = true,
   shareStudio = true,
+  projectMatrix = true,
   adviceFeedback = 'none',
   timeZone = 'Asia/Hong_Kong',
   codexMonth = '',
@@ -458,6 +485,7 @@ exports.renderHarness = async function renderHarness({
       adviceEffectiveness: adviceEffectivenessFixture,
       adviceOptimizer: adviceOptimizerFixture,
       displayCurrency,
+      projectMatrix,
     });
     addClaudeData(provider, { fixture, enableContent: adviceContentFixture });
     if (adviceEffectivenessFixture) {

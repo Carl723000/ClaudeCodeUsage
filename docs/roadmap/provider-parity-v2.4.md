@@ -18,6 +18,14 @@ At the start of the v2.3.2 stabilization branch, the accepted items have the
 following status. Commit identifiers refer to the local candidate branch and
 become release evidence only after maintainer review and merge.
 
+- **Done — X-06 brought forward from v2.3.3:** the existing Projects page now
+  provides a shared, Token-only 30/90-day project × day heatmap and stacked
+  daily trend for Claude and Codex. Exact tooltips, explicit coverage, bounded
+  rows/cells/series, and an **Other projects** tail preserve truth and scale.
+  Both providers reuse already-materialized indexes; opening or switching the
+  matrix performs zero source-JSONL reads and adds no scanner, cache, timer,
+  watcher, worker, dependency, or network path (`eaf2eb9`; model/index/UI tests).
+
 - **Done — watcher recovery:** failed Claude/Codex file watchers rearm with
   bounded exponential backoff while polling remains the safe fallback. Tests
   cover repeated failure, recovery, and disposal without a hot loop

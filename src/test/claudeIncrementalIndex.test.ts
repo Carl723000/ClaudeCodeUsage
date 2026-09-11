@@ -335,6 +335,62 @@ test('Today and rolling 30 days share the configured local-day map across DST', 
   }
 });
 
+test('Claude project-day aggregates stay incremental and feed the 90-day matrix without body rereads', async () => {
+  const previousTimeZone = I18n.getTimezone();
+  I18n.setTimezone('UTC');
+  try {
+    const { root, first } = await fixture();
+    const cold = await updateClaudeUsageIndex(createClaudeUsageIndex(), root, {
+      analyzeContent: false,
+    });
+    const initial = claudeUsageDashboardSnapshot(cold.index, {
+      now: new Date('2026-08-21T12:00:00.000Z'),
+    });
+    assert.deepEqual(
+      initial.projectUsageMatrix.points.map((point) => ({
+        name: point.projectName,
+        day: point.day,
+        tokens: point.tokens,
+      })),
+      [
+        { name: 'project-a', day: '2026-08-21', tokens: 19 },
+        { name: 'project-b', day: '2026-08-21', tokens: 33 },
+      ],
+    );
+
+    const unchanged = await updateClaudeUsageIndex(cold.index, root, {
+      analyzeContent: false,
+    });
+    const warmSnapshot = claudeUsageDashboardSnapshot(unchanged.index, {
+      now: new Date('2026-08-21T12:00:00.000Z'),
+    });
+    assert.equal(unchanged.diagnostics.bodyReads, 0);
+    assert.deepEqual(warmSnapshot.projectUsageMatrix, initial.projectUsageMatrix);
+
+    await appendFile(first, `${usageLine('matrix-append', 7, 1, {
+      timestamp: '2026-08-22T09:00:00.000Z',
+    })}\n`, 'utf8');
+    const appended = await updateClaudeUsageIndex(unchanged.index, root, {
+      analyzeContent: false,
+    });
+    const appendedSnapshot = claudeUsageDashboardSnapshot(appended.index, {
+      now: new Date('2026-08-22T12:00:00.000Z'),
+    });
+    assert.equal(appended.diagnostics.bodyReads, 1);
+    assert.deepEqual(
+      appendedSnapshot.projectUsageMatrix.points
+        .filter((point) => point.projectName === 'project-a')
+        .map((point) => ({ day: point.day, tokens: point.tokens })),
+      [
+        { day: '2026-08-21', tokens: 19 },
+        { day: '2026-08-22', tokens: 13 },
+      ],
+    );
+  } finally {
+    I18n.setTimezone(previousTimeZone);
+  }
+});
+
 test('advice window is opt-in and comes only from materialized day and session aggregates', async () => {
   const { root, first } = await fixture();
   await writeFile(
@@ -394,6 +450,10 @@ test('configured timezone rebuckets Claude Today and hours from the in-memory in
 
     assert.equal(shifted.diagnostics.bodyReads, 0);
     assert.equal(hongKong.today.totalInputTokens, 10);
+    assert.deepEqual(
+      hongKong.projectUsageMatrix.points.map((point) => point.day),
+      ['2026-07-21'],
+    );
     assert.deepEqual(hongKong.hourlyForToday.map(({ hour }) => hour), ['07:00']);
     assert.deepEqual(
       hongKong.hourlyForLast30DaysByDay['2026-07-21'].map(({ hour }) => hour),
