@@ -3089,6 +3089,7 @@ export class ClaudeCodeUsageExtension {
   // providers, or trigger a corpus reindex.
   private static readonly DASHBOARD_ONLY_SETTINGS = new Set([
     'showWeeklyEquivalentValue',
+    'showProjectUsageMatrix',
   ]);
 
   // These values only reformat already-materialized USD estimates. They must

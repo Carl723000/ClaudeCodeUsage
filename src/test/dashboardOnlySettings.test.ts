@@ -3,7 +3,7 @@ import * as path from 'path';
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
 
-test('weekly equivalent panel toggle refreshes dashboard UI without rebuilding providers', () => {
+test('presentation toggles refresh dashboard UI without rebuilding providers', () => {
   const source = fs.readFileSync(
     path.join(__dirname, '..', '..', 'src', 'extension.ts'),
     'utf8',
@@ -11,7 +11,7 @@ test('weekly equivalent panel toggle refreshes dashboard UI without rebuilding p
 
   assert.match(
     source,
-    /DASHBOARD_ONLY_SETTINGS\s*=\s*new Set\(\[[\s\S]*?'showWeeklyEquivalentValue'[\s\S]*?\]\)/,
+    /DASHBOARD_ONLY_SETTINGS\s*=\s*new Set\(\[[\s\S]*?'showWeeklyEquivalentValue'[\s\S]*?'showProjectUsageMatrix'[\s\S]*?\]\)/,
   );
   assert.match(
     source,

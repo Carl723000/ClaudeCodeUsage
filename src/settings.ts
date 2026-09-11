@@ -352,6 +352,16 @@ export const SETTINGS: SettingDef[] = [
     providers: ['claude', 'codex'],
   },
   {
+    key: 'showProjectUsageMatrix',
+    type: 'boolean',
+    default: true,
+    storage: 'state',
+    group: 'features',
+    label: 'Show project usage matrix',
+    help: 'On by default. Add a local 30/90-day Token heatmap and stacked trend to Projects. Reuses indexed aggregates and never allocates subscription quota by project.',
+    providers: ['claude', 'codex'],
+  },
+  {
     key: 'showHeatmap',
     type: 'boolean',
     default: false,
