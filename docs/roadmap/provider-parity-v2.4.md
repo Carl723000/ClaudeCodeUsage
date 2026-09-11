@@ -117,3 +117,28 @@ become release evidence only after maintainer review and merge.
 - Playwright covers mouse, Enter/Space, ARIA, focus, Light+/Dark+, 360 px, the longest locale, and drill-down/collapse flows.
 - An isolated VS Code profile installs the VSIX and captures privacy-safe Claude/Codex Today status, quota tooltip, month-to-day, and day-to-hour evidence.
 - After one read-only Claude CLI audit, allow one revision review for selected findings; all blockers close before candidate packaging.
+
+## Later candidate (v2.6+): Remote-SSH and multi-host usage aggregation
+
+This item is explicitly outside v2.4 and v2.5 and does not block either release.
+For now, each Extension Host continues to read exactly one local `CODEX_HOME`:
+Remote-SSH usage is visible separately only when the extension actually runs on
+that remote Extension Host, and local plus remote hosts are not merged automatically.
+
+- Any future implementation remains off by default and requires explicit host
+  selection and pairing. SSH access, background synchronization, or remote
+  scanning must never enter the ordinary refresh path implicitly.
+- Hosts may exchange only versioned, bounded, privacy-safe numeric aggregates
+  and coverage metadata. Raw JSONL, prompts/responses, thread titles, absolute
+  paths, usernames, credentials, and full account identifiers never cross hosts.
+- Token activity may be deduplicated and summed within stable pseudonymous
+  host/source boundaries. Account allowance snapshots are never added across
+  hosts: each allowance series uses its newest valid observation and displays
+  the source host, observation time, and staleness explicitly.
+- The dashboard must expose both combined values and per-host coverage. Offline
+  hosts, disconnects, timezone differences, cross-host replay, and multiple
+  sign-ins in one home remain visible uncertainty instead of invented history.
+- Implementation requires a separate design and privacy gate covering Remote
+  Extension Host lifecycle, resumable transfer, atomic checkpoints, cross-host
+  deduplication, resource ceilings, and reversible clearing. No exact release
+  is promised until those gates pass.
