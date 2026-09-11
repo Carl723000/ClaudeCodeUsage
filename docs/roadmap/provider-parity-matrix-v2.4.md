@@ -2,7 +2,7 @@
 
 [简体中文](provider-parity-matrix-v2.4.zh-CN.md) · English
 
-Snapshot: 2026-09-09, local candidate branch `codex/v2.3.2-stabilization`.
+Snapshot: 2026-09-11, local candidate branch `codex/v2.3.2-project-usage-matrix`.
 Commit identifiers are development evidence, not published-release claims.
 
 This matrix records interaction parity without pretending Claude and Codex
@@ -33,6 +33,7 @@ local branch and has passed its listed tests.
 | Expansion / selection persistence | Expansion and Today-hour selection survive Webview reload and reset on a user-initiated top-tab switch | Same for supported interactions | Candidate (`3b46c09`) | Ordinary same-shell refresh replaces only the provider panel and preserves the host-selected tab, expanded chain, chart/hour selection, transient Optimizer input, keyboard focus, and nearest visible anchor. Same-turn updates coalesce; structural changes or failed delivery fall back to a complete document. Node and Playwright coverage exercise Claude and Codex |
 | Page scroll | Debounced per-provider/tab position plus nearest-anchor restoration during live replacement | Same | Candidate (`3b46c09`, `7b86a54`) | Continuous scrolling writes once after the gesture; late Chromium scroll/pagehide events cannot synchronously rewrite an identical position. Live replacement restores the nearest visible stable element; complete reload restoration remains covered in `codex-interactions.spec.mjs` |
 | Tables | Shared numeric alignment, sortable semantics where applicable, bounded horizontal scrollers | Same | Aligned | Keyboard sorting, 360 px, long-locale, and desktop overflow tests |
+| Project activity matrix | Token-only 30/90-day project × day heatmap and stacked daily trend from the Claude incremental index | Same interaction from Codex period slices, with explicit indexed-subtotal coverage | Candidate (`eaf2eb9`) | Shared 0–4 intensity scale, exact tooltips, bounded rows/cells/series, **Other projects** tail, separate provider identities, local scrolling, and zero source-JSONL reads on interaction; `project-usage-matrix.spec.mjs` covers state, live replacement, setting, and 360 px |
 | Weekly allowance-value detail | Provider-qualified Claude panel; details collapsed by default | Separate provider-qualified Codex panel; details collapsed by default | Aligned layout, intentional evidence authority | Claude uses official observations; Codex uses local last-observed evidence. Compare never sums them |
 | Status-bar quota detail | Official `/usage`, shared progress table and thresholds | Last-observed local evidence, same progress table and thresholds | Aligned layout, intentional authority | Provider-specific provenance stays visible and must never be inferred from matching colors |
 | Sharing | Legacy Claude export remains compatible during v2.3.x | Compare studio exports privacy-safe provider components | Partial by decision | New sharing work goes only to the Compare studio; legacy removal waits for documentation and compatibility migration |
@@ -50,6 +51,7 @@ local branch and has passed its listed tests.
 | All time month → day (Claude) | Existing in-memory records only; no filesystem read | Expanded month and metric | User switches the top dashboard tab |
 | All time month → day (Codex) | One provider-qualified selected-month response derived from host-memory index aggregates; no filesystem read | Expanded month, eligible nested hour, and metrics | User switches the top dashboard tab |
 | Sort / filter | Existing rendered DTO only | Sort, session range, and model filter | Explicit user change or UI reset |
+| Project matrix range / view / expansion | Existing bounded project-day DTO only; no host message or filesystem read | Provider-scoped 30/90-day range, heatmap/trend view, and expanded-row state | UI reset |
 | Scroll | Browser scroll position only | Per provider and dashboard tab | UI reset |
 | Live data replacement | Newly rendered provider-panel HTML, the bounded Claude rolling-hour DTO, and an on-demand selected-month Codex fragment; no source-log read in the client | Active tab, expansion chain, chart/hour selection, transient focused control, keyboard focus, and nearest visible anchor | Structural shell change, provider change, rejected delivery, or UI reset |
 
@@ -59,5 +61,5 @@ bounded DTO before a new drill-down control is added.
 
 ## Next implementation order
 
-1. Capture the installed-VSIX status, quota, and supported drill-down evidence
-   before candidate packaging.
+1. Capture installed-VSIX status, quota, supported drill-down, and project-matrix
+   evidence before candidate packaging.

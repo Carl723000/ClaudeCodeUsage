@@ -36,11 +36,14 @@ Hover the quota indicator for a breakdown:
 
 ![Combined Claude and Codex heatmap, English, light theme](images/v2.3.1/compare-heatmap-en-light.png)
 
-These four v2.3 captures use the production renderer, synthetic fixtures, and VS Code Light+/Dark+ theme variables—not personal usage or billing evidence. Native VSIX installation is checked separately.
+![Project activity matrix, English, dark theme](images/v2.3.2/project-activity-matrix-en-dark.png)
+
+These five v2.3 captures use the production renderer, synthetic fixtures, and VS Code Light+/Dark+ theme variables—not personal usage or billing evidence. Native VSIX installation is checked separately.
 
 - Codex shows **Today token usage** and separate **remaining quota**: 36% used means `wk 64%`. Hover shows utilisation bars, resets, and wrapped notes. Quota is last-observed local evidence, not a live balance.
 - Period details start collapsed; sharing settings sit below the preview. Sharing is on by default with an off switch and quantile, logarithmic, or linear intensity.
 - CLI calls count only when persistent sessions leave usage-bearing logs. Non-persisted calls cannot be backfilled; Today and Last 30 days use the configured timezone.
+- Projects adds a Token-only 30/90-day project × day heatmap and stacked daily trend for both providers, with exact tooltips, explicit coverage, bounded rows, and an Other-projects tail.
 
 ## Features
 
@@ -57,8 +60,9 @@ These four v2.3 captures use the production renderer, synthetic fixtures, and VS
 
 - **Refined throughout the v2.3 line** — GPT-6 Astra and Fable 5.1 model
   metadata, optional AWS Bedrock pricing, a fixed-reference display-currency
-  selector, complete month/day/hour drill-downs, state-preserving refresh,
-  accessible charts, and lower watcher/title-index overhead. Patch-level
+  selector, a Token-only 30/90-day project activity matrix, complete
+  month/day/hour drill-downs, state-preserving refresh, accessible charts, and
+  lower watcher/title-index overhead. Patch-level
   details stay in the changelog and GitHub Releases.
 - Codex usage records are discovered only from `sessions/**/*.jsonl` and `archived_sessions/**/*.jsonl`; credential, database, and unknown files remain excluded. Separately, the extension streams exactly `$CODEX_HOME/session_index.jsonl` to map `id` to `thread_name` for truthful thread titles. Absolute paths are redacted and titles remain memory-only. Usage-record JSONL lines are streamed and temporarily parsed only to extract allowlisted usage and structural metadata; prompt, response, command, and tool-argument fields are not inspected or used for analysis, and are never retained or persisted.
 - **Processed** means input + output, **uncached usage** means uncached input + output, **cached input** remains a subset of input, and reasoning remains a subset of output. The overview also shows input cache hit rate as cached input / input. Codex billing cost is not shown. Its first summary card is a clearly labelled API-equivalent cost estimate for the selected scope, and the All-time view shows the weekly trend on the same pricing basis; Claude / Codex / Compare keep each provider's accounting separate.

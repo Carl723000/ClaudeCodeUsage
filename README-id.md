@@ -36,11 +36,14 @@ Arahkan kursor ke indikator kuota untuk melihat rinciannya:
 
 ![Heatmap gabungan Claude dan Codex, Inggris, tema terang](images/v2.3.1/compare-heatmap-en-light.png)
 
-Empat gambar v2.3 ini menggunakan renderer produksi, data sintetis, dan variabel tema VS Code Light+/Dark+, bukan bukti penggunaan pribadi atau tagihan. Instalasi VSIX native diverifikasi secara terpisah.
+![Matriks aktivitas proyek, Inggris, tema gelap](images/v2.3.2/project-activity-matrix-en-dark.png)
+
+Lima gambar v2.3 ini menggunakan renderer produksi, data sintetis, dan variabel tema VS Code Light+/Dark+, bukan bukti penggunaan pribadi atau tagihan. Instalasi VSIX native diverifikasi secara terpisah.
 
 - Codex menampilkan **token terpakai hari ini** dan **sisa kuota** secara terpisah: penggunaan mingguan 36% berarti `wk 64%`. Tooltip tetap menampilkan bilah penggunaan, waktu reset, dan catatan berbaris. Kuota berasal dari pengamatan lokal terakhir, bukan saldo langsung.
 - Detail periode tertutup secara default; pengaturan berbagi berada di bawah pratinjau. Berbagi aktif secara default dan dapat dimatikan, dengan intensitas kuantil, logaritmik, atau linear.
 - Panggilan CLI dihitung hanya jika sesi persisten menyimpan log dengan usage. Panggilan tanpa log tidak dapat dipulihkan; Hari ini dan 30 hari terakhir memakai zona waktu yang dikonfigurasi.
+- Projects menambahkan heatmap Token 30/90 hari “proyek × tanggal” dan tren harian bertumpuk untuk kedua penyedia, dengan tooltip presisi, cakupan eksplisit, baris terbatas, dan ekor “Proyek lain”.
 
 ## Fitur
 
@@ -57,8 +60,9 @@ Empat gambar v2.3 ini menggunakan renderer produksi, data sintetis, dan variabel
 
 - **Penyempurnaan di seluruh seri v2.3** — metadata model GPT-6 Astra dan
   Fable 5.1, harga AWS Bedrock opsional, pilihan mata uang tampilan dengan kurs
-  referensi tetap, drill-down bulan/hari/jam lengkap, refresh yang mempertahankan
-  state, grafik aksesibel, serta beban watcher dan indeks judul yang lebih rendah.
+  referensi tetap, matriks aktivitas proyek khusus Token 30/90 hari, drill-down
+  bulan/hari/jam lengkap, refresh yang mempertahankan state, grafik aksesibel,
+  serta beban watcher dan indeks judul yang lebih rendah.
   Detail per patch hanya disimpan di CHANGELOG dan GitHub Releases.
 - Catatan penggunaan Codex hanya ditemukan dari `sessions/**/*.jsonl` dan `archived_sessions/**/*.jsonl`; file kredensial, database, dan file tak dikenal tetap dikecualikan. Secara terpisah, ekstensi hanya melakukan streaming terhadap `$CODEX_HOME/session_index.jsonl` untuk memetakan `id` ke `thread_name` bagi judul thread yang sebenarnya. Jalur absolut dalam judul disamarkan dan judul hanya disimpan di memori. Setiap baris JSONL penggunaan di-stream dan diparse sementara hanya untuk mengambil metadata penggunaan dan struktur dalam daftar izin; field prompt, respons, perintah, dan argumen alat tidak diperiksa atau dipakai untuk analisis, serta tidak pernah disimpan atau dipersistenkan.
 - **Diproses** = input + output, **Penggunaan tanpa cache** = Input tanpa cache + output, **cached input** tetap bagian dari input, dan reasoning bagian dari output. Ringkasan juga menampilkan tingkat hit cache input sebagai cached input / input. Biaya tagihan Codex tidak ditampilkan. Kartu ringkasan pertama menampilkan estimasi biaya ekuivalen API untuk cakupan terpilih dengan label yang jelas, sedangkan tampilan Sepanjang Waktu menunjukkan tren mingguan dengan dasar harga yang sama. Claude / Codex / Compare tetap memisahkan makna tiap penyedia.

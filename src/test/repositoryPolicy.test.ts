@@ -1447,7 +1447,7 @@ test('all seven README editions explain Codex Beta in their own language', () =>
   }
 });
 
-test('v2.3.1 README editions share release evidence and local-data boundaries', () => {
+test('v2.3 README editions share release evidence and local-data boundaries', () => {
   const readmes = [
     'README.md',
     'README-en.md',
@@ -1462,6 +1462,7 @@ test('v2.3.1 README editions share release evidence and local-data boundaries', 
     'images/v2.3.1/codex-overview-zh-CN-dark.png',
     'images/v2.3.1/codex-weekly-estimate-en-dark.png',
     'images/v2.3.1/compare-heatmap-en-light.png',
+    'images/v2.3.2/project-activity-matrix-en-dark.png',
   ];
   for (const image of releaseImages) {
     assert.ok(
@@ -1480,6 +1481,11 @@ test('v2.3.1 README editions share release evidence and local-data boundaries', 
   for (const readme of readmes) {
     const body = repoFile(readme);
     assert.match(body, /2\.3\.1/, `${readme} is missing the release section`);
+    assert.doesNotMatch(
+      body,
+      /^##[^\n]*2\.3\.2[^\n]*$/m,
+      `${readme} must keep What's new at minor-version granularity`,
+    );
     assert.match(body, /LOCAL-DATA(?:\.zh-CN)?\.md/, `${readme} is missing the local-data inventory`);
     for (const image of releaseImages) {
       assert.ok(body.includes(image), `${readme} is missing ${image}`);
@@ -1543,8 +1549,9 @@ test('changelog records the V2.2.2 energy patch after the released V2.2.1 baseli
   assert.doesNotMatch(changelog, /^## \[2\.2\.[01]\] — Unreleased$/m);
 });
 
-test('changelog records the v2.3.0 and v2.3.1 candidates', () => {
+test('changelog records the v2.3.0 through v2.3.2 candidates', () => {
   const changelog = repoFile('CHANGELOG.md');
+  assert.match(changelog, /^## \[2\.3\.2\] — Unreleased$/m);
   assert.match(changelog, /^## \[2\.3\.1\] — Unreleased$/m);
   assert.match(changelog, /^## \[2\.3\.0\] — Unreleased$/m);
 });
@@ -1555,6 +1562,7 @@ test('release announcements are exact-version and user-disableable', () => {
 
   assert.match(extension, /'2\.3\.0'/);
   assert.match(extension, /'2\.3\.1'/);
+  assert.match(extension, /'2\.3\.2'/);
   assert.doesNotMatch(extension, /'2\.2'\s*:/);
   assert.match(settings, /key:\s*'releaseAnnouncements'/);
   assert.match(settings, /default:\s*true/);

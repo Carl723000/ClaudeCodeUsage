@@ -115,6 +115,7 @@ export interface Translations {
   releaseAnnouncement: {
     v230: string;
     v231: string;
+    v232: string;
   };
   providers: ProviderTranslations;
   weeklyValue: WeeklyValueCopy;
@@ -1188,6 +1189,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: "What's new — Codex Beta usage and local optimization guidance, exact-version release notes, and removal of the obsolete model-specific weekly Opus option.",
       v231: 'Accurate 30-day Codex totals, reset-aware weekly allowance estimates, and a private combined activity heatmap with local SVG and Markdown sharing.',
+      v232: 'New in 2.3.2: a 30/90-day project activity matrix for Claude and Codex, complete chart drill-downs, state-preserving refresh, and a compact fixed-rate currency selector.',
     },
     providers: PROVIDERS.en,
     weeklyValue: WEEKLY_VALUE_COPY.en,
@@ -1488,6 +1490,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: 'Neu: Codex-Beta-Nutzung und lokale Optimierungshinweise, versionsgenaue Release-Hinweise und Entfernung der veralteten modellspezifischen wöchentlichen Opus-Option.',
       v231: 'Neu: korrekte 30-Tage-Codex-Werte, reset-bewusste Wochenschätzungen und eine private kombinierte Aktivitäts-Heatmap mit lokalem SVG- und Markdown-Export.',
+      v232: 'Neu in 2.3.2: eine 30-/90-Tage-Projektaktivitätsmatrix für Claude und Codex, vollständige Diagramm-Drilldowns, zustandserhaltende Aktualisierung und eine kompakte Währungsauswahl mit festen Referenzkursen.',
     },
     providers: PROVIDERS['de-DE'],
     weeklyValue: WEEKLY_VALUE_COPY['de-DE'],
@@ -1791,6 +1794,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: '新功能：Codex Beta 用量與本機優化建議、與安裝版本精確對應的更新說明，並移除已過時的特定模型每週 Opus 選項。',
       v231: '新功能：正確的 Codex 最近 30 天統計、可識別重置的每週額度估算，以及可匯出本機 SVG／Markdown 的隱私安全綜合活動熱力圖。',
+      v232: '2.3.2 新功能：Claude 與 Codex 的 30／90 天專案活動矩陣、完整圖表下鑽、保留介面狀態的重新整理，以及採用固定參考匯率的精簡幣別下拉選單。',
     },
     providers: PROVIDERS['zh-TW'],
     weeklyValue: WEEKLY_VALUE_COPY['zh-TW'],
@@ -2087,6 +2091,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: '新功能：Codex Beta 用量与本地优化建议、与安装版本精确对应的更新说明，并移除已过时的特定模型每周 Opus 选项。',
       v231: '新功能：准确的 Codex 最近 30 天统计、可识别重置的每周额度估算，以及可导出本地 SVG／Markdown 的隐私安全综合活动热力图。',
+      v232: '2.3.2 新功能：Claude 与 Codex 的 30／90 天项目活动矩阵、完整图表下钻、保留界面状态的刷新，以及采用固定参考汇率的紧凑币种下拉栏。',
     },
     providers: PROVIDERS['zh-CN'],
     weeklyValue: WEEKLY_VALUE_COPY['zh-CN'],
@@ -2383,6 +2388,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: '新機能：Codex Beta の使用量とローカル最適化ガイド、完全なバージョンに対応するリリース通知、および古いモデル別の週間 Opus オプションの削除。',
       v231: '新機能：正確な Codex の直近 30 日集計、リセットを考慮した週間枠の推定、ローカル SVG／Markdown 共有に対応したプライバシー保護の統合アクティビティヒートマップ。',
+      v232: '2.3.2 の新機能：Claude と Codex の30／90日プロジェクト活動マトリクス、完全なチャートドリルダウン、状態を保つ更新、固定参照レートのコンパクトな通貨選択。',
     },
     providers: PROVIDERS.ja,
     weeklyValue: WEEKLY_VALUE_COPY.ja,
@@ -2684,6 +2690,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: '새 기능: Codex Beta 사용량과 로컬 최적화 안내, 설치된 전체 버전에 맞는 릴리스 알림, 그리고 오래된 모델별 주간 Opus 옵션 제거.',
       v231: '새 기능: 정확한 Codex 최근 30일 통계, 재설정을 인식하는 주간 한도 추정, 로컬 SVG/Markdown 공유를 지원하는 개인정보 보호 통합 활동 히트맵.',
+      v232: '2.3.2 새 기능: Claude와 Codex의 30/90일 프로젝트 활동 매트릭스, 완전한 차트 드릴다운, 상태를 보존하는 새로 고침, 고정 기준 환율의 간결한 통화 선택.',
     },
     providers: PROVIDERS.ko,
     weeklyValue: WEEKLY_VALUE_COPY.ko,
@@ -2985,6 +2992,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: 'Novidades: uso do Codex Beta e orientações locais de otimização, avisos da versão exata instalada e remoção da opção semanal obsoleta do Opus por modelo.',
       v231: 'Novidades: totais corretos dos últimos 30 dias do Codex, estimativas semanais cientes de redefinições e um mapa de calor combinado e privado com exportação local em SVG e Markdown.',
+      v232: 'Novidades da 2.3.2: matriz de atividade por projeto em 30/90 dias para Claude e Codex, detalhamento completo dos gráficos, atualização que preserva o estado e seletor compacto de moeda com taxas de referência fixas.',
     },
     providers: PROVIDERS['pt-BR'],
     weeklyValue: WEEKLY_VALUE_COPY['pt-BR'],
@@ -3285,6 +3293,7 @@ const translations: Record<SupportedLanguage, Translations> = {
     releaseAnnouncement: {
       v230: 'Yang baru: penggunaan Codex Beta dan panduan optimasi lokal, catatan rilis yang sesuai dengan versi lengkap terpasang, serta penghapusan opsi Opus mingguan khusus model yang sudah usang.',
       v231: 'Yang baru: statistik 30 hari Codex yang akurat, estimasi batas mingguan yang mengenali reset, dan heatmap aktivitas gabungan privat dengan ekspor SVG serta Markdown lokal.',
+      v232: 'Baru di 2.3.2: matriks aktivitas proyek 30/90 hari untuk Claude dan Codex, drill-down grafik lengkap, refresh yang mempertahankan state, serta pemilih mata uang ringkas dengan kurs referensi tetap.',
     },
     providers: PROVIDERS.id,
     weeklyValue: WEEKLY_VALUE_COPY.id,

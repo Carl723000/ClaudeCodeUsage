@@ -386,6 +386,10 @@ const WHATS_NEW: ReleaseAnnouncementCatalog<LocalizedReleaseAnnouncement> = {
     version: '2.3.1',
     body: () => I18n.t.releaseAnnouncement.v231,
   },
+  '2.3.2': {
+    version: '2.3.2',
+    body: () => I18n.t.releaseAnnouncement.v232,
+  },
 };
 
 export class ClaudeCodeUsageExtension {
