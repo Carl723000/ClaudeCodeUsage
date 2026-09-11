@@ -64,6 +64,11 @@ import { createCodexLocalizedFormatters } from './codexFormat';
 import { getProviderNavClientScript } from './providerNavClient';
 import { getDashboardRefreshClientScript } from './dashboardRefreshClient';
 import { getChartAccessibilityClientScript } from './chartAccessibilityClient';
+import {
+  ProjectUsageMatrixSnapshot,
+  projectHeatmap,
+  projectTrend,
+} from './projectUsageMatrix';
 import * as os from 'os';
 import * as path from 'path';
 import * as https from 'https';
@@ -725,6 +730,193 @@ function combinedHeatmapUiCopy(locale: string): CombinedHeatmapUiCopy {
   };
 }
 
+interface ProjectMatrixUiCopy {
+  title: string;
+  description: string;
+  rangeLabel: string;
+  viewLabel: string;
+  last30: string;
+  last90: string;
+  heatmap: string;
+  trend: string;
+  completeCoverage: string;
+  partialCoverage: string;
+  noCoverage: string;
+  project: string;
+  activeDays: string;
+  otherProjects: string;
+  showMore: string;
+  showLess: string;
+  matrixAria: string;
+  trendAria: string;
+}
+
+function projectMatrixUiCopy(locale: string): ProjectMatrixUiCopy {
+  const copies: Record<string, ProjectMatrixUiCopy> = {
+    en: {
+      title: 'Project activity',
+      description: 'One indexed project × calendar-day source powers both views. Token activity only; not cost or subscription quota.',
+      rangeLabel: 'Range',
+      viewLabel: 'View',
+      last30: '30 days',
+      last90: '90 days',
+      heatmap: 'Heatmap',
+      trend: 'Trend',
+      completeCoverage: 'Complete coverage',
+      partialCoverage: 'Indexed subtotal · partial coverage',
+      noCoverage: 'No indexed coverage',
+      project: 'Project',
+      activeDays: 'active days',
+      otherProjects: 'Other projects',
+      showMore: 'Show more projects',
+      showLess: 'Show fewer projects',
+      matrixAria: 'Project activity heatmap',
+      trendAria: 'Daily project activity stacked trend',
+    },
+    'de-DE': {
+      title: 'Projektaktivität',
+      description: 'Eine indexierte Projekt-×-Kalendertag-Quelle speist beide Ansichten. Nur Token-Aktivität; keine Kosten oder Abokontingente.',
+      rangeLabel: 'Zeitraum',
+      viewLabel: 'Ansicht',
+      last30: '30 Tage',
+      last90: '90 Tage',
+      heatmap: 'Heatmap',
+      trend: 'Verlauf',
+      completeCoverage: 'Vollständige Abdeckung',
+      partialCoverage: 'Indexierte Zwischensumme · teilweise Abdeckung',
+      noCoverage: 'Keine indexierte Abdeckung',
+      project: 'Projekt',
+      activeDays: 'aktive Tage',
+      otherProjects: 'Weitere Projekte',
+      showMore: 'Mehr Projekte anzeigen',
+      showLess: 'Weniger Projekte anzeigen',
+      matrixAria: 'Heatmap der Projektaktivität',
+      trendAria: 'Gestapelter Tagesverlauf der Projektaktivität',
+    },
+    'zh-TW': {
+      title: '專案活動',
+      description: '兩種檢視共用同一份已索引的「專案 × 本機日期」資料。僅表示 Token 活動，不是成本或訂閱額度。',
+      rangeLabel: '範圍',
+      viewLabel: '檢視',
+      last30: '30 天',
+      last90: '90 天',
+      heatmap: '熱力圖',
+      trend: '趨勢',
+      completeCoverage: '涵蓋完整',
+      partialCoverage: '已索引小計 · 涵蓋不完整',
+      noCoverage: '沒有已索引涵蓋資料',
+      project: '專案',
+      activeDays: '個活躍日',
+      otherProjects: '其他專案',
+      showMore: '顯示更多專案',
+      showLess: '收起專案',
+      matrixAria: '專案活動熱力圖',
+      trendAria: '每日專案活動堆疊趨勢',
+    },
+    'zh-CN': {
+      title: '项目活动',
+      description: '两种视图共用同一份已索引的“项目 × 本地日期”数据。仅表示 Token 活动，不是成本或订阅额度。',
+      rangeLabel: '范围',
+      viewLabel: '视图',
+      last30: '30 天',
+      last90: '90 天',
+      heatmap: '热力图',
+      trend: '趋势',
+      completeCoverage: '覆盖完整',
+      partialCoverage: '已索引小计 · 覆盖不完整',
+      noCoverage: '没有已索引覆盖数据',
+      project: '项目',
+      activeDays: '个活跃日',
+      otherProjects: '其他项目',
+      showMore: '显示更多项目',
+      showLess: '收起项目',
+      matrixAria: '项目活动热力图',
+      trendAria: '每日项目活动堆叠趋势',
+    },
+    ja: {
+      title: 'プロジェクト活動',
+      description: '両方の表示は、同じ索引済み「プロジェクト × ローカル日付」データを使用します。Token 活動のみで、費用や契約枠ではありません。',
+      rangeLabel: '期間',
+      viewLabel: '表示',
+      last30: '30 日',
+      last90: '90 日',
+      heatmap: 'ヒートマップ',
+      trend: '推移',
+      completeCoverage: '完全なカバレッジ',
+      partialCoverage: '索引済み小計 · 一部カバレッジ',
+      noCoverage: '索引済みデータなし',
+      project: 'プロジェクト',
+      activeDays: '活動日',
+      otherProjects: 'その他のプロジェクト',
+      showMore: 'さらに表示',
+      showLess: '表示を減らす',
+      matrixAria: 'プロジェクト活動ヒートマップ',
+      trendAria: '日別プロジェクト活動の積み上げ推移',
+    },
+    ko: {
+      title: '프로젝트 활동',
+      description: '두 보기는 동일한 인덱싱된 프로젝트 × 현지 날짜 데이터를 사용합니다. Token 활동일 뿐 비용이나 구독 한도가 아닙니다.',
+      rangeLabel: '기간',
+      viewLabel: '보기',
+      last30: '30일',
+      last90: '90일',
+      heatmap: '히트맵',
+      trend: '추세',
+      completeCoverage: '전체 범위',
+      partialCoverage: '인덱싱 소계 · 일부 범위',
+      noCoverage: '인덱싱된 범위 없음',
+      project: '프로젝트',
+      activeDays: '활동 일수',
+      otherProjects: '기타 프로젝트',
+      showMore: '프로젝트 더 보기',
+      showLess: '프로젝트 접기',
+      matrixAria: '프로젝트 활동 히트맵',
+      trendAria: '일별 프로젝트 활동 누적 추세',
+    },
+    'pt-BR': {
+      title: 'Atividade por projeto',
+      description: 'As duas visualizações usam a mesma fonte indexada de projeto × dia local. Apenas atividade de Tokens; não representa custo nem cota da assinatura.',
+      rangeLabel: 'Período',
+      viewLabel: 'Visualização',
+      last30: '30 dias',
+      last90: '90 dias',
+      heatmap: 'Mapa de calor',
+      trend: 'Tendência',
+      completeCoverage: 'Cobertura completa',
+      partialCoverage: 'Subtotal indexado · cobertura parcial',
+      noCoverage: 'Sem cobertura indexada',
+      project: 'Projeto',
+      activeDays: 'dias ativos',
+      otherProjects: 'Outros projetos',
+      showMore: 'Mostrar mais projetos',
+      showLess: 'Mostrar menos projetos',
+      matrixAria: 'Mapa de calor da atividade por projeto',
+      trendAria: 'Tendência diária empilhada da atividade por projeto',
+    },
+    id: {
+      title: 'Aktivitas proyek',
+      description: 'Kedua tampilan memakai sumber terindeks proyek × hari lokal yang sama. Hanya aktivitas Token; bukan biaya atau kuota langganan.',
+      rangeLabel: 'Rentang',
+      viewLabel: 'Tampilan',
+      last30: '30 hari',
+      last90: '90 hari',
+      heatmap: 'Peta panas',
+      trend: 'Tren',
+      completeCoverage: 'Cakupan lengkap',
+      partialCoverage: 'Subtotal terindeks · cakupan sebagian',
+      noCoverage: 'Tidak ada cakupan terindeks',
+      project: 'Proyek',
+      activeDays: 'hari aktif',
+      otherProjects: 'Proyek lainnya',
+      showMore: 'Tampilkan lebih banyak proyek',
+      showLess: 'Tampilkan lebih sedikit proyek',
+      matrixAria: 'Peta panas aktivitas proyek',
+      trendAria: 'Tren bertumpuk aktivitas proyek harian',
+    },
+  };
+  return copies[locale] ?? copies.en;
+}
+
 export class UsageWebviewProvider {
   private panel: vscode.WebviewPanel | undefined;
   private webviewClientReady = false;
@@ -762,6 +954,7 @@ export class UsageWebviewProvider {
   private allRecords: any[] = [];
   private sessionBreakdown: SessionUsage[] = [];
   private projectBreakdown: ProjectGroup[] = [];
+  private claudeProjectUsageMatrix: ProjectUsageMatrixSnapshot | null = null;
   private contentAnalysis: ContentAnalysis | null = null;
   private branchBreakdown: BranchUsage[] = [];
   private workflowBreakdown: WorkflowUsage[] = [];
@@ -2280,6 +2473,7 @@ export class UsageWebviewProvider {
       string,
       { hour: string; data: UsageData }[]
     > = {},
+    projectUsageMatrix: ProjectUsageMatrixSnapshot | null = null,
   ): void {
     this.currentSessionData = sessionData;
     this.todayData = todayData;
@@ -2297,6 +2491,7 @@ export class UsageWebviewProvider {
     }
     this.sessionBreakdown = sessionBreakdown;
     this.projectBreakdown = projectBreakdown;
+    this.claudeProjectUsageMatrix = projectUsageMatrix;
     this.contentAnalysis = contentAnalysis;
     this.branchBreakdown = branchBreakdown;
     this.workflowBreakdown = workflowBreakdown;
@@ -5191,7 +5386,139 @@ export class UsageWebviewProvider {
       '</div>';
   }
 
+  private projectMatrixCoverageLabel(
+    coverage: ProjectUsageMatrixSnapshot['coverage'],
+    copy: ProjectMatrixUiCopy,
+  ): string {
+    if (coverage === 'complete') return copy.completeCoverage;
+    if (coverage === 'partial') return copy.partialCoverage;
+    return copy.noCoverage;
+  }
+
+  private renderProjectMatrixHeatmap(
+    snapshot: ProjectUsageMatrixSnapshot,
+    range: 30 | 90,
+    copy: ProjectMatrixUiCopy,
+  ): string {
+    const rows = projectHeatmap(snapshot, range, 40);
+    const headerDays = (rows[0]?.cells ?? []).map((cell, index, cells) => {
+      const monthChanged = index === 0 || cells[index - 1].day.slice(0, 7) !== cell.day.slice(0, 7);
+      const label = monthChanged ? this.getShortDate(cell.day) : cell.day.slice(8);
+      return '<th scope="col" title="' + this.escapeHtml(this.formatDate(cell.day)) + '">' +
+        this.escapeHtml(label) + '</th>';
+    }).join('');
+    const body = rows.map((row, index) => {
+      const name = row.projectName || copy.project;
+      const meta = I18n.formatNumber(row.totalTokens) + ' Token · ' +
+        I18n.formatNumber(row.activeDays) + ' ' + copy.activeDays;
+      const cells = row.cells.map((cell) => {
+        const coverage = this.projectMatrixCoverageLabel(cell.coverage, copy);
+        const title = name + ' · ' + this.formatDate(cell.day) + ' · ' +
+          I18n.formatNumber(cell.tokens) + ' Token · ' + coverage;
+        return '<td class="project-matrix-cell project-matrix-level-' + cell.bucket + '" ' +
+          'data-day="' + this.escapeHtml(cell.day) + '" data-tokens="' + cell.tokens + '" ' +
+          'title="' + this.escapeHtml(title) + '" aria-label="' + this.escapeHtml(title) + '"></td>';
+      }).join('');
+      return '<tr class="project-matrix-row"' +
+        (index >= 12 ? ' data-project-matrix-extra="true" hidden' : '') + '>' +
+        '<th scope="row" class="project-matrix-project"><span>' + this.escapeHtml(name) + '</span>' +
+        '<small>' + this.escapeHtml(meta) + '</small></th>' + cells + '</tr>';
+    }).join('');
+    return '<div class="project-matrix-scroll" tabindex="0" role="region" aria-label="' +
+      this.escapeHtml(copy.matrixAria + ' · ' + (range === 90 ? copy.last90 : copy.last30)) + '">' +
+      '<table class="project-matrix-grid"><thead><tr><th scope="col" class="project-matrix-project">' +
+      this.escapeHtml(copy.project) + '</th>' + headerDays + '</tr></thead><tbody>' + body +
+      '</tbody></table></div>';
+  }
+
+  private renderProjectMatrixTrend(
+    snapshot: ProjectUsageMatrixSnapshot,
+    range: 30 | 90,
+    copy: ProjectMatrixUiCopy,
+  ): string {
+    const series = projectTrend(snapshot, range, 6);
+    const names = series.map((item) => item.other ? copy.otherProjects : (item.projectName || copy.project));
+    const dayTotals = (series[0]?.values ?? []).map((_, dayIndex) =>
+      series.reduce((sum, item) => sum + item.values[dayIndex].tokens, 0));
+    const maxDay = Math.max(1, ...dayTotals);
+    const legend = series.map((item, index) =>
+      '<span class="project-matrix-trend-series"><i class="project-matrix-series-' + index +
+      '" aria-hidden="true"></i><span>' + this.escapeHtml(names[index]) + '</span><strong>' +
+      this.escapeHtml(I18n.formatNumber(item.totalTokens)) + '</strong></span>').join('');
+    const columns = (series[0]?.values ?? []).map((value, dayIndex, values) => {
+      const total = dayTotals[dayIndex];
+      const coverage = this.projectMatrixCoverageLabel(value.coverage, copy);
+      const totalTitle = this.formatDate(value.day) + ' · ' + I18n.formatNumber(total) +
+        ' Token · ' + coverage;
+      const segments = series.map((item, seriesIndex) => {
+        const point = item.values[dayIndex];
+        if (!(point.tokens > 0)) return '';
+        const title = names[seriesIndex] + ' · ' + this.formatDate(point.day) + ' · ' +
+          I18n.formatNumber(point.tokens) + ' Token · ' +
+          this.projectMatrixCoverageLabel(point.coverage, copy);
+        return '<span class="project-matrix-trend-segment project-matrix-series-' + seriesIndex + '" ' +
+          'style="height:' + ((point.tokens / maxDay) * 100).toFixed(4) + '%" ' +
+          'title="' + this.escapeHtml(title) + '" aria-label="' + this.escapeHtml(title) + '"></span>';
+      }).join('');
+      const showLabel = dayIndex === 0 || dayIndex === values.length - 1 || dayIndex % 7 === 0;
+      return '<div class="project-matrix-trend-col" title="' + this.escapeHtml(totalTitle) + '">' +
+        '<div class="project-matrix-trend-stack">' + segments + '</div>' +
+        '<span class="project-matrix-trend-date">' +
+        (showLabel ? this.escapeHtml(this.getShortDate(value.day)) : '') + '</span></div>';
+    }).join('');
+    return '<div class="project-matrix-trend-legend">' + legend + '</div>' +
+      '<div class="project-matrix-trend-scroll" tabindex="0" role="img" aria-label="' +
+      this.escapeHtml(copy.trendAria + ' · ' + (range === 90 ? copy.last90 : copy.last30)) + '">' +
+      '<div class="project-matrix-trend-bars project-matrix-trend-' + range + '">' + columns + '</div></div>';
+  }
+
+  private renderProjectUsageMatrix(provider: SettingProvider): string {
+    if (!this.setting<boolean>('showProjectUsageMatrix', true)) return '';
+    const snapshot = provider === 'codex'
+      ? this.codexView?.projectUsageMatrix
+      : this.claudeProjectUsageMatrix;
+    if (!snapshot || snapshot.points.length === 0) return '';
+    const copy = projectMatrixUiCopy(I18n.getLocale());
+    const coverage = this.projectMatrixCoverageLabel(snapshot.coverage, copy);
+    const rangePanel = (range: 30 | 90): string =>
+      '<div class="project-matrix-range" data-project-matrix-range-panel="' + range + '"' +
+      (range === 90 ? ' hidden' : '') + '>' +
+      '<div class="project-matrix-view" data-project-matrix-heatmap>' +
+      this.renderProjectMatrixHeatmap(snapshot, range, copy) + '</div>' +
+      '<div class="project-matrix-view" data-project-matrix-trend hidden>' +
+      this.renderProjectMatrixTrend(snapshot, range, copy) + '</div></div>';
+    const hasExtraRows = Math.max(
+      projectHeatmap(snapshot, 30, 40).length,
+      projectHeatmap(snapshot, 90, 40).length,
+    ) > 12;
+    return '<section class="project-matrix" data-project-matrix="' + provider + '">' +
+      '<div class="project-matrix-head"><div><h3>' + this.escapeHtml(copy.title) + '</h3>' +
+      '<p>' + this.escapeHtml(copy.description) + '</p></div>' +
+      '<span class="project-matrix-coverage project-matrix-coverage-' + snapshot.coverage + '">' +
+      this.escapeHtml(coverage) + '</span></div>' +
+      '<div class="project-matrix-toolbar">' +
+      '<div class="project-matrix-control" role="group" aria-label="' + this.escapeHtml(copy.rangeLabel) + '">' +
+      '<span>' + this.escapeHtml(copy.rangeLabel) + '</span>' +
+      '<button class="project-matrix-option active" data-project-matrix-range="30" aria-pressed="true">' +
+      this.escapeHtml(copy.last30) + '</button>' +
+      '<button class="project-matrix-option" data-project-matrix-range="90" aria-pressed="false">' +
+      this.escapeHtml(copy.last90) + '</button></div>' +
+      '<div class="project-matrix-control" role="group" aria-label="' + this.escapeHtml(copy.viewLabel) + '">' +
+      '<span>' + this.escapeHtml(copy.viewLabel) + '</span>' +
+      '<button class="project-matrix-option active" data-project-matrix-view="heatmap" aria-pressed="true">' +
+      this.escapeHtml(copy.heatmap) + '</button>' +
+      '<button class="project-matrix-option" data-project-matrix-view="trend" aria-pressed="false">' +
+      this.escapeHtml(copy.trend) + '</button></div></div>' +
+      rangePanel(30) + rangePanel(90) +
+      (hasExtraRows
+        ? '<button class="project-matrix-expand" data-project-matrix-expand aria-expanded="false" ' +
+          'data-show-more="' + this.escapeHtml(copy.showMore) + '" data-show-less="' +
+          this.escapeHtml(copy.showLess) + '">' + this.escapeHtml(copy.showMore) + '</button>'
+        : '') + '</section>';
+  }
+
   private renderProjectData(provider: SettingProvider = 'claude'): string {
+    const matrix = this.renderProjectUsageMatrix(provider);
     if (provider === 'codex') {
       const copy = I18n.t.providers.codex;
       const projects = this.codexView?.projects ?? [];
@@ -5199,7 +5526,7 @@ export class UsageWebviewProvider {
         this.codexView?.allTime.indexedSubtotal,
       );
       if (projects.length === 0) {
-        return subtotal + this.renderCodexEmptyState();
+        return subtotal + matrix + this.renderCodexEmptyState();
       }
       const formatters = createCodexLocalizedFormatters(I18n.getLocale(), I18n.getTimezone());
       const rows = projects.map((project: CodexProjectUsageView) => {
@@ -5223,7 +5550,7 @@ export class UsageWebviewProvider {
       }).join('');
       const th = (key: string, label: string): string =>
         '<th class="sortable" data-sortkey="' + key + '">' + this.escapeHtml(label) + '</th>';
-      return subtotal + '<div class="daily-breakdown"><h3>' + this.escapeHtml(copy.projects) + '</h3>' +
+      return subtotal + matrix + '<div class="daily-breakdown"><h3>' + this.escapeHtml(copy.projects) + '</h3>' +
         '<p class="table-hint">' + this.escapeHtml(I18n.t.popup.sortHint) + '</p>' +
         '<div class="daily-table-container" tabindex="0"><table class="daily-table sortable-table"><thead><tr>' +
         th('name', copy.projectLabel) + th('sessions', copy.threads) + th('processed', copy.processed) +
@@ -5232,7 +5559,7 @@ export class UsageWebviewProvider {
         '</tr></thead><tbody>' + rows + '</tbody></table></div></div>';
     }
     if (!this.projectBreakdown || this.projectBreakdown.length === 0) {
-      return '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
+      return matrix + '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>';
     }
 
     const t = I18n.t.popup;
@@ -5311,7 +5638,7 @@ export class UsageWebviewProvider {
       '<th class="sortable" data-sortkey="' + key + '">' + label + '</th>';
 
     return (
-      '<div class="daily-breakdown">' +
+      matrix + '<div class="daily-breakdown">' +
       '<h3>' + t.projectBreakdown + '</h3>' +
       '<p class="table-hint">' + t.sortHint + '</p>' +
       '<div class="daily-table-container" tabindex="0">' +
@@ -8250,6 +8577,238 @@ export class UsageWebviewProvider {
         color: var(--vscode-charts-green);
       }
 
+      .project-matrix {
+        min-width: 0;
+        margin-top: var(--ccu-space-5);
+        padding: var(--ccu-space-4) 0 var(--ccu-space-5);
+        border-top: 1px solid var(--ccu-border);
+        border-bottom: 1px solid var(--ccu-border);
+      }
+      .project-matrix-head {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: var(--ccu-space-4);
+      }
+      .project-matrix-head > div { min-width: 0; }
+      .project-matrix-head h3 {
+        margin: 0 0 var(--ccu-space-1);
+        font-size: 16px;
+      }
+      .project-matrix-head p {
+        max-width: 760px;
+        margin: 0;
+        color: var(--vscode-descriptionForeground);
+        line-height: 1.5;
+      }
+      .project-matrix-coverage {
+        flex: 0 0 auto;
+        padding: 2px 8px;
+        border: 1px solid var(--ccu-border);
+        border-radius: 999px;
+        color: var(--vscode-foreground);
+        font-size: 10px;
+        font-weight: 600;
+        white-space: nowrap;
+      }
+      .project-matrix-coverage-complete { border-color: var(--vscode-charts-green); }
+      .project-matrix-coverage-partial { border-color: var(--vscode-charts-yellow); }
+      .project-matrix-toolbar {
+        display: flex;
+        flex-wrap: wrap;
+        gap: var(--ccu-space-3) var(--ccu-space-5);
+        margin: var(--ccu-space-4) 0 var(--ccu-space-3);
+      }
+      .project-matrix-control {
+        display: inline-flex;
+        align-items: center;
+        gap: var(--ccu-space-1);
+      }
+      .project-matrix-control > span {
+        margin-right: var(--ccu-space-1);
+        color: var(--vscode-descriptionForeground);
+        font-size: 11px;
+      }
+      .project-matrix-option {
+        padding: 4px 9px;
+        border: 1px solid var(--ccu-border);
+        background: var(--vscode-button-secondaryBackground);
+        color: var(--vscode-button-secondaryForeground);
+        font-size: 11px;
+      }
+      .project-matrix-option:hover { background: var(--vscode-button-secondaryHoverBackground); }
+      .project-matrix-option.active {
+        border-color: var(--ccu-focus);
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+      }
+      .project-matrix-range[hidden],
+      .project-matrix-view[hidden],
+      .project-matrix-row[hidden] { display: none; }
+      .project-matrix-scroll,
+      .project-matrix-trend-scroll {
+        max-width: 100%;
+        overflow-x: auto;
+        overflow-y: hidden;
+        overscroll-behavior-inline: contain;
+        scrollbar-width: thin;
+        touch-action: pan-x pan-y;
+        contain: layout paint;
+      }
+      .project-matrix-scroll {
+        padding: 0 0 var(--ccu-space-2);
+      }
+      .project-matrix-grid {
+        width: max-content;
+        border-collapse: separate;
+        border-spacing: 3px;
+        font-size: 10px;
+      }
+      .project-matrix-grid th {
+        height: 18px;
+        padding: 0;
+        background: var(--vscode-editor-background);
+        color: var(--vscode-descriptionForeground);
+        font-weight: 500;
+        text-align: center;
+        white-space: nowrap;
+      }
+      .project-matrix-grid .project-matrix-project {
+        position: sticky;
+        left: 0;
+        z-index: 2;
+        box-sizing: border-box;
+        width: 180px;
+        max-width: 180px;
+        padding: 3px 12px 3px 0;
+        border-right: 1px solid var(--ccu-border);
+        background: var(--vscode-editor-background);
+        color: var(--vscode-foreground);
+        text-align: left;
+      }
+      .project-matrix-project > span,
+      .project-matrix-project > small {
+        display: block;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .project-matrix-project > span { font-size: 11px; font-weight: 600; }
+      .project-matrix-project > small {
+        margin-top: 2px;
+        color: var(--vscode-descriptionForeground);
+        font-size: 9px;
+        font-weight: 400;
+        font-variant-numeric: tabular-nums;
+      }
+      .project-matrix-cell {
+        box-sizing: border-box;
+        width: 14px;
+        min-width: 14px;
+        height: 14px;
+        border: 1px solid var(--ccu-border);
+        border-radius: 2px;
+        background: var(--vscode-input-background);
+      }
+      .project-matrix-level-1,
+      .project-matrix-level-2,
+      .project-matrix-level-3,
+      .project-matrix-level-4 {
+        border-color: transparent;
+        background: var(--vscode-charts-blue);
+      }
+      .project-matrix-level-1 { opacity: 0.28; }
+      .project-matrix-level-2 { opacity: 0.48; }
+      .project-matrix-level-3 { opacity: 0.72; }
+      .project-matrix-level-4 { opacity: 1; }
+      .project-matrix-cell:hover {
+        outline: 1px solid var(--ccu-focus);
+        outline-offset: 1px;
+        opacity: 1;
+      }
+      .project-matrix-trend-legend {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 6px 14px;
+        margin: 2px 0 var(--ccu-space-3);
+      }
+      .project-matrix-trend-series {
+        display: inline-grid;
+        grid-template-columns: 8px minmax(0, auto) auto;
+        align-items: center;
+        gap: 5px;
+        min-width: 0;
+        color: var(--vscode-descriptionForeground);
+        font-size: 10px;
+      }
+      .project-matrix-trend-series i {
+        width: 8px;
+        height: 8px;
+        border-radius: 2px;
+      }
+      .project-matrix-trend-series strong {
+        color: var(--vscode-foreground);
+        font-variant-numeric: tabular-nums;
+      }
+      .project-matrix-trend-bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        width: max-content;
+        min-width: 100%;
+        height: 190px;
+        padding: var(--ccu-space-2) 2px 0;
+        border-top: 1px solid var(--ccu-border);
+        border-bottom: 1px solid var(--ccu-border);
+      }
+      .project-matrix-trend-col {
+        display: flex;
+        flex: 1 0 16px;
+        width: 16px;
+        min-width: 16px;
+        height: 100%;
+        flex-direction: column;
+        justify-content: flex-end;
+      }
+      .project-matrix-trend-90 .project-matrix-trend-col { flex-basis: 12px; width: 12px; min-width: 12px; }
+      .project-matrix-trend-stack {
+        display: flex;
+        height: 160px;
+        flex-direction: column-reverse;
+        justify-content: flex-start;
+      }
+      .project-matrix-trend-segment {
+        display: block;
+        min-height: 1px;
+      }
+      .project-matrix-series-0 { background: var(--vscode-charts-blue); }
+      .project-matrix-series-1 { background: var(--vscode-charts-green); }
+      .project-matrix-series-2 { background: var(--vscode-charts-yellow); }
+      .project-matrix-series-3 { background: var(--vscode-charts-purple); }
+      .project-matrix-series-4 { background: var(--vscode-charts-red); }
+      .project-matrix-series-5 { background: var(--vscode-charts-orange); }
+      .project-matrix-trend-date {
+        display: block;
+        height: 22px;
+        padding-top: 4px;
+        color: var(--vscode-descriptionForeground);
+        font-size: 9px;
+        line-height: 10px;
+        white-space: nowrap;
+      }
+      .project-matrix-expand {
+        margin-top: var(--ccu-space-3);
+        padding: 4px 0;
+        border: none;
+        background: transparent;
+        color: var(--vscode-textLink-foreground);
+        font-weight: 600;
+      }
+      .project-matrix-expand:hover {
+        background: transparent;
+        text-decoration: underline;
+      }
+
       .model-breakdown, .daily-breakdown {
         margin-top: 24px;
       }
@@ -10103,6 +10662,14 @@ export class UsageWebviewProvider {
         white-space: pre;
       }
       @media (max-width: 800px) {
+        .project-matrix-head {
+          flex-direction: column;
+          gap: var(--ccu-space-2);
+        }
+        .project-matrix-coverage { white-space: normal; }
+        .project-matrix-toolbar {
+          gap: var(--ccu-space-2);
+        }
         .combined-share-layout {
           grid-template-columns: minmax(0, 1fr);
         }
@@ -10176,6 +10743,16 @@ export class UsageWebviewProvider {
         }
         .tabs {
           margin-bottom: var(--ccu-space-4);
+        }
+        .project-matrix-control {
+          width: 100%;
+        }
+        .project-matrix-control > span {
+          width: 48px;
+        }
+        .project-matrix-grid .project-matrix-project {
+          width: 132px;
+          max-width: 132px;
         }
         .combined-heatmap-panel {
           padding: var(--ccu-space-3);
@@ -10269,6 +10846,86 @@ function ccuElementStateKey(element, kind) {
   var elements = Array.prototype.slice.call(root.querySelectorAll(kind === 'table' ? 'table' : '.daily-breakdown, .hourly-breakdown'));
   return ccuProviderName() + ':' + (tab ? tab.id : 'page') + ':' + kind + ':' + Math.max(0, elements.indexOf(element));
 }
+
+function ccuProjectMatrixState(root) {
+  var provider = root ? root.getAttribute('data-project-matrix') : '';
+  var all = ccuReadUiState().projectUsageMatrix || {};
+  var saved = provider && all[provider] ? all[provider] : {};
+  return {
+    range: saved.range === '90' ? '90' : '30',
+    view: saved.view === 'trend' ? 'trend' : 'heatmap',
+    expanded: saved.expanded === true
+  };
+}
+function ccuSaveProjectMatrixState(root, state) {
+  var provider = root ? root.getAttribute('data-project-matrix') : '';
+  if (provider !== 'claude' && provider !== 'codex') { return; }
+  var all = ccuReadUiState().projectUsageMatrix || {};
+  all[provider] = {
+    range: state.range,
+    view: state.view,
+    expanded: state.expanded === true
+  };
+  ccuWriteUiState('projectUsageMatrix', all);
+}
+function ccuApplyProjectMatrixState(root, state) {
+  if (!root) { return; }
+  root.querySelectorAll('[data-project-matrix-range]').forEach(function(button) {
+    var selected = button.getAttribute('data-project-matrix-range') === state.range;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
+  root.querySelectorAll('[data-project-matrix-view]').forEach(function(button) {
+    var selected = button.getAttribute('data-project-matrix-view') === state.view;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
+  root.querySelectorAll('[data-project-matrix-range-panel]').forEach(function(panel) {
+    panel.hidden = panel.getAttribute('data-project-matrix-range-panel') !== state.range;
+    panel.querySelectorAll('[data-project-matrix-heatmap]').forEach(function(view) {
+      view.hidden = state.view !== 'heatmap';
+    });
+    panel.querySelectorAll('[data-project-matrix-trend]').forEach(function(view) {
+      view.hidden = state.view !== 'trend';
+    });
+  });
+  root.querySelectorAll('[data-project-matrix-extra]').forEach(function(row) {
+    row.hidden = !state.expanded;
+  });
+  var expand = root.querySelector('[data-project-matrix-expand]');
+  if (expand) {
+    expand.setAttribute('aria-expanded', state.expanded ? 'true' : 'false');
+    expand.textContent = state.expanded
+      ? (expand.getAttribute('data-show-less') || '')
+      : (expand.getAttribute('data-show-more') || '');
+  }
+}
+function restoreProjectMatrixState(scope) {
+  var root = scope || document;
+  var matrices = [];
+  if (root.matches && root.matches('[data-project-matrix]')) { matrices.push(root); }
+  root.querySelectorAll('[data-project-matrix]').forEach(function(matrix) { matrices.push(matrix); });
+  matrices.forEach(function(matrix) {
+    ccuApplyProjectMatrixState(matrix, ccuProjectMatrixState(matrix));
+  });
+}
+document.addEventListener('click', function(event) {
+  var control = event.target && event.target.closest
+    ? event.target.closest('[data-project-matrix-range],[data-project-matrix-view],[data-project-matrix-expand]')
+    : null;
+  if (!control) { return; }
+  var root = control.closest('[data-project-matrix]');
+  if (!root) { return; }
+  event.preventDefault();
+  var state = ccuProjectMatrixState(root);
+  var range = control.getAttribute('data-project-matrix-range');
+  var view = control.getAttribute('data-project-matrix-view');
+  if (range === '30' || range === '90') { state.range = range; }
+  if (view === 'heatmap' || view === 'trend') { state.view = view; }
+  if (control.hasAttribute('data-project-matrix-expand')) { state.expanded = !state.expanded; }
+  ccuApplyProjectMatrixState(root, state);
+  ccuSaveProjectMatrixState(root, state);
+});
 
 function adviceRoot(provider) {
   if (provider === 'optimizer') {
@@ -10402,6 +11059,7 @@ function restoreUi() {
   restoreHourlyOverviewSelections();
   initializeStatusRegions();
   restoreCombinedHeatmapConfig();
+  restoreProjectMatrixState();
   requestLocalDataInventoryForVisibleSettings();
   restoreScrollPosition();
   vscode.postMessage({ command: 'localDataClientReady' });

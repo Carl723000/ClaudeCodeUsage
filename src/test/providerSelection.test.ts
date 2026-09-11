@@ -9,6 +9,7 @@ import { CODEX_COPY_EN } from '../codexView';
 import { I18n } from '../i18n';
 import { buildScopedCodexInsights } from '../providers/codex/codexInsights';
 import { buildCodexUsageView } from '../providers/codex/codexUsage';
+import { buildProjectUsageMatrixSnapshot } from '../projectUsageMatrix';
 import { ContentAnalysis, ProjectGroup, SessionUsage, SupportedLanguage, UsageData } from '../types';
 import { CODEX_WEBVIEW_NOW, codexWebviewFixture } from './codexWebviewFixtures';
 
@@ -114,6 +115,21 @@ test('Codex dashboard HTML uses only classes already rendered by the Claude dash
     provider.dailyDataForAllTime = [{ date: '2026-07', data: usage }];
     provider.sessionBreakdown = [session];
     provider.projectBreakdown = [project];
+    provider.claudeProjectUsageMatrix = buildProjectUsageMatrixSnapshot(
+      'claude',
+      [1, 2, 3, 4, 5].map((value) => ({
+        projectKey: `claude-project-${value}`,
+        projectName: `Claude project ${value}`,
+        day: '2026-07-20',
+        tokens: value * 1_000,
+        coverage: 'partial' as const,
+      })),
+      {
+        asOfDay: '2026-07-20',
+        timeZone: 'Asia/Hong_Kong',
+        coverage: 'partial',
+      },
+    );
     provider.contentAnalysis = content;
     provider.providerAvailability = { claude: true, codex: true };
     const codexSnapshot = codexWebviewFixture();

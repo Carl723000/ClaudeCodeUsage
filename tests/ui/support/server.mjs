@@ -55,6 +55,7 @@ const server = createServer(async (request, response) => {
     const autoRefresh = url.searchParams.get('autoRefresh') === 'true';
     const weeklyValue = url.searchParams.get('weeklyValue') !== 'false';
     const shareStudio = url.searchParams.get('shareStudio') !== 'false';
+    const projectMatrix = url.searchParams.get('projectMatrix') !== 'false';
     const requestedFeedback = url.searchParams.get('adviceFeedback');
     const adviceFeedback = requestedFeedback === 'claude-helpful' ||
       requestedFeedback === 'optimizer-helpful'
@@ -72,6 +73,7 @@ const server = createServer(async (request, response) => {
       autoRefresh,
       weeklyValue,
       shareStudio,
+      projectMatrix,
       adviceFeedback,
       timeZone,
       codexMonth,
