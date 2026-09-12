@@ -82,7 +82,7 @@ function assertExactVscePin(commands: readonly WorkflowStepValue[]): void {
   );
   assert.ok(tokens.length > 0, 'workflow must invoke VSCE');
   for (const token of tokens) {
-    assert.equal(token, '@vscode/vsce@3.9.1', `unexpected VSCE invocation ${token}`);
+    assert.equal(token, '@vscode/vsce@3.9.2', `unexpected VSCE invocation ${token}`);
   }
 }
 
@@ -1549,11 +1549,12 @@ test('changelog records the V2.2.2 energy patch after the released V2.2.1 baseli
   assert.doesNotMatch(changelog, /^## \[2\.2\.[01]\] — Unreleased$/m);
 });
 
-test('changelog records the v2.3.0 through v2.3.2 candidates', () => {
+test('changelog records one v2.3.3 candidate after the released v2.3 line', () => {
   const changelog = repoFile('CHANGELOG.md');
-  assert.match(changelog, /^## \[2\.3\.2\] — Unreleased$/m);
-  assert.match(changelog, /^## \[2\.3\.1\] — Unreleased$/m);
-  assert.match(changelog, /^## \[2\.3\.0\] — Unreleased$/m);
+  assert.match(changelog, /^## \[2\.3\.3\] — Unreleased$/m);
+  assert.match(changelog, /^## \[2\.3\.2\] — 2026-09-12$/m);
+  assert.match(changelog, /^## \[2\.3\.1\] — 2026-09-08$/m);
+  assert.match(changelog, /^## \[2\.3\.0\] — 2026-08-28$/m);
 });
 
 test('release announcements are exact-version and user-disableable', () => {
@@ -1667,7 +1668,7 @@ test('CI has separate Node, browser, and package release gates', () => {
   assert.match(workflow, /PLAYWRIGHT_BROWSERS_PATH:\s*\/ms-playwright/);
   assert.match(workflow, /needs:\s*\[test, ui\]/);
   assert.ok(runValues.includes('npm run test:ui'));
-  const packageAt = runValues.indexOf('npx -y @vscode/vsce@3.9.1 package --out /tmp/claude-code-usage-ci.vsix');
+  const packageAt = runValues.indexOf('npx -y @vscode/vsce@3.9.2 package --out /tmp/claude-code-usage-ci.vsix');
   const verifyAt = runValues.indexOf('node .github/scripts/verify-vsix.mjs /tmp/claude-code-usage-ci.vsix');
   assert.ok(packageAt >= 0 && verifyAt > packageAt, 'smoke VSIX verification must follow packaging');
   assertExactVscePin(runs);
@@ -1683,7 +1684,7 @@ test('CI has separate Node, browser, and package release gates', () => {
   assert.doesNotMatch(workflow, /<pinned-[s]ha>/);
 });
 
-test('publish pins the Node-20-compatible VSCE and verifies before publishing', () => {
+test('publish pins compatible registry CLIs and isolates all three delivery sinks', () => {
   const workflow = repoFile('.github/workflows/publish.yml');
   const runs = workflowStepValues(workflow, 'run');
   const uses = workflowStepValues(workflow, 'uses');
@@ -1691,17 +1692,27 @@ test('publish pins the Node-20-compatible VSCE and verifies before publishing', 
     runs.find((entry) => entry.value === value);
 
   assert.match(workflow, /node-version:\s*'20'/);
-  const packageStep = findRun('npx -y @vscode/vsce@3.9.1 package --out claude-code-usage.vsix');
-  const verifyStep = findRun('node .github/scripts/verify-vsix.mjs claude-code-usage.vsix');
-  const publishStep = findRun('npx -y @vscode/vsce@3.9.1 publish --packagePath claude-code-usage.vsix --pat "$VSCE_PAT"');
-  const openVsxStep = findRun('npx -y ovsx publish claude-code-usage.vsix --pat "$OVSX_PAT"');
+  const packageStep = findRun('npx -y @vscode/vsce@3.9.2 package --out claude-code-usage.vsix');
+  const verifyStep = findRun('node .github/scripts/verify-vsix.mjs claude-code-usage.vsix "${RELEASE_TAG#v}"');
+  const restoreStep = runs.find(({ value }) => value.includes('gh release download "$RELEASE_TAG"'));
+  const publishStep = runs.find(({ value }) => value.includes('@vscode/vsce@3.9.2 publish'));
+  const openVsxStep = runs.find(({ value }) => value.includes('ovsx@1.1.1 publish'));
+  const resultStep = runs.find(({ value }) => value.includes('VSCODE_OUTCOME'));
   const attachStep = uses.find(({ value }) =>
     value === 'softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65',
   );
   assert.ok(packageStep && verifyStep && verifyStep.line > packageStep.line, 'VSIX verification must follow packaging');
+  assert.ok(restoreStep && verifyStep && verifyStep.line > restoreStep.line, 'manual retries must verify the restored VSIX');
   assert.ok(publishStep && publishStep.line > verifyStep.line, 'VSIX verification must precede Marketplace publish');
   assert.ok(openVsxStep && openVsxStep.line > verifyStep.line, 'VSIX verification must precede Open VSX publish');
   assert.ok(attachStep && attachStep.line > verifyStep.line, 'VSIX verification must precede Release attachment');
+  assert.ok(attachStep && publishStep && attachStep.line < publishStep.line, 'Release attachment must not wait for Marketplace');
+  assert.ok(attachStep && openVsxStep && attachStep.line < openVsxStep.line, 'Release attachment must not wait for Open VSX');
+  assert.ok(resultStep && publishStep && openVsxStep && resultStep.line > publishStep.line && resultStep.line > openVsxStep.line);
+  assert.match(publishStep?.value ?? '', /--skip-duplicate/);
+  assert.match(openVsxStep?.value ?? '', /--skip-duplicate/);
+  assert.equal((workflow.match(/steps\.restore_package\.outputs\.restored != 'true'/g) ?? []).length, 4);
+  assert.equal((workflow.match(/continue-on-error: true/g) ?? []).length, 3);
   assertExactVscePin(runs);
   assert.match(workflow, /RELEASE_TAG:[\s\S]*github\.event\.release\.tag_name[\s\S]*inputs\.tag/);
   assert.ok(runs.some(({ value }) => value.includes('npm version "$VER" --no-git-tag-version --allow-same-version')));

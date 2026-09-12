@@ -83,7 +83,30 @@ test('manual publish retries require a release tag and can target one registry',
   assert.match(workflow, /git rev-parse "refs\/tags\/\$RELEASE_TAG\^\{commit\}"/);
   assert.match(workflow, /if: github\.event_name == 'release' \|\| inputs\.publish_vscode/);
   assert.match(workflow, /if: github\.event_name == 'release' \|\| inputs\.publish_open_vsx/);
-  assert.doesNotMatch(workflow, /name: Set version from release tag\s*\n\s+if:/);
+  assert.match(workflow, /name: Verify release tag checkout[\s\S]*?Invalid release tag/);
+  assert.match(workflow, /verify-vsix\.mjs claude-code-usage\.vsix "\$\{RELEASE_TAG#v\}"/);
+});
+
+test('release delivery retries safely and does not let one registry block the other sinks', () => {
+  const workflow = read('.github/workflows/publish.yml');
+  const restoreAt = workflow.indexOf('name: Restore verified .vsix for a manual retry');
+  const verifyAt = workflow.indexOf('name: Verify .vsix');
+  const attachAt = workflow.indexOf('name: Attach .vsix to the GitHub Release');
+  const vscodeAt = workflow.indexOf('name: Publish to VS Code Marketplace');
+  const openVsxAt = workflow.indexOf('name: Publish to Open VSX Registry');
+  const resultAt = workflow.indexOf('name: Verify release delivery outcomes');
+
+  assert.ok(restoreAt >= 0 && verifyAt > restoreAt, 'manual retries must restore the canonical release asset first');
+  assert.ok(attachAt > verifyAt, 'verified VSIX must be attached');
+  assert.ok(vscodeAt > attachAt && openVsxAt > attachAt, 'release attachment must not depend on either registry');
+  assert.ok(resultAt > vscodeAt && resultAt > openVsxAt, 'registry failures must be reconciled after both attempts');
+  assert.match(workflow, /gh release download "\$RELEASE_TAG"[\s\S]*?claude-code-usage\.vsix/);
+  assert.equal((workflow.match(/steps\.restore_package\.outputs\.restored != 'true'/g) ?? []).length, 4);
+  assert.match(workflow, /tag_name: \$\{\{ env\.RELEASE_TAG \}\}/);
+  assert.match(workflow, /@vscode\/vsce@3\.9\.2 publish[\s\S]*?--skip-duplicate/);
+  assert.match(workflow, /ovsx@1\.1\.1 publish[\s\S]*?--skip-duplicate/);
+  assert.equal((workflow.match(/continue-on-error: true/g) ?? []).length, 3);
+  assert.equal((workflow.match(/for attempt in 1 2 3/g) ?? []).length, 2);
 });
 
 test('maintainer-only mention workflow retains its privileged Claude boundary', () => {
