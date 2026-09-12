@@ -77,6 +77,8 @@ test('manual publish retries require a release tag and can target one registry',
   const workflow = read('.github/workflows/publish.yml');
   assert.match(workflow, /workflow_dispatch:\s*\n\s+inputs:\s*\n\s+tag:/);
   assert.match(workflow, /tag:\s*\n(?:\s+[^\n]+\n)*?\s+required: true/);
+  assert.match(workflow, /description: Existing release tag to retry; it must pass the current package policy/);
+  assert.doesNotMatch(workflow, /for example, v2\.2\.1/);
   assert.match(workflow, /RELEASE_TAG:.*github\.event\.release\.tag_name.*inputs\.tag/);
   assert.match(workflow, /uses: actions\/checkout@[a-f0-9]+[\s\S]*?ref: refs\/tags\/\$\{\{ env\.RELEASE_TAG \}\}/);
   assert.match(workflow, /git rev-parse HEAD/);

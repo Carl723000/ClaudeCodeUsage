@@ -17,7 +17,8 @@
 # Trigger manually from Actions → Publish Extension → Run workflow to retry a
 # failed registry. Supply the existing release tag and select only the registry
 # that needs a retry; the workflow reuses its attached VSIX or rebuilds the
-# missing asset from that exact tag.
+# missing asset from that exact tag, then requires it to pass the current
+# package-safety policy before any delivery resumes.
 
 name: Publish Extension
 
@@ -27,7 +28,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Existing release tag to retry (for example, v2.2.1)
+        description: Existing release tag to retry; it must pass the current package policy
         required: true
         type: string
       publish_vscode:
@@ -113,9 +114,10 @@ jobs:
         if: github.event_name == 'release' || steps.restore_package.outputs.restored != 'true'
         run: npx -y @vscode/vsce@3.9.2 package --out claude-code-usage.vsix
 
-      # Historical release tags predate the package verifier. Load the current
-      # workflow's verification policy only after packaging so policy files can
-      # neither be missing on an old tag nor leak into the VSIX being checked.
+      # Some historical release tags predate the package verifier. Load the
+      # current workflow's policy only after packaging so policy files can
+      # neither be missing on the tag nor leak into the VSIX being checked.
+      # A package that no longer meets current safety policy fails closed.
       - name: Checkout current release verification policy
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
