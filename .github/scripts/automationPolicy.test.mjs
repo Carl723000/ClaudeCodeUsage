@@ -128,7 +128,7 @@ test('release delivery retries safely and does not let one registry block the ot
   assert.equal((workflow.match(/steps\.restore_package\.outputs\.restored != 'true'/g) ?? []).length, 4);
   assert.match(workflow, /tag_name: \$\{\{ env\.RELEASE_TAG \}\}/);
   assert.match(workflow, /@vscode\/vsce@3\.9\.2 publish[\s\S]*?--skip-duplicate/);
-  assert.match(workflow, /ovsx@1\.1\.1 publish[\s\S]*?--skip-duplicate/);
+  assert.match(workflow, /ovsx@1\.2\.0 publish[\s\S]*?--skip-duplicate/);
   assert.equal((workflow.match(/continue-on-error: true/g) ?? []).length, 3);
   assert.equal((workflow.match(/for attempt in 1 2 3/g) ?? []).length, 2);
   assert.equal((workflow.match(/timeout-minutes: 12/g) ?? []).length, 2);

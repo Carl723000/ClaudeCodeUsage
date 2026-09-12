@@ -170,7 +170,7 @@ jobs:
         timeout-minutes: 12
         run: |
           for attempt in 1 2 3; do
-            if npx -y ovsx@1.1.1 publish claude-code-usage.vsix --skip-duplicate --pat "$OVSX_PAT"; then
+            if npx -y ovsx@1.2.0 publish claude-code-usage.vsix --skip-duplicate --pat "$OVSX_PAT"; then
               exit 0
             fi
             if [[ "$attempt" == "3" ]]; then
