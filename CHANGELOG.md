@@ -14,6 +14,8 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   transient timeout cannot silently block the other registry or leave the
   release without its downloadable package. Targeted retries reuse that exact
   attached VSIX; a missing legacy asset is rebuilt once from its release tag.
+  Release Drafter also performs a merge-complete reconciliation pass so the PR
+  that triggered the main-branch push cannot be omitted by event-ordering races.
 
 ## [2.3.2] — 2026-09-12
 

@@ -110,6 +110,20 @@ test('release delivery retries safely and does not let one registry block the ot
   assert.equal((workflow.match(/timeout-minutes: 12/g) ?? []).length, 2);
 });
 
+test('release draft gets a post-merge reconciliation pass', () => {
+  const workflow = read('.github/workflows/release-drafter.yml');
+  assert.match(
+    workflow,
+    /pull_request_target:\s*\n\s+types: \[[^\]]*closed[^\]]*\]/,
+    'the merge-complete event must refresh the draft after the main push race',
+  );
+  assert.match(
+    workflow,
+    /if: >-\s*\n\s+github\.event_name != 'pull_request_target' \|\|\s*\n\s+github\.event\.action != 'closed' \|\|\s*\n\s+github\.event\.pull_request\.merged == true/,
+    'closing an unmerged PR must not rewrite the release draft',
+  );
+});
+
 test('maintainer-only mention workflow retains its privileged Claude boundary', () => {
   const privileged = read('.github/workflows/claude.yml');
   assert.match(privileged, /contents: write/);
