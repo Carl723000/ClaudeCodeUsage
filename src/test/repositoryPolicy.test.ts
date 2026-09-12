@@ -1693,7 +1693,7 @@ test('publish pins compatible registry CLIs and isolates all three delivery sink
 
   assert.match(workflow, /node-version:\s*'20'/);
   const packageStep = findRun('npx -y @vscode/vsce@3.9.2 package --out claude-code-usage.vsix');
-  const verifyStep = findRun('node .github/scripts/verify-vsix.mjs claude-code-usage.vsix "${RELEASE_TAG#v}"');
+  const verifyStep = findRun('node .release-policy/.github/scripts/verify-vsix.mjs claude-code-usage.vsix "${RELEASE_TAG#v}"');
   const restoreStep = runs.find(({ value }) => value.includes('gh release download "$RELEASE_TAG"'));
   const publishStep = runs.find(({ value }) => value.includes('@vscode/vsce@3.9.2 publish'));
   const openVsxStep = runs.find(({ value }) => value.includes('ovsx@1.1.1 publish'));
@@ -1701,7 +1701,16 @@ test('publish pins compatible registry CLIs and isolates all three delivery sink
   const attachStep = uses.find(({ value }) =>
     value === 'softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65',
   );
+  const policyCheckout = uses.find(({ line, value }) =>
+    value === 'actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5' &&
+      packageStep !== undefined && line > packageStep.line,
+  );
   assert.ok(packageStep && verifyStep && verifyStep.line > packageStep.line, 'VSIX verification must follow packaging');
+  assert.ok(policyCheckout && verifyStep && policyCheckout.line < verifyStep.line, 'current policy checkout must precede verification');
+  assert.match(workflow, /ref: \$\{\{ github\.workflow_sha \}\}/);
+  assert.match(workflow, /path: \.release-policy/);
+  assert.match(workflow, /sparse-checkout: \.github\/scripts/);
+  assert.match(workflow, /persist-credentials: false/);
   assert.ok(restoreStep && verifyStep && verifyStep.line > restoreStep.line, 'manual retries must verify the restored VSIX');
   assert.ok(publishStep && publishStep.line > verifyStep.line, 'VSIX verification must precede Marketplace publish');
   assert.ok(openVsxStep && openVsxStep.line > verifyStep.line, 'VSIX verification must precede Open VSX publish');

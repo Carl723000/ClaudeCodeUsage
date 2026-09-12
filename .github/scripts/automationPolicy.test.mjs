@@ -84,12 +84,27 @@ test('manual publish retries require a release tag and can target one registry',
   assert.match(workflow, /if: github\.event_name == 'release' \|\| inputs\.publish_vscode/);
   assert.match(workflow, /if: github\.event_name == 'release' \|\| inputs\.publish_open_vsx/);
   assert.match(workflow, /name: Verify release tag checkout[\s\S]*?Invalid release tag/);
-  assert.match(workflow, /verify-vsix\.mjs claude-code-usage\.vsix "\$\{RELEASE_TAG#v\}"/);
+  assert.match(
+    workflow,
+    /name: Checkout current release verification policy[\s\S]*?ref: \$\{\{ github\.workflow_sha \}\}[\s\S]*?path: \.release-policy[\s\S]*?sparse-checkout: \.github\/scripts[\s\S]*?persist-credentials: false/,
+    'legacy release tags must use the current workflow verification policy',
+  );
+  assert.match(
+    workflow,
+    /node \.release-policy\/\.github\/scripts\/verify-vsix\.mjs claude-code-usage\.vsix "\$\{RELEASE_TAG#v\}"/,
+  );
+  assert.doesNotMatch(
+    workflow,
+    /run: node \.github\/scripts\/verify-vsix\.mjs claude-code-usage\.vsix/,
+    'manual retries cannot depend on a verifier present in the historical tag',
+  );
 });
 
 test('release delivery retries safely and does not let one registry block the other sinks', () => {
   const workflow = read('.github/workflows/publish.yml');
   const restoreAt = workflow.indexOf('name: Restore verified .vsix for a manual retry');
+  const packageAt = workflow.indexOf('name: Package .vsix');
+  const policyAt = workflow.indexOf('name: Checkout current release verification policy');
   const verifyAt = workflow.indexOf('name: Verify .vsix');
   const attachAt = workflow.indexOf('name: Attach .vsix to the GitHub Release');
   const vscodeAt = workflow.indexOf('name: Publish to VS Code Marketplace');
@@ -97,6 +112,10 @@ test('release delivery retries safely and does not let one registry block the ot
   const resultAt = workflow.indexOf('name: Verify release delivery outcomes');
 
   assert.ok(restoreAt >= 0 && verifyAt > restoreAt, 'manual retries must restore the canonical release asset first');
+  assert.ok(
+    packageAt >= 0 && policyAt > packageAt && verifyAt > policyAt,
+    'verification policy must be checked out only after packaging and before verification',
+  );
   assert.ok(attachAt > verifyAt, 'verified VSIX must be attached');
   assert.ok(vscodeAt > attachAt && openVsxAt > attachAt, 'release attachment must not depend on either registry');
   assert.ok(resultAt > vscodeAt && resultAt > openVsxAt, 'registry failures must be reconciled after both attempts');

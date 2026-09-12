@@ -113,8 +113,20 @@ jobs:
         if: github.event_name == 'release' || steps.restore_package.outputs.restored != 'true'
         run: npx -y @vscode/vsce@3.9.2 package --out claude-code-usage.vsix
 
+      # Historical release tags predate the package verifier. Load the current
+      # workflow's verification policy only after packaging so policy files can
+      # neither be missing on an old tag nor leak into the VSIX being checked.
+      - name: Checkout current release verification policy
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .release-policy
+          sparse-checkout: .github/scripts
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Verify .vsix
-        run: node .github/scripts/verify-vsix.mjs claude-code-usage.vsix "${RELEASE_TAG#v}"
+        run: node .release-policy/.github/scripts/verify-vsix.mjs claude-code-usage.vsix "${RELEASE_TAG#v}"
 
       # Attach first so a transient registry outage cannot leave the GitHub
       # Release without its verified package. Manual retries overwrite the same
