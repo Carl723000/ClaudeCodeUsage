@@ -100,7 +100,10 @@ test('release delivery retries safely and does not let one registry block the ot
   assert.ok(attachAt > verifyAt, 'verified VSIX must be attached');
   assert.ok(vscodeAt > attachAt && openVsxAt > attachAt, 'release attachment must not depend on either registry');
   assert.ok(resultAt > vscodeAt && resultAt > openVsxAt, 'registry failures must be reconciled after both attempts');
+  assert.match(workflow, /ASSET_NAME="\$\(gh release view "\$RELEASE_TAG" --json assets --jq/);
+  assert.match(workflow, /if \[\[ "\$ASSET_NAME" == "claude-code-usage\.vsix" \]\]/);
   assert.match(workflow, /gh release download "\$RELEASE_TAG"[\s\S]*?claude-code-usage\.vsix/);
+  assert.doesNotMatch(workflow, /if gh release download/);
   assert.equal((workflow.match(/steps\.restore_package\.outputs\.restored != 'true'/g) ?? []).length, 4);
   assert.match(workflow, /tag_name: \$\{\{ env\.RELEASE_TAG \}\}/);
   assert.match(workflow, /@vscode\/vsce@3\.9\.2 publish[\s\S]*?--skip-duplicate/);

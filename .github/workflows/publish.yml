@@ -79,7 +79,9 @@ jobs:
         id: restore_package
         if: github.event_name == 'workflow_dispatch'
         run: |
-          if gh release download "$RELEASE_TAG" --pattern claude-code-usage.vsix --clobber; then
+          ASSET_NAME="$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[] | select(.name == "claude-code-usage.vsix") | .name')"
+          if [[ "$ASSET_NAME" == "claude-code-usage.vsix" ]]; then
+            gh release download "$RELEASE_TAG" --pattern claude-code-usage.vsix --clobber
             echo "restored=true" >> "$GITHUB_OUTPUT"
           else
             echo "restored=false" >> "$GITHUB_OUTPUT"
