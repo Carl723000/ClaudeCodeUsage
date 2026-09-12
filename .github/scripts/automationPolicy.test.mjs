@@ -107,6 +107,7 @@ test('release delivery retries safely and does not let one registry block the ot
   assert.match(workflow, /ovsx@1\.1\.1 publish[\s\S]*?--skip-duplicate/);
   assert.equal((workflow.match(/continue-on-error: true/g) ?? []).length, 3);
   assert.equal((workflow.match(/for attempt in 1 2 3/g) ?? []).length, 2);
+  assert.equal((workflow.match(/timeout-minutes: 12/g) ?? []).length, 2);
 });
 
 test('maintainer-only mention workflow retains its privileged Claude boundary', () => {

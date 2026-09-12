@@ -1713,6 +1713,7 @@ test('publish pins compatible registry CLIs and isolates all three delivery sink
   assert.match(openVsxStep?.value ?? '', /--skip-duplicate/);
   assert.equal((workflow.match(/steps\.restore_package\.outputs\.restored != 'true'/g) ?? []).length, 4);
   assert.equal((workflow.match(/continue-on-error: true/g) ?? []).length, 3);
+  assert.equal((workflow.match(/timeout-minutes: 12/g) ?? []).length, 2);
   assertExactVscePin(runs);
   assert.match(workflow, /RELEASE_TAG:[\s\S]*github\.event\.release\.tag_name[\s\S]*inputs\.tag/);
   assert.ok(runs.some(({ value }) => value.includes('npm version "$VER" --no-git-tag-version --allow-same-version')));

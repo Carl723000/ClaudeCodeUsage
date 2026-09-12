@@ -133,6 +133,7 @@ jobs:
         id: publish_vscode
         if: github.event_name == 'release' || inputs.publish_vscode
         continue-on-error: true
+        timeout-minutes: 12
         run: |
           for attempt in 1 2 3; do
             if npx -y @vscode/vsce@3.9.2 publish --packagePath claude-code-usage.vsix --skip-duplicate --pat "$VSCE_PAT"; then
@@ -150,6 +151,7 @@ jobs:
         id: publish_open_vsx
         if: github.event_name == 'release' || inputs.publish_open_vsx
         continue-on-error: true
+        timeout-minutes: 12
         run: |
           for attempt in 1 2 3; do
             if npx -y ovsx@1.1.1 publish claude-code-usage.vsix --skip-duplicate --pat "$OVSX_PAT"; then
