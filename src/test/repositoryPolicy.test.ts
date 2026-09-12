@@ -1691,7 +1691,9 @@ test('publish pins compatible registry CLIs and isolates all three delivery sink
   const findRun = (value: string): WorkflowStepValue | undefined =>
     runs.find((entry) => entry.value === value);
 
-  assert.match(workflow, /node-version:\s*'20'/);
+  const releaseNodeMatch = workflow.match(/node-version:\s*'(\d+)'/);
+  assert.ok(releaseNodeMatch, 'publish workflow must pin a Node major');
+  const releaseNodeMajor = Number(releaseNodeMatch[1]);
   const packageStep = findRun('npx -y @vscode/vsce@3.9.2 package --out claude-code-usage.vsix');
   const verifyStep = findRun('node .release-policy/.github/scripts/verify-vsix.mjs claude-code-usage.vsix "${RELEASE_TAG#v}"');
   const restoreStep = runs.find(({ value }) => value.includes('gh release download "$RELEASE_TAG"'));
@@ -1720,6 +1722,16 @@ test('publish pins compatible registry CLIs and isolates all three delivery sink
   assert.ok(resultStep && publishStep && openVsxStep && resultStep.line > publishStep.line && resultStep.line > openVsxStep.line);
   assert.match(publishStep?.value ?? '', /--skip-duplicate/);
   assert.match(openVsxStep?.value ?? '', /--skip-duplicate/);
+  const openVsxVersion = openVsxStep?.value.match(/\bovsx@(\d+\.\d+\.\d+)\b/)?.[1];
+  const openVsxMinimumNodeMajor: Readonly<Record<string, number>> = {
+    // npm package metadata: ovsx@1.2.0 engines.node is >=22.0.0.
+    '1.2.0': 22,
+  };
+  assert.ok(openVsxVersion, 'Open VSX CLI must be exactly version-pinned');
+  assert.ok(
+    releaseNodeMajor >= (openVsxMinimumNodeMajor[openVsxVersion] ?? Number.POSITIVE_INFINITY),
+    `Node ${releaseNodeMajor} does not satisfy ovsx@${openVsxVersion}`,
+  );
   assert.equal((workflow.match(/steps\.restore_package\.outputs\.restored != 'true'/g) ?? []).length, 4);
   assert.equal((workflow.match(/continue-on-error: true/g) ?? []).length, 3);
   assert.equal((workflow.match(/timeout-minutes: 12/g) ?? []).length, 2);

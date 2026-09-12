@@ -10,8 +10,8 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 - **Resilient release delivery** — the verified VSIX is attached to the GitHub
   Release before either registry publish begins, and VS Code Marketplace and
   Open VSX are attempted independently. Both registry uploads use pinned,
-  Node-20-compatible CLIs, bounded retries, and duplicate-safe publishing, so a
-  transient timeout cannot silently block the other registry or leave the
+  Node-engine-compatible CLIs, bounded retries, and duplicate-safe publishing,
+  so a transient timeout cannot silently block the other registry or leave the
   release without its downloadable package. Targeted retries reuse that exact
   attached VSIX; a missing legacy asset is rebuilt once from its release tag.
   A failed asset download is never mistaken for a missing asset or silently

@@ -71,7 +71,10 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '20'
+          # ovsx 1.2.0 declares Node >=22. Keep the publishing runtime inside
+          # the supported engine contract instead of relying on accidental
+          # compatibility from a shorter-lived CLI code path.
+          node-version: '22'
 
       # A targeted manual retry should deliver the exact package that was
       # already reviewed and attached. Build only when the release has no asset
