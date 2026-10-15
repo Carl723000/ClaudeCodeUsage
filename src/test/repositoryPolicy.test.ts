@@ -890,6 +890,32 @@ test('AGENTS links a faithful Simplified-Chinese review copy', () => {
   assert.match(chinese, /推送、创建 PR、合并或发布 Release/);
 });
 
+test('new visual systems require compared mockups and approval before implementation', () => {
+  const english = repoFile('AGENTS.md'), chinese = repoFile('AGENTS.zh-CN.md');
+  assert.match(english, /New visual systems: design before implementation/);
+  assert.match(english, /imagegen[\s\S]*2–3[\s\S]*distinct/i);
+  assert.match(english, /maintainer[\s\S]*approve[\s\S]*before production UI implementation/i);
+  assert.match(english, /approved design[\s\S]*red-green TDD/i);
+  assert.match(english, /mockups are not[\s\S]*acceptance evidence/i);
+  assert.match(english, /Small copy[\s\S]*spacing fixes[\s\S]*do not/i);
+  assert.match(chinese, /全新可视化：先定稿，再实现/);
+  assert.match(chinese, /imagegen[\s\S]*2–3[\s\S]*不同/);
+  assert.match(chinese, /维护者[\s\S]*明确确认[\s\S]*生产 UI 实现/);
+  assert.match(chinese, /已批准设计[\s\S]*red-green TDD/);
+  assert.match(chinese, /设计图不是[\s\S]*验收证据/);
+  assert.match(repoFile('CONTRIBUTING.md'), /AGENTS\.md#new-visual-systems-design-before-implementation/);
+});
+
+test('public release notes focus on user outcomes rather than internal requests', () => {
+  const english = repoFile('AGENTS.md'), chinese = repoFile('AGENTS.zh-CN.md');
+  assert.match(english, /Release notes focus on user-visible outcomes/);
+  assert.match(english, /merge strateg[\s\S]*test counts[\s\S]*rank[\s\S]*threshold/i);
+  assert.match(english, /internal[\s\S]*PR[\s\S]*handoff/i);
+  assert.match(chinese, /Release 说明聚焦用户可感知的变化/);
+  assert.match(chinese, /合并策略[\s\S]*测试数量[\s\S]*档位[\s\S]*门槛/);
+  assert.match(repoFile('CONTRIBUTING.md'), /Do not turn internal implementation requests into release highlights/);
+});
+
 test('AGENTS allow only the guarded Codex session-index title lookup', () => {
   const agents = repoFile('AGENTS.md');
   const chinese = repoFile('AGENTS.zh-CN.md');

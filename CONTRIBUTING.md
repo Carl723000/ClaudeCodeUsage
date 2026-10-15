@@ -57,6 +57,19 @@ a default-profile `code --install-extension` or modify the daily installation.
 - If your change affects user-facing behaviour, update `CHANGELOG.md` and the
   relevant parts of `README.md`.
 
+### New visual features
+
+For a new visual system or substantial redesign, follow the
+[design-before-implementation gate](AGENTS.md#new-visual-systems-design-before-implementation):
+compare 2–3 distinct imagegen mockups, obtain maintainer approval, then turn the
+selected direction into testable criteria and implement with red-green TDD.
+Generated mockups are design references, not proof of native behavior or accessibility.
+Small copy/spacing fixes within an approved design do not restart this process.
+
+中文审阅：全新视觉系统或大幅重设计，先用 imagegen 生成 2–3 个实质不同方案，
+由维护者比选定稿，再转为可测试的验收条件并按 red-green TDD 实现。设计图不是
+原生行为或无障碍的证明；已定稿设计内的小文案／间距修补无需重新启动此流程。
+
 ### Merge strategy and progress commits
 
 The project defaults to **Squash and merge**: each reviewed PR adds one commit
@@ -165,6 +178,17 @@ maintainer verifies its author and applicable `Co-authored-by` trailers and reta
 truthful per-entry Release credit.
 
 ### Release-note attribution
+
+Release notes describe what changed for users, not how the team was instructed
+to implement or merge it. Do not turn internal implementation requests into release highlights:
+merge strategy, acceptance checklists, test counts, agent settings and routine
+achievement-rank/threshold adjustments belong in PRs or task records, not release
+prose. Keep necessary compatibility instructions, honest limitations and the
+per-entry contributor credit below.
+
+中文审阅：发版说明写用户感知到什么变化，不写内部如何要求实现或合并。合并方式、
+验收清单、测试数量、智能体设置和普通成就档位／门槛调整不作为独立发布亮点；
+这些细节留在 PR 或任务记录。必要兼容说明、事实边界和逐项贡献者署名仍须保留。
 
 The draft release already puts `@PR-author` **on each change entry**. When a
 maintainer edits the draft before publishing, keep that per-entry attribution

@@ -167,6 +167,30 @@ npx @vscode/vsce package
 - Documentation-only edits verify affected facts, links and document/policy
   tests. They do not establish new runtime, native, performance or release passes.
 
+### New visual systems: design before implementation
+
+- For a new visual system (such as achievements) or a substantial visual redesign,
+  use built-in **imagegen** first to produce **2–3 materially distinct** design
+  directions, not just color variants. Use synthetic content and the existing
+  product/theme constraints; do not send private logs or account data as references.
+- Compare information hierarchy, density, artwork, controls, long/localized text,
+  empty/error/expanded states, and narrow/light/dark layouts. Let the maintainer
+  select and explicitly approve a direction before production UI implementation.
+  Read-only investigation and disposable feasibility prototypes may precede approval.
+- Translate the approved design into concrete layout, state, accessibility and
+  responsive acceptance criteria; then use red-green TDD to implement them in the
+  shared renderer and existing theme tokens. Compare real rendered screenshots
+  with the approved reference before requesting acceptance. Mockups are not
+  runtime, accessibility, native or installed-package acceptance evidence.
+- Preserve the selected reference and decision with the task's design artifacts.
+  A material change of direction returns to visual confirmation, rather than
+  accumulating speculative production revisions. If imagegen is unavailable,
+  report that limitation and agree on an alternative before this design gate;
+  do not silently switch to a paid API/CLI or skip the gate.
+- Small copy corrections and local spacing fixes within an approved design do not
+  require another image-generation round. Editable SVG/icon maintenance stays in
+  its native format; this policy does not turn code-native UI into a raster image.
+
 ### UI rendering-environment fidelity
 
 For any UI change, first prove that the rendering environment is equivalent to
@@ -245,6 +269,13 @@ anchors. A static assertion of the first render is not acceptance evidence.
 - Do not bump `package.json` or create release tags manually. Release Drafter
   prepares a draft; publishing that reviewed draft creates the tag, and the
   publish workflow stamps the package version from it.
+- Release notes focus on user-visible outcomes, necessary compatibility/action
+  notes and factual limitations. Do not list merge strategies, one-off acceptance
+  requests, test counts, agent/reviewer settings or routine achievement rank and
+  threshold tuning as standalone highlights. Keep internal planning and proof in
+  the PR and task handoff; do not turn the maintainer's implementation checklist
+  into public release prose. Explain technical details only when users need them
+  to use the change safely, and retain truthful per-entry contributor credit.
 
 ## GitHub text attribution
 
