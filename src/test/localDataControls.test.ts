@@ -135,6 +135,21 @@ test('source exclusions and clear-all allowlists cannot target provider logs or 
   assert.ok(allowlistedState.size > 0);
   assert.ok(allowlistedState.has('ccu.migrated.adviceDefaultFormat.v2.4.1'),
     'the non-secret compatibility marker is included in confirmed clear-all');
+  assert.equal(allowlistedState.has('ccu.achievements.grants.v2'), true);
+  assert.equal(allowlistedState.has('ccu.achievements.grants.v3'), true);
+  assert.equal(allowlistedState.has('ccu.achievements.grants.v4'), true);
+  assert.equal(allowlistedState.has('ccu.achievements.activity.v2'), true);
+  assert.equal(allowlistedState.has('ccu.achievements.hours.v2'), true);
+  for (const key of [
+    'ccu.achievements.grants.v5', 'ccu.achievements.hours.v3',
+    'ccu.achievements.structuralAudit.v1', 'ccu.achievements.tokenAudit.v1',
+    'ccu.achievements.bucketAudit.v1',
+    'ccu.achievements.manifestAudit.v1',
+    'ccu.achievements.calendarAudit.v1',
+    'ccu.achievements.calibrationAudit.v1',
+    'ccu.achievements.calibrationPending.v1',
+    'ccu.achievements.calendarPeak.v1',
+  ]) assert.equal(allowlistedState.has(key), true, `${key} must have an exact clear-all postcondition`);
   for (const key of allowlistedState) {
     assert.match(key, /^ccu\./);
     assert.doesNotMatch(key, /oauth|cookie|provider.?credential|provider.?log/i);
@@ -143,6 +158,14 @@ test('source exclusions and clear-all allowlists cannot target provider logs or 
   }
   assert.equal(allowlistedState.has('claudeCodeUsage.dataDirectory'), false);
   assert.equal(allowlistedState.has('claudeCodeUsage.codex.dataDirectory'), false);
+});
+
+test('achievement clear targets describe current v2, legacy v1 and both retained fences', () => {
+  const targets = LOCAL_DATA_ACTION_TARGETS['clear-all-derived-data'].join('\n');
+  assert.match(targets, /achievements-v2\.json/);
+  assert.match(targets, /achievements-v1\.json/);
+  assert.match(targets, /legacy.*records|archived.*records/i);
+  assert.match(targets, /downgrade fence/i);
 });
 
 test('approximateJsonBytes reports UTF-8 JSON bytes and fails closed', () => {

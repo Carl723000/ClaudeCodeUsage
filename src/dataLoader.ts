@@ -5,6 +5,7 @@ import * as path from 'path';
 // Removed tinyglobby dependency - using native fs instead
 // Removed zod dependency - using native validation instead
 import { calculateCostBreakdown, getModelRatesPerMillion } from './pricing';
+import { addClaudeReferenceUsage, claudeReferenceUsage, hasKnownClaudeCacheCreationShape, normalizeClaudeNativeUsage } from './claudeReferenceUsage';
 import { detachedPromptPrefix, isRetryDuplicatePrompt } from './promptDedup';
 import {
   dayKeyInZone,
@@ -44,6 +45,42 @@ import {
   UsageData,
   WorkflowUsage,
 } from './types';
+
+/** In-memory provenance only; never accept this flag from JSONL metadata. */
+type ClaudeSessionEvidenceRecord = ClaudeUsageRecord & { _unownedAgentSession?: true };
+export type ClaudeSessionUsage = SessionUsage & { _unownedAgentSession?: true };
+
+/** Flat agent files have no path-proven parent. Keep their usage/session rows,
+ * but do not treat their basename as evidence of an independent conversation.
+ * Record sessionId/isSidechain metadata is not an established ownership contract
+ * here; nested agents retain the existing parent-directory contract. No I/O. */
+export function tagClaudeSessionEvidence(record: ClaudeUsageRecord, filePath: string): void {
+  const tagged = record as ClaudeSessionEvidenceRecord;
+  if (/(?:^|[\\/])projects[\\/][^\\/]+[\\/]agent-[^\\/]+\.jsonl$/.test(filePath)) {
+    tagged._unownedAgentSession = true;
+  } else {
+    delete tagged._unownedAgentSession;
+  }
+}
+
+/** One-pass bounds; spreading an unbounded history exceeds V8's argument limit. */
+export function recordTimestampBounds(
+  records: Iterable<Pick<ClaudeUsageRecord, 'timestamp'>>,
+  ignoreInvalid = true,
+): { first: number; last: number } {
+  let first = Infinity;
+  let last = -Infinity;
+  for (const record of records) {
+    const timestamp = Date.parse(record.timestamp);
+    if (!Number.isFinite(timestamp)) {
+      if (!ignoreInvalid) return { first: NaN, last: NaN };
+      continue;
+    }
+    if (timestamp < first) first = timestamp;
+    if (timestamp > last) last = timestamp;
+  }
+  return first === Infinity ? { first: 0, last: 0 } : { first, last };
+}
 
 // Constants
 const CLAUDE_CONFIG_DIR_ENV = 'CLAUDE_CONFIG_DIR';
@@ -97,7 +134,7 @@ function usageModelName(value: unknown): string | undefined {
  * A usage-bearing assistant row may contain a very large response/tool body;
  * retaining the parsed row would pin that body in every dashboard snapshot. */
 export function compactUsageRecord(data: ClaudeUsageRecord): ClaudeUsageRecord {
-  const sourceUsage = data.message.usage;
+  const sourceUsage = normalizeClaudeNativeUsage(data.message.usage);
   const model = usageModelName(data.message.model);
   const usage: ClaudeUsageRecord['message']['usage'] = {
     input_tokens: sourceUsage.input_tokens,
@@ -108,6 +145,10 @@ export function compactUsageRecord(data: ClaudeUsageRecord): ClaudeUsageRecord {
       ? { cache_read_input_tokens: sourceUsage.cache_read_input_tokens } : {}),
     ...(sourceUsage.cache_creation !== undefined ? {
       cache_creation: {
+        // Keep only a bounded numeric rejection marker, not unknown fields or
+        // their bodies. Pricing still sees exactly the original known counts.
+        ...(!hasKnownClaudeCacheCreationShape(sourceUsage.cache_creation)
+          ? { _unsupportedTTLShape: 1 } : {}),
         ...(sourceUsage.cache_creation?.ephemeral_1h_input_tokens !== undefined
           ? { ephemeral_1h_input_tokens: sourceUsage.cache_creation.ephemeral_1h_input_tokens } : {}),
         ...(sourceUsage.cache_creation?.ephemeral_5m_input_tokens !== undefined
@@ -996,6 +1037,7 @@ export class ClaudeDataLoader {
                     _sessionId: sessionInfo.sessionId,
                     _projectDirEncoded: sessionInfo.projectPath,
                   };
+                  tagClaudeSessionEvidence(prompt, file);
                   const pcwd = lineAny.cwd;
                   if (typeof pcwd === 'string' && pcwd.trim() !== '') {
                     prompt._projectPath = pcwd;
@@ -1025,6 +1067,7 @@ export class ClaudeDataLoader {
               // over the lossy, dash-encoded folder name when it is available.
               const record = compactUsageRecord(data as ClaudeUsageRecord);
               record._sessionId = sessionInfo.sessionId;
+              tagClaudeSessionEvidence(record, file);
               record._projectDirEncoded = sessionInfo.projectPath;
               const cwd = (parsed as { cwd?: unknown }).cwd;
               if (typeof cwd === 'string' && cwd.trim() !== '') {
@@ -1316,7 +1359,7 @@ export class ClaudeDataLoader {
         continue;
       }
 
-      const usage = record.message.usage;
+      const usage = normalizeClaudeNativeUsage(record.message.usage);
       // Skip error records and invalid records
       if (model === '<synthetic>' || record.isApiErrorMessage) {
         continue;
@@ -1362,6 +1405,10 @@ export class ClaudeDataLoader {
       modelData.cacheReadTokens += usage.cache_read_input_tokens || 0;
       modelData.cost += calculatedCost;
       modelData.count++;
+      const reference = claudeReferenceUsage(usage);
+      if (reference) {
+        modelData.referenceUsage = addClaudeReferenceUsage(modelData.referenceUsage, reference);
+      }
     }
 
     return data;
@@ -1446,11 +1493,11 @@ export class ClaudeDataLoader {
     }
 
     const usageData = this.calculateUsageData(sessionRecords);
-    const times = sessionRecords.map((r) => new Date(r.timestamp).getTime());
+    const times = recordTimestampBounds(sessionRecords, false);
     return {
       ...usageData,
-      sessionStart: new Date(Math.min(...times)),
-      sessionEnd: new Date(Math.max(...times)),
+      sessionStart: new Date(times.first),
+      sessionEnd: new Date(times.last),
     };
   }
 
@@ -2399,7 +2446,7 @@ export class ClaudeDataLoader {
    *   cap, not a "recent" window: the Sessions tab shows all of a normal user's
    *   sessions and narrows them with client-side time / project / model filters.
    */
-  static getSessionBreakdown(records: ClaudeUsageRecord[], limit: number = 1000): SessionUsage[] {
+  static getSessionBreakdown(records: ClaudeUsageRecord[], limit: number = 1000): ClaudeSessionUsage[] {
     // Internal grouping tables have no inherited keys. Public rows/snapshots
     // still use their existing ordinary-object shape.
     const recordsBySession: Record<string, ClaudeUsageRecord[]> = Object.create(null);
@@ -2412,12 +2459,10 @@ export class ClaudeDataLoader {
       recordsBySession[sessionId].push(record);
     }
 
-    const sessions: SessionUsage[] = Object.entries(recordsBySession).map(([sessionId, sessionRecords]) => {
-      const timestamps = sessionRecords
-        .map((r) => new Date(r.timestamp).getTime())
-        .filter((t) => !isNaN(t));
-      const startTime = timestamps.length > 0 ? new Date(Math.min(...timestamps)) : new Date(0);
-      const endTime = timestamps.length > 0 ? new Date(Math.max(...timestamps)) : new Date(0);
+    const sessions: ClaudeSessionUsage[] = Object.entries(recordsBySession).map(([sessionId, sessionRecords]) => {
+      const timestamps = recordTimestampBounds(sessionRecords);
+      const startTime = new Date(timestamps.first);
+      const endTime = new Date(timestamps.last);
       const first = sessionRecords[0];
       const peakContextTokens = sessionRecords.reduce((peak, r) => Math.max(peak, this.recordContextTokens(r)), 0);
 
@@ -2432,6 +2477,8 @@ export class ClaudeDataLoader {
         endTime,
         data: this.calculateUsageData(sessionRecords),
         peakContextTokens,
+        ...(sessionRecords.some((r) => (r as ClaudeSessionEvidenceRecord)._unownedAgentSession)
+          ? { _unownedAgentSession: true as const } : {}),
       };
     });
 
@@ -2538,10 +2585,10 @@ export class ClaudeDataLoader {
     }
 
     const timeRange = (rs: ClaudeUsageRecord[]): { start: Date; end: Date } => {
-      const timestamps = rs.map((r) => new Date(r.timestamp).getTime()).filter((t) => !isNaN(t));
+      const timestamps = recordTimestampBounds(rs);
       return {
-        start: timestamps.length > 0 ? new Date(Math.min(...timestamps)) : new Date(0),
-        end: timestamps.length > 0 ? new Date(Math.max(...timestamps)) : new Date(0),
+        start: new Date(timestamps.first),
+        end: new Date(timestamps.last),
       };
     };
 
@@ -3045,27 +3092,27 @@ export class ClaudeDataLoader {
         }
       }
 
-      const timestamps = projectRecords.map((r) => new Date(r.timestamp).getTime()).filter((t) => !isNaN(t));
+      const timestamps = recordTimestampBounds(projectRecords);
       const first = projectRecords[0];
       const project: ProjectUsage = {
         projectName: first._projectName || 'unknown',
         projectPath: displayPathByKey[key],
         sessionCount: new Set(projectRecords.map((r) => r._sessionId || 'unknown')).size,
-        firstSeen: timestamps.length > 0 ? new Date(Math.min(...timestamps)) : new Date(0),
-        lastSeen: timestamps.length > 0 ? new Date(Math.max(...timestamps)) : new Date(0),
+        firstSeen: new Date(timestamps.first),
+        lastSeen: new Date(timestamps.last),
         data: this.calculateUsageData(projectRecords),
       };
 
       if (!groups[groupKey]) {
         groups[groupKey] = { records: [], children: [], displayPath: groupDisplayPath, isGitRepo };
       }
-      groups[groupKey].records.push(...projectRecords);
+      for (const record of projectRecords) groups[groupKey].records.push(record);
       groups[groupKey].children.push(project);
     });
 
     // 4. Aggregate each group.
     const result: ProjectGroup[] = Object.values(groups).map((g) => {
-      const timestamps = g.records.map((r) => new Date(r.timestamp).getTime()).filter((t) => !isNaN(t));
+      const timestamps = recordTimestampBounds(g.records);
       const sessionCount = new Set(g.records.map((r) => r._sessionId || 'unknown')).size;
       const children = g.children.sort((a, b) => b.lastSeen.getTime() - a.lastSeen.getTime());
       const pathSegments = g.displayPath.split(/[\\/]/).filter((s) => s.length > 0);
@@ -3077,8 +3124,8 @@ export class ClaudeDataLoader {
         isGitRepo: g.isGitRepo,
         projectCount: children.length,
         sessionCount,
-        firstSeen: timestamps.length > 0 ? new Date(Math.min(...timestamps)) : new Date(0),
-        lastSeen: timestamps.length > 0 ? new Date(Math.max(...timestamps)) : new Date(0),
+        firstSeen: new Date(timestamps.first),
+        lastSeen: new Date(timestamps.last),
         data: this.calculateUsageData(g.records),
         children,
       };
@@ -3110,13 +3157,13 @@ export class ClaudeDataLoader {
     const result: BranchUsage[] = Object.values(byKey).map((recs) => {
       const first = recs[0];
       const branch = first._gitBranch && first._gitBranch.trim() !== '' ? first._gitBranch : '-';
-      const timestamps = recs.map((r) => new Date(r.timestamp).getTime()).filter((t) => !isNaN(t));
+      const timestamps = recordTimestampBounds(recs);
       return {
         branch,
         projectName: first._projectName || 'unknown',
         projectPath: first._projectPath || '',
         sessionCount: new Set(recs.map((r) => r._sessionId || 'unknown')).size,
-        lastSeen: timestamps.length > 0 ? new Date(Math.max(...timestamps)) : new Date(0),
+        lastSeen: new Date(timestamps.last),
         data: this.calculateUsageData(recs),
       };
     });

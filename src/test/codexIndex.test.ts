@@ -22,7 +22,10 @@ import {
   CodexIndexUpdateOptions,
   CODEX_REFRESH_MIN_BYTES,
   createEmptyCodexIndex,
+  codexHourProofSnapshot,
+  isReadableCodexPeriod,
   loadCodexIndex,
+  runCodexFilePass,
   saveCodexIndexAtomic,
   updateCodexIndex as updateCodexIndexRaw,
 } from '../providers/codex/codexIndex';
@@ -37,6 +40,8 @@ import {
 } from '../providers/codex/codexFilePassPool';
 import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 import { parseCodexLine } from '../providers/codex/codexParser';
+import { codexAchievementDayEvidence } from '../achievementCalendar';
+import { CODEX_PERIOD_LINEAGE_VERSION } from '../providers/codex/codexPeriodIndex';
 
 const SALT = 'test-machine-salt';
 
@@ -688,6 +693,418 @@ function updateCodexIndex(
   });
 }
 
+test('disabled achievements leave a complete legacy usage index warm without extra history reads', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-proof-disabled-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions);
+    await writeFile(path.join(sessions, 'history.jsonl'),
+      `${sessionLine('disabled-proof')}\n${contextLine()}\n${tokenLine(100, 50, '2026-07-20T00:10:00.000Z')}\n`, 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, { salt: SALT });
+    const legacy = structuredClone(cold.index);
+    for (const row of Object.values(legacy.files)) delete row.hourProof;
+    const disabled = await updateCodexIndex(legacy, manifest, {
+      salt: SALT, allowAchievementHourProof: false,
+    } as any);
+    assert.equal(disabled.bodyReads, 0, 'OFF must not run achievement-only history migration');
+    assert.equal(disabled.indexChanged, false);
+    assert.equal(disabled.index, legacy, 'numeric checkpoint and generation remain intact');
+    const enabled = await updateCodexIndex(disabled.index, manifest, {
+      salt: SALT, allowAchievementHourProof: true,
+    } as any);
+    assert.equal(codexHourProofSnapshot(enabled.index).complete, true);
+    assert.deepEqual(enabled.index.aggregate.total, cold.index.aggregate.total);
+    const warm = await updateCodexIndex(enabled.index, manifest, { salt: SALT });
+    assert.equal(warm.bodyReads, 0);
+    assert.equal(warm.indexChanged, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+for (const batched of [false, true]) test(`legacy calendar proof recovers one file per refresh and stays warm (${batched ? 'batch' : 'sequential'})`, async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-calendar-legacy-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions);
+    for (let i = 0; i < 3; i++) {
+      await writeFile(path.join(sessions, `${i}.jsonl`), completeSession(`calendar-${i}`, 100 + i, 10), 'utf8');
+    }
+    const manifest = await scanCodexManifest(root, SALT);
+    const now = () => Date.parse('2026-08-30T00:00:00.000Z');
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, { salt: SALT, now });
+    const legacy = structuredClone(cold.index);
+    for (const row of Object.values(legacy.files)) {
+      const period = row.aggregate.period!;
+      delete period.lineageVersion;
+      delete period.lineagePrefixEvents;
+      // Aggregate-size compatibility cannot prove these dates. Recovery must
+      // replay bodies rather than blessing otherwise plausible legacy buckets.
+      period.days = { '2026-07-19': period.days['2026-07-20'] };
+    }
+    const evidence = (index: typeof legacy) => codexAchievementDayEvidence(
+      Object.values(index.files).map(row => row.aggregate), 'UTC', index.coverage.period.allTime.complete,
+    );
+    assert.equal(legacy.coverage.complete, true);
+    assert.equal(legacy.coverage.period.allTime.complete, true);
+    assert.equal(evidence(legacy).complete, false);
+    const disabled = await updateCodexIndex(legacy, manifest, { salt: SALT, now, allowAchievementHourProof: false });
+    assert.equal(disabled.index, legacy);
+    assert.equal(disabled.bodyReads, 0);
+    assert.equal(disabled.migration.pending, false);
+    assert.ok(Object.values(disabled.index.files).every(row => isReadableCodexPeriod(row, 'UTC')));
+
+    const budget = { maxFilePasses: 1, maxBytes: CODEX_REFRESH_MIN_BYTES };
+    const taskKinds: string[] = [];
+    const filePassBatch: CodexFilePassBatchRunner | undefined = batched ? async (tasks, onOutcome) => {
+      assert.equal(tasks.length, 1, 'the batch must share the global file-pass budget');
+      for (const task of tasks) {
+        taskKinds.push(task.kind);
+        await onOutcome(await runCodexFilePass(task));
+      }
+    } : undefined;
+    const noBudget = await updateCodexIndex(disabled.index, manifest, {
+      salt: SALT, now, budget: { ...budget, maxFilePasses: 0 },
+    });
+    assert.equal(noBudget.bodyReads, 0);
+    assert.equal(noBudget.migration.pending, true);
+    assert.equal(noBudget.index.coverage.period.allTime.complete, false);
+    assert.ok(Object.values(noBudget.index.files).every(row => row.aggregate.period?.lineageVersion === undefined));
+    let index = noBudget.index;
+    const indexPath = path.join(root, 'index.json');
+    for (let i = 1; i <= 3; i++) {
+      const result = await updateCodexIndex(index, manifest, { salt: SALT, now, budget, filePassBatch });
+      assert.equal(result.failedFiles, 0);
+      assert.equal(result.bodyReads, 1);
+      assert.equal(result.migration.filePasses, 1);
+      assert.ok(result.migration.bytesRead <= budget.maxBytes);
+      assert.equal(result.migration.pending, i < 3);
+      assert.equal(result.index.coverage.period.allTime.migratedFiles, i);
+      assert.equal(result.index.coverage.period.allTime.complete, i === 3);
+      assert.equal(evidence(result.index).complete, i === 3);
+      assert.deepEqual(result.index.aggregate.total, cold.index.aggregate.total);
+      assert.equal(result.index.indexGeneration, cold.index.indexGeneration);
+      assert.equal(Object.values(result.index.files).filter(row =>
+        row.aggregate.period?.lineageVersion === CODEX_PERIOD_LINEAGE_VERSION).length, i);
+      await saveCodexIndexAtomic(indexPath, result.index);
+      index = await loadCodexIndex(indexPath, 'UTC');
+    }
+    assert.deepEqual(evidence(index), evidence(cold.index), 'dates come from source proof');
+    if (batched) assert.deepEqual(taskKinds, ['period', 'period']);
+    for (let i = 0; i < 2; i++) {
+      const io = trackingIo();
+      const warm = await updateCodexIndex(index, manifest, { salt: SALT, now, budget, io, filePassBatch });
+      assert.equal(warm.index, index);
+      assert.equal(warm.indexChanged, false);
+      assert.equal(warm.bodyReads, 0);
+      assert.equal(io.bodyReads.size, 0);
+      assert.equal(warm.migration.pending, false);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy calendar proof is never stamped by blocked or failed history reads', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-calendar-failure-'));
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    await writeFile(path.join(root, 'sessions', 'history.jsonl'), completeSession('calendar-failure', 100, 10), 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const now = () => Date.parse('2026-08-30T00:00:00.000Z');
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, { salt: SALT, now });
+    const legacy = structuredClone(cold.index);
+    const key = manifest.files[0].fileKey;
+    delete legacy.files[key].aggregate.period!.lineageVersion;
+    delete legacy.files[key].aggregate.period!.lineagePrefixEvents;
+    const blocked = await updateCodexIndex(legacy, manifest, { salt: SALT, now, allowHistoricalBackfill: false });
+    assert.equal(blocked.bodyReads, 0);
+    assert.equal(blocked.index.files[key].aggregate.period!.lineageVersion, undefined);
+    const failed = await updateCodexIndex(legacy, manifest, {
+      salt: SALT, now, io: { async *read() { throw new Error('synthetic proof read failure'); } },
+    });
+    assert.equal(failed.failedFiles, 1);
+    assert.equal(failed.migration.pending, true);
+    assert.equal(failed.index.coverage.period.allTime.complete, false);
+    assert.equal(failed.index.files[key].aggregate.period!.lineageVersion, undefined);
+    assert.deepEqual(failed.index.aggregate.total, cold.index.aggregate.total);
+    const recovered = await updateCodexIndex(failed.index, manifest, { salt: SALT, now });
+    assert.deepEqual(recovered.index.files[key].aggregate.period, cold.index.files[key].aggregate.period);
+    assert.equal(recovered.migration.pending, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy calendar proof only revalidates canonical active/archive copies', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-calendar-copy-'));
+  try {
+    for (const area of ['sessions', 'archived_sessions']) {
+      await mkdir(path.join(root, area));
+      await writeFile(path.join(root, area, 'copy.jsonl'), completeSession('calendar-copy', 100, 10), 'utf8');
+    }
+    const manifest = await scanCodexManifest(root, SALT);
+    const now = () => Date.parse('2026-08-30T00:00:00.000Z');
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, { salt: SALT, now });
+    assert.equal(cold.index.coverage.period.allTime.totalFiles, 1);
+    const legacy = structuredClone(cold.index);
+    for (const row of Object.values(legacy.files)) {
+      delete row.aggregate.period!.lineageVersion;
+      delete row.aggregate.period!.lineagePrefixEvents;
+    }
+    const io = trackingIo();
+    const recovered = await updateCodexIndex(legacy, manifest, {
+      salt: SALT, now, io, budget: { maxFilePasses: 1, maxBytes: CODEX_REFRESH_MIN_BYTES },
+    });
+    const canonical = manifest.files.find(row => row.sourceArea === 'sessions')!;
+    assert.deepEqual(io.fileKeysRead, [canonical.fileKey]);
+    assert.equal(recovered.index.coverage.period.allTime.complete, true);
+    assert.equal(recovered.migration.pending, false);
+    assert.deepEqual(recovered.index.aggregate.total, cold.index.aggregate.total);
+    const warm = await updateCodexIndex(recovered.index, manifest, { salt: SALT, now });
+    assert.equal(warm.bodyReads, 0);
+    assert.equal(warm.indexChanged, false, 'an excluded copy cannot restart proof recovery');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy calendar proof cancellation resumes its persisted body cursor', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-calendar-cancel-'));
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    const body = `${sessionLine('calendar-cancel')}\n${contextLine()}\n` + Array.from(
+      { length: 11_000 }, (_, i) => tokenLine(i + 1, i + 1, '2026-07-20T00:01:00.000Z'),
+    ).join('\n') + '\n';
+    await writeFile(path.join(root, 'sessions', 'history.jsonl'), body, 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const now = () => Date.parse('2026-08-30T00:00:00.000Z');
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, { salt: SALT, now });
+    const legacy = structuredClone(cold.index);
+    const key = manifest.files[0].fileKey;
+    delete legacy.files[key].aggregate.period!.lineageVersion;
+    delete legacy.files[key].aggregate.period!.lineagePrefixEvents;
+    const indexPath = path.join(root, 'index.json');
+    let cancelled = false;
+    await assert.rejects(updateCodexIndex(legacy, manifest, {
+      salt: SALT, now, budget: { maxFilePasses: 1, maxBytes: CODEX_REFRESH_MIN_BYTES },
+      shouldCancel: () => cancelled,
+      onProgress: progress => { if (progress.period.allTime.migratedBytes > 0) cancelled = true; },
+      onCheckpoint: async index => { await saveCodexIndexAtomic(indexPath, index); },
+    }), CodexIndexCancelledError);
+    const saved = await loadCodexIndex(indexPath, 'UTC');
+    const offset = saved.files[key].periodMigration!.offset;
+    assert.ok(offset > 0 && offset < manifest.files[0].size);
+    assert.equal(saved.files[key].aggregate.period?.lineageVersion, undefined);
+    assert.ok(isReadableCodexPeriod(saved.files[key], 'UTC'), 'compatible display slices survive a partial proof pass');
+    assert.equal(saved.coverage.period.allTime.complete, false);
+    assert.deepEqual(saved.aggregate.total, cold.index.aggregate.total);
+    const io = trackingIo();
+    const resumed = await updateCodexIndex(saved, manifest, { salt: SALT, now, io });
+    assert.equal(io.readOffsets[0], offset);
+    assert.ok(resumed.migration.bytesRead < Buffer.byteLength(body));
+    assert.deepEqual(resumed.index.files[key].aggregate.period, cold.index.files[key].aggregate.period);
+    assert.equal(resumed.index.coverage.period.allTime.complete, true);
+    assert.equal(resumed.migration.pending, false);
+    const warm = await updateCodexIndex(resumed.index, manifest, { salt: SALT, now });
+    assert.equal(warm.bodyReads, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('UTC output proof backfills legacy history, resumes, and keeps warm body reads at zero', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-hour-proof-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    const indexPath = path.join(root, 'index.json');
+    const filePath = path.join(sessions, 'history.jsonl');
+    const body = `${sessionLine('proof')}\n${contextLine()}\n${Array.from(
+      { length: 11_000 },
+      (_, i) => tokenLine(i + 1, i + 1,
+        `2026-07-20T${String(Math.floor(i / 60) % 24).padStart(2, '0')}:00:00.000Z`),
+    ).join('\n')}\n`;
+    await writeFile(filePath, body, 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const cold = await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, { salt: SALT });
+    const key = manifest.files[0].fileKey;
+    const legacy = structuredClone(cold.index);
+    delete legacy.files[key].hourProof;
+    const budget = { maxFilePasses: 16, maxBytes: CODEX_REFRESH_MIN_BYTES };
+    const partial = await updateCodexIndex(legacy, manifest, { salt: SALT, budget });
+    assert.ok((partial.index.files[key].hourProofMigration?.offset ?? 0) > 0);
+    assert.equal(codexHourProofSnapshot(partial.index).complete, false);
+    await saveCodexIndexAtomic(indexPath, partial.index);
+    let resumed = await loadCodexIndex(indexPath, 'UTC');
+    const archive = path.join(root, 'archived_sessions');
+    await mkdir(archive);
+    await rename(filePath, path.join(archive, 'history.jsonl'));
+    const archivedManifest = await scanCodexManifest(root, SALT);
+    const archivedKey = archivedManifest.files[0].fileKey;
+    const moved = await updateCodexIndex(resumed, archivedManifest, {
+      salt: SALT, budget: { maxFilePasses: 0, maxBytes: CODEX_REFRESH_MIN_BYTES },
+    });
+    assert.notEqual(archivedKey, key);
+    assert.equal(moved.index.files[archivedKey].hourProofMigration?.parserState.fileKey, archivedKey);
+    assert.equal(moved.index.files[archivedKey].hourProofMigration?.offset,
+      resumed.files[key].hourProofMigration?.offset);
+    await saveCodexIndexAtomic(indexPath, moved.index);
+    resumed = await loadCodexIndex(indexPath, 'UTC');
+    assert.ok(resumed.files[archivedKey].hourProofMigration, 'archive move keeps the resumable proof');
+    let iterations = 0;
+    while (!codexHourProofSnapshot(resumed).complete && iterations++ < 20) {
+      resumed = (await updateCodexIndex(resumed, archivedManifest, { salt: SALT, budget })).index;
+    }
+    const proof = codexHourProofSnapshot(resumed);
+    assert.equal(proof.complete, true);
+    assert.ok(proof.hours.length >= 12);
+    await saveCodexIndexAtomic(indexPath, resumed);
+    resumed = await loadCodexIndex(indexPath, 'UTC');
+    assert.deepEqual(codexHourProofSnapshot(resumed), proof);
+    const warm = await updateCodexIndex(resumed, archivedManifest, { salt: SALT });
+    assert.equal(warm.bodyReads, 0);
+    assert.equal(warm.indexChanged, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('legacy hour proof advances even when another session appends on refresh', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-hour-progress-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    const older = path.join(sessions, 'older.jsonl');
+    const active = path.join(sessions, 'active.jsonl');
+    await writeFile(older, `${sessionLine('older-proof')}\n${contextLine()}\n` +
+      `${tokenLine(1, 1, '2026-07-20T00:10:00.000Z')}\n`, 'utf8');
+    await writeFile(active, `${sessionLine('active-proof')}\n${contextLine()}\n` +
+      `${tokenLine(1, 1, '2026-07-20T01:10:00.000Z')}\n`, 'utf8');
+    let manifest = await scanCodexManifest(root, SALT);
+    const index = (await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, { salt: SALT })).index;
+    const olderKey = manifest.files.find((entry) => entry.absolutePath === older)!.fileKey;
+    delete index.files[olderKey].hourProof;
+    await appendFile(active, `${tokenLine(2, 2, '2026-07-20T02:10:00.000Z')}\n`);
+    manifest = await scanCodexManifest(root, SALT);
+    const updated = await updateCodexIndex(index, manifest, {
+      salt: SALT, budget: { maxFilePasses: 2, maxBytes: CODEX_REFRESH_MIN_BYTES },
+    });
+    assert.equal(updated.index.files[olderKey].hourProof?.indexedThrough,
+      updated.index.files[olderKey].offset,
+    'a routine append must not indefinitely postpone an unrelated legacy proof');
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('UTC output proof updates on append and drops removed or replaced files', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-hour-change-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    const filePath = path.join(sessions, 'session.jsonl');
+    await writeFile(filePath, `${sessionLine('proof-change')}\n${contextLine()}\n` +
+      `${tokenLine(1, 1, '2026-07-20T00:10:00.000Z')}\n`, 'utf8');
+    let manifest = await scanCodexManifest(root, SALT);
+    let index = (await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest, { salt: SALT })).index;
+    assert.equal(codexHourProofSnapshot(index).complete, true);
+    assert.equal(codexHourProofSnapshot(index).hours.length, 1);
+    assert.deepEqual(codexHourProofSnapshot(index,
+      Date.parse('2026-07-20T00:30:00.000Z')).hours, []);
+    assert.equal(codexHourProofSnapshot(index,
+      Date.parse('2026-07-20T01:00:00.000Z')).hours.length, 1);
+    await appendFile(filePath, `${tokenLine(2, 2, '2026-07-20T01:10:00.000Z')}\n`);
+    manifest = await scanCodexManifest(root, SALT);
+    index = (await updateCodexIndex(index, manifest, { salt: SALT })).index;
+    assert.equal(codexHourProofSnapshot(index).complete, true);
+    assert.equal(codexHourProofSnapshot(index).hours.length, 2);
+    await writeFile(filePath, `${sessionLine('proof-replacement')}\n${contextLine()}\n` +
+      `${tokenLine(3, 3, '2026-07-21T04:10:00.000Z')}\n`, 'utf8');
+    manifest = await scanCodexManifest(root, SALT);
+    index = (await updateCodexIndex(index, manifest, { salt: SALT })).index;
+    assert.deepEqual(codexHourProofSnapshot(index).hours,
+      [Date.parse('2026-07-21T04:00:00.000Z') / 3_600_000]);
+    await rm(filePath);
+    manifest = await scanCodexManifest(root, SALT);
+    index = (await updateCodexIndex(index, manifest, { salt: SALT })).index;
+    assert.deepEqual(codexHourProofSnapshot(index).hours, []);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('unknown or malformed persisted hour proof is discarded without leaking fields', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-hour-invalid-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    await writeFile(path.join(sessions, 'session.jsonl'),
+      `${sessionLine('proof-invalid')}\n${contextLine()}\n` +
+      `${tokenLine(1, 1, '2026-07-20T00:10:00.000Z')}\n`, 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const index = (await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest,
+      { salt: SALT })).index;
+    const key = manifest.files[0].fileKey;
+    const indexPath = path.join(root, 'index.json');
+    index.files[key].hourProof = { ...index.files[key].hourProof!, version: 99,
+      path: 'must-not-persist' } as any;
+    index.files[key].hourProofMigration = {
+      version: 1, offset: index.files[key].offset, prefixEvents: 0,
+      tokenEventsSeen: 0, discardingOversizedLine: false,
+      parserState: index.files[key].parserState,
+      hours: [2, 1], rawSessionId: 'must-not-persist',
+    } as any;
+    await saveCodexIndexAtomic(indexPath, index);
+    const stored = await readFile(indexPath, 'utf8');
+    assert.doesNotMatch(stored, /must-not-persist/);
+    const loaded = await loadCodexIndex(indexPath, 'UTC');
+    assert.equal(loaded.files[key].hourProof, undefined);
+    assert.equal(loaded.files[key].hourProofMigration, undefined);
+    assert.equal(codexHourProofSnapshot(loaded).complete, false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cancelled hour proof migration resumes from a durable safe cursor', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-hour-cancel-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions, { recursive: true });
+    const body = `${sessionLine('proof-cancel')}\n${contextLine()}\n` +
+      `${tokenLine(1, 1, '2026-07-20T00:10:00.000Z')}\n`.repeat(3_000);
+    await writeFile(path.join(sessions, 'session.jsonl'), body, 'utf8');
+    const manifest = await scanCodexManifest(root, SALT);
+    const legacy = (await updateCodexIndex(createEmptyCodexIndex('UTC'), manifest,
+      { salt: SALT })).index;
+    const key = manifest.files[0].fileKey;
+    delete legacy.files[key].hourProof;
+    const checkpointPath = path.join(root, 'checkpoint.json');
+    let cancelled = false;
+    await assert.rejects(updateCodexIndex(legacy, manifest, {
+      salt: SALT,
+      scheduling: { checkpointEveryBytes: 1 },
+      shouldCancel: () => cancelled,
+      onCheckpoint: async (index) => {
+        if ((index.files[key].hourProofMigration?.offset ?? 0) > 0) {
+          await saveCodexIndexAtomic(checkpointPath, index);
+          cancelled = true;
+        }
+      },
+    }), CodexIndexCancelledError);
+    const saved = await loadCodexIndex(checkpointPath, 'UTC');
+    assert.ok((saved.files[key].hourProofMigration?.offset ?? 0) > 0);
+    assert.equal(codexHourProofSnapshot(saved).complete, false);
+    const resumed = await updateCodexIndex(saved, manifest, { salt: SALT });
+    assert.equal(codexHourProofSnapshot(resumed.index).complete, true);
+    assert.ok(resumed.migration.bytesRead < body.length);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 function sessionLine(id: string): string {
   return JSON.stringify({
     timestamp: '2026-07-20T00:00:00.000Z',
@@ -702,6 +1119,132 @@ function sessionLine(id: string): string {
     },
   });
 }
+
+test('Codex tail-origin uses normal parser deltas after verified lineage, never cached or reasoning twice', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-tail-origin-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    await mkdir(sessions);
+    const log = path.join(sessions, 'usage.jsonl');
+    await writeFile(log, `${sessionLine('tail-origin')}\n${contextLine('gpt-6.1-astra')}\n${tokenLine(500_000_000, 100_000_000, '2026-07-20T00:10:00Z')}\n`);
+    const window = { after: Date.parse('2026-07-20T01:00:00Z'), through: Date.parse('2026-07-20T02:00:00Z') };
+    const opts = { salt: SALT, now: () => window.through, achievementUsageWindow: window } as any;
+    let baseline = await updateCodexIndex(createEmptyCodexIndex('UTC'), await scanCodexManifest(root, SALT), opts);
+    assert.equal((baseline as any).achievementUsageDelta, undefined, 'cold input is history');
+    for (let i = 0; baseline.migration.pending && i < 6; i++) baseline = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+    assert.equal(baseline.index.coverage.complete, true);
+    const warm = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+    assert.equal(warm.bodyReads, 0);
+    await appendFile(log, `${tokenLine(5_500_000_000, 1_100_000_000, '2026-07-20T01:30:00Z')}\n`);
+    const appended = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+    assert.deepEqual((appended as any).achievementUsageDelta, {
+      provider: 'codex', ...window, processed: 6_000_000_000, output: 1_000_000_000,
+      cacheRead: 2_500_000_000, families: { astra: 6_000_000_000, sol: 0, luna: 0 },
+    });
+    assert.equal(appended.index.aggregate.total.inputTotal + appended.index.aggregate.total.outputTotal, 6_600_000_000);
+    assert.equal(JSON.stringify(appended.index).includes('achievementUsage'), false, 'proof is not a checkpoint field');
+    assert.equal((await updateCodexIndex(appended.index, await scanCodexManifest(root, SALT), opts) as any).achievementUsageDelta, undefined, 'warm polls never replay proof');
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('Codex mixed historical import and fresh tail only certify the independent appended portion', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-tail-mixed-'));
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    const log = path.join(root, 'sessions', 'live.jsonl');
+    await writeFile(log, `${sessionLine('live')}\n${contextLine('gpt-6.1-astra')}\n${tokenLine(100, 20, '2026-07-20T00:10:00Z')}\n`);
+    const window = { after: Date.parse('2026-07-20T01:00:00Z'), through: Date.parse('2026-07-20T02:00:00Z') };
+    const opts = { salt: SALT, now: () => window.through, achievementUsageWindow: window } as any;
+    let baseline = await updateCodexIndex(createEmptyCodexIndex('UTC'), await scanCodexManifest(root, SALT), opts);
+    for (let i = 0; baseline.migration.pending && i < 6; i++) baseline = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+    await appendFile(log, `${tokenLine(200, 40, '2026-07-20T00:30:00Z')}\n${tokenLine(300, 60, '2026-07-20T01:30:00Z')}\n`);
+    await writeFile(path.join(root, 'sessions', 'import.jsonl'), `${sessionLine('import')}\n${contextLine('gpt-6.1-astra')}\n${tokenLine(9_000_000_000, 0, '2026-07-20T01:30:00Z')}\n`);
+    const result = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+    assert.equal((result as any).achievementUsageDelta?.processed, 120);
+    assert.equal((result as any).achievementUsageDelta?.families.astra, 120);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+for (const scenario of ['old-event', 'future-event', 'replay', 'replacement', 'incomplete-baseline',
+  'timezone', 'invalid-window', 'regression', 'identity-conflict', 'partial-tail'] as const) {
+  test(`Codex usage origin withholds ${scenario} without resetting usage semantics`, async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-origin-guard-'));
+    try {
+      await mkdir(path.join(root, 'sessions'));
+      const log = path.join(root, 'sessions', 'live.jsonl');
+      const header = `${sessionLine('guard')}\n${contextLine('gpt-6.1-astra')}\n`;
+      const original = `${tokenLine(100, 20, '2026-07-20T00:10:00Z')}\n`;
+      await writeFile(log, header + original);
+      const window = { after: Date.parse('2026-07-20T01:00:00Z'), through: Date.parse('2026-07-20T02:00:00Z') };
+      const opts: any = { salt: SALT, now: () => window.through, achievementUsageWindow: window };
+      let baseline = await updateCodexIndex(createEmptyCodexIndex('UTC'), await scanCodexManifest(root, SALT), opts);
+      for (let i = 0; baseline.migration.pending && i < 6; i++) baseline = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+      const before = structuredClone(baseline.index);
+      const key = Object.keys(before.files)[0];
+      if (scenario === 'replacement') {
+        await rename(log, path.join(root, 'old.outside-allowlist'));
+        await writeFile(log, header + original);
+      }
+      if (scenario === 'incomplete-baseline') before.files[key].offset -= 1;
+      if (scenario === 'timezone') opts.timeZone = 'Asia/Shanghai';
+      if (scenario === 'invalid-window') opts.achievementUsageWindow = { after: window.through, through: window.after };
+      if (scenario === 'identity-conflict') await writeFile(path.join(root, 'sessions', 'conflict.jsonl'), header + `${tokenLine(900, 90, '2026-07-20T00:30:00Z')}\n`);
+      const timestamp = scenario === 'old-event' ? '2026-07-20T00:30:00Z'
+        : scenario === 'future-event' ? '2026-07-20T03:00:00Z' : '2026-07-20T01:30:00Z';
+      const tail = scenario === 'replay' ? original
+        : `${tokenLine(scenario === 'regression' ? 10 : 200, scenario === 'regression' ? 2 : 40, timestamp)}${scenario === 'partial-tail' ? '' : '\n'}`;
+      await appendFile(log, scenario === 'partial-tail' ? tail.slice(0, -10) : tail);
+      const result = await updateCodexIndex(before, await scanCodexManifest(root, SALT), opts);
+      assert.equal((result as any).achievementUsageDelta, undefined, scenario);
+      assert.equal(JSON.stringify(result.index).includes('achievementUsage'), false);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  });
+}
+
+test('real file-pass workers retain sound new Astra tokens beside an unrelated ambiguous session', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-origin-pool-'));
+  const pool = new CodexFilePassPool();
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    const window = { after: Date.parse('2026-07-20T01:00:00Z'), through: Date.parse('2026-07-20T02:00:00Z') };
+    for (const [name, id, input, output] of [['sound', 'sound', 500_000_000, 100_000_000], ['other', 'other', 100, 0],
+      ['conflict-one', 'conflict', 20, 0], ['conflict-two', 'conflict', 30, 0]] as const) {
+      await writeFile(path.join(root, 'sessions', `${name}.jsonl`), `${sessionLine(id)}\n${contextLine('gpt-6.1-astra')}\n${tokenLine(input, output, '2026-07-20T00:10:00Z')}\n`);
+    }
+    const opts: any = { salt: SALT, now: () => window.through, achievementUsageWindow: window };
+    let baseline = await updateCodexIndex(createEmptyCodexIndex('UTC'), await scanCodexManifest(root, SALT), opts);
+    for (let i = 0; baseline.migration.pending && i < 6; i++) baseline = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+    assert.equal(baseline.index.coverage.identity.complete, false);
+    await appendFile(path.join(root, 'sessions', 'sound.jsonl'), `${tokenLine(5_500_000_000, 1_100_000_000, '2026-07-20T01:30:00Z')}\n`);
+    await appendFile(path.join(root, 'sessions', 'conflict-one.jsonl'), `${tokenLine(9_000_000_000, 0, '2026-07-20T01:30:00Z')}\n`);
+    const result = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), { ...opts, filePassBatch: pool.run });
+    assert.equal((result as any).achievementUsageDelta?.processed, 6_000_000_000);
+    assert.equal((result as any).achievementUsageDelta?.families.astra, 6_000_000_000);
+  } finally { await pool.dispose(); await rm(root, { recursive: true, force: true }); }
+});
+
+test('Codex copied child history and unsettled lineage cannot masquerade as live tail origin', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-origin-fork-'));
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    const window = { after: Date.parse('2026-07-20T01:00:00Z'), through: Date.parse('2026-07-20T02:00:00Z') };
+    const opts: any = { salt: SALT, now: () => window.through, achievementUsageWindow: window };
+    const parentLog = path.join(root, 'sessions', 'parent.jsonl');
+    await writeFile(parentLog, `${sessionLine('parent')}\n${contextLine('gpt-6.1-astra')}\n${tokenLine(100, 20, '2026-07-20T00:10:00Z')}\n`);
+    let baseline = await updateCodexIndex(createEmptyCodexIndex('UTC'), await scanCodexManifest(root, SALT), opts);
+    for (let i = 0; baseline.migration.pending && i < 6; i++) baseline = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+    const copied = `${tokenLine(200, 40, '2026-07-20T01:30:00Z')}\n`;
+    await writeFile(path.join(root, 'sessions', 'child.jsonl'), `${childSessionLine('child', 'parent')}\n${contextLine('gpt-6.1-astra')}\n${copied}`);
+    const imported = await updateCodexIndex(baseline.index, await scanCodexManifest(root, SALT), opts);
+    assert.equal((imported as any).achievementUsageDelta, undefined);
+    const unsettled = structuredClone(baseline.index);
+    const row = Object.values(unsettled.files)[0];
+    row.lineage!.desiredPrefixEvents = 1;
+    await appendFile(parentLog, copied);
+    const result = await updateCodexIndex(unsettled, await scanCodexManifest(root, SALT), opts);
+    assert.equal((result as any).achievementUsageDelta, undefined);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
 
 function childSessionLine(id: string, parentId: string): string {
   return JSON.stringify({
@@ -2335,6 +2878,8 @@ test('exact active and archive copies contribute usage only once', async () => {
     });
     assert.equal(result.index.coverage.period.allTime.totalFiles, 1);
     assert.equal(result.index.coverage.period.allTime.complete, true);
+    assert.equal(codexHourProofSnapshot(result.index).complete, true);
+    assert.equal(codexHourProofSnapshot(result.index).totalFiles, 1);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -2359,6 +2904,8 @@ test('ambiguous active and archive copies remain in period coverage', async () =
     assert.equal(result.index.coverage.period.allTime.totalFiles, 2);
     assert.equal(result.index.coverage.identity.ambiguousSessionGroups, 1);
     assert.equal(result.index.coverage.identity.complete, false);
+    assert.equal(codexHourProofSnapshot(result.index).complete, false);
+    assert.deepEqual(codexHourProofSnapshot(result.index).hours, []);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

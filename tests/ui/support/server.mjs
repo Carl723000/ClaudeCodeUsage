@@ -1,8 +1,15 @@
 import { createServer } from 'node:http';
 import { createRequire } from 'node:module';
+import { lstatSync, readFileSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
-const { renderHarness } = require('./render-harness.cjs');
+const { renderHarness, achievementResourceFiles } = require('./render-harness.cjs');
+// Read only the packaged catalog at startup; requests select cached bytes by
+// exact route, never a path, URL parameter, directory listing or user source.
+const achievementResources = new Map([...achievementResourceFiles].map(([route, filename]) => {
+  if (!lstatSync(filename).isFile()) throw new Error('Expected a regular packaged achievement icon');
+  return [route, readFileSync(filename)];
+}));
 const locales = new Set(['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id']);
 const uiTestPort = Number(process.env.CCU_UI_TEST_PORT ?? 4173);
 
@@ -15,6 +22,13 @@ const server = createServer(async (request, response) => {
       return;
     }
     if (url.pathname !== '/') {
+      const image = achievementResources.get(url.pathname);
+      if (image) {
+        response.writeHead(200, { 'content-type': 'image/png', 'cache-control': 'no-store',
+          'x-content-type-options': 'nosniff' });
+        response.end(image);
+        return;
+      }
       response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
       response.end('not found');
       return;
@@ -26,7 +40,8 @@ const server = createServer(async (request, response) => {
     const provider = requestedProvider === 'claude' || requestedProvider === 'compare'
       ? requestedProvider
       : 'codex';
-    const theme = url.searchParams.get('theme') === 'dark' ? 'dark' : 'light';
+    const requestedTheme = url.searchParams.get('theme');
+    const theme = ['dark', 'highContrast'].includes(requestedTheme) ? requestedTheme : 'light';
     const requestedFixture = url.searchParams.get('fixture') ?? 'default';
     const fixture = [
       'default',
@@ -36,6 +51,7 @@ const server = createServer(async (request, response) => {
       'persisted-details',
       'weekly-usage-only',
       'weekly-claude-completed',
+      'weekly-quota-pace',
       'unknown-models',
       'zero-input',
       'covered-day-without-hourly-rows',
@@ -46,6 +62,39 @@ const server = createServer(async (request, response) => {
       'combined-heatmap',
       'session-timezone-boundaries',
       'local-currency',
+      'achievement-token-stages',
+      'achievement-share-resources',
+      'achievement-calendar-subset',
+      'achievement-review-loading',
+      'achievement-review-failure',
+      'achievement-proof-stale',
+      'achievement-review-next-rank',
+      'achievement-management-history',
+      'achievement-management-history-recorded',
+      'achievement-management-full',
+      'achievement-long-term-gold',
+      'achievement-long-term-platinum',
+      'achievement-long-term-legendary',
+      'achievement-effort-statistics',
+      'achievement-effort-statistics-empty',
+      'achievement-effort-statistics-retired',
+      'achievement-records',
+      'achievement-records-read',
+      'achievement-history-only',
+      'achievement-pins',
+      'achievement-six-pins',
+      'achievement-six-pins-reordered',
+      'achievement-last-pin',
+      'achievement-last-pin-removed',
+      'achievement-theme-milestones',
+      'achievement-theme-pins',
+      'achievement-theme-pins-released',
+      'achievement-journey-partial',
+      'achievement-journey-complete',
+      'achievement-journey-history',
+      'achievement-hidden-pins',
+      'achievement-hidden-pins-released',
+      'achievement-hidden-pins-last',
     ].includes(requestedFixture)
       ? requestedFixture
       : 'default';
@@ -57,6 +106,8 @@ const server = createServer(async (request, response) => {
     const weeklyValue = url.searchParams.get('weeklyValue') !== 'false';
     const shareStudio = url.searchParams.get('shareStudio') !== 'false';
     const projectMatrix = url.searchParams.get('projectMatrix') !== 'false';
+    const achievementsEnabled = url.searchParams.get('achievementsEnabled') !== 'false';
+    const achievementNotices = url.searchParams.get('achievementNotices') !== 'false';
     const requestedFeedback = url.searchParams.get('adviceFeedback');
     const adviceFeedback = requestedFeedback === 'claude-helpful' ||
       requestedFeedback === 'optimizer-helpful'
@@ -67,11 +118,16 @@ const server = createServer(async (request, response) => {
       ? requestedCodexMonth
       : '';
     const claudeOnly = url.searchParams.get('claudeOnly') === 'true';
+    const codexOnly = url.searchParams.get('codexOnly') === 'true';
     const requestedCommandTemplate = url.searchParams.get('commandTemplate') ?? '';
-    const commandTemplate = ['claudeShareCard', 'claudeHeatmap'].includes(requestedCommandTemplate)
+    const commandTemplate = ['claudeShareCard', 'claudeHeatmap', 'achievements'].includes(requestedCommandTemplate)
       ? requestedCommandTemplate
       : '';
     const commandAfterReset = url.searchParams.get('commandAfterReset') === 'true';
+    const quotaPace = url.searchParams.get('quotaPace') === 'true';
+    const requestedPaceState = url.searchParams.get('quotaPaceState') ?? 'fresh';
+    const quotaPaceState = ['fresh', 'stale', 'reset', 'null', 'raw-mismatch'].includes(requestedPaceState)
+      ? requestedPaceState : 'fresh';
     const html = await renderHarness({
       provider,
       locale,
@@ -81,12 +137,18 @@ const server = createServer(async (request, response) => {
       weeklyValue,
       shareStudio,
       projectMatrix,
+      achievementsEnabled,
+      achievementNotices,
       adviceFeedback,
       timeZone,
       codexMonth,
       claudeOnly,
+      codexOnly,
       commandTemplate,
       commandAfterReset,
+      quotaPace,
+      quotaPaceState,
+      nativeResources: url.searchParams.get('nativeResources') === 'true',
     });
     response.writeHead(200, {
       'content-type': 'text/html; charset=utf-8',

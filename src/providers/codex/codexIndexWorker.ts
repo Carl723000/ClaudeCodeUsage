@@ -26,6 +26,8 @@ import {
 } from './codexIndexLease';
 import { CodexFilePassPool } from './codexFilePassPool';
 import { adoptLegacyCodexIndex } from './codexIndexStorage';
+import { copyCodexUsageWindow, copyCodexUsageDelta } from './codexAchievementOrigin';
+import { supportsCodexZstd, CodexZstdError } from './codexZstd';
 
 const cancelled = new Set<string>();
 let activeRequestId: string | null = null;
@@ -49,6 +51,10 @@ function safeError(
   requestId: string,
   error: unknown,
 ): Extract<CodexWorkerMessage, { type: 'error' }> {
+  if (error instanceof CodexZstdError && error.code === 'codec-unavailable') return {
+    type: 'error', requestId, error: { code: 'zstd-unsupported',
+      message: 'Compressed Codex logs require a newer VS Code runtime' },
+  };
   if (
     error instanceof CodexIndexCancelledError ||
     error instanceof CodexIndexLeaseCancelledError
@@ -87,7 +93,7 @@ export interface CodexWorkerRefreshRuntime {
   scanCodexManifest: typeof scanCodexManifest;
   updateCodexIndex: typeof updateCodexIndex;
   saveCodexIndexAtomic: typeof saveCodexIndexAtomic;
-  createCodexFilePassPool?: () => Pick<CodexFilePassPool, 'run' | 'dispose'>;
+  createCodexFilePassPool?: (workerLimit?: number) => Pick<CodexFilePassPool, 'run' | 'dispose'>;
   now?: () => number;
   adoptLegacyCodexIndex?: typeof adoptLegacyCodexIndex;
 }
@@ -96,6 +102,7 @@ export async function runCodexWorkerRefresh(
   request: Extract<CodexWorkerRequest, { type: 'refresh' }>,
   runtime: CodexWorkerRefreshRuntime,
 ): Promise<void> {
+  const requestedUsageWindow = copyCodexUsageWindow(request.achievementUsageWindow);
   const now = runtime.now ?? Date.now;
   try {
     const lease = await runtime.acquireCodexIndexLease(request.indexPath, {
@@ -105,18 +112,20 @@ export async function runCodexWorkerRefresh(
     try {
       let indexRecovery: CodexIndexRecovery | undefined;
       const metadataStarted = now();
-      const [loaded, manifest] = await Promise.all([
-        runtime.loadCodexIndex(request.indexPath, request.timeZone, (event) => {
-          indexRecovery = event;
-        }),
-        runtime.scanCodexManifest(request.codexHome, request.salt),
-      ]);
+      const manifest = await runtime.scanCodexManifest(request.codexHome, request.salt);
+      // Discover, but never silently omit, compressed history on an older host.
+      // This fence precedes even legacy adoption or corrupt-cache quarantine.
+      if (manifest.files.some(file => file.compression === 'zstd') && !supportsCodexZstd()) {
+        throw new CodexZstdError('codec-unavailable');
+      }
+      const loaded = await runtime.loadCodexIndex(request.indexPath, request.timeZone, event => { indexRecovery = event; });
       const previous = request.legacyIndexPath && runtime.adoptLegacyCodexIndex
         ? await runtime.adoptLegacyCodexIndex(request.indexPath, request.legacyIndexPath,
           manifest, request.timeZone, runtime.isCancelled,
           { codexHome: request.codexHome, salt: request.salt }) ?? loaded
         : loaded;
       const metadataMs = now() - metadataStarted;
+      const usageWindow = !indexRecovery && previous === loaded ? requestedUsageWindow : undefined;
       const parseStarted = now();
       const foreground = request.profile === 'foreground';
       const allowHistoricalBackfill = request.allowHistoricalBackfill !== false;
@@ -125,12 +134,13 @@ export async function runCodexWorkerRefresh(
         manifest.files.length,
       );
       const filePassPool = expeditedBackfill
-        ? runtime.createCodexFilePassPool?.()
+        ? runtime.createCodexFilePassPool?.(manifest.files.some(file => file.compression === 'zstd') ? 2 : undefined)
         : undefined;
       let checkpointWrites = 0;
       let updated;
       try {
         updated = await runtime.updateCodexIndex(previous, manifest, {
+          achievementUsageWindow: usageWindow,
           salt: request.salt,
           timeZone: request.timeZone,
           now,
@@ -158,6 +168,7 @@ export async function runCodexWorkerRefresh(
               progress,
             }),
           allowHistoricalBackfill,
+          allowAchievementHourProof: request.allowAchievementHourProof !== false,
           ...(filePassPool ? { filePassBatch: filePassPool.run } : {}),
         });
       } finally {
@@ -172,8 +183,11 @@ export async function runCodexWorkerRefresh(
       if (runtime.isCancelled()) {
         throw new CodexIndexCancelledError();
       }
+      const { achievementUsageDelta: rawDelta, ...committed } = updated;
+      const achievementUsageDelta = copyCodexUsageDelta(rawDelta, usageWindow);
       result = {
-        ...updated,
+        ...committed,
+        ...(achievementUsageDelta ? { achievementUsageDelta } : {}),
         ...(indexRecovery ? { indexRecovery } : {}),
         metadataMs,
         parseMs: now() - parseStarted,
@@ -216,7 +230,7 @@ async function runRefresh(
       updateCodexIndex,
       saveCodexIndexAtomic,
       adoptLegacyCodexIndex,
-      createCodexFilePassPool: () => new CodexFilePassPool(),
+      createCodexFilePassPool: workerLimit => new CodexFilePassPool(workerLimit),
     });
   } finally {
     cancelled.delete(request.requestId);

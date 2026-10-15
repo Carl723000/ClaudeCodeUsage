@@ -27,6 +27,8 @@ const targetGiB = option('--gib', 2.4);
 const fileCount = option('--files', 645);
 const analyzeContent = process.argv.includes('--analyze-content');
 const assistantPayload = process.argv.includes('--assistant-payload');
+const lineKiB = option('--line-kib', Buffer.byteLength('synthetic-only-') * 17_000 / 1024);
+if (lineKiB < 1 || lineKiB > 256) throw new Error('Expected 1 <= --line-kib <= 256');
 const modelOption = process.argv.indexOf('--model');
 const model = modelOption < 0 ? 'claude-sonnet-4-5' : process.argv[modelOption + 1];
 if (!model || model.length > 160 || !/^[a-z0-9][a-z0-9._-]*$/i.test(model)) {
@@ -40,7 +42,7 @@ if (targetGiB <= 0 || targetGiB > 3 || !Number.isInteger(fileCount) || fileCount
 }
 
 const timestamp = new Date().toISOString();
-const payload = 'synthetic-only-'.repeat(17_000); // ~255 KiB; safely below the 1 MiB line cap.
+const payload = 'synthetic-only-'.repeat(Math.floor(lineKiB * 1024 / Buffer.byteLength('synthetic-only-')));
 const fillerLine = `${JSON.stringify(assistantPayload ? {
   type: 'assistant', timestamp, cwd: '/fixture/large-history',
   message: {
@@ -80,6 +82,7 @@ async function measured(label, work) {
   const start = performance.now();
   const result = await work();
   const memory = process.memoryUsage();
+  peakRss = Math.max(peakRss, memory.rss);
   return {
     label,
     elapsedMs: Math.round(performance.now() - start),
@@ -180,11 +183,14 @@ try {
   process.stdout.write(`${JSON.stringify({
     fixtureBytes: writtenBytes,
     files: fileCount,
+    fillerLineBytes: fillerBytes,
+    fillerLines: fillerCount,
     coldRecords,
     contentAnalysis: analyzeContent,
     assistantPayload,
     model,
     warningCalls,
+    memoryScope: 'single-process synthetic mutations; phase results retain prior snapshots, not a production soak',
     peakRssBytes: peakRss,
     phases: [
       { label: generated.label, elapsedMs: generated.elapsedMs,

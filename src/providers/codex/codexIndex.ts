@@ -35,6 +35,7 @@ import {
   CodexStructuralSummary,
   CodexTodayMigrationState,
   isCompatibleCodexPeriodLineage,
+  isCurrentCodexPeriodLineage,
   pruneCodexHourlyDays,
   reduceCodexRollingHourlySlice,
   reduceCodexStructuralSlice,
@@ -42,6 +43,7 @@ import {
   codexPeriodFitsAggregate,
 } from './codexPeriodIndex';
 import { parseJsonObject, stringField } from './codexSchema';
+import { CodexZstdError, type CodexZstdErrorCode } from './codexZstd';
 import {
   CodexManifest,
   CodexPersistedManifest,
@@ -66,10 +68,14 @@ import {
   pseudonymousIdentityKey,
 } from './codexIdentity';
 import { sanitizeCodexMetadataLabel } from './codexMetadataLabel';
+import { CodexAchievementUsageWindow, CodexAchievementUsageDelta, copyCodexUsageWindow,
+  emptyCodexUsageDelta, addCodexOriginEvent, copyCodexUsageDelta,
+  codexOriginBaselineReady, finalizeCodexUsageDelta } from './codexAchievementOrigin';
 import {
   CODEX_LINEAGE_FINGERPRINT_BYTES,
   CODEX_LINEAGE_FINGERPRINTS_PER_BLOCK,
   CodexLineageTrace,
+  createLineageDepthResolver,
 } from './codexLineage';
 import {
   appendCodexQuotaHistory,
@@ -79,6 +85,14 @@ import {
   CodexQuotaObservation,
   sanitizeCodexQuotaHistory,
 } from './codexQuotaHistory';
+import {
+  CODEX_UTC_HOUR_PROOF_VERSION,
+  MAX_CODEX_HOURS_PER_FILE,
+  CodexHourProof,
+  CanonicalCodexOutputHours,
+  addCodexOutputHourInPlace,
+  canonicalCodexOutputHours,
+} from './codexHourProof';
 
 export {
   CodexPeriodMigrationState,
@@ -105,12 +119,27 @@ export interface CodexFileAggregate {
   };
   structural: CodexStructuralSummary;
   period?: CodexFilePeriodIndex;
+  /** Runtime-only current-source calendar provenance; never persisted as index proof. */
+  achievementPeriodWitness?: {
+    size: number;
+    offset: number;
+    expectedPrefixEvents: number;
+    timeZone: string;
+  };
   today?: CodexFileTodayIndex;
 }
 
 export interface CodexFileContribution {
   fileKey: string;
   sourceArea?: CodexSourceArea;
+  /** size/offset remain decoded-byte coordinates; these describe on-disk bytes. */
+  compression?: 'zstd';
+  storageSize?: number;
+  storageCtimeMs?: number;
+  /** Present only after the exact physical representation reached verified EOF. */
+  compressionVerified?: true;
+  /** A deterministic failure of this exact physical representation, never usage. */
+  compressionFailure?: { version: 1; code: CodexTerminalCompressionFailureCode };
   size: number;
   mtimeMs: number;
   dev?: number;
@@ -129,6 +158,17 @@ export interface CodexFileContribution {
   identityChecked?: boolean;
   periodMigration?: CodexPeriodMigrationState;
   todayMigration?: CodexTodayMigrationState;
+  hourProof?: CodexHourProof;
+  hourProofMigration?: CodexHourProofMigrationState;
+}
+
+export interface CodexHourProofMigrationState extends CodexJsonlCursor {
+  version: typeof CODEX_UTC_HOUR_PROOF_VERSION;
+  prefixEvents: number;
+  tokenEventsSeen: number;
+  parserState: CodexParserState;
+  hours: number[];
+  overflow?: boolean;
 }
 
 /**
@@ -140,7 +180,8 @@ export interface CodexFileContribution {
 export function isCodexUsageContributionCurrent(
   contribution: CodexFileContribution,
 ): boolean {
-  return !contribution.qualityFlags.includes('stale-reset-required');
+  return !contribution.compressionFailure && !contribution.qualityFlags.includes('stale-reset-required') &&
+    (contribution.compression !== 'zstd' || contribution.compressionVerified === true);
 }
 
 export interface CodexLineageReconciliationState extends CodexJsonlCursor {
@@ -149,6 +190,8 @@ export interface CodexLineageReconciliationState extends CodexJsonlCursor {
   parserState: CodexParserState;
   aggregate: CodexFileAggregate;
   qualityFlags: string[];
+  hourProofHours?: number[];
+  hourProofOverflow?: boolean;
 }
 
 // A first-time or legacy backfill receives one large streaming ceiling so a
@@ -298,6 +341,61 @@ export type CodexFilePassKind =
   | 'today'
   | 'identity';
 
+/** Identity-incomplete or partially migrated histories expose no hour IDs. */
+export function codexHourProofSnapshot(
+  index: CodexIndexV3,
+  nowMs = Date.now(),
+): CanonicalCodexOutputHours {
+  const canonicalKeys = classifyCodexSessionDuplicates(index.files).canonicalFileKeys;
+  const proof = canonicalCodexOutputHours(
+    index.files,
+    canonicalKeys,
+    index.coverage.complete && index.coverage.identity.complete &&
+      index.coverage.indexedFiles === index.coverage.totalFiles,
+  );
+  // A future-dated event in the current UTC hour cannot be distinguished
+  // from an already-observed one by the minimal hour ID alone. Count only
+  // closed UTC hours, accepting a delay of at most one hour for awards.
+  return {
+    ...proof,
+    hours: proof.hours.filter((hour) => (hour + 1) * 3_600_000 <= nowMs),
+    backfillableFiles: index.coverage.identity.complete
+      ? [...canonicalKeys].filter((key) => {
+          const contribution = index.files[key];
+          return contribution && contribution.offset === contribution.size &&
+            needsHourProofBackfill(contribution);
+        }).length
+      : 0,
+  };
+}
+
+function needsHourProofBackfill(contribution: CodexFileContribution): boolean {
+  if (contribution.identityChecked !== true || contribution.discardingOversizedLine ||
+      contribution.lineageReconciliation || contribution.hourProofMigration?.overflow ||
+      contribution.lineage?.appliedPrefixEvents !== contribution.lineage?.desiredPrefixEvents ||
+      contribution.qualityFlags.some((flag) => [
+        'stale-file', 'stale-reset-required', 'oversized-jsonl-line',
+        'invalid-event-timestamp',
+      ].includes(flag))) return false;
+  const proof = sanitizeCodexHourProof(contribution.hourProof);
+  return !proof || proof.indexedThrough !== contribution.offset ||
+    proof.prefixEvents !== contribution.lineage?.desiredPrefixEvents;
+}
+
+function hourProofWorkEntries(
+  index: CodexIndexV3,
+  manifest: CodexManifest,
+): CodexRuntimeManifestEntry[] {
+  if (!index.coverage.identity.complete) return [];
+  const canonical = classifyCodexSessionDuplicates(index.files).canonicalFileKeys;
+  return manifest.files.filter((entry) => {
+    if (!canonical.has(entry.fileKey)) return false;
+    const contribution = index.files[entry.fileKey];
+    return !!contribution && contribution.offset === entry.size &&
+      needsHourProofBackfill(contribution);
+  });
+}
+
 /**
  * A self-contained, per-file pass. Runtime paths are sent only to the local
  * worker that reads the file and are never persisted in the index.
@@ -311,6 +409,7 @@ export interface CodexFilePassTask {
   timeZone: string;
   asOfDay: string;
   endExclusive: number;
+  achievementUsageWindow?: CodexAchievementUsageWindow;
 }
 
 export type CodexFilePassOutcome =
@@ -319,8 +418,34 @@ export type CodexFilePassOutcome =
       ok: true;
       contribution: CodexFileContribution;
       bytesRead: number;
+      achievementUsageDelta?: CodexAchievementUsageDelta;
     }
-  | { taskId: string; ok: false };
+  | { taskId: string; ok: false; failureCode?: CodexZstdErrorCode };
+
+const terminalCompressionCodes = [
+  'malformed', 'truncated', 'trailing-data', 'size-mismatch', 'decode-failed', 'size-limit',
+  'unknown-size', 'dictionary', 'reserved',
+] as const satisfies readonly CodexZstdErrorCode[];
+type CodexTerminalCompressionFailureCode = typeof terminalCompressionCodes[number];
+
+/** Fixed enum copying at the worker boundary; never copy Error/message/stack. */
+function copyFilePassFailureCode(value: unknown): CodexZstdErrorCode | undefined {
+  switch (value) {
+    case 'malformed': case 'truncated': case 'trailing-data': case 'size-mismatch':
+    case 'decode-failed': case 'size-limit': case 'unknown-size': case 'dictionary': case 'reserved':
+    case 'codec-unavailable': case 'replay-limit': case 'invalid-range': case 'invalid-options':
+    case 'io-error': case 'aborted': case 'source-changed': return value;
+    default: return undefined;
+  }
+}
+
+export function codexFilePassFailureCode(error: unknown): CodexZstdErrorCode | undefined {
+  return error instanceof CodexZstdError ? copyFilePassFailureCode(error.code) : undefined;
+}
+
+function terminalCompressionCode(value: unknown): CodexTerminalCompressionFailureCode | undefined {
+  return terminalCompressionCodes.find(code => code === value);
+}
 
 export type CodexFilePassBatchRunner = (
   tasks: readonly CodexFilePassTask[],
@@ -329,6 +454,8 @@ export type CodexFilePassBatchRunner = (
 ) => Promise<void>;
 
 export interface CodexIndexUpdateOptions {
+  /** Caller-owned accepted observation window, never inferred from refresh triggers. */
+  achievementUsageWindow?: CodexAchievementUsageWindow;
   salt: string;
   timeZone: string;
   now?: () => number;
@@ -343,11 +470,14 @@ export interface CodexIndexUpdateOptions {
   /** False skips unchanged historical lineage/period/hour/identity passes while
    * still allowing the main changed-file and append-tail stage to run. */
   allowHistoricalBackfill?: boolean;
+  /** False avoids separate history reads for achievements; existing usage cursors stay intact. */
+  allowAchievementHourProof?: boolean;
   /** Internal resolved civil day shared with local file-pass workers. */
   asOfDay?: string;
 }
 
 export interface CodexIndexUpdateResult {
+  achievementUsageDelta?: CodexAchievementUsageDelta;
   index: CodexIndexV3;
   indexChanged: boolean;
   bodyReads: number;
@@ -654,6 +784,23 @@ function uniqueFlags(...groups: string[][]): string[] {
   return [...new Set(groups.flat())].sort();
 }
 
+/** A valid checkpoint may still be skipping inherited events. Resuming that
+ * scan is not permission to publish its dates; promotion still requires the
+ * entire prefix and source cursor below. */
+function resumablePeriodMigration(
+  contribution: CodexFileContribution,
+  timeZone: string,
+): CodexPeriodMigrationState | undefined {
+  const migration = contribution.periodMigration;
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+  const seen = migration?.tokenEventsSeen;
+  if (!migration || migration.timeZone !== timeZone || migration.prefixEvents !== prefixEvents ||
+      typeof seen !== 'number' || !Number.isSafeInteger(seen) || seen < 0 ||
+      !Number.isSafeInteger(migration.offset) || migration.offset < 0 || migration.offset > contribution.offset ||
+      (seen < prefixEvents && Object.keys(migration.days).length > 0)) return undefined;
+  return migration;
+}
+
 function promoteCaughtUpPeriod(
   contribution: CodexFileContribution,
   timeZone: string,
@@ -802,6 +949,8 @@ function previousManifest(index: CodexIndexV3): CodexPersistedManifest {
               mtimeMs: file.mtimeMs,
               dev: file.dev,
               ino: file.ino,
+              ...(file.compression === 'zstd' ? { compression: file.compression,
+                storageSize: file.storageSize, storageCtimeMs: file.storageCtimeMs } : {}),
             },
           ]]
         : [],
@@ -822,21 +971,94 @@ function contributionFor(
     mtimeMs: 0,
     dev: entry.dev,
     ino: entry.ino,
+    ...compressedSourceMetadata(entry),
     offset: 0,
     discardingOversizedLine: false,
     parserState,
     lineage: createLineageTrace(),
+    hourProof: {
+      version: CODEX_UTC_HOUR_PROOF_VERSION,
+      indexedThrough: 0,
+      prefixEvents: 0,
+      hours: [],
+    },
     aggregate: {
       ...emptyFileAggregate(entry.fileKey, parserState.role),
-      period: { timeZone, indexedThrough: 0, days: {} },
+      // A new empty cursor is built by the current reducer from byte zero.
+      // Unlike a persisted legacy slice, it needs no second validation pass.
+      period: { timeZone, indexedThrough: 0, days: {},
+        lineageVersion: CODEX_PERIOD_LINEAGE_VERSION, lineagePrefixEvents: 0 },
     },
     qualityFlags: [...flags],
   };
 }
 
 interface CodexFilePassResult {
+  achievementUsageDelta?: CodexAchievementUsageDelta;
   contribution: CodexFileContribution;
   bytesRead: number;
+}
+
+function compressedSourceMetadata(entry: CodexRuntimeManifestEntry):
+  Pick<CodexFileContribution, 'compression' | 'storageSize' | 'storageCtimeMs'> {
+  return entry.compression === 'zstd' ? { compression: 'zstd', storageSize: entry.storageSize,
+    storageCtimeMs: entry.storageCtimeMs } : {};
+}
+
+function validCompressionFingerprint(row: Record<string, unknown>): boolean {
+  return row.compression === 'zstd' &&
+    typeof row.size === 'number' && Number.isSafeInteger(row.size) && row.size >= 0 &&
+    typeof row.storageSize === 'number' && Number.isSafeInteger(row.storageSize) && row.storageSize > 0 &&
+    typeof row.mtimeMs === 'number' && Number.isFinite(row.mtimeMs) &&
+    typeof row.storageCtimeMs === 'number' && Number.isFinite(row.storageCtimeMs) && row.storageCtimeMs > 0 &&
+    [row.dev, row.ino].every(value => value === undefined ||
+      typeof value === 'number' && Number.isFinite(value) && value >= 0);
+}
+
+function hasCurrentCompressionFailure(contribution: CodexFileContribution | undefined,
+  entry: CodexRuntimeManifestEntry): boolean {
+  return !!contribution && contribution.compressionFailure?.version === 1 &&
+    terminalCompressionCode(contribution.compressionFailure.code) !== undefined &&
+    contribution.compression === 'zstd' && entry.compression === 'zstd' &&
+    contribution.fileKey === entry.fileKey && contribution.size === entry.size &&
+    contribution.storageSize === entry.storageSize && contribution.mtimeMs === entry.mtimeMs &&
+    contribution.storageCtimeMs === entry.storageCtimeMs &&
+    contribution.dev === entry.dev && contribution.ino === entry.ino;
+}
+
+/** Rebuild a metadata-only empty contribution. Never retain a failed draft's
+ * parser state, tokens, quota observations, lineage or period/hour witnesses. */
+function compressionFailureContribution(
+  entry: Pick<CodexFileContribution, 'fileKey' | 'sourceArea' | 'size' | 'mtimeMs' |
+    'storageSize' | 'storageCtimeMs' | 'dev' | 'ino'>,
+  code: CodexTerminalCompressionFailureCode,
+): CodexFileContribution {
+  // This path is also a persistence sanitizer: construct the neutral state
+  // through the explicit local DTO whitelist, not an opaque imported object.
+  const parserState = sanitizeParserState(undefined, entry.fileKey);
+  return {
+    fileKey: entry.fileKey, sourceArea: entry.sourceArea, compression: 'zstd',
+    size: entry.size, mtimeMs: entry.mtimeMs, storageSize: entry.storageSize,
+    storageCtimeMs: entry.storageCtimeMs, dev: entry.dev, ino: entry.ino,
+    compressionFailure: { version: 1, code }, offset: 0, discardingOversizedLine: false,
+    parserState, aggregate: emptyFileAggregate(entry.fileKey, parserState.role),
+    qualityFlags: ['stale-file', 'stale-reset-required'],
+  };
+}
+
+/** A cancellation after the final decoded chunk can leave an unverified draft.
+ * Revalidate rather than promoting an offset-equals-size claim. */
+function compressedDraftNeedsRestart(contribution: CodexFileContribution | undefined): boolean {
+  return contribution?.compression === 'zstd' && contribution.compressionVerified !== true &&
+    contribution.offset >= contribution.size;
+}
+
+/** Compressed history is an immutable whole-frame task. Permit at most the
+ * first file in a refresh to exceed the soft byte budget (codec hard caps still
+ * apply), otherwise defer it. This avoids replay-prefix budget starvation. */
+function compressedMainPassEnd(entry: CodexRuntimeManifestEntry, start: number, remaining: number, first: boolean): number {
+  if (entry.compression === 'zstd') return entry.size <= remaining || first ? entry.size : start;
+  return Math.min(entry.size, start + remaining);
 }
 
 type ContributionChunkHandler = (
@@ -852,6 +1074,8 @@ async function updateContribution(
   endExclusive: number,
   onChunk: ContributionChunkHandler,
 ): Promise<CodexFilePassResult> {
+  const usageWindow = entry.compression === 'zstd' ? undefined : copyCodexUsageWindow(options.achievementUsageWindow);
+  let usageDelta = usageWindow ? emptyCodexUsageDelta(usageWindow) : undefined;
   let parserState = contribution.parserState;
   const aggregate = contribution.aggregate;
   const lineage = contribution.lineage ?? createLineageTrace();
@@ -876,6 +1100,13 @@ async function updateContribution(
     lineage.appliedPrefixEvents === desiredPrefixEvents &&
     isCompatibleCodexPeriodLineage(aggregate.period, desiredPrefixEvents) &&
     codexPeriodFitsAggregate(aggregate.period, aggregate.total);
+  const activeHourProof = contribution.hourProof?.version === CODEX_UTC_HOUR_PROOF_VERSION &&
+    contribution.hourProof.indexedThrough === contribution.offset &&
+    contribution.hourProof.prefixEvents === desiredPrefixEvents &&
+    lineage.appliedPrefixEvents === desiredPrefixEvents &&
+    !contribution.lineageReconciliation
+      ? contribution.hourProof
+      : undefined;
   if (aggregate.today && !reanchorRollingToday(aggregate.today, asOfDay, timeZone)) {
     delete aggregate.today;
   }
@@ -889,6 +1120,7 @@ async function updateContribution(
       ? aggregate.today
       : undefined;
   let invalidEventTimestamp = false;
+  let activeHourProofOverflow = false;
 
   const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => {
     syncSession(aggregate, parserState);
@@ -896,6 +1128,7 @@ async function updateContribution(
       activeToday.indexedThrough = cursor.offset;
       syncTodayProjection(activeToday);
     }
+    if (activeHourProof) activeHourProof.indexedThrough = cursor.offset;
     return {
       ...contribution,
       fileKey: entry.fileKey,
@@ -904,11 +1137,29 @@ async function updateContribution(
       mtimeMs: entry.mtimeMs,
       dev: entry.dev,
       ino: entry.ino,
+      ...compressedSourceMetadata(entry),
+      ...(entry.compression === 'zstd' ? { compressionVerified: undefined } : {}),
       offset: cursor.offset,
       discardingOversizedLine: cursor.discardingOversizedLine,
       parserState,
       lineage,
       aggregate,
+      ...(activeHourProof && !activeHourProofOverflow ? {
+        hourProof: { ...activeHourProof, hours: [...activeHourProof.hours] },
+      } : {}),
+      ...(activeHourProofOverflow ? {
+        hourProof: undefined,
+        hourProofMigration: {
+          version: CODEX_UTC_HOUR_PROOF_VERSION,
+          prefixEvents: desiredPrefixEvents,
+          tokenEventsSeen: 0,
+          offset: cursor.offset,
+          discardingOversizedLine: cursor.discardingOversizedLine,
+          parserState,
+          hours: [],
+          overflow: true,
+        },
+      } : {}),
       limit,
       limits,
       ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
@@ -937,7 +1188,14 @@ async function updateContribution(
           addLineageToken(lineage, parsed.lineageTokenKey);
         }
         for (const event of parsed.events) {
+          if (usageDelta && !addCodexOriginEvent(usageDelta, event)) usageDelta = undefined;
           reduceUsage(aggregate, event);
+          if (activeHourProof) {
+            const added = addCodexOutputHourInPlace(
+              activeHourProof.hours, event.timestamp, event.tokens.outputTotal,
+            );
+            if (!added) activeHourProofOverflow = true;
+          }
           if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
             invalidEventTimestamp = true;
           } else if (advancePeriod && aggregate.period) {
@@ -1011,11 +1269,16 @@ async function updateContribution(
     packPendingLineageFingerprints(lineage);
   }
   const updated = snapshot(scan.cursor);
+  if (entry.compression === 'zstd' && scan.cursor.offset === entry.size && !scan.cursor.discardingOversizedLine) {
+    updated.compressionVerified = true;
+  }
   updated.qualityFlags = uniqueFlags(
     updated.qualityFlags,
     scan.oversizedLines > 0 ? ['oversized-jsonl-line'] : [],
+    scan.finalLineDiscarded ? ['invalid-json'] : [],
   );
-  return { contribution: updated, bytesRead: scan.bytesRead };
+  return { contribution: updated, bytesRead: scan.bytesRead,
+    ...(usageDelta && usageDelta.processed > 0 ? { achievementUsageDelta: usageDelta } : {}) };
 }
 
 function promoteCaughtUpLineage(
@@ -1034,6 +1297,27 @@ function promoteCaughtUpLineage(
   }
   contribution.aggregate = reconciliation.aggregate;
   lineage.appliedPrefixEvents = reconciliation.prefixEvents;
+  if (reconciliation.hourProofHours && !reconciliation.hourProofOverflow) {
+    contribution.hourProof = {
+      version: CODEX_UTC_HOUR_PROOF_VERSION,
+      indexedThrough: contribution.offset,
+      prefixEvents: reconciliation.prefixEvents,
+      hours: reconciliation.hourProofHours,
+    };
+    delete contribution.hourProofMigration;
+  } else if (reconciliation.hourProofOverflow) {
+    delete contribution.hourProof;
+    contribution.hourProofMigration = {
+      version: CODEX_UTC_HOUR_PROOF_VERSION,
+      prefixEvents: reconciliation.prefixEvents,
+      tokenEventsSeen: reconciliation.tokenEventsSeen,
+      offset: contribution.offset,
+      discardingOversizedLine: false,
+      parserState: reconciliation.parserState,
+      hours: [],
+      overflow: true,
+    };
+  }
   if (contribution.aggregate.period) {
     contribution.aggregate.period.lineageVersion = CODEX_PERIOD_LINEAGE_VERSION;
     contribution.aggregate.period.lineagePrefixEvents = reconciliation.prefixEvents;
@@ -1043,6 +1327,23 @@ function promoteCaughtUpLineage(
     reconciliation.qualityFlags,
   );
   delete contribution.lineageReconciliation;
+}
+
+function promoteCaughtUpHourProof(contribution: CodexFileContribution): void {
+  const draft = contribution.hourProofMigration;
+  if (!draft || draft.version !== CODEX_UTC_HOUR_PROOF_VERSION ||
+      draft.overflow || draft.discardingOversizedLine ||
+      draft.offset < contribution.offset || contribution.lineageReconciliation ||
+      draft.tokenEventsSeen < draft.prefixEvents ||
+      contribution.lineage?.appliedPrefixEvents !== draft.prefixEvents ||
+      contribution.lineage.desiredPrefixEvents !== draft.prefixEvents) return;
+  contribution.hourProof = {
+    version: CODEX_UTC_HOUR_PROOF_VERSION,
+    indexedThrough: contribution.offset,
+    prefixEvents: draft.prefixEvents,
+    hours: draft.hours,
+  };
+  delete contribution.hourProofMigration;
 }
 
 async function reconcileContributionLineage(
@@ -1080,11 +1381,14 @@ async function reconcileContributionLineage(
           today: emptyTodayIndex(asOfDay, timeZone),
         },
         qualityFlags: [],
+        hourProofHours: [],
       };
   let parserState = initial.parserState;
   let tokenEventsSeen = initial.tokenEventsSeen;
   const aggregate = initial.aggregate;
   let invalidEventTimestamp = false;
+  let hourProofHours = initial.hourProofHours ? [...initial.hourProofHours] : undefined;
+  let hourProofOverflow = initial.hourProofOverflow === true;
   const pseudonymize = pseudonymizer(options.salt);
   let quotaHistory = appendCodexQuotaHistory(
     contribution.quotaHistory ?? [],
@@ -1118,6 +1422,8 @@ async function reconcileContributionLineage(
           parserState.qualityFlags,
           invalidEventTimestamp ? ['invalid-event-timestamp'] : [],
         ),
+        ...(hourProofHours ? { hourProofHours: hourProofOverflow ? [] : [...hourProofHours] } : {}),
+        ...(hourProofOverflow ? { hourProofOverflow: true } : {}),
       },
     };
   };
@@ -1150,6 +1456,12 @@ async function reconcileContributionLineage(
       if (includeUsage) {
         for (const event of parsed.events) {
           reduceUsage(aggregate, event);
+          if (hourProofHours && !hourProofOverflow) {
+            const added = addCodexOutputHourInPlace(
+              hourProofHours, event.timestamp, event.tokens.outputTotal,
+            );
+            if (!added) hourProofOverflow = true;
+          }
           if (!Number.isFinite(event.timestamp) || event.timestamp <= 0) {
             invalidEventTimestamp = true;
           } else if (aggregate.period) {
@@ -1209,12 +1521,8 @@ async function migrateContributionPeriod(
 ): Promise<CodexFilePassResult> {
   const timeZone = resolveTimeZone(options.timeZone);
   const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
-  const savedMigration = contribution.periodMigration;
-  const canResume = savedMigration?.timeZone === timeZone &&
-    savedMigration.prefixEvents === prefixEvents &&
-    Number.isFinite(savedMigration.tokenEventsSeen) &&
-    (savedMigration.tokenEventsSeen ?? 0) >= prefixEvents;
-  const initial: CodexPeriodMigrationState = canResume
+  const savedMigration = resumablePeriodMigration(contribution, timeZone);
+  const initial: CodexPeriodMigrationState = savedMigration
     ? savedMigration
     : {
         timeZone,
@@ -1242,7 +1550,11 @@ async function migrateContributionPeriod(
     ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
     aggregate: {
       ...contribution.aggregate,
-      period: undefined,
+      // A compatible legacy slice can still serve ordinary usage while its
+      // stronger calendar proof is rebuilt. Only the completed body pass may
+      // replace it with current lineage markers.
+      period: isReadableCodexPeriod(contribution, timeZone)
+        ? contribution.aggregate.period : undefined,
     },
     periodMigration: {
       timeZone,
@@ -1318,23 +1630,86 @@ async function migrateContributionPeriod(
       ['oversized-jsonl-line'],
     );
   }
-  if (
-    updated.periodMigration &&
-    updated.periodMigration.offset >= contribution.offset &&
-    !updated.periodMigration.discardingOversizedLine
-  ) {
-    updated.aggregate.period = {
-      timeZone,
+  promoteCaughtUpPeriod(updated, timeZone);
+  return { contribution: updated, bytesRead: scan.bytesRead };
+}
+
+/** One-time historical UTC hour scan; its draft is safe to checkpoint mid-file. */
+async function migrateContributionHourProof(
+  contribution: CodexFileContribution,
+  entry: CodexRuntimeManifestEntry,
+  options: CodexIndexUpdateOptions,
+  io: CodexIndexIo,
+  endExclusive: number,
+  onChunk: ContributionChunkHandler,
+): Promise<CodexFilePassResult> {
+  const prefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
+  const saved = contribution.hourProofMigration;
+  const initial: CodexHourProofMigrationState = saved?.version === CODEX_UTC_HOUR_PROOF_VERSION &&
+      saved.prefixEvents === prefixEvents && !saved.overflow
+    ? saved
+    : {
+        version: CODEX_UTC_HOUR_PROOF_VERSION,
+        prefixEvents,
+        tokenEventsSeen: 0,
+        offset: 0,
+        discardingOversizedLine: false,
+        parserState: createCodexParserState(entry.fileKey),
+        hours: [],
+      };
+  let parserState = initial.parserState;
+  let tokenEventsSeen = initial.tokenEventsSeen;
+  const hours = [...initial.hours];
+  let overflow = false;
+  const pseudonymize = pseudonymizer(options.salt);
+  const snapshot = (cursor: CodexJsonlCursor): CodexFileContribution => ({
+    ...contribution,
+    hourProof: undefined,
+    hourProofMigration: {
+      version: CODEX_UTC_HOUR_PROOF_VERSION,
+      prefixEvents,
+      tokenEventsSeen,
+      offset: cursor.offset,
+      discardingOversizedLine: cursor.discardingOversizedLine,
+      parserState,
+      hours: overflow ? [] : [...hours],
+      ...(overflow ? { overflow: true } : {}),
+    },
+  });
+  const scan = await scanCodexJsonlLines(
+    entry,
+    io,
+    { offset: initial.offset, discardingOversizedLine: initial.discardingOversizedLine },
+    endExclusive,
+    (line) => {
+      if (line.trim() === '') return;
+      const parsed = parseCodexLine(line, parserState, pseudonymize);
+      parserState = parsed.state;
+      if (parsed.lineageTokenKey) tokenEventsSeen += 1;
+      if (tokenEventsSeen <= prefixEvents || overflow) return;
+      for (const event of parsed.events) {
+        if (!addCodexOutputHourInPlace(hours, event.timestamp, event.tokens.outputTotal)) {
+          overflow = true;
+          break;
+        }
+      }
+    },
+    async (progress) => { await onChunk(snapshot(progress.cursor), progress.bytesRead); },
+  );
+  if (!scan.reachedEnd) throw new Error('Codex log changed during hour proof migration');
+  if (scan.oversizedLines > 0) overflow = true;
+  const updated = snapshot(scan.cursor);
+  if (updated.hourProofMigration &&
+      updated.hourProofMigration.offset >= contribution.offset &&
+      !updated.hourProofMigration.discardingOversizedLine &&
+      tokenEventsSeen >= prefixEvents && !overflow) {
+    updated.hourProof = {
+      version: CODEX_UTC_HOUR_PROOF_VERSION,
       indexedThrough: contribution.offset,
-      days: updated.periodMigration.days,
-      lineageVersion: CODEX_PERIOD_LINEAGE_VERSION,
-      lineagePrefixEvents: prefixEvents,
+      prefixEvents,
+      hours,
     };
-    updated.qualityFlags = uniqueFlags(
-      updated.qualityFlags,
-      updated.periodMigration.qualityFlags,
-    );
-    delete updated.periodMigration;
+    delete updated.hourProofMigration;
   }
   return { contribution: updated, bytesRead: scan.bytesRead };
 }
@@ -1524,6 +1899,7 @@ export async function runCodexFilePass(
     salt: task.salt,
     timeZone: task.timeZone,
     asOfDay: task.asOfDay,
+    ...(task.kind === 'main' ? { achievementUsageWindow: copyCodexUsageWindow(task.achievementUsageWindow) } : {}),
   };
   const noChunk: ContributionChunkHandler = async () => undefined;
   let result: CodexFilePassResult;
@@ -1587,6 +1963,7 @@ export async function runCodexFilePass(
     ok: true,
     contribution: result.contribution,
     bytesRead: result.bytesRead,
+    ...(result.achievementUsageDelta ? { achievementUsageDelta: result.achievementUsageDelta } : {}),
   };
 }
 
@@ -1682,7 +2059,7 @@ function reconcileLineageContributions(
   };
   for (const fileKey of canonicalFileKeys) {
     const contribution = files[fileKey];
-    if (!contribution?.lineage) {
+    if (!contribution?.lineage || (contribution.compression === 'zstd' && !contribution.compressionVerified)) {
       continue;
     }
     const key = contribution.aggregate.session.sessionKey;
@@ -1698,7 +2075,7 @@ function reconcileLineageContributions(
   }
 
   for (const contribution of Object.values(files)) {
-    if (!contribution.lineage) {
+    if (!contribution.lineage || (contribution.compression === 'zstd' && !contribution.compressionVerified)) {
       continue;
     }
     const childTrace = traceFor(contribution);
@@ -1757,35 +2134,17 @@ function reconcileLineageContributions(
     }
   }
 
-  const depthMemo = new Map<CodexFileContribution, number>();
-  const depthFor = (
-    contribution: CodexFileContribution,
-    visiting = new Set<CodexFileContribution>(),
-  ): number => {
-    const cached = depthMemo.get(contribution);
-    if (cached !== undefined) {
-      return cached;
-    }
-    if (visiting.has(contribution)) {
-      return 0;
-    }
+  const depthFor = createLineageDepthResolver<CodexFileContribution>((contribution) => {
     const parentKey = contribution.aggregate.session.parentSessionKey;
     if (!parentKey) {
-      depthMemo.set(contribution, 0);
-      return 0;
+      return null;
     }
-    const nextVisiting = new Set(visiting).add(contribution);
-    const parents = (parentCandidates.get(parentKey) ?? []).filter((parent) =>
+    return (parentCandidates.get(parentKey) ?? []).filter((parent) =>
       !contribution.parserState.treeKey ||
       !parent.parserState.treeKey ||
       contribution.parserState.treeKey === parent.parserState.treeKey,
     );
-    const depth = parents.length > 0
-      ? 1 + Math.min(...parents.map((parent) => depthFor(parent, nextVisiting)))
-      : 1;
-    depthMemo.set(contribution, depth);
-    return depth;
-  };
+  });
 
   for (const tree of treeCandidates.values()) {
     const ordered = [...tree].sort((left, right) =>
@@ -1869,6 +2228,10 @@ function recomputeAggregate(
 function mergeCodexQuotaHistory(index: CodexIndexV3): void {
   const additions: CodexQuotaObservation[] = [];
   for (const contribution of Object.values(index.files)) {
+    // Draft decoded bytes are provisional until the entire physical frame is
+    // verified. The global history outlives files, so premature promotion here
+    // could not be withdrawn by later terminal-frame cleanup.
+    if (contribution.compression === 'zstd' && !isCodexUsageContributionCurrent(contribution)) continue;
     additions.push(...(contribution.quotaHistory ?? []));
     for (const snapshot of [
       ...Object.values(contribution.limits ?? {}),
@@ -1914,6 +2277,7 @@ function coverageFor(
   timeZone: string,
   asOfDay: string,
   deduplication = classifyCodexSessionDuplicates(files),
+  requireCalendarProof = false,
 ): CodexIndexCoverage {
   let indexedFiles = 0;
   let indexedBytes = 0;
@@ -1931,6 +2295,7 @@ function coverageFor(
     indexedBytes += parsedBytes;
     if (
       !resetIsStale &&
+      isCodexUsageContributionCurrent(contribution) &&
       !flags.has('stale-file') &&
       contribution.offset >= entry.size &&
       !contribution.discardingOversizedLine &&
@@ -1955,6 +2320,7 @@ function coverageFor(
       const flags = new Set(contribution?.qualityFlags ?? []);
       const mainVerified = Boolean(
         contribution &&
+        isCodexUsageContributionCurrent(contribution) &&
         contribution.offset === entry.size &&
         !contribution.discardingOversizedLine &&
         contribution.lineage?.appliedPrefixEvents ===
@@ -1977,7 +2343,12 @@ function coverageFor(
       }
       rangeTotalFiles += 1;
       rangeTotalBytes += entry.size;
-      const periodIsCurrent = isReadableCodexPeriod(contribution, timeZone);
+      // Recent display ranges retain legacy compatibility. Calendar evidence
+      // requires proof across every canonical file, including older history.
+      const periodIsCurrent = isReadableCodexPeriod(contribution, timeZone) &&
+        (!requireCalendarProof || oldestDay !== undefined ||
+          isCurrentCodexPeriodLineage(contribution?.aggregate.period,
+            contribution?.lineage?.desiredPrefixEvents ?? 0));
       const periodMigration = contribution?.periodMigration;
       // A migration draft is intentionally not a readable period yet, but
       // its cursor still represents verified work for the progress display.
@@ -2170,6 +2541,7 @@ function recomputeDerivedIndex(
   timeZone: string,
   asOfDay: string,
   reconcileLineage = true,
+  requireCalendarProof = false,
 ): void {
   const initialDeduplication = classifyCodexSessionDuplicates(index.files);
   if (reconcileLineage) {
@@ -2187,6 +2559,7 @@ function recomputeDerivedIndex(
     timeZone,
     asOfDay,
     deduplication,
+    requireCalendarProof,
   );
 }
 
@@ -2207,6 +2580,8 @@ function isWarmNoOp(
   diff: ReturnType<typeof diffCodexManifest>,
   timeZone: string,
   asOfDay: string,
+  allowHistoricalBackfill: boolean,
+  allowAchievementHourProof: boolean,
 ): boolean {
   // Older schema-3 indexes have a current `limit` projection but no neutral
   // reset history. Give the next refresh one chance to seed the bounded cache
@@ -2215,27 +2590,34 @@ function isWarmNoOp(
     return false;
   }
   const totalBytes = manifest.files.reduce((sum, entry) => sum + entry.size, 0);
+  const terminalEntries = manifest.files.filter(entry => hasCurrentCompressionFailure(previous.files[entry.fileKey], entry));
+  const terminalCount = terminalEntries.length;
+  const availableBytes = totalBytes - terminalEntries.reduce((sum, entry) => sum + entry.size, 0);
   const hourlyCoverage = previous.coverage.hourly;
   if (
+    (allowHistoricalBackfill && allowAchievementHourProof &&
+      hourProofWorkEntries(previous, manifest).length > 0) ||
     diff.appended.length > 0 ||
     diff.truncated.length > 0 ||
     diff.replaced.length > 0 ||
     diff.moved.length > 0 ||
     diff.added.length > 0 ||
     diff.removed.length > 0 ||
-    !previous.coverage.complete ||
+    (!terminalCount && !previous.coverage.complete) ||
     previous.coverage.totalFiles !== manifest.files.length ||
-    previous.coverage.indexedFiles !== manifest.files.length ||
+    previous.coverage.indexedFiles + terminalCount !== manifest.files.length ||
     previous.coverage.totalBytes !== totalBytes ||
-    previous.coverage.indexedBytes !== totalBytes ||
-    !previous.coverage.period.allTime.complete ||
+    previous.coverage.indexedBytes !== availableBytes ||
+    (terminalCount ? previous.coverage.period.allTime.migratedFiles + terminalCount !== previous.coverage.period.allTime.totalFiles
+      : !previous.coverage.period.allTime.complete) ||
     previous.coverage.period.timeZone !== timeZone ||
     previous.coverage.period.asOfDay !== asOfDay ||
-    !hourlyCoverage?.complete ||
+    !hourlyCoverage || (terminalCount ? hourlyCoverage.indexedFiles !== hourlyCoverage.totalFiles : !hourlyCoverage.complete) ||
     hourlyCoverage.timeZone !== timeZone ||
     hourlyCoverage.asOfDay !== asOfDay ||
     hourlyCoverage.windowDays !== CODEX_ROLLING_HOURLY_DAYS ||
-    !previous.coverage.today?.complete ||
+    !previous.coverage.today || (terminalCount ? previous.coverage.today.indexedFiles !== previous.coverage.today.totalFiles
+      : !previous.coverage.today.complete) ||
     previous.coverage.today.timeZone !== timeZone ||
     previous.coverage.today.day !== asOfDay
   ) {
@@ -2246,6 +2628,7 @@ function isWarmNoOp(
   const rollingDays = rollingHourlyDaySet(asOfDay);
   return manifest.files.every((entry) => {
     const contribution = previous.files[entry.fileKey];
+    if (hasCurrentCompressionFailure(contribution, entry)) return true;
     const baseIsCurrent = Boolean(
       contribution &&
       contribution.offset === entry.size &&
@@ -2257,8 +2640,11 @@ function isWarmNoOp(
       contribution.aggregate.period?.timeZone === timeZone &&
       contribution.aggregate.period.indexedThrough >= contribution.offset &&
       isReadableCodexPeriod(contribution, timeZone) &&
+      (!allowAchievementHourProof || !canonical.has(entry.fileKey) || isCurrentCodexPeriodLineage(
+        contribution.aggregate.period, contribution.lineage?.desiredPrefixEvents ?? 0,
+      )) &&
       !contribution.qualityFlags.includes('stale-file') &&
-      !contribution.qualityFlags.includes('stale-reset-required'),
+      isCodexUsageContributionCurrent(contribution),
     );
     if (!baseIsCurrent || !contribution) {
       return false;
@@ -2294,11 +2680,17 @@ export async function updateCodexIndex(
   const io = options.io ?? defaultIo();
   const timeZone = resolveTimeZone(options.timeZone);
   const refreshInstant = (options.now ?? Date.now)();
+  const requireCalendarProof = options.allowAchievementHourProof !== false;
+  const requestedUsageWindow = copyCodexUsageWindow(options.achievementUsageWindow);
+  const usageWindow = requestedUsageWindow && requestedUsageWindow.through <= refreshInstant &&
+    previous.coverage.period.timeZone === timeZone && codexOriginBaselineReady(previous)
+    ? requestedUsageWindow : undefined;
   const asOfDay = dayKeyInZone(new Date(refreshInstant), timeZone);
   const normalizedOptions: CodexIndexUpdateOptions = {
     ...options,
     timeZone,
     asOfDay,
+    achievementUsageWindow: undefined,
   };
   const scheduling: CodexIndexSchedulingPolicy = {
     ...DEFAULT_CODEX_INDEX_SCHEDULING,
@@ -2326,12 +2718,20 @@ export async function updateCodexIndex(
     ),
   };
   const diff = diffCodexManifest(previousManifest(previous), manifest.persistable);
-  if (isWarmNoOp(previous, manifest, diff, timeZone, asOfDay)) {
+  const terminalCount = manifest.files.filter(entry => hasCurrentCompressionFailure(previous.files[entry.fileKey], entry)).length;
+  const originAppends = new Set(usageWindow ? diff.appended.filter(key => {
+    const prior = previous.files[key], entry = manifest.persistable[key];
+    return prior && entry && !prior.compression && !entry.compression && prior.dev! > 0 && prior.ino! > 0 &&
+      prior.dev === entry.dev && prior.ino === entry.ino;
+  }) : []);
+  const originCandidates = new Map<string, CodexAchievementUsageDelta>();
+  if (isWarmNoOp(previous, manifest, diff, timeZone, asOfDay,
+    options.allowHistoricalBackfill !== false, options.allowAchievementHourProof !== false)) {
     return {
       index: previous,
       indexChanged: false,
       bodyReads: 0,
-      failedFiles: 0,
+      failedFiles: terminalCount,
       migration: {
         filePasses: 0,
         bytesRead: 0,
@@ -2348,7 +2748,7 @@ export async function updateCodexIndex(
   }
   const entries = new Map(manifest.files.map((entry) => [entry.fileKey, entry]));
   let bodyReads = 0;
-  let failedFiles = 0;
+  let failedFiles = terminalCount;
   let filePasses = 0;
   let bytesRead = 0;
   let cancellationCheckpointed = false;
@@ -2363,6 +2763,12 @@ export async function updateCodexIndex(
   let lastCheckpointAt = scheduling.now();
   let lastCheckpointBytes = 0;
   let reconcileLineageForCheckpoint = true;
+  const recordTerminalFailure = (entry: CodexRuntimeManifestEntry, value: unknown): boolean => {
+    const code = terminalCompressionCode(copyFilePassFailureCode(value));
+    if (entry.compression !== 'zstd' || !code || !validCompressionFingerprint({ ...entry })) return false;
+    index.files[entry.fileKey] = compressionFailureContribution(entry, code);
+    return true;
+  };
   for (const move of diff.moved) {
     const contribution = index.files[move.fromKey];
     const entry = entries.get(move.toKey);
@@ -2386,6 +2792,9 @@ export async function updateCodexIndex(
     if (contribution.todayMigration) {
       contribution.todayMigration.parserState.fileKey = move.toKey;
     }
+    if (contribution.hourProofMigration) {
+      contribution.hourProofMigration.parserState.fileKey = move.toKey;
+    }
     index.files[move.toKey] = contribution;
   }
   for (const key of diff.removed) {
@@ -2393,6 +2802,7 @@ export async function updateCodexIndex(
   }
   for (const contribution of Object.values(index.files)) {
     promoteCaughtUpLineage(contribution);
+    promoteCaughtUpHourProof(contribution);
     const desiredPrefixEvents = contribution.lineage?.desiredPrefixEvents ?? 0;
     if (contribution.aggregate.period && (
       !isCompatibleCodexPeriodLineage(
@@ -2407,15 +2817,7 @@ export async function updateCodexIndex(
     )) {
       delete contribution.aggregate.period;
     }
-    if (
-      contribution.periodMigration &&
-      (
-        contribution.periodMigration.timeZone !== timeZone ||
-        contribution.periodMigration.prefixEvents !== desiredPrefixEvents ||
-        !Number.isFinite(contribution.periodMigration.tokenEventsSeen) ||
-        (contribution.periodMigration.tokenEventsSeen ?? 0) < desiredPrefixEvents
-      )
-    ) {
+    if (contribution.periodMigration && !resumablePeriodMigration(contribution, timeZone)) {
       delete contribution.periodMigration;
     }
     promoteCaughtUpPeriod(contribution, timeZone);
@@ -2463,6 +2865,14 @@ export async function updateCodexIndex(
   for (const key of diff.replaced) {
     resetFlags.set(key, 'replaced-jsonl');
   }
+  // A known encoding/version replacement withdraws old authority immediately,
+  // including cancellation before its first decoded chunk or checkpoint.
+  for (const key of diff.replaced) {
+    const prior = index.files[key], entry = entries.get(key);
+    if (prior) delete prior.compressionFailure;
+    if (prior && (prior.compression || entry?.compression)) prior.qualityFlags = uniqueFlags(
+      prior.qualityFlags, ['stale-reset-required']);
+  }
   const changedKeys = new Set([
     ...diff.added,
     ...diff.appended,
@@ -2471,12 +2881,14 @@ export async function updateCodexIndex(
   ]);
   for (const entry of manifest.files) {
     const contribution = index.files[entry.fileKey];
+    if (hasCurrentCompressionFailure(contribution, entry)) continue;
     if (
       contribution &&
       (contribution.offset < entry.size ||
         contribution.discardingOversizedLine ||
         contribution.qualityFlags.includes('stale-file') ||
-        contribution.qualityFlags.includes('stale-reset-required'))
+        contribution.qualityFlags.includes('stale-reset-required') ||
+        compressedDraftNeedsRestart(contribution))
     ) {
       changedKeys.add(entry.fileKey);
     }
@@ -2502,7 +2914,7 @@ export async function updateCodexIndex(
     if (!due) {
       return false;
     }
-    recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false);
+    recomputeDerivedIndex(index, manifest, timeZone, asOfDay, false, requireCalendarProof);
     options.onProgress(progressFor(index, index.coverage.indexedFiles));
     lastProgressAt = current;
     lastProgressBytes = bytesRead;
@@ -2530,6 +2942,7 @@ export async function updateCodexIndex(
       timeZone,
       asOfDay,
       reconcileLineageForCheckpoint,
+      requireCalendarProof,
     );
     options.onProgress?.(progressFor(index, index.coverage.indexedFiles));
     lastProgressAt = current;
@@ -2560,6 +2973,7 @@ export async function updateCodexIndex(
         timeZone,
         asOfDay,
         reconcileLineageForCheckpoint,
+        requireCalendarProof,
       );
       publishProgress(true);
       return;
@@ -2571,6 +2985,7 @@ export async function updateCodexIndex(
         timeZone,
         asOfDay,
         reconcileLineageForCheckpoint,
+        requireCalendarProof,
       );
     }
   };
@@ -2633,12 +3048,16 @@ export async function updateCodexIndex(
           if (!task) {
             throw new Error('Codex file worker returned an unknown task');
           }
+          byId.delete(outcome.taskId);
           if (outcome.ok) {
             bytesRead += outcome.bytesRead;
             index.files[task.entry.fileKey] = outcome.contribution;
+            const proof = task.kind === 'main' && originAppends.has(task.entry.fileKey)
+              ? copyCodexUsageDelta(outcome.achievementUsageDelta, usageWindow) : undefined;
+            if (proof) originCandidates.set(task.entry.fileKey, proof);
           } else {
             failedFiles += 1;
-            onFailure(task);
+            if (!recordTerminalFailure(task.entry, outcome.failureCode)) onFailure(task);
           }
           dirtySinceCheckpoint = true;
           filePassesSinceCheckpoint += 1;
@@ -2682,7 +3101,7 @@ export async function updateCodexIndex(
       }
       const resetFlag = resetFlags.get(entry.fileKey);
       const prior = index.files[entry.fileKey];
-      const base = resetFlag || !prior ||
+      const base = resetFlag || !prior || compressedDraftNeedsRestart(prior) ||
           prior.qualityFlags.includes('stale-reset-required')
         ? contributionFor(entry, timeZone, resetFlag ? [resetFlag] : [])
         : {
@@ -2692,14 +3111,15 @@ export async function updateCodexIndex(
             ),
           };
       const remainingBytes = budget.maxBytes - bytesRead - reservedBytes;
-      const endExclusive = Math.min(entry.size, base.offset + remainingBytes);
-      if (endExclusive <= base.offset) {
+      const endExclusive = compressedMainPassEnd(entry, base.offset, remainingBytes, filePasses + tasks.length === 0 && bytesRead === 0);
+      if (endExclusive <= base.offset && !(entry.compression === 'zstd' && entry.size === 0)) {
         break;
       }
       const taskId = `main:${entry.fileKey}`;
       tasks.push({
         taskId,
         kind: 'main',
+        ...(originAppends.has(entry.fileKey) ? { achievementUsageWindow: usageWindow } : {}),
         contribution: base,
         entry,
         salt: normalizedOptions.salt,
@@ -2709,7 +3129,7 @@ export async function updateCodexIndex(
       });
       priorByTask.set(taskId, prior);
       resetFlagByTask.set(taskId, resetFlag);
-      reservedBytes += endExclusive - base.offset;
+      reservedBytes += entry.compression === 'zstd' ? endExclusive : endExclusive - base.offset;
     }
     await runParallelTasks(tasks, (task) => {
       const prior = priorByTask.get(task.taskId);
@@ -2734,7 +3154,7 @@ export async function updateCodexIndex(
     await cancelBeforePass();
     const resetFlag = resetFlags.get(entry.fileKey);
     const prior = index.files[entry.fileKey];
-    const base = resetFlag || !prior ||
+    const base = resetFlag || !prior || compressedDraftNeedsRestart(prior) ||
         prior.qualityFlags.includes('stale-reset-required')
       ? contributionFor(entry, timeZone, resetFlag ? [resetFlag] : [])
       : {
@@ -2744,8 +3164,8 @@ export async function updateCodexIndex(
           ),
         };
     const remainingBytes = budget.maxBytes - bytesRead;
-    const endExclusive = Math.min(entry.size, base.offset + remainingBytes);
-    if (endExclusive <= base.offset) {
+    const endExclusive = compressedMainPassEnd(entry, base.offset, remainingBytes, filePasses === 0 && bytesRead === 0);
+    if (endExclusive <= base.offset && !(entry.compression === 'zstd' && entry.size === 0)) {
       break;
     }
     bodyReads += 1;
@@ -2755,19 +3175,25 @@ export async function updateCodexIndex(
       const pass = await updateContribution(
         base,
         entry,
-        normalizedOptions,
+        { ...normalizedOptions, achievementUsageWindow: originAppends.has(entry.fileKey) ? usageWindow : undefined },
         io,
         endExclusive,
         onChunk(entry, passStartingBytes),
       );
       bytesRead = passStartingBytes + pass.bytesRead;
       index.files[entry.fileKey] = pass.contribution;
+      const proof = copyCodexUsageDelta(pass.achievementUsageDelta, usageWindow);
+      if (proof) originCandidates.set(entry.fileKey, proof);
     } catch (error) {
       if (error instanceof CodexIndexCancelledError) {
         throw error;
       }
       failedFiles += 1;
-      if (prior) {
+      if (recordTerminalFailure(entry, codexFilePassFailureCode(error))) {
+        // Provisional chunks may already have been checkpointed; replace them
+        // with the safe failure record before the next durable stage boundary.
+      } else if (!prior && entry.compression === 'zstd') delete index.files[entry.fileKey];
+      else if (prior) {
         index.files[entry.fileKey] = {
           ...prior,
           qualityFlags: uniqueFlags(
@@ -2787,6 +3213,7 @@ export async function updateCodexIndex(
   }
 
   await finishStage(filePasses > mainPassStart, true);
+  const mainPassEnd = filePasses;
   const allowHistoricalBackfill = options.allowHistoricalBackfill !== false;
   const lineageWork = (allowHistoricalBackfill ? manifest.files : [])
     .filter((entry) => {
@@ -2898,7 +3325,7 @@ export async function updateCodexIndex(
         throw error;
       }
       failedFiles += 1;
-      index.files[entry.fileKey] = prior;
+      if (!recordTerminalFailure(entry, codexFilePassFailureCode(error))) index.files[entry.fileKey] = prior;
     }
     dirtySinceCheckpoint = true;
     filePassesSinceCheckpoint += 1;
@@ -2925,6 +3352,10 @@ export async function updateCodexIndex(
         contribution.offset >= entry.size &&
         !contribution.discardingOversizedLine &&
         (
+          (requireCalendarProof && !isCurrentCodexPeriodLineage(
+            contribution.aggregate.period,
+            contribution.lineage?.desiredPrefixEvents ?? 0,
+          )) ||
           !isCompatibleCodexPeriodLineage(
             contribution.aggregate.period,
             contribution.lineage?.desiredPrefixEvents ?? 0,
@@ -2958,14 +3389,7 @@ export async function updateCodexIndex(
         continue;
       }
       const base = cloneContribution(prior);
-      const start = base.periodMigration?.timeZone === timeZone &&
-          base.periodMigration.prefixEvents ===
-            (base.lineage?.desiredPrefixEvents ?? 0) &&
-          Number.isFinite(base.periodMigration.tokenEventsSeen) &&
-          (base.periodMigration.tokenEventsSeen ?? 0) >=
-            (base.lineage?.desiredPrefixEvents ?? 0)
-        ? base.periodMigration.offset
-        : 0;
+      const start = resumablePeriodMigration(base, timeZone)?.offset ?? 0;
       const endExclusive = Math.min(
         base.offset,
         start + (budget.maxBytes - bytesRead - reservedBytes),
@@ -3003,14 +3427,7 @@ export async function updateCodexIndex(
       continue;
     }
     const base = cloneContribution(prior);
-    const start = base.periodMigration?.timeZone === timeZone &&
-        base.periodMigration.prefixEvents ===
-          (base.lineage?.desiredPrefixEvents ?? 0) &&
-        Number.isFinite(base.periodMigration.tokenEventsSeen) &&
-        (base.periodMigration.tokenEventsSeen ?? 0) >=
-          (base.lineage?.desiredPrefixEvents ?? 0)
-      ? base.periodMigration.offset
-      : 0;
+    const start = resumablePeriodMigration(base, timeZone)?.offset ?? 0;
     const endExclusive = Math.min(
       base.offset,
       start + (budget.maxBytes - bytesRead),
@@ -3037,7 +3454,7 @@ export async function updateCodexIndex(
         throw error;
       }
       failedFiles += 1;
-      index.files[entry.fileKey] = prior;
+      if (!recordTerminalFailure(entry, codexFilePassFailureCode(error))) index.files[entry.fileKey] = prior;
     }
     dirtySinceCheckpoint = true;
     filePassesSinceCheckpoint += 1;
@@ -3183,7 +3600,7 @@ export async function updateCodexIndex(
         throw error;
       }
       failedFiles += 1;
-      index.files[entry.fileKey] = prior;
+      if (!recordTerminalFailure(entry, codexFilePassFailureCode(error))) index.files[entry.fileKey] = prior;
     }
     dirtySinceCheckpoint = true;
     filePassesSinceCheckpoint += 1;
@@ -3201,7 +3618,8 @@ export async function updateCodexIndex(
     ? manifest.files.sort(recentFirst)
     : [];
   const pendingIdentity = identityWork.filter(
-    (entry) => index.files[entry.fileKey]?.identityChecked !== true,
+    (entry) => !hasCurrentCompressionFailure(index.files[entry.fileKey], entry) &&
+      index.files[entry.fileKey]?.identityChecked !== true,
   );
   if (options.filePassBatch && pendingIdentity.length > 1) {
     await cancelBeforePass();
@@ -3232,7 +3650,7 @@ export async function updateCodexIndex(
       reservedBytes += identityBytes;
     }
     await runParallelTasks(tasks, () => undefined);
-  } else for (const entry of identityWork) {
+  } else for (const entry of pendingIdentity) {
     if (!hasBudget()) {
       break;
     }
@@ -3270,6 +3688,7 @@ export async function updateCodexIndex(
         throw error;
       }
       failedFiles += 1;
+      recordTerminalFailure(entry, codexFilePassFailureCode(error));
     }
     dirtySinceCheckpoint = true;
     filePassesSinceCheckpoint += 1;
@@ -3279,12 +3698,63 @@ export async function updateCodexIndex(
   }
 
   await finishStage(filePasses > identityPassStart);
+  // A migrated index has no older hour positions in its period projection.
+  // Run this only under the historical-work allowance and only after lineage
+  // and duplicate classification have settled. Each pass is streaming and
+  // checkpointed at the same safe JSONL cursor as the other migrations.
+  recomputeDerivedIndex(index, manifest, timeZone, asOfDay, true, requireCalendarProof);
+  const hourProofStart = filePasses;
+  // Routine appended tails should not starve older hour proofs. Keep only one
+  // historical migration stage per refresh to protect the bounded I/O budget.
+  if (allowHistoricalBackfill && options.allowAchievementHourProof !== false &&
+      filePasses === mainPassEnd && hasBudget()) {
+    const hourWork = hourProofWorkEntries(index, manifest).sort(recentFirst);
+    for (const entry of hourWork) {
+      if (!hasBudget()) break;
+      await cancelBeforePass();
+      const prior = index.files[entry.fileKey];
+      const base = cloneContribution(prior);
+      const draft = base.hourProofMigration;
+      const start = draft?.version === CODEX_UTC_HOUR_PROOF_VERSION &&
+        draft.prefixEvents === (base.lineage?.desiredPrefixEvents ?? 0) &&
+        !draft.overflow
+          ? draft.offset : 0;
+      const endExclusive = Math.min(base.offset, start + budget.maxBytes - bytesRead);
+      if (endExclusive <= start) break;
+      bodyReads += 1;
+      filePasses += 1;
+      const passStartingBytes = bytesRead;
+      try {
+        const pass = await migrateContributionHourProof(
+          base, entry, normalizedOptions, io, endExclusive,
+          onChunk(entry, passStartingBytes),
+        );
+        bytesRead = passStartingBytes + pass.bytesRead;
+        index.files[entry.fileKey] = pass.contribution;
+      } catch (error) {
+        if (error instanceof CodexIndexCancelledError) throw error;
+        failedFiles += 1;
+        if (!recordTerminalFailure(entry, codexFilePassFailureCode(error))) index.files[entry.fileKey] = prior;
+      }
+      dirtySinceCheckpoint = true;
+      filePassesSinceCheckpoint += 1;
+      if (!(await checkpoint(false))) publishProgress(false);
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+  }
+  await finishStage(filePasses > hourProofStart);
   if (filePasses === 0) {
     options.onProgress?.(progressFor(index, manifest.files.length));
   } else {
     publishProgress(true);
   }
+  const historicalHourProof = codexHourProofSnapshot(index);
+  const achievementUsageDelta = finalizeCodexUsageDelta(previous, index, originCandidates, usageWindow);
+  const terminalSettled = manifest.files.some(entry => hasCurrentCompressionFailure(index.files[entry.fileKey], entry)) &&
+    isWarmNoOp(index, manifest, diffCodexManifest(previousManifest(index), manifest.persistable),
+      timeZone, asOfDay, allowHistoricalBackfill, options.allowAchievementHourProof !== false);
   return {
+    ...(achievementUsageDelta ? { achievementUsageDelta } : {}),
     index,
     indexChanged: true,
     bodyReads,
@@ -3293,9 +3763,11 @@ export async function updateCodexIndex(
       filePasses,
       bytesRead,
       pending:
-        !index.coverage.complete ||
+        !terminalSettled && (!index.coverage.complete ||
         !index.coverage.period.allTime.complete ||
-        !index.coverage.hourly?.complete,
+        !index.coverage.hourly?.complete ||
+        (options.allowAchievementHourProof !== false && !historicalHourProof.complete &&
+          (historicalHourProof.backfillableFiles ?? 0) > 0)),
     },
   };
 }
@@ -3785,6 +4257,59 @@ function sanitizePeriodMigration(
   };
 }
 
+// Keep the persisted DTO sanitizer local: repository policy audits every field
+// reachable from sanitizeIndexV2 rather than trusting an external return value.
+function sanitizeCodexHourProof(value: unknown): CodexHourProof | undefined {
+  if (!isRecord(value) || value.version !== CODEX_UTC_HOUR_PROOF_VERSION ||
+      !Number.isSafeInteger(value.indexedThrough) || (value.indexedThrough as number) < 0 ||
+      !Number.isSafeInteger(value.prefixEvents) || (value.prefixEvents as number) < 0 ||
+      !Array.isArray(value.hours) || value.hours.length > MAX_CODEX_HOURS_PER_FILE) {
+    return undefined;
+  }
+  const hours: number[] = [];
+  for (const hour of value.hours) {
+    if (!Number.isSafeInteger(hour) || hour <= 0 ||
+        (hours.length > 0 && hour <= hours[hours.length - 1])) return undefined;
+    hours.push(hour);
+  }
+  return {
+    version: CODEX_UTC_HOUR_PROOF_VERSION,
+    indexedThrough: value.indexedThrough as number,
+    prefixEvents: value.prefixEvents as number,
+    hours,
+  };
+}
+
+function sanitizeHourProofMigration(
+  value: unknown,
+  fileKey: string,
+): CodexHourProofMigrationState | undefined {
+  if (!isRecord(value) || value.version !== CODEX_UTC_HOUR_PROOF_VERSION ||
+      !Number.isSafeInteger(value.offset) || (value.offset as number) < 0 ||
+      !Number.isSafeInteger(value.prefixEvents) || (value.prefixEvents as number) < 0 ||
+      !Number.isSafeInteger(value.tokenEventsSeen) ||
+      (value.tokenEventsSeen as number) < 0 ||
+      !isRecord(value.parserState) || value.parserState.schemaVersion !== 4 ||
+      value.parserState.fileKey !== fileKey) return undefined;
+  const proof = sanitizeCodexHourProof({
+    version: value.version,
+    indexedThrough: value.offset,
+    prefixEvents: value.prefixEvents,
+    hours: value.hours,
+  });
+  if (!proof) return undefined;
+  return {
+    version: CODEX_UTC_HOUR_PROOF_VERSION,
+    offset: proof.indexedThrough,
+    prefixEvents: proof.prefixEvents,
+    tokenEventsSeen: value.tokenEventsSeen as number,
+    discardingOversizedLine: value.discardingOversizedLine === true,
+    parserState: sanitizeParserState(value.parserState, fileKey),
+    hours: proof.hours,
+    ...(value.overflow === true ? { overflow: true } : {}),
+  };
+}
+
 function sanitizeTodayMigration(
   value: unknown,
   fileKey: string,
@@ -3950,6 +4475,12 @@ function sanitizeLineageReconciliation(
     return undefined;
   }
   const parserState = sanitizeParserState(value.parserState, fileKey);
+  const hourProof = sanitizeCodexHourProof({
+    version: CODEX_UTC_HOUR_PROOF_VERSION,
+    indexedThrough: value.offset,
+    prefixEvents: value.prefixEvents,
+    hours: value.hourProofHours,
+  });
   return {
     prefixEvents: Math.max(0, Math.floor(finiteNumber(value.prefixEvents))),
     tokenEventsSeen: Math.max(
@@ -3961,6 +4492,8 @@ function sanitizeLineageReconciliation(
     parserState,
     aggregate: sanitizeFileAggregate(value.aggregate, parserState),
     qualityFlags: sanitizeQualityFlags(value.qualityFlags),
+    ...(hourProof ? { hourProofHours: hourProof.hours } : {}),
+    ...(value.hourProofOverflow === true ? { hourProofOverflow: true } : {}),
   };
 }
 
@@ -4177,6 +4710,18 @@ function sanitizeFileContribution(
 ): CodexFileContribution {
   const contribution = isRecord(value) ? value : {};
   const fileKey = key;
+  const failure = isRecord(contribution.compressionFailure) ? contribution.compressionFailure : undefined;
+  const failureCode = failure?.version === 1 ? terminalCompressionCode(failure.code) : undefined;
+  if (failureCode && validCompressionFingerprint(contribution)) {
+    return compressionFailureContribution({
+      fileKey,
+      sourceArea: contribution.sourceArea === 'sessions' || contribution.sourceArea === 'archive'
+        ? contribution.sourceArea : undefined,
+      size: contribution.size as number, mtimeMs: contribution.mtimeMs as number,
+      storageSize: contribution.storageSize as number, storageCtimeMs: contribution.storageCtimeMs as number,
+      dev: optionalNumber(contribution.dev), ino: optionalNumber(contribution.ino),
+    }, failureCode);
+  }
   const parserState = sanitizeParserState(contribution.parserState, fileKey);
   const safeOffset = offsetOverride ?? Math.max(0, finiteNumber(contribution.offset));
   const limit = sanitizeLimit(contribution.limit);
@@ -4229,6 +4774,12 @@ function sanitizeFileContribution(
     contribution.todayMigration,
     fileKey,
   );
+  const rawHourProof = sanitizeCodexHourProof(contribution.hourProof);
+  const hourProof = rawHourProof && rawHourProof.indexedThrough <= safeOffset
+    ? rawHourProof : undefined;
+  const rawHourDraft = sanitizeHourProofMigration(contribution.hourProofMigration, fileKey);
+  const hourProofMigration = rawHourDraft && rawHourDraft.offset <= safeOffset
+    ? rawHourDraft : undefined;
   if (todayMigration) {
     todayMigration.offset = Math.min(todayMigration.offset, safeOffset);
     todayMigration.prefixEvents = Math.min(
@@ -4260,6 +4811,16 @@ function sanitizeFileContribution(
     ...(optionalNumber(contribution.ino) !== undefined
       ? { ino: optionalNumber(contribution.ino) }
       : {}),
+    ...(contribution.compression === 'zstd' ? {
+      compression: 'zstd' as const,
+      storageSize: finiteNumber(contribution.storageSize),
+      storageCtimeMs: finiteNumber(contribution.storageCtimeMs),
+      ...(contribution.compressionVerified === true && contribution.compressionFailure === undefined &&
+        typeof contribution.storageSize === 'number' &&
+        Number.isSafeInteger(contribution.storageSize) && contribution.storageSize > 0 &&
+        typeof contribution.storageCtimeMs === 'number' && Number.isFinite(contribution.storageCtimeMs) &&
+        contribution.storageCtimeMs > 0 ? { compressionVerified: true as const } : {}),
+    } : {}),
     offset: safeOffset,
     discardingOversizedLine: discardingOverride ??
       contribution.discardingOversizedLine === true,
@@ -4270,12 +4831,15 @@ function sanitizeFileContribution(
     ...(limit ? { limit } : {}),
     ...(limits ? { limits } : {}),
     ...(quotaHistory.length > 0 ? { quotaHistory } : {}),
-    qualityFlags: sanitizeQualityFlags(contribution.qualityFlags),
+    qualityFlags: uniqueFlags(sanitizeQualityFlags(contribution.qualityFlags),
+      contribution.compression !== undefined && contribution.compression !== 'zstd' ? ['stale-reset-required'] : []),
     ...(typeof contribution.identityChecked === 'boolean'
       ? { identityChecked: contribution.identityChecked }
       : {}),
     ...(periodMigration ? { periodMigration } : {}),
     ...(todayMigration ? { todayMigration } : {}),
+    ...(hourProof ? { hourProof } : {}),
+    ...(hourProofMigration ? { hourProofMigration } : {}),
   };
 }
 

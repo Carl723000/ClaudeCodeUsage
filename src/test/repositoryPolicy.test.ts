@@ -7,6 +7,13 @@ import * as ts from 'typescript';
 
 const REPO_ROOT = resolve(__dirname, '..', '..');
 
+test('TypeScript source discovery excludes private evidence snapshots outside src', () => {
+  const parsed = ts.parseJsonConfigFileContent(JSON.parse(repoFile('tsconfig.json')), ts.sys, REPO_ROOT);
+  assert.equal(parsed.errors.length, 0);
+  assert.ok(parsed.fileNames.length > 0);
+  for (const file of parsed.fileNames) assert.ok(file.startsWith(resolve(REPO_ROOT, 'src') + '/'), file);
+});
+
 test('hotfix polling documentation retains the hourly Content boundary and cache release semantics', () => {
   assert.match(repoFile('CHANGELOG.md'), /hourly hidden-panel refresh still computes Content attribution once/);
   assert.match(repoFile('ARCHITECTURE.md'), /撤销来源和释放时清除旧引用/);
@@ -927,6 +934,66 @@ test('CLAUDE is a compatibility entry point, not a conflicting policy source', (
   assert.doesNotMatch(claude, /activity-aware: ~15 s|never writes to `~\/\.claude\/`/);
 });
 
+test('current documentation separates task authority, rendering acceptance and replay exceptions', () => {
+  const english = repoFile('AGENTS.md'), chinese = repoFile('AGENTS.zh-CN.md');
+  for (const [document, patterns] of [
+    [english, [/maintainer owns user value/i, /Agents own implementation/i,
+      /Read documentation by task/i, /ordinary verified single-file append/i,
+      /UUID first-owner changes[\s\S]*ordered wider[\s\S]*replay/i,
+      /window or worktree alone[\s\S]*not isolation/i,
+      /necessary rendering-fidelity guard, not native acceptance/i,
+      /full-page replacement or a provider-panel live patch/i]],
+    [chinese, [/维护者裁决用户价值/, /负责实现、反例/, /按任务读取文档/,
+      /普通已验证单文件 append/, /UUID first-owner[\s\S]*有序重放/,
+      /单独窗口或工作树不等于隔离/, /必要的渲染保真守卫，不证明原生/,
+      /整页替换[\s\S]*live patch/]],
+  ] as const) for (const pattern of patterns) assert.match(document, pattern);
+});
+
+test('current data inventory supplements the historical baseline and dates only proven live awards', () => {
+  for (const suffix of ['', '.zh-CN']) {
+    const inventory = repoFile(`LOCAL-DATA${suffix}.md`);
+    assert.ok(inventory.includes('achievements-v2.json'));
+    assert.ok(inventory.includes('ccu.combinedHeatmap.'));
+    for (const suffix of ['provider', 'metric', 'showAmounts']) {
+      assert.ok(inventory.includes('`' + suffix + '`'));
+    }
+  }
+  const english = repoFile('ARCHITECTURE.md'), chinese = repoFile('ARCHITECTURE-zh-CN.md');
+  assert.match(english, /historical field-level baseline[\s\S]*LOCAL-DATA\.md/);
+  assert.match(chinese, /字段级历史基线[\s\S]*LOCAL-DATA\.zh-CN\.md/);
+  assert.match(english, /Proven Claude\/Codex Token crossings[\s\S]*cumulative[\s\S]*independent\s+receipts/);
+  assert.match(chinese, /Claude／Codex Token 跨级[\s\S]*累计 API 等价跨级[\s\S]*独立收据/);
+  for (const file of ['docs/superpowers/specs/2026-09-02-v2.3.1-local-data-contract.md',
+    'docs/superpowers/specs/2026-09-02-v2.3.1-local-data-contract.zh-CN.md']) {
+    assert.ok(repoFile(file).includes('../../../LOCAL-DATA'));
+  }
+});
+
+test('weekly value documentation explains current-window estimates without promising account balances', () => {
+  const english = repoFile('ARCHITECTURE.md'), chinese = repoFile('ARCHITECTURE-zh-CN.md');
+  for (const document of [english, chinese]) {
+    assert.ok(document.includes('candidateFullEquivalent = pricedUsedEquivalentThroughObservedAt / usedFraction'));
+  }
+  assert.match(english, /current window[\s\S]*low-confidence local estimate/i);
+  assert.match(english, /weighted median/i);
+  assert.match(chinese, /当前周期[\s\S]*低可信本地估算/);
+  assert.match(chinese, /加权中位数/);
+  assert.match(english, /multiple distinct mapped `seriesKey`/);
+  assert.match(english, /single unattributed[\s\S]*after completion/);
+  assert.match(chinese, /多个不同 `seriesKey`[\s\S]*已结束 Codex/);
+  assert.match(chinese, /单一未归属[\s\S]*结束后仍可保留/);
+  assert.match(english, /cumulative known used value exceeds the aggregate candidate/i);
+  assert.match(chinese, /累计已知已用等价值[\s\S]*汇总候选/);
+  assert.doesNotMatch(english, /Current\s+unused value is withheld/i);
+  assert.doesNotMatch(chinese, /当前周期不显示未用值/);
+  assert.match(repoFile('LOCAL-DATA.md'), /74[\s\S]*100[\s\S]*26/);
+  assert.match(repoFile('LOCAL-DATA.zh-CN.md'), /74[\s\S]*100[\s\S]*26/);
+  for (const file of ['LOCAL-DATA.md', 'LOCAL-DATA.zh-CN.md']) {
+    assert.ok(repoFile(file).includes('showWeeklyQuotaPace'));
+  }
+});
+
 test('line endings and tracked file modes are repository-safe', () => {
   const attributes = repoFile('.gitattributes');
   assert.match(attributes, /^\* text=auto eol=lf$/m);
@@ -1455,7 +1522,7 @@ test('release history stays scannable and human contributors stay discoverable',
     'Credits should not single out first-time contributors');
   for (const login of [
     'Carl723000', 'jack21', 'Dobidop', 'nickearnshaw', 'mxzinke',
-    'Alfiefe10', 'jackieyangjq', 'rsyuzyov', 'projectronic', 'zeyutang',
+    'Alfiefe10', 'jackyyangjq', 'rsyuzyov', 'projectronic', 'zeyutang',
     'chuccv', 'eduardogomezgvp', 'zhaoxiao9302', 'mkgaskin-ops',
   ]) {
     assert.ok(main.includes(`https://github.com/${login}`), `missing contributor ${login}`);
@@ -1561,8 +1628,8 @@ test('v2.3 README editions share release evidence and local-data boundaries', ()
     }
     assert.doesNotMatch(
       body,
-      /local candidate|本地候选|本機候選|ローカル候補|로컬 후보|Kandidat lokal/i,
-      `${readme} still labels v2.3.1 as a local candidate`,
+      /(?:v?2\.3\.1[^\n]{0,30}(?:local candidate|本地候选|本機候選|ローカル候補|로컬 후보|Kandidat lokal))/i,
+      `${readme} still labels released v2.3.1 as a local candidate`,
     );
   }
 
@@ -1599,6 +1666,14 @@ test('v2.4 synthetic preview images are present and carry no text metadata', () 
 });
 
 test('v2.4 README editions describe one preview-first sharing workspace', () => {
+  const assertMinorReleaseHeadings = (body: string, readme: string): void => {
+    // Feature chapters may document a patch release; What's new remains minor-only.
+    const releaseHeadings = body.split(/\r?\n/).filter((line) =>
+      /^#{2,6}\s/.test(line) && /What['’]s new|新功能|新機能|새로운 기능|Yang baru/i.test(line),
+    );
+    assert.doesNotMatch(releaseHeadings.join('\n'), /(?:^|[^\d])2\.4\.\d/,
+      `${readme} must keep What's new at minor-version granularity`);
+  };
   const expectations: Record<string, RegExp[]> = {
     'README.md': [
       /^## What's new in 2\.4$/m,
@@ -1660,11 +1735,10 @@ test('v2.4 README editions describe one preview-first sharing workspace', () => 
       assert.ok(body.includes(publicId), `${readme} is missing compatibility command ${publicId}`);
     }
     assert.match(body, /enableShareCard/, `${readme} is missing the single visible sharing switch`);
-    assert.doesNotMatch(
-      body,
-      /^##[^\n]*2\.4\.\d[^\n]*$/m,
-      `${readme} must keep What's new at minor-version granularity`,
-    );
+    assertMinorReleaseHeadings(body, readme);
+    const patchHeading = body.match(patterns[0])![0].replace('2.4', '2.4.2');
+    assert.throws(() => assertMinorReleaseHeadings(`${body}\n${patchHeading}`, readme),
+      /minor-version granularity/, 'a patch-level release heading must still fail in every edition');
   }
 });
 
@@ -1877,7 +1951,65 @@ test('CI has separate Node, browser, and package release gates', () => {
   assert.match(workflow, /image:\s*mcr\.microsoft\.com\/playwright:v1\.61\.1-noble/);
   assert.match(workflow, /PLAYWRIGHT_BROWSERS_PATH:\s*\/ms-playwright/);
   assert.match(workflow, /needs:\s*\[test, ui\]/);
-  assert.ok(runValues.includes('npm run test:ui'));
+  const assertShardedUiGate = (source: string): void => {
+    // Scope assertions to each job so unrelated commands/comments cannot satisfy a gate.
+    const active = source.split(/\r?\n/).filter((line) => !line.trimStart().startsWith('#')).join('\n');
+    const job = (id: string): string => {
+      const blocks = [...active.matchAll(new RegExp(`^  ${id}:\\s*\n([\\s\\S]*?)(?=^  [\\w-]+:|(?![\\s\\S]))`, 'gm'))];
+      assert.equal(blocks.length, 1, `exactly one ${id} job is required`);
+      return blocks[0][1];
+    };
+    const node = job('test');
+    const shards = job('ui_shards');
+    const ui = job('ui');
+    const packaging = job('package');
+    assert.match(node, /^    name:\s*Node Tests\s*$/m);
+    assert.match(ui, /^    name:\s*UI Test\s*$/m);
+    assert.match(packaging, /^    name:\s*Release Package\s*$/m);
+    for (const [name, block] of [['Node', node], ['UI shards', shards], ['UI gate', ui], ['package', packaging]]) {
+      assert.doesNotMatch(block, /^\s+continue-on-error:/m, `${name} must propagate failures`);
+    }
+    for (const block of [node, shards, packaging]) {
+      assert.doesNotMatch(block, /^\s+if:/m, 'required gates must not be conditional or bypass default success checks');
+    }
+    assert.ok(workflowStepValues(node, 'run').some(({ value }) => value === 'npm test'));
+    assert.match(shards, /^      fail-fast:\s*false\s*$/m);
+    const matrices = [...shards.matchAll(/^      matrix:\s*\n((?:^ {8}[^\n]*\n?)*)/gm)];
+    assert.equal(matrices.length, 1, 'UI requires one complete four-shard matrix');
+    assert.equal(matrices[0][1].trim(), 'shard: [1, 2, 3, 4]', 'no missing, duplicate, excluded or extra shards');
+    assert.deepEqual(workflowStepValues(shards, 'run').map(({ value }) => value), [
+      'npm ci',
+      'npm run test:ui -- --fully-parallel --workers=1 --shard=${{ matrix.shard }}/4',
+    ], 'each shard must run the unfiltered full UI suite and propagate its exit status');
+    assert.match(shards, /^      image:\s*mcr\.microsoft\.com\/playwright:v1\.61\.1-noble\s*$/m);
+    assert.match(shards, /^      PLAYWRIGHT_BROWSERS_PATH:\s*\/ms-playwright\s*$/m);
+    assert.match(ui, /^    needs:\s*\[ui_shards\]\s*$/m);
+    assert.deepEqual(ui.match(/^\s+if:[^\n]*$/gm)?.map((line) => line.trim()), ['if: always()']);
+    assert.deepEqual(workflowStepValues(ui, 'run').map(({ value }) => value), [
+      "test '${{ needs.ui_shards.result }}' = 'success'",
+    ], 'failed, cancelled and skipped shards must fail the stable UI Test gate');
+    assert.match(packaging, /^    needs:\s*\[test, ui\]\s*$/m);
+  };
+  assertShardedUiGate(workflow);
+  for (const [before, after] of [
+    ['shard: [1, 2, 3, 4]', 'shard: [1, 2, 3]'],
+    ['shard: [1, 2, 3, 4]', 'shard: [1, 2, 3, 3]'],
+    ['shard: [1, 2, 3, 4]', 'shard: [1, 2, 3, 4]\n        exclude: [{ shard: 4 }]'],
+    ['--shard=${{ matrix.shard }}/4', '--shard=1/4'],
+    ['--workers=1', '--workers=1 --grep smoke'],
+    ['--shard=${{ matrix.shard }}/4', '--shard=${{ matrix.shard }}/4 || true'],
+    ['  ui_shards:\n', '  ui_shards:\n    continue-on-error: true\n'],
+    ['  ui_shards:\n', '  ui_shards:\n    if: false\n'],
+    ['    needs: [ui_shards]', '    needs: [test]'],
+    ['    if: always()', '    if: success()'],
+    ["= 'success'", "!= 'failure'"],
+    ['    needs: [test, ui]', '    needs: [test]'],
+    ['  package:\n', '  package:\n    if: always()\n'],
+  ]) {
+    assert.ok(workflow.includes(before), `mutation anchor is missing: ${before}`);
+    assert.throws(() => assertShardedUiGate(workflow.replace(before, after)),
+      { code: 'ERR_ASSERTION' }, `unsafe CI mutation must fail: ${after}`);
+  }
   const packageAt = runValues.indexOf('npx -y @vscode/vsce@4.0.0 package --out /tmp/claude-code-usage-ci.vsix');
   const verifyAt = runValues.indexOf('node .github/scripts/verify-vsix.mjs /tmp/claude-code-usage-ci.vsix');
   assert.ok(packageAt >= 0 && verifyAt > packageAt, 'smoke VSIX verification must follow packaging');
@@ -1960,7 +2092,9 @@ test('CONTRIBUTING documents provider-aware privacy and three testing layers', (
   assert.match(guide, /Claude session actions are separately gated and disabled by default\./);
   assert.match(guide, /they can resume or delete a selected session\./);
   assert.match(guide, /Deleting the selected session moves its log to the OS trash\./);
-  assert.match(guide, /Codex does not estimate\s+dollar cost/i);
+  assert.match(guide, /Codex provides clearly labelled API-equivalent cost estimates/i);
+  assert.match(guide, /never a bill or subscription charge/i);
+  assert.doesNotMatch(guide, /Codex does not estimate\s+dollar cost/i);
   assert.match(
     guide,
     /usage JSONL is streamed and temporarily parsed for allowlisted\s+metadata/i,

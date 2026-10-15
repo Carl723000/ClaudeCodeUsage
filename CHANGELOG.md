@@ -6,6 +6,505 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [2.5.0] — 2026-10-15
+
+Version 2.5.0 combines local achievements and Codex compressed-log compatibility.
+The maintainer reported successful testing, accepted the candidate and authorized
+Squash and merge plus publication. This records maintainer acceptance, not an
+agent-performed native/F5 or Linux installed-package pass.
+中文：2.5.0 整合本地成就与 Codex 压缩日志兼容。维护者反馈测试通过、接受候选，
+并明确授权 Squash and merge 及发布；此处记录维护者验收，不声称代理完成原生／F5
+或 Linux 已安装包测试。
+
+Broad sharing-page visual unification/beautification and a durable usage archive
+are deferred to the next version; neither is implemented in 2.5.0.
+中文：分享页整体视觉统一／美化与持久用量归档推迟至下一版本，2.5.0 未实现这两项。
+
+### Added — 2.5.0
+
+- **Compact expanded achievement rows** — grade names use per-rank theme tokens
+  (foreground fallback in high contrast), with bold, right-aligned thresholds on
+  the same header row. Only the next rank above the highest earned shows “In progress”
+  when proof is ready; later ranks, fully earned cards and pending proof omit it.
+  Verified retained-log dates display as bare ISO dates, with source interpretation
+  once in Evidence details and provenance in title/ARIA. When both dates exist,
+  only the verified date is visible; first-recorded details remain in title/ARIA.
+  First-recorded-only dates keep an explicit label; unknown stays unknown. Awards,
+  rules, date calculations, catalog and stored records are unchanged.
+  中文：展开等级行按各等级主题 token 显示名称（高对比回退到前景色），门槛在同一标题行
+  加粗、右对齐。仅证据就绪时，最高已获等级的下一等级显示「进行中」；后续等级、满级及
+  证据待定均不显示。已核验保留日志日期仅显示 ISO 日期，来源含义在「数据依据」解释一次，
+  title／ARIA 保留来源说明。两种日期同时存在时仅显示已核验日期，首次记录详情留在
+  title／ARIA；仅有首次记录日期时保留明确标签，未知仍为未知。授奖、规则、日期计算、
+  目录及已存记录不变。
+
+- **Five weekly API-equivalent ranks per provider** — Claude and Codex each retain
+  Bronze $100, Silver $500 and Gold $2,500, and add Platinum $10,000 and Legendary
+  $25,000. Version 2.5.0 includes these new thresholds. Four new IDs bring the catalog to 178 rules, including 24
+  monetary conditions, with 50 themes unchanged and 138 explicit date registrations.
+  Completed Monday-start weeks, configured timezone, frozen reference prices and
+  provider-specific provenance retain their existing requirements. Old IDs,
+  thresholds, awards and artwork remain intact; legacy envelopes cannot grant the
+  new ranks, and an older reader rejects unknown ranks without rewriting or clearing
+  either envelope. This does not add live weekly-award receipts or a usage archive.
+  中文：Claude／Codex 的周 API 等价金额各保留铜 $100、银 $500、金 $2,500，新增铂金
+  $10,000、传奇 $25,000，合为五级；2.5.0 采用这组新门槛。四个新 ID
+  将目录增至 178 项规则，其中金额条件 24 项；主题仍为 50 个，显式日期注册增至 138 项。
+  仍须设置时区内已结束的周一自然周、固定参考价及各供应商来源证明。旧 ID、门槛、授奖
+  和图案不变；旧封套不能授予新等级，旧读取器遇未知等级拒绝操作，不改写或清除任一封套。
+  不新增周奖章实时收据或用量归档。
+
+- **Shared achievement money reference** — show the current book/date once per
+  enabled provider with a shared non-billing explanation. Different historical
+  books retain exact award associations. Cards retain scope and pricing coverage
+  while repeated price/basis notes are removed; saved award provenance is unchanged.
+  中文：金额参考说明集中显示各已启用供应商的当前价表／日期及非账单提示；不同历史价表
+  保留与具体奖项的准确关联。卡片保留范围和计价覆盖率，移除重复价表／依据说明，不改已存授奖来源。
+- **Independent root tasks** — rename `root-portfolio` in all eight locales
+  (独立主任务 in Simplified Chinese). Count verifiable root ownership with recognized
+  positive model usage, input **or** output; a root and its children count once.
+  This does not establish task completion. Existing IDs, thresholds and awards remain unchanged.
+  中文：`root-portfolio` 八语名称明确为独立主任务；要求根归属可核验且已识别模型的输入或输出
+  有正用量，主任务及子任务合计一次，不表示任务已完成；既有 ID、门槛与授奖不变。
+- **Share & compare: bounded sharing fixes** — rename the navigation/page label
+  (分享与对比), align badge choices at equal width with a separate rank line, and
+  add the fixed public `https://github.com/ClaudeCodeUsage/ClaudeCodeUsage` link to
+  exported SVGs. Long headings, footers and rank/threshold labels use wrapping and
+  spacing safeguards. The checkbox-icon repair uses the main webview's
+  `webview.cspSource`, rather than an additional remote image source. Preview/export
+  adds no automatic network request or personal metadata; explicit selection and
+  the immutable accepted-preview/export contract remain intact.
+  中文：导航／页标题改为「分享与对比」，徽章选项仅做等宽对齐与等级单列，导出 SVG 加入
+  固定公开仓库链接；长标题、页脚及等级／门槛通过换行和间距避免重叠。勾选图标
+  修复沿用主 Webview 的 `webview.cspSource`，不新增远程图片来源。预览／导出不新增自动
+  网络请求或个人元数据，主动选择及不可变预览／导出约定不变。
+
+- **Compressed Codex history** — discover `.jsonl` and `.jsonl.zst` only under
+  `sessions` / `archived_sessions`, retaining the regular-file and no-symlink
+  boundary. Zstd is lossless compression, not an LLM summary: disk savings do not
+  change logged tokens. Sources stay read-only, with no plaintext copy on disk.
+  Same-directory plain files win with a canonical key that strips `.zst`; cross-area
+  copies still use full-census lineage deduplication. Schema 3 adds compressed-source
+  fingerprints and verified-EOF evidence while preserving decoded size/cursors and
+  old plain entries. Encoding or physical-version changes cause quiet targeted
+  rereads, not new live-usage receipts. Verified unchanged files need only header
+  checks on warm refresh; cancellable resume accounts for prefix replay. Native
+  Node Zstd (22.15+ / 23.8+) adds no dependency; unsupported hosts retain last-good
+  results with an explicit error. Only explicit-size, dictionary-free single frames
+  are accepted; corruption, extra frames and trailing data fail. Hard caps are
+  4 GiB decoded/replay, 2 GiB physical and a 64 MiB window; the first historical
+  compressed file may exceed a soft refresh budget within those caps.
+  中文：仅在 sessions／archived_sessions 读取普通 `.jsonl`／`.jsonl.zst` 文件，拒绝符号链接。
+  Zstd 无损压缩不是 LLM 摘要，磁盘变小不改变 token；不写源、不落地明文。同目录 plain
+  优先，文件键剥离 `.zst`，跨区仍按完整清单 lineage 去重。schema 3 附加物理指纹与 EOF
+  验证标记，保留 decoded 大小／游标和旧 plain 记录；编码／物理版本变化定向静默重读，
+  不生成新活动收据。warm 仅读 header，resume 前缀重放计工作量且可取消。使用原生 Node
+  Zstd，不新增依赖；旧宿主明确报错并保留 last-good。仅接受显式大小、无字典的单 frame，
+  损坏／额外帧／尾随数据失败；解压及重放各限 4 GiB、物理 2 GiB、window 64 MiB，首个
+  历史压缩文件可在硬上限内超出 soft budget。
+
+- **Date compatibility and calibration transaction boundaries** — explicitly register
+  138 rule shapes, including counter/series/base/scope, instead of dating future IDs
+  by series membership. Canonical uncapped session admission excludes output-only
+  non-sessions; weak cache keys are retired on source/evidence changes. Changed logs
+  require recalibration. Independently verified native usage keeps its first-recorded
+  receipt when calibration is cancelled or fails; historical reconciliation stays
+  quiet and partial saves are not reported as total failure or full completion.
+  中文：138 项日期规则显式注册，完整匹配计数器／系列／基础／范围，未知新 ID 不自动继承。
+  会话沿用规范完整准入，弱键缓存随来源／证据退役，日志变化后重新校准。真实已核验增量
+  的首次记录不因校准取消或失败而丢失；历史补认静默，部分保存单独报告。
+
+- **Gallery management and log-date annotations** — expand/collapse reuses card
+  `openDetails` local UI state only. Localized Bronze/Silver/Gold labels preserve
+  legacy IDs, pins and pricebooks. Exactly matching conditions/units appear once;
+  the shared money-reference section retains current and historical award bases.
+  Fully earned cards retain uncapped current
+  statistics, never a target substituted for stale evidence. Per-level dates use
+  a runtime-only v1 annotation bound to rule version, timezone, catalog shape and
+  source/pricing context, without changing v2 `recordedDay`, unknown dates or unread
+  state. Retained logs establish only the earliest verifiable date, not complete
+  account history. Supported daily reductions reuse materialized days and strictly
+  verified fully dated Codex files. Active-day counts/streaks include today's positive
+  activity; qualified family/day dates require closure and use day + 1. Four-week
+  windows exclude the first incomplete week from the first positive activity day.
+  Only manual calibration additionally reduces already-held uncapped Claude record
+  memory for output/Fable/mixed-family session dates; ordinary warm refreshes do not
+  regroup records. Unsupported joint-agent/effort/hour/night/single-task money and
+  timestamp-less migrated actions remain unknown or first-recorded, never dated today
+  by default. Date reduction uses materialized numbers or held-record usage metadata,
+  without extra log-body scans, conversation-content inspection or metadata export.
+  Normal local incremental refresh may read allowlisted new/changed JSONL under
+  existing analysis settings; no forced full reread, new scanner, network request
+  or old-award clearing is added. Pending
+  guards pause historical grants/baselines while native receipts are staged; a valid history commit stays quiet.
+  Cancellation before the historical commit adds no historical awards; cancellation after atomic commit does
+  not undo saved records or misreport them as unsaved. Busy work, an unaccepted
+  current index census, failure or pre-commit cancellation is not success. Verified
+  partial history retains lower bounds or unknowns; completion does not establish
+  full coverage of all award scopes. Explicit date-handler allowlists and rule-version isolation keep new
+  scopes unknown; future catalog envelopes remain read-only and fail closed. No new
+  persistent store, storage schema, source parser, dependency or package version.
+  中文：图鉴展开状态沿用本地 UI 存储，铜／银／金短名不改 ID、固定项或价表；完全相同
+  条件／单位集中一次，金额参考区保留当前及历史授奖依据；满级保留未截断当前统计，过期证据不冒充目标值。
+  逐级日期仅为绑定规则版本、时区、目录及来源／计价上下文的运行期 v1 注释，不改 v2
+  原日期与未读，不承诺完整账户历史。自动日归约复用物化数据与严格完整日期文件；
+  活跃计数／连续活跃含当天正活动，合格家族日须闭日后加一天，四周窗口按首个正活动日
+  排除首个不完整周。仅手动校准归约已持有的未截断 Claude 会话记录，普通热更新不重聚合；
+  不支持的联合／小时／单任务金额及缺时迁移操作保持未知或首次记录，不补今天。
+  日期归约仅读物化数值或已持有记录的 usage 元数据，不额外扫描日志正文、不检查对话内容
+  或导出元数据；正常本地增量刷新仍按既有分析设置读取允许的新增／变更 JSONL，
+  不强制全量重读、不新增扫描器或网络、不清旧徽章。
+  pending guard 暂停历史补认及基线推进，真实增量独立暂存；历史提交静默。提交前取消不新增历史奖，提交后不撤销
+  已保存记录或误报未提交；忙碌、当前索引全清单未获接纳、失败及提交前取消不是成功。
+  已核验部分历史保留下界或未知，完成不代表所有授奖范围完整覆盖。未来处理器显式白名单及版本隔离，
+  新范围未知、未来封套只读拒写；不新增持久存储、schema、解析器、依赖或版号。
+
+- **Merge policy** — default to Squash and merge: retain development commits and
+  validation evidence locally, then land one squash commit per PR on `main`.
+  Normal merge is an explicit maintainer exception; published history is not rewritten.
+  中文：默认 Squash and merge；开发阶段保留本地提交与验证证据，每个 PR 最终在 `main`
+  形成一个 squash commit；普通 merge 须维护者显式例外，不追溯改写已发布历史。
+
+- **Claude-heavy long-term ranks** — fifteen existing Claude/sustained-activity
+  series gain thirty Platinum/Legendary conditions, preserving the original three
+  targets and artwork. Output, sessions and nonconsecutive activity support solo
+  Claude and concentrated weekly patterns without buying models or using Codex.
+  No consecutive-day tiers are added. Locale-native titles, current progress,
+  explicit sharing and quiet historical reconciliation retain their contracts.
+  Frozen v1 IDs/pin keys and v2 canonical records stay compatible; up to 178 current
+  records remain bounded by 64 KiB. Old labels cannot authorize new high ranks.
+
+- **Provider/metric heatmap sharing** — Claude / Codex / Both × Tokens /
+  API-equivalent amount, defaulting to Tokens with explicit amount disclosure.
+  Current daily Claude estimates and Codex exact-model-priced subsets remain
+  separate from achievement reference prices. Both amount panels never sum;
+  missing/partial pricing and incomplete sources retain explicit coverage/lower bounds.
+  Hiding amounts restores Token colors/text/tooltips/metadata/Markdown and retires
+  the old handle. A read-only ≤366-date projector reuses materialized daily rows,
+  without scanning the corpus, repricing or adding network access. Export writes
+  the accepted immutable SVG after document/source/pricing/display/config checks
+  before and after the single-flight save dialog; stale replies cannot enable it.
+- **Weekly quota pace** — default-off shared STATE preference uses existing quota
+  snapshots and their original observation time. At 25% elapsed, 29% used forecasts
+  116% over the account-wide cycle. No forecast in the first six hours, beyond
+  thirty minutes without a fresh observation or after reset. Credential invalidation
+  withdraws it immediately. Verified account-HMAC/window continuity stays runtime-
+  only; counter/source/account/reset discontinuities latch until a verified ordinary
+  seven-day rollover. Codex local-log account trust is unknown, so forecasting is
+  unavailable. Existing callbacks update a document/provider-bound dashboard fragment
+  even with auto-refresh off; no optimistic client calculation, new request, timer
+  or history. Dashboard/status tooltip share eight-locale copy; bar text and custom
+  formats are unchanged. Off avoids source getter, clock/cache/client access.
+- **Verified cumulative-money awards** — four existing cumulative tiers per provider
+  now use accepted native Claude/Codex tail-window increments under the same frozen
+  public pricebook as the before/after scope. The increment must be sufficient from
+  prior progress and necessary to the new crossing. Token/money receipts remain
+  independent; money-only book/scope invalidation cannot erase a separately valid
+  Token receipt. Common source/index, clear, OFF and disposal guards still apply
+  to both; a Claude backend switch can retire pending Token proof via its index
+  invalidation. Atomic saves retain unread first-record day/zone and public
+  `referencePricebook`, never numeric money or proof. Same-book provisional history
+  after the accepted baseline can be repaired; older or different-book history
+  keeps its basis/date. Failed saves have no optimistic dates, and one update uses
+  one existing notice batch. History, completed weeks and single sessions/tasks stay
+  quiet with unknown dates; price changes and rebuilds are not new activity.
+- **Inline Codex effort statistics** — the existing effort-breadth disclosure shows
+  low/medium/high/xhigh/max/ultra rows from complete current root-task × effort
+  populations with their own positive output, excluding approval reviewers.
+  Processed/output/root-count progress uses the existing three shared tier criteria.
+  Frozen USD subtotal/coverage is informational, never an effort qualification.
+  Ambiguous model × effort attribution is not allocated by ratios; empty/unpriced/
+  partial/invalid/overflow states remain explicit and absent evidence is unknown,
+  not six zero rows. The optional DTO is cached by proof revision; no new rule,
+  preference, stored history or log read.
+- **Recognizable API resource emblems** — six Claude/Codex cumulative, week and
+  single-session/task emblems use restrained gold coins or small money pouches
+  alongside their ledger, calendar or task scope. These cues identify API-equivalent
+  resources, not income, wealth or task quality. Original artwork is retained;
+  gallery, notices and explicitly selected SVG exports share the versioned lookup.
+  中文：六枚 API 资源徽章以少量金币或小钱袋增强金额辨识度，保留账册、周历及单次
+  会话／任务标记，不使用财富炫耀意象，也不表示收入或任务质量；旧图案保留。
+- **Current statistics from badge details** — model/token badges link to existing
+  same-provider statistics, with a reload-safe keyboard return and preserved
+  disclosures. Shared/calendar conditions and absent views have no misleading
+  totals link. No log scan, award date, new host command or automatic sharing.
+- **Quiet badge arrival** — a new foreground notice gives its emblem one 440 ms
+  reveal, with no moving text, sound or focus change. Reduced-motion and both
+  high-contrast modes stay static; dashboard patches and reloads do not replay it.
+- **Accurate exploration artwork** — the three-step local journey uses a new
+  text-free emblem instead of the obsolete “10X” picture, including in SVG export.
+  Existing award conditions are unchanged.
+- **Short local feature journey** — the exploration badge details list collection,
+  share-preview and successful local-export facts from saved action proof. Queued
+  or cancelled exports and optional advice feedback cannot complete the journey;
+  old awards do not invent missing step records. No extra awards or actions.
+- **Keyboard-safe legacy pins** — removing a merged milestone pin restores focus
+  to that theme's summary when its button disappears. Surviving controls retain
+  focus normally; no refresh, read acknowledgement or new preference is added.
+- **Growing themes without duplicate cards** — the current default gallery has 50 theme
+  cards, 178 rules and 52 artwork groups, including six API resource themes. The fourteen-day and
+  first shared-day milestones live inside their growing themes, not as extra
+  tiers. Old disclosure links and pins still work; duplicate old pins can be
+  removed separately. Recent views collapse themes but preserve exact records,
+  unread levels, dates and independent share choices.
+- **Accurate model experience names** — all eight locales and share cards now
+  distinguish model breadth within one task, repeated multi-model tasks and
+  same-session Fable output. Names no longer imply an unproven sequential relay;
+  rule identities, thresholds, artwork and saved awards are unchanged.
+- **Current-tab reselection** — clicking the already selected dashboard tab no
+  longer clears saved expanded rules or repeats host tab/inventory requests.
+  Real tab switches keep their existing reset behavior.
+- **Separate notice opt-out** — turn off Show achievement notices without hiding
+  the gallery, stopping grants or deleting unread records. It dismisses an active
+  notice, retires queued delivery and its old ACK, and never replays missed notices
+  when re-enabled. The local preference does not restart providers or indexing.
+- **Verified new-Token awards** — Claude and Codex tail parsers can return bounded,
+  runtime-only new-Token proof without extra log reads or persisted index fields.
+  Codex verifies settled canonical lineages and transports only fixed numeric
+  fields through local workers; imports, recovery, foreign requests and failed
+  saves cannot fabricate live origin. Exact-tier helpers retain approved targets.
+  Accepted Claude/Codex snapshots now hand off independently of dashboard refresh; proven
+  Token tier crossings save first-record days and unread state under the shared
+  lease. Late peer history cannot steal new provenance; pre-existing history is
+  not rewritten. Failed saves retain bounded retryable proof, retired sources
+  release it. Claude commits its index before handoff and explicit rebuilds stay
+  quiet. Four Claude families, output, cache reads, cache creation and cumulative
+  volume are supported; cumulative-money crossings use their independent proof
+  above, while other live usage scopes still require their own origin proof;
+  unsupported or historical crossings stay quiet with unknown dates.
+- **Personal badge pins and size controls** — closed-card icons and a searchable
+  editor select/order up to six manual showcase themes. Manual mode shows only
+  chosen pins; automatic mode recommends at most three. Revision-checked atomic
+  intents preserve other windows' choices without changing goals or sharing consent. Only a
+  saved host preference updates the UI; failed saves retain the old choice.
+  Disabled-source pins remain removable from a folded management list without
+  re-enabling that source, reading logs or deleting other saved pins.
+  Size/filter controls precede the overview; collection emblems use 56/80/112 px,
+  showcase emblems 56/72/96 px. Errors stay near controls and disabled/removed
+  controls fall back to a stable summary without losing keyboard focus.
+- **Recent award views** — up to three actually recorded new series, plus a
+  collapsible thirty-row list linked to the existing rules. First-record dates
+  stay distinct from historical unknown dates; browsing neither marks records
+  read nor selects sharing.
+- **Explicit unread groups** — a folded New awards summary presents up to six
+  exact earned levels, including multiple tiers of the same series. Mark this
+  group read saves only those represented IDs after foreground/source/document
+  checks under the shared lease; peer additions stay unread. Failed saves retain
+  the group with fixed localized feedback. Browsing/pinning/sharing do not confirm
+  it, and missed notices never replay as popups. No new scan, timer or store is added.
+- **Quiet confirmed notices** — only the visible foreground panel can show new
+  action awards, with a shared five-minute cooldown across windows/restarts.
+  Display ACK reads only its bounded batch; missed, failed or retired deliveries
+  remain unread. Hover/keyboard interaction pauses dismissal without stealing
+  focus. Verified Claude/Codex Token crossings use the same delivery guards;
+  cumulative-money crossings now share this guarded delivery path. Other live
+  usage scopes still require their own origin proof.
+- **Bounded durable award records** — a ≤64 KiB canonical file keeps each public
+  rule once, with quiet unknown-date migration and unread saved-action records.
+  Cross-process leases merge peers' awards; an empty clear-generation fence
+  prevents older hosts from restoring deleted awards or cached auxiliary
+  proof. Existing bounded local-action/hour/calendar proof is merged in the same
+  envelope, not mirrored into stale window caches. Invalid/future
+  input remains untouched; OFF does not initialize it. Inventory and Clear All
+  cover the file. Pins and explicit unread confirmations use the same envelope.
+- **Badge overview** — automatic mode shows up to three earned representatives,
+  manual mode only the selected themes (up to six); three
+  reachable goals precede the complete collection. Selection favors distinct
+  themes and current-provider ties, and stays stable during browsing. Unused,
+  zero-progress, pending or stale goals are not promoted. Clicking opens the
+  existing rule with keyboard focus; it does not refresh logs or select exports.
+- **Progress between Token tiers** — closed cards show integer progress toward
+  the next formal tier; long Token ladders include display-only 1/2/5 stage targets.
+  These are not extra awards, notifications or sharing choices, and do not change
+  any formal threshold. Pending/outdated proof never fabricates stage progress.
+- **Tiered local achievements** — 50 icon-first themes and 178 award conditions,
+  with distinct bundled artwork per series, shared by its colored tiers. Token-led Claude Sonnet/Opus/Haiku/Fable and Codex
+  Astra/Sol/Luna progression, output/cache, model/effort and agent experiences,
+  calendar activity, weekly peaks, completed four-week averages, and a few safe
+  deliberate plugin actions. Cumulative tokens share one five-tier series.
+- **Default-on with a clear opt-out** — a once-only non-modal upgrade reminder
+  offers View achievements or Turn achievements off, respecting release-reminder
+  settings and existing opt-outs. Historical awards establish a quiet baseline;
+  subsequent eligible awards use a brief in-panel notice without sound or focus
+  theft. Sensitive time-of-day and 24/48-hour output badges remain silent.
+- **Local badge sharing** — explicitly choose up to nine earned badges, accept
+  the preview and export a self-contained SVG. No authentication or background
+  upload; no credential/network-consent achievements.
+- **Lower-friction gallery** — series and level counts are separate; All / Next
+  level / Earned filters stay local and survive reload. Cards show a compact next
+  target, with every tier's rule inside a stable disclosure. The settings shortcut
+  focuses the existing opt-out without changing it; sharing offers a return path.
+
+### Fixed — 2.5.0
+
+- **Codex achievement evidence reuse** — each successful refresh reconstructs the
+  full file census and independent witnesses, then compares them exactly with a
+  detached, deeply immutable publication. Equal evidence can reuse its revision
+  and calendar projection, including the projection checked by monetary scopes.
+  Unchanged flags, zero body reads or matching totals alone cannot authorize reuse.
+  Changed evidence retains full validation; this does not make refresh work constant-time.
+- **Claude session-achievement evidence** — flat `agent-*.jsonl` files without a
+  path-proven parent no longer count as independent session evidence for achievements.
+  Token totals, prices, daily aggregates and visible session rows are unchanged.
+  Nested agents retain the existing parent-path contract, and saved awards remain.
+- **Complete UI CI gate** — the canonical browser suite runs in four isolated
+  shards, each with one worker and a 35-minute limit. The stable `UI Test` aggregate
+  fails if any shard fails, is cancelled or is skipped. `Node Tests` and
+  `Release Package` retain their check names; packaging still requires both gates.
+
+- **Achievement recognition and retained history** — non-monetary collaboration/
+  rainbow model recognition is separate from fixed pricing aliases; Claude accepts
+  only explicit global/us/eu/jp/apac/in Anthropic prefixes, and recognized but
+  unpriced labels remain unpriced. Saved monetary records retain current or
+  explicitly published reference-book labels, while new append/usage writes
+  require a current provider book. Unknown non-current books still fail closed
+  and remain untouched by clearing. Claude-only retained peaks ignore unrelated
+  Codex parser/period changes, preserving rule/timezone/provider and complete-current
+  evidence checks. No prices, award IDs, storage fields or schema are added.
+- **Achievement record and target display** — eight-locale loading, unavailable,
+  changed and disabled states precede gallery counts instead of showing `0 / 0`.
+  Verified Claude cumulative usage stays a `≥` lower bound while enabled Codex
+  evidence is unverified. Next-target cards show the target name/rank/color;
+  earned gallery ranks remain unchanged. Shared public title handling removes
+  only exact localized rank suffixes from SVG titles when rank is shown separately.
+
+- **Codex calendar subset proof** — runtime contribution witnesses and full-census
+  ancestry/revision checks preserve positive activity/family/weekly Token bounds.
+  Weekly money requires fully dated billable/model equality; date/pricing coverage
+  stays separate. Partial zero-only/empty stays pending, without four-week means or
+  retained peaks. Cumulative/task scopes, prices and rules are unchanged; no new
+  I/O, timers, stores, persistent witnesses or identity export.
+
+- **Calendar cursor cache binding** — cursor-only period changes now retire
+  runtime achievement date/Money revisions even when displayed counters match.
+  This adds no source reads, persistent fields or new award authority.
+
+- **Historical rank versus current progress** — retained awards preserve their
+  earned rank but never replace a current verified subtotal with the old target.
+  After log retention, an earned Legendary badge can therefore show a smaller
+  current amount truthfully without deleting its historical qualification.
+
+- **Calendar proof recovery and partial progress** — legacy Codex date indexes
+  without current lineage proof enter bounded, resumable revalidation when
+  achievements are enabled, then return to zero-body warm refresh. Independently
+  validated positive Claude calendar metrics remain visible as lower bounds while
+  Codex dates are incomplete; shared-provider dates and four-week means retain
+  complete-proof gates and recovered history does not generate live notices.
+- **Claude split-only cache writes** — both explicit safe TTL components restore
+  a missing flat count consistently through full/incremental aggregates and fixed
+  reference money. Contradictory totals, unknown fields and incomplete splits do
+  not gain pricing proof. Source records are unchanged.
+- **Reachable next targets** — model-rainbow tiers above enabled-provider family
+  capacity are not recommended; pins and formal rules remain. Positive proven
+  Token progress gains display-only stages within one decade before its first
+  formal tier, without new grants, dates, notifications or monetary entry stages.
+
+- **Compact achievement overview** — bounded horizontal badge/next-target cards
+  replace sparse full-width columns. Icons, titles, ranks and progress stay together,
+  pins remain inside their cards, and next targets show a thin progress bar. Existing
+  artwork, three sizes, theme tokens, evidence labels and keyboard routes remain.
+  Light-theme gold rank labels use legible foreground text with a gold accent.
+
+- **Achievement controls and paired showcase** — lightweight inline SVG icons
+  accompany existing localized share/settings/filter/size/editor/info labels;
+  counts use compact chips. Above 960 px, the badge column fits its content up to
+  two overview-card widths plus their internal gap; next targets fill the remaining
+  space, with a 16 px column gap. At 960 px or below they stack directly with a
+  12 px gap. Auxiliary history
+  sections follow both. Gallery icons remain 56/80/112 px; overview icons use
+  56/72/96 px. The pure `achievementUiIcons` module uses known SVG paths without
+  dependencies, network access or additional asset files. Existing controls,
+  persistence, eligibility and message protocols are unchanged.
+
+- **Owned Codex cancellation** — an explicitly host-requested cancellation can
+  retain the prior accepted view without accepting the interrupted snapshot,
+  recording a successful refresh or creating a new award receipt. Earlier failures
+  stay failed; new activity requires a fresh verified scan, and history-only
+  reconciliation stays quiet. The strict zero failed-file check is defensive:
+  the current producer reports zero on terminal cancellation because final file
+  diagnostics are unavailable, not because no file failed. Missing/nonzero reported
+  counts, other errors and unowned cancellations retain failure/revocation behavior.
+
+- **Codex period-migration continuation** — valid checkpoints now resume while
+  `tokenEventsSeen` is below the inherited prefix when `days` is empty. The bounded
+  cursor advances across passes, persistence/restart and cancellation; dates are
+  promoted only after the complete prefix, EOF and current-timezone witness checks.
+  Reviewed regressions cover batching, persistence, cancellation, negative EOF
+  cases and unchanged warm reads of zero bodies. Undated, oversized or conflicting
+  evidence remains conservatively pending; this does not fix every missing date.
+
+- **Sharing and subtotal edge cases** — the Codex-only gallery share action
+  selects the requested achievement card, not the heatmap fallback. Restoring a
+  default title no longer suppresses provider/amount preview regeneration.
+  Positive partial subtotals below one dollar use `<$1`, without the invalid `≥<` prefix.
+- **Usage-origin integration** — verified Claude/Codex Token append proof now reaches
+  atomic awards independently of dashboard delivery, as described above. Per-level
+  checks cannot turn unrelated live tokens into dated historical awards; analysis
+  reparsing retains verified boundaries and observation windows precede asynchronous
+  work. Cumulative money has independent origin proof; other live usage scopes
+  still need their own proof. No new scan, timer
+  or index field.
+- **Retired dashboard messages** — readiness, tab changes and unread receipts
+  carry a runtime document identity. Full replacement and failed-patch fallback
+  retire the old identity; ordinary in-place patches retain it. A late old page
+  cannot revive readiness or confirm another group's awards.
+- **Source-only compilation** — TypeScript discovers only `src/**/*.ts`, so
+  private source snapshots used for evidence cannot be emitted or included as
+  extension source. This changes no runtime dependency or packaged feature.
+- **Deliberate plugin-action provenance** — restored experience records grant
+  quietly; only a newly crossed target in a successfully saved action can notify.
+  Awards save even with the dashboard closed, without refreshing hidden panels.
+  Provider-proof retirement no longer cancels independently queued action awards;
+  failed grant saves remain retryable and re-enabling reconciles quietly.
+- **Unknown progress is not zero** — pending/outdated evidence is visible on the
+  badge and excluded from Next filtering, without deleting earned tiers. Independent
+  quiet baselines prevent incomplete calendar proof from suppressing later verified
+  Token upgrades; migration rechecks no longer silence all future usage levels.
+- **Proof changes without chart refreshes** — refreshed Codex period lineage
+  evidence and effort validation now reach achievements even when chart data is
+  identical. Display-only changes reuse proof; disabling achievements skips this
+  extra computation. No new log read, timer or persisted data is introduced.
+- **Repeated Claude watcher setup** — directory discovery no longer invalidates
+  an already installed watcher's event or error callbacks when the watched
+  directory is unchanged. Overlapping setup still accepts only the newest
+  request; blur, disabling and disposal cancel pending setup and retire callbacks.
+- **Codex awards blocked by unrelated identity conflicts** — after complete current
+  indexing, independently verified token/model/effort/agent lineages can prove
+  positive milestones. Conflicting copies and affected descendants are excluded;
+  calendar awards still require complete identity and date proof. Deep lineage
+  selection/root resolution is iterative and memoized, without rereading logs.
+- **Integer-first, quieter achievement cards** — progress/targets use integer
+  abbreviations floored below the next threshold; exact integer progress remains
+  accessible. Duplicate status and tier-title prose is removed; necessary retained-
+  log/calendar caveats stay available in an initially collapsed evidence disclosure.
+- **Large Claude group stack overflow** — reported by [@mkgaskin-ops](https://github.com/mkgaskin-ops)
+  in [#126](https://github.com/ClaudeCodeUsage/ClaudeCodeUsage/issues/126), fixed by
+  [@Carl723000](https://github.com/Carl723000). Project, session, branch and workflow
+  timestamp bounds use a one-pass reducer rather than passing unbounded arrays
+  as function arguments. Project merging likewise appends records individually.
+  Regression coverage includes 150,000 synthetic records and zero-body-read
+  unchanged refreshes. This is distinct from the v2.4.1 warning-flood fix and is
+  not evidence that every Windows memory/CPU issue is solved.
+- **Award-proof lifecycle** — refresh failures immediately revoke permission to
+  award from stale numeric evidence, even while dashboard presentation is paused.
+  Last displayed statistics and legitimate saved awards remain intact; source
+  changes, clearing and retired callbacks cannot grant on behalf of a new source.
+- **Optional hour-proof work** — old Codex checkpoints retain primary totals while
+  a bounded, resumable positive-output-hour pass completes. Disabling achievements
+  stops this extra historical work without recreating the usage provider or index.
+- **Stable achievement interaction** — tier upgrades preserve disclosure identity
+  and canonical card order. Live notices count advanced series rather than calling
+  them imported history. Sharing exports the exact accepted SVG, rejects superseded
+  responses/handles, reconciles unavailable selections and recovers visibly from
+  preview failures without exposing private diagnostics. Automatic display restore
+  reuses the accepted artifact instead of silently regenerating it.
+- **Review-driven polish** — high-tier cards name the actual milestone; single-provider
+  views hide unreachable dual-provider series. Qualified units, near-target number
+  precision and consecutive-hour wording are explicit. Five-level disclosures fit
+  320px; silver and platinum have distinct accents. Sharing returns to the original
+  provider with keyboard focus, reports save/cancel/failure, prevents duplicate save
+  dialogs and checks language before accepting an export.
+
 ### Fixed
 - **Source-scoped Codex caches** — different Codex homes, profile salts and
   data timezones sharing VS Code global storage no longer replace one another's

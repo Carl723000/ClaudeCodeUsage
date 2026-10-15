@@ -4,14 +4,16 @@ import {
   CodexIndexUpdateResult,
   CodexIndexV1,
 } from './codexIndex';
+import type { CodexAchievementUsageWindow, CodexAchievementUsageDelta } from './codexAchievementOrigin';
 
-export type CodexIndexErrorCode = 'busy' | 'cancelled' | 'disposed' | 'worker-failed' | 'refresh-failed';
+export type CodexIndexErrorCode = 'busy' | 'cancelled' | 'disposed' | 'worker-failed' | 'refresh-failed' | 'zstd-unsupported';
 export function safeCodexIndexErrorCode(value: unknown): CodexIndexErrorCode {
-  return value === 'busy' || value === 'cancelled' || value === 'disposed' || value === 'worker-failed'
+  return value === 'busy' || value === 'cancelled' || value === 'disposed' || value === 'worker-failed' || value === 'zstd-unsupported'
     ? value : 'refresh-failed';
 }
 
 export interface CodexWorkerRefreshInput {
+  achievementUsageWindow?: CodexAchievementUsageWindow;
   codexHome: string;
   indexPath: string;
   /** Read-only compatibility input, adopted only after manifest ownership proof. */
@@ -23,6 +25,8 @@ export interface CodexWorkerRefreshInput {
   /** False keeps changed-file/tail maintenance active but suppresses unchanged
    * historical reconciliation until the persisted eligibility time. */
   allowHistoricalBackfill?: boolean;
+  /** False skips achievement-only UTC output proof migration, not usage indexing. */
+  allowAchievementHourProof?: boolean;
 }
 
 export type CodexWorkerRequest =
@@ -30,6 +34,7 @@ export type CodexWorkerRequest =
   | { type: 'cancel'; requestId: string };
 
 export interface CodexWorkerResult {
+  achievementUsageDelta?: CodexAchievementUsageDelta;
   index: CodexIndexV1;
   indexRecovery?: CodexIndexRecovery;
   indexChanged: boolean;

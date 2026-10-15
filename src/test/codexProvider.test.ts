@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import * as assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
@@ -13,10 +13,13 @@ import {
   CodexIndexProgress,
   CodexIndexV1,
   createEmptyCodexIndex,
+  saveCodexIndexAtomic,
 } from '../providers/codex/codexIndex';
+import { CODEX_PERIOD_LINEAGE_VERSION } from '../providers/codex/codexPeriodIndex';
 import { CodexWorkerResult } from '../providers/codex/codexWorkerProtocol';
-import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
 import { CodexWorkerError } from '../providers/codex/codexIndexClient';
+import { pseudonymousIdentityKey } from '../providers/codex/codexIdentity';
+import { buildCodexUsageView } from '../providers/codex/codexUsage';
 
 function contribution(
   fileKey = 'anonymous-file-key',
@@ -197,6 +200,227 @@ function workerResult(index = partialIndex()): CodexWorkerResult {
   };
 }
 
+function calendarWitnessIndex(prefixEvents = 0): CodexIndexV1 {
+  const index = partialIndex();
+  const file = Object.values(index.files)[0];
+  file.lineage = {
+    fingerprintBlocks: [], pendingFingerprints: [], tokenEvents: prefixEvents,
+    desiredPrefixEvents: prefixEvents, appliedPrefixEvents: prefixEvents,
+  };
+  file.aggregate.period = {
+    timeZone: 'UTC', indexedThrough: file.offset,
+    lineageVersion: CODEX_PERIOD_LINEAGE_VERSION, lineagePrefixEvents: prefixEvents,
+    days: {
+      '2026-07-20': {
+        total: { ...file.aggregate.total }, byModel: structuredClone(file.aggregate.byModel),
+        byEffort: structuredClone(file.aggregate.byEffort), structural: { ...file.aggregate.structural },
+      },
+    },
+  };
+  Object.assign(index.coverage, {
+    complete: true, indexedFiles: 1, totalFiles: 1, indexedBytes: file.offset, totalBytes: file.size,
+  });
+  return index;
+}
+
+test('provider reuses only an immutable equal current census, independently of unchanged worker hints', async (t) => {
+  const index = calendarWitnessIndex();
+  const responses = Array.from({ length: 5 }, () => ({ ...workerResult(index), failedFiles: 0, bodyReads: 0, indexChanged: false }));
+  const client = new FakeClient(responses);
+  const provider = new CodexProvider({ enabled: true, codexHome: '/synthetic-not-read',
+    indexPath: '/synthetic-not-read/index', salt: 'public-fixture', timeZone: 'UTC' }, () => client);
+  t.mock.method(provider, 'isAvailable', async () => true);
+  t.mock.method((provider as any).sessionTitleCache, 'load', async () => new Map());
+  const first = (await provider.refresh()).snapshot;
+  const warm = (await provider.refresh()).snapshot;
+  assert.equal(warm.files, first.files);
+  assert.ok(Object.isFrozen(first.files[0].period!.days));
+  const file = Object.values(index.files)[0];
+  file.offset--; // No body-read/indexChanged hint, and display totals still equal.
+  const stale = (await provider.refresh()).snapshot;
+  assert.notEqual(stale.files, first.files);
+  assert.equal(stale.files[0].achievementPeriodWitness, undefined);
+  assert.equal(first.files[0].achievementPeriodWitness!.offset, 100);
+  file.offset++;
+  provider.setAchievementHourProofEnabled(false);
+  const off = (await provider.refresh()).snapshot;
+  assert.equal(Object.isFrozen(off.files), false, 'OFF adds no immutable achievement capture');
+  provider.setAchievementHourProofEnabled(true);
+  const enabled = (await provider.refresh()).snapshot;
+  assert.notEqual(enabled.files, off.files);
+  assert.ok(Object.isFrozen(enabled.files));
+  await provider.dispose();
+});
+
+test('calendar witness comes from a verified settled source, survives warm zero-body refresh, and stays runtime-only', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-provider-calendar-witness-'));
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    const index = calendarWitnessIndex(2);
+    const file = Object.values(index.files)[0];
+    const indexPath = path.join(root, 'index.json');
+    await saveCodexIndexAtomic(indexPath, index);
+    const before = JSON.stringify(index);
+    const client = new FakeClient([
+      { ...workerResult(index), failedFiles: 0 },
+      { ...workerResult(index), failedFiles: 0, bodyReads: 0, indexChanged: false },
+      new CodexWorkerError('cancelled', 'synthetic cancellation'),
+      { ...workerResult(index), failedFiles: 0, bodyReads: 0 },
+    ]);
+    const provider = new CodexProvider({
+      enabled: true, codexHome: root, indexPath, salt: 'salt', timeZone: 'UTC',
+    }, () => client);
+    const cached = await provider.loadPersistedSnapshot();
+    assert.equal(cached?.currentManifestVerified, false);
+    assert.equal(cached?.files[0].achievementPeriodWitness, undefined);
+    const verified = await provider.refresh();
+    const expected = { size: file.size, offset: file.offset, expectedPrefixEvents: 2, timeZone: 'UTC' };
+    assert.deepEqual(verified.snapshot.files[0].achievementPeriodWitness, expected);
+    assert.equal(JSON.stringify(index), before, 'snapshot publication must not mutate the worker index');
+    assert.equal(Object.prototype.hasOwnProperty.call(file.aggregate, 'achievementPeriodWitness'), false);
+    const projectedIndex = structuredClone(index);
+    projectedIndex.files[file.fileKey].aggregate = verified.snapshot.files[0];
+    await saveCodexIndexAtomic(indexPath, projectedIndex);
+    assert.equal((await readFile(indexPath, 'utf8')).includes('achievementPeriodWitness'), false,
+      'the existing persisted DTO must omit even an attached runtime projection');
+    const warm = await provider.refresh();
+    assert.equal(warm.diagnostic?.bodyReads, 0);
+    assert.deepEqual(warm.snapshot.files[0].achievementPeriodWitness, expected);
+    const displayOnly = await provider.loadPersistedSnapshot();
+    assert.equal(displayOnly?.currentManifestVerified, false);
+    assert.equal(displayOnly?.files[0].achievementPeriodWitness, undefined);
+    const failed = await provider.refresh();
+    assert.equal(failed.snapshot.currentManifestVerified, false);
+    assert.equal(failed.snapshot.files[0].achievementPeriodWitness, undefined);
+    assert.deepEqual(failed.snapshot.files[0].period, file.aggregate.period);
+    assert.deepEqual(verified.snapshot.files[0].achievementPeriodWitness, expected, 'published snapshots stay immutable');
+    const recovered = await provider.refresh();
+    assert.deepEqual(recovered.snapshot.files[0].achievementPeriodWitness, expected);
+    await provider.dispose();
+    assert.equal(provider.snapshot()?.files[0].achievementPeriodWitness, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('calendar witness fails closed on independent source and period fences without filtering display files', async (t) => {
+  const cases: Array<[string, (index: CodexIndexV1, file: CodexFileContribution) => void]> = [
+    ['incomplete source coverage', (index) => { index.coverage.complete = false; }],
+    ['stale reset', (_index, file) => { file.qualityFlags.push('stale-reset-required'); }],
+    ['lineage reconciliation', (_index, file) => {
+      file.lineageReconciliation = {
+        offset: 0, discardingOversizedLine: false, prefixEvents: 0, tokenEventsSeen: 0,
+        parserState: file.parserState, aggregate: file.aggregate, qualityFlags: [],
+      };
+    }],
+    ['unapplied prefix', (_index, file) => { file.lineage!.desiredPrefixEvents = 1; }],
+    ['oversized discard', (_index, file) => { file.discardingOversizedLine = true; }],
+    ['unread tail', (_index, file) => { file.size++; }],
+    ['cursor beyond source', (_index, file) => { file.size--; }],
+    ['negative cursor', (_index, file) => { file.size = file.offset = file.aggregate.period!.indexedThrough = -1; }],
+    ['fractional cursor', (_index, file) => { file.size = file.offset = file.aggregate.period!.indexedThrough = 0.5; }],
+    ['unsafe cursor', (_index, file) => { file.size = file.offset = file.aggregate.period!.indexedThrough = Number.MAX_SAFE_INTEGER + 1; }],
+    ['nonfinite cursor', (_index, file) => { file.size = file.offset = file.aggregate.period!.indexedThrough = Infinity; }],
+    ['negative expected prefix', (_index, file) => { file.lineage!.desiredPrefixEvents = file.lineage!.appliedPrefixEvents = -1; }],
+    ['fractional expected prefix', (_index, file) => { file.lineage!.desiredPrefixEvents = file.lineage!.appliedPrefixEvents = 0.5; }],
+    ['unsafe expected prefix', (_index, file) => { file.lineage!.desiredPrefixEvents = file.lineage!.appliedPrefixEvents = Number.MAX_SAFE_INTEGER + 1; file.aggregate.period!.lineagePrefixEvents = Number.MAX_SAFE_INTEGER + 1; }],
+    ['active period migration', (_index, file) => {
+      file.periodMigration = {
+        offset: file.offset, discardingOversizedLine: false, timeZone: 'UTC',
+        prefixEvents: 0, tokenEventsSeen: 0, parserState: file.parserState, days: {}, qualityFlags: [],
+      };
+    }],
+    ['missing period', (_index, file) => { delete file.aggregate.period; }],
+    ['legacy readable period', (_index, file) => { delete file.aggregate.period!.lineageVersion; delete file.aggregate.period!.lineagePrefixEvents; }],
+    ['old lineage version', (_index, file) => { file.aggregate.period!.lineageVersion = CODEX_PERIOD_LINEAGE_VERSION + 1; }],
+    ['period prefix mismatch', (_index, file) => { file.aggregate.period!.lineagePrefixEvents = 1; }],
+    ['period timezone mismatch', (_index, file) => { file.aggregate.period!.timeZone = 'Asia/Shanghai'; }],
+    ['period cursor behind', (_index, file) => { file.aggregate.period!.indexedThrough--; }],
+    ['period cursor ahead', (_index, file) => { file.aggregate.period!.indexedThrough++; }],
+    ['period exceeds aggregate', (_index, file) => { file.aggregate.period!.days['2026-07-20'].total.inputTotal++; }],
+    ['invalid period tokens', (_index, file) => { file.aggregate.period!.days['2026-07-20'].total.inputTotal = NaN; }],
+    ['model exceeds day', (_index, file) => { file.aggregate.period!.days['2026-07-20'].byModel['gpt-5.6-sol'].inputTotal++; }],
+    ['effort exceeds day', (_index, file) => { file.aggregate.period!.days['2026-07-20'].byEffort.high.outputTotal++; }],
+  ];
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-provider-calendar-fences-'));
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    for (const [label, mutate] of cases) {
+      await t.test(label, async () => {
+        const index = calendarWitnessIndex();
+        const file = Object.values(index.files)[0];
+        mutate(index, file);
+        // Even a forged incoming aggregate witness must not bypass validation.
+        file.aggregate.achievementPeriodWitness = { size: 100, offset: 100, expectedPrefixEvents: 0, timeZone: 'UTC' };
+        const provider = new CodexProvider({
+          enabled: true, codexHome: root, indexPath: path.join(root, 'index.json'), salt: 'salt', timeZone: 'UTC',
+        }, () => new FakeClient([{ ...workerResult(index), failedFiles: 0 }]));
+        const result = await provider.refresh();
+        assert.equal(result.snapshot.currentManifestVerified, true);
+        assert.ok(result.snapshot.files.every((aggregate) => aggregate.achievementPeriodWitness === undefined));
+        const excluded = ['stale reset', 'lineage reconciliation', 'unapplied prefix'].includes(label);
+        assert.equal(result.snapshot.files.length, excluded ? 0 : 1, 'only existing usage filtering may exclude files');
+        if (label === 'legacy readable period') {
+          assert.deepEqual(result.snapshot.files[0].period, file.aggregate.period, 'trusted legacy slices remain visible');
+        }
+        await provider.dispose();
+      });
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('calendar witness is per-file evidence while canonical contributions are withheld', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-provider-calendar-subtotal-'));
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    const index = calendarWitnessIndex();
+    const withheld = contribution('withheld-file');
+    withheld.aggregate.session.sessionKey = withheld.parserState.sessionKey = 'withheld-session';
+    withheld.qualityFlags.push('stale-reset-required');
+    index.files[withheld.fileKey] = withheld;
+    Object.assign(index.coverage, { indexedFiles: 2, totalFiles: 2, indexedBytes: 200, totalBytes: 200 });
+    index.coverage.identity.complete = false;
+    index.coverage.period.allTime.complete = false;
+    const provider = new CodexProvider({
+      enabled: true, codexHome: root, indexPath: path.join(root, 'index.json'), salt: 'salt', timeZone: 'UTC',
+    }, () => new FakeClient([{ ...workerResult(index), failedFiles: 0 }]));
+    const result = await provider.refresh();
+    assert.equal(result.snapshot.coverage.complete, true, 'source-index coverage is not a calendar census');
+    assert.equal(result.snapshot.coverage.identity.complete, false);
+    assert.equal(result.snapshot.coverage.period.allTime.complete, false);
+    assert.equal(result.snapshot.files.length, 1, 'retain the existing usage contribution exclusion');
+    assert.deepEqual(result.snapshot.files[0].achievementPeriodWitness,
+      { size: 100, offset: 100, expectedPrefixEvents: 0, timeZone: 'UTC' });
+    await provider.dispose();
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('facade copies the accepted usage window and exposes only matching successful producer proof', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-provider-origin-'));
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    const window = { after: 100, through: 200 };
+    const delta = { ...window, provider: 'codex' as const, processed: 100, output: 20,
+      cacheRead: 30, families: { astra: 100, sol: 0, luna: 0 } };
+    let captured: any;
+    const provider = new CodexProvider({ enabled: true, codexHome: root, indexPath: 'unused', salt: 'salt', timeZone: 'UTC' }, () => ({
+      refresh: async input => { captured = input; window.through = 300;
+        const index = partialIndex(); index.coverage.complete = true;
+        return { ...workerResult(index), failedFiles: 0, achievementUsageDelta: delta }; }, dispose: () => undefined,
+    }));
+    const result = await (provider.refresh as any)('background', undefined, true, window);
+    assert.deepEqual(captured.achievementUsageWindow, { after: 100, through: 200 });
+    assert.deepEqual(result.achievementUsageDelta, delta);
+    assert.notEqual(result.achievementUsageDelta, delta);
+    assert.equal((await (provider.refresh as any)('background', undefined, true, window)).achievementUsageDelta, undefined);
+    await provider.dispose();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test('disabled or unavailable providers do not create a worker client', async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-off-'));
   try {
@@ -274,6 +498,61 @@ test('a persisted checkpoint hydrates a usable snapshot before the worker refres
     assert.equal(snapshot.files.length, 1);
     assert.deepEqual(provider.snapshot(), snapshot);
     assert.equal(client.calls, 0);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('hour proof stays closed on cached hydration until a worker verifies the manifest', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-hour-cache-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    const indexPath = path.join(root, 'index.json');
+    const index = partialIndex();
+    const file = Object.values(index.files)[0];
+    file.identityChecked = true;
+    file.lineage = {
+      fingerprintBlocks: [], pendingFingerprints: [], tokenEvents: 0,
+      appliedPrefixEvents: 0, desiredPrefixEvents: 0,
+    };
+    file.hourProof = {
+      version: 1, indexedThrough: file.offset, prefixEvents: 0,
+      hours: [Date.parse('2026-07-20T00:00:00.000Z') / 3_600_000],
+    };
+    index.coverage.complete = true;
+    index.coverage.indexedFiles = 1;
+    index.coverage.totalFiles = 1;
+    index.coverage.indexedBytes = file.offset;
+    index.coverage.totalBytes = file.size;
+    await writeFile(indexPath, JSON.stringify(index), 'utf8');
+    const provider = new CodexProvider({
+      enabled: true, codexHome: root, indexPath, salt: 'salt', timeZone: 'UTC',
+    }, () => new FakeClient([
+      workerResult(index),
+      new CodexWorkerError('cancelled', '/private/worker cancellation details'),
+      workerResult(index),
+    ]));
+    const cached = await provider.loadPersistedSnapshot();
+    assert.equal(cached?.outputHourProof?.complete, false);
+    assert.deepEqual(cached?.outputHourProof?.hours, []);
+    assert.equal(cached?.currentManifestVerified, false);
+    assert.equal(buildCodexUsageView(cached!).currentManifestVerified, false);
+    const verified = await provider.refresh();
+    assert.equal(verified.snapshot.outputHourProof?.complete, true);
+    assert.equal(verified.snapshot.outputHourProof?.hours.length, 1);
+    assert.equal(verified.snapshot.currentManifestVerified, true);
+    assert.equal(buildCodexUsageView(verified.snapshot).currentManifestVerified, true);
+    const interrupted = await provider.refresh();
+    assert.equal(interrupted.snapshot.total.inputTotal, verified.snapshot.total.inputTotal);
+    assert.equal(interrupted.snapshot.currentManifestVerified, false);
+    assert.equal(interrupted.snapshot.outputHourProof?.complete, false);
+    assert.deepEqual(interrupted.snapshot.outputHourProof?.hours, []);
+    assert.equal(provider.snapshot()?.currentManifestVerified, false);
+    assert.equal((await provider.loadPersistedSnapshot())?.currentManifestVerified, false);
+    assert.equal(verified.snapshot.currentManifestVerified, true, 'do not mutate an earlier published snapshot');
+    const recovered = await provider.refresh();
+    assert.equal(recovered.snapshot.currentManifestVerified, true);
+    assert.equal(recovered.snapshot.outputHourProof?.complete, true);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -709,9 +988,127 @@ test('a worker failure retains the last verified provider snapshot', async () =>
 
     assert.equal(verified.snapshot.total.inputTotal, 80);
     assert.equal(failed.outcome, 'error');
+    assert.equal(failed.failureCode, 'refresh-failed');
     assert.equal(failed.snapshot.total.inputTotal, 80);
+    assert.equal(failed.snapshot.currentManifestVerified, false,
+      'cached totals remain visible, but a failed current scan cannot prove new achievements');
+    assert.equal(verified.snapshot.currentManifestVerified, true);
     assert.doesNotMatch(JSON.stringify(failed), /private\/path/);
   } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('worker errors expose only an allowlisted category, never the error message', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-safe-failure-'));
+  try {
+    await mkdir(path.join(root, 'sessions'), { recursive: true });
+    for (const code of ['cancelled', 'busy', 'worker-failed', 'disposed', 'refresh-failed', '/private/secret-code']) {
+      const provider = new CodexProvider({
+        enabled: true, codexHome: root, indexPath: 'index', salt: 'salt', timeZone: 'UTC',
+      }, () => new FakeClient([new CodexWorkerError(code, '/private/credentials token=secret-value')]));
+      const failed = await provider.refresh();
+      assert.equal(failed.failureCode, code.startsWith('/') ? 'refresh-failed' : code);
+      assert.doesNotMatch(JSON.stringify(failed), /private|credentials|secret-value|secret-code/);
+      assert.equal(failed.snapshot.currentManifestVerified, false);
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('unavailable and disposed providers keep cached totals without current achievement proof', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-proof-lifecycle-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const pausedSessions = path.join(root, 'paused-sessions');
+    await mkdir(sessions, { recursive: true });
+    const client = new FakeClient([workerResult(), workerResult()]);
+    const provider = new CodexProvider({
+      enabled: true, codexHome: root, indexPath: 'index', salt: 'salt', timeZone: 'UTC',
+    }, () => client);
+    const verified = await provider.refresh();
+    await rename(sessions, pausedSessions);
+    const unavailable = await provider.refresh();
+    assert.equal(unavailable.outcome, 'unavailable');
+    assert.equal(unavailable.snapshot.total.inputTotal, verified.snapshot.total.inputTotal);
+    assert.equal(unavailable.snapshot.currentManifestVerified, false);
+    assert.equal(buildCodexUsageView(unavailable.snapshot).currentManifestVerified, false);
+    assert.equal(verified.snapshot.currentManifestVerified, true);
+    await rename(pausedSessions, sessions);
+    const recovered = await provider.refresh();
+    assert.equal(recovered.snapshot.currentManifestVerified, true);
+    await provider.dispose();
+    const disposed = await provider.refresh();
+    assert.equal(disposed.outcome, 'unavailable');
+    assert.equal(disposed.snapshot.currentManifestVerified, false);
+    assert.equal(disposed.snapshot.total.inputTotal, verified.snapshot.total.inputTotal);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('cached hydration cannot reopen proof when a previously unavailable directory returns', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-restored-cache-'));
+  try {
+    const sessions = path.join(root, 'sessions');
+    const paused = path.join(root, 'paused-sessions');
+    await mkdir(sessions);
+    const provider = new CodexProvider({
+      enabled: true, codexHome: root, indexPath: 'index', salt: 'salt', timeZone: 'UTC',
+    }, () => new FakeClient([workerResult()]));
+    const verified = await provider.refresh();
+    await rename(sessions, paused);
+    assert.equal(await provider.isAvailable(), false,
+      'the extension can observe unavailability without calling provider.refresh');
+    await rename(paused, sessions);
+    const cached = await provider.loadPersistedSnapshot();
+    assert.equal(cached?.total.inputTotal, verified.snapshot.total.inputTotal);
+    assert.equal(cached?.currentManifestVerified, false);
+    assert.equal(cached?.outputHourProof?.complete, false);
+    assert.deepEqual(cached?.outputHourProof?.hours, []);
+    assert.equal(verified.snapshot.currentManifestVerified, true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('disposal during the title await cannot republish current proof or revive its cache', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-codex-provider-title-retirement-'));
+  let finishTitles!: () => void;
+  const titlesHeld = new Promise<void>(resolve => { finishTitles = resolve; });
+  try {
+    await mkdir(path.join(root, 'sessions'));
+    const provider = new CodexProvider({
+      enabled: true, codexHome: root, indexPath: 'index', salt: 'salt', timeZone: 'UTC',
+    }, () => new FakeClient([workerResult(), workerResult()]));
+    const verified = await provider.refresh();
+    let titleLoadStarted!: () => void;
+    const titleStarted = new Promise<void>(resolve => { titleLoadStarted = resolve; });
+    const cache = {
+      populated: false,
+      clear: () => { cache.populated = false; },
+      load: async () => {
+        titleLoadStarted();
+        await titlesHeld;
+        cache.populated = true;
+        return new Map<string, string>();
+      },
+    };
+    (provider as any).sessionTitleCache = cache;
+    const pending = provider.refresh();
+    await titleStarted;
+    await provider.dispose();
+    finishTitles();
+    const retired = await pending;
+    assert.equal(retired.outcome, 'unavailable');
+    assert.equal(retired.snapshot.currentManifestVerified, false);
+    assert.equal(provider.snapshot()?.currentManifestVerified, false);
+    assert.equal(retired.snapshot.total.inputTotal, verified.snapshot.total.inputTotal);
+    assert.equal(verified.snapshot.currentManifestVerified, true);
+    assert.equal(cache.populated, false);
+  } finally {
+    finishTitles();
     await rm(root, { recursive: true, force: true });
   }
 });

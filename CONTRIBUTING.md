@@ -14,8 +14,10 @@ reconciliation. Features that sharpen attribution, privacy, or the advice
 experience are the best fit.
 
 Usage ingestion reads only each provider's local metadata and usage logs.
-Usage ingestion is read-only, and Codex data is never mutated. Codex does not estimate
-dollar cost. Its usage JSONL is streamed and temporarily parsed for allowlisted
+Usage ingestion is read-only, and Codex data is never mutated.
+Codex provides clearly labelled API-equivalent cost estimates for exactly known
+models, never a bill or subscription charge; unknown models remain unpriced.
+Its usage JSONL is streamed and temporarily parsed for allowlisted
 metadata; conversation fields are not inspected or used for analysis and are never
 retained. Codex limits are last-observed values from local logs, not real-time billing
 data.
@@ -35,6 +37,16 @@ npm run watch            # recompile on change
 - Press **F5** in VS Code to launch the Extension Development Host and test
   your changes manually.
 - Package a `.vsix` with `npx -y @vscode/vsce@3.9.1 package`.
+  This is the pinned contributor recipe, not a claim about the latest stable
+  VSCE. For a candidate, record the actual verified packaging tool/version and
+  freeze its source and package hashes; do not silently upgrade dependencies.
+
+Before host smoke or installation, isolate all writable user-data, extensions,
+shared/agent state, global/workspace storage, provider homes, caches and lock
+paths. See [the guarded native-test instructions](tests/native/README.md).
+A separate window or worktree is insufficient. Compare selected normal-state
+metadata/hashes before and after; unexplained changes stay unknown. Do not use
+a default-profile `code --install-extension` or modify the daily installation.
 
 ## Pull requests
 
@@ -44,6 +56,31 @@ npm run watch            # recompile on change
 - Describe the problem and the fix; screenshots help for UI changes.
 - If your change affects user-facing behaviour, update `CHANGELOG.md` and the
   relevant parts of `README.md`.
+
+### Merge strategy and progress commits
+
+The project defaults to **Squash and merge**: each reviewed PR adds one commit
+to `main`, including multi-stage features and version work. A normal merge or
+rebase merge requires an explicit maintainer exception for that PR.
+Keep meaningful local stage commits until the PR is merged for verification and
+rollback; this default does not require pre-squashing progress commits before
+review. Do not rewrite published history or shared branches to apply it.
+
+Merge the contributor's original PR and verify the squash commit author and all
+applicable `Co-authored-by` trailers. Never copy another contributor's PR into a
+maintainer PR and close the original as superseded. If changes are needed,
+prefer an author update, or update the original PR branch with explicit
+authorization. Keep truthful credit on each Release change entry, as described
+in [Release-note attribution](#release-note-attribution).
+See [the repository Git policy](AGENTS.md#git-and-release-discipline).
+
+中文审阅：本项目默认 Squash and merge，每个已审阅 PR 向 `main` 合入一个提交，
+多阶段功能和版本开发也适用。只有维护者针对该 PR 明确指定时，才例外采用普通 merge
+或 rebase merge。本地有意义的阶段提交保留至 PR 合并，供验证和回滚，不要求在审阅前
+提前 squash；不得为应用此规则重写已发布历史或共享分支。合并贡献者的原始 PR，
+核对 squash commit 作者及所有适用的 `Co-authored-by` trailer；不得把他人 PR
+复制进维护者 PR 后以 superseded 为由关闭原 PR。需要修改时，优先请作者更新，
+或经明确授权在原 PR 分支修改。Release 每条变更均保留真实贡献者 credit。
 
 ## Tests
 
@@ -58,6 +95,18 @@ Tests run in three layers:
 3. **VS Code host smoke.** Press **F5** or install a packaged VSIX. Verify real
    VS Code host activation, real local metadata, and theme smoke behavior. This
    layer does not replace the first two layers.
+
+Browser checks use the production renderer and synthetic fixtures, not an actual
+native installed window. Theme-variable guards are required but cannot prove
+resource URIs, native fonts, screen readers or real zoom. Record those gates
+separately; preparing a launch configuration or succeeding at CLI installation
+does not execute F5 or accept the installed UI.
+
+中文审阅：Codex 对已知精确型号提供明确标注的 API 等价估值，不是账单或订阅扣费，
+未知型号仍未定价。原生／安装测试须隔离全部可写状态，单独窗口或工作树不足以证明隔离；
+不替换日常 Code，无法归因的日常状态变化保留未知。浏览器生产渲染夹具与主题变量守卫
+不代替原生字体、资源 URI、真实缩放、读屏、实际 F5 或已安装界面验收。贡献者的 VSCE
+固定版本示例不是“最新稳定版”声明；候选记录实际工具版本、冻结源码和包 hash。
 
 CI uses separate gates, with packaging after both test jobs pass on every PR
 (`.github/workflows/test.yml`). Canonical Linux screenshots may only be updated
@@ -99,7 +148,7 @@ tags:
    clear). A maintainer applies the matching label when merging — that label sets
    the version bump (`minor` → minor, `breaking` or `major` → major; ordinary
    `feature` / `fix` / docs and unlabeled PRs → patch).
-2. **A maintainer merges it.** [Release Drafter](https://github.com/release-drafter/release-drafter)
+2. **A maintainer squash-merges it by default.** [Release Drafter](https://github.com/release-drafter/release-drafter)
    then adds your change to a continuously-updated **draft GitHub Release** and
    recomputes the next version.
 3. **To ship, a maintainer reviews that draft and clicks Publish.** That creates
@@ -110,8 +159,10 @@ tags:
    can recover either registry without changing the release tag. Older releases
    that have no asset yet are rebuilt once from their exact tag and repaired.
 
-Because changes ship by **merging** your PR — not by re-applying it — your commit
-authorship and the PR's *merged* status are preserved.
+Changes ship through your original PR, preserving its *merged* status. The default
+squash produces a new commit rather than preserving each branch commit SHA; the
+maintainer verifies its author and applicable `Co-authored-by` trailers and retains
+truthful per-entry Release credit.
 
 ### Release-note attribution
 

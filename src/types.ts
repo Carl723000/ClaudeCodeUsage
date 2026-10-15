@@ -66,6 +66,15 @@ export interface ClaudeUsageRecord {
   _plugin?: string;
 }
 
+/** Native, TTL-complete usage subset; independent of model price coverage. */
+export interface ClaudeReferenceUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreation5mTokens: number;
+  cacheCreation1hTokens: number;
+}
+
 export interface UsageData {
   totalInputTokens: number;
   totalOutputTokens: number;
@@ -87,6 +96,9 @@ export interface UsageData {
     cacheReadTokens: number;
     cost: number;
     count: number;
+    /** Sum of admitted records only. Missing/unknown TTL stays in primary totals.
+     * Pricing and exact-model coverage are the reference pricebook's concern. */
+    referenceUsage?: ClaudeReferenceUsage;
   }>;
 }
 
@@ -316,6 +328,8 @@ export interface ExtensionConfig {
   compactNumbers: boolean;
   // Show one exact-version What's New notification after an upgrade.
   releaseAnnouncements: boolean;
+  // Local achievements default on; turning off suppresses feature-only history work.
+  enableAchievements: boolean;
   // IANA timezone name (e.g. "Asia/Hong_Kong") used for date display and
   // provider period boundaries, or '' to use the system timezone. Useful for
   // users in devcontainers or sandboxes whose system zone differs from theirs.
@@ -332,6 +346,8 @@ export interface ExtensionConfig {
   // as "wk 9% (fable 17%)".
   // Was showOpusWeekly (PR #38) before the API began naming the scope itself.
   showScopedWeekly: boolean;
+  // Default-off presentation only; consumes existing account observations.
+  showWeeklyQuotaPace?: boolean;
   // Quota status-bar display (V2.2): inline reset countdown; 5h-only.
   showResetInStatusBar: boolean;
   quotaFiveHourOnly: boolean;

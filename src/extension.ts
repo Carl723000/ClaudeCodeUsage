@@ -15,7 +15,10 @@ import {
 } from './claudeIncrementalIndex';
 import { StatusBarManager } from './statusBar';
 import { UsageWebviewProvider } from './webview';
-import { I18n } from './i18n';
+import { AchievementCalibrationSingleFlight, AchievementCalibrationResult, AchievementCalibrationCommitResult, shouldFetchQuotaForRefresh } from './achievementCalibration';
+import { codexAchievementHistoryEvidence } from './achievementHistoryDates';
+import { achievementCopyFor, achievementRecordStatusCopyFor, artifactLocale, ACHIEVEMENT_RECORD_INVENTORY_COPY, I18n } from './i18n';
+import { ACHIEVEMENT_RECORD_FILE, ACHIEVEMENT_LEGACY_RECORD_FILE, AchievementRecordStore, achievementRecordAuxiliaryName, loadAchievementRecords } from './achievementRecordStore';
 import { dayKeyInZone, resolveTimeZone } from './dateKeys';
 import {
   GITHUB_HEATMAP_DESTINATION_KEY,
@@ -32,7 +35,8 @@ import { ClaudeApiClient } from './claudeApiClient';
 import {
   buildOptimizerSystemPrompt,
 } from './advisor';
-import { ClaudeApiUsageResponse, ContentAnalysis, ExtensionConfig } from './types';
+import { ClaudeApiUsageResponse, ClaudeUsageRecord, ContentAnalysis, ExtensionConfig } from './types';
+import type { ClaudeUsageIndexUpdateResult } from './claudeIncrementalIndex';
 import {
   KNOWN_CONFIGURATION_SETTING_KEYS,
   OWNED_SETTING_GLOBAL_STATE_KEYS,
@@ -41,6 +45,9 @@ import {
   SettingsStore,
 } from './settings';
 import { normalizeQuotaWindows } from './quotaWindows';
+import { ClaudeQuotaPaceSource, projectCodexQuotaPaceSource } from './quotaPaceSource';
+import type { QuotaPaceAdapterSnapshot } from './quotaPaceAdapters';
+import {codexAchievementEffortStatistics} from './achievementEffortStatistics';
 import {
   WeeklyQuotaObservation,
 } from './weeklyValue';
@@ -64,6 +71,7 @@ import {
   UsageManifest,
 } from './claudeUsageFiles';
 import {
+  ClaudeRefreshRecovery,
   commitRefreshSnapshot,
   codexRefreshProfileForTrigger,
   pollIntervalMs,
@@ -79,8 +87,12 @@ import {
   WindowActivityGate,
 } from './refreshPolicy';
 import {
+  ClaudeFailureDiagnosticBudget,
+  ClaudeRefreshStage,
+  claudeRefreshFailureReason,
   formatCodexIndexDiagnostic,
   formatRefreshDiagnostic,
+  RefreshDiagnostic,
 } from './refreshDiagnostics';
 import {
   CodexProvider,
@@ -96,6 +108,10 @@ import { weeklyQuotaObservationsFromCodexHistory } from './providers/codex/codex
 import { resolveCodexHome, scanCodexManifest } from './providers/codex/codexManifest';
 import { codexIndexStoragePath, codexIndexCanonicalName, readOwnedLegacyCodexIndex } from './providers/codex/codexIndexStorage';
 import { buildCodexUsageView, CodexUsageView } from './providers/codex/codexUsage';
+import { codexModelSignals, CodexAchievementSignals } from './achievements';
+import {codexAchievementMoneyScopes} from './achievementMoneyScopes';
+import { codexAchievementCalendarProjection, codexAchievementTokenEvidence } from './achievementCalendar';
+import { codexAchievementProofRevision } from './codexAchievementRevision';
 import {
   buildScopedCodexInsights,
   CodexScopedInsights,
@@ -420,12 +436,31 @@ const WHATS_NEW: ReleaseAnnouncementCatalog<LocalizedReleaseAnnouncement> = {
     version: '2.3.2',
     body: () => I18n.t.releaseAnnouncement.v232,
   },
+  '2.5.0': {
+    version: '2.5.0',
+    body: () => achievementCopyFor(I18n.getLocale()).upgradeOn,
+  },
 };
+
+const EMPTY_CODEX_ACHIEVEMENT_SIGNALS: CodexAchievementSignals = Object.freeze({
+  modelCount: 0,
+  efforts: [],
+  familyRootCounts: Object.freeze({ astra: 0, sol: 0, luna: 0 }),
+});
+
+interface AchievementCalibrationRefresh {
+  current(): boolean;
+  /** Actual source/lifecycle authority, independent of the progress Cancel token. */
+  sourceCurrent?(): boolean;
+  accepted: boolean;
+}
 
 export class ClaudeCodeUsageExtension {
   private static readonly CODEX_BACKGROUND_WORK_STATE_KEY =
     'ccu.codex.backgroundWork.v1';
-  private static readonly CODEX_BACKGROUND_MEASUREMENT_VERSION = 1;
+  // Reopen completed v1 background work once so existing indexes can acquire
+  // the bounded historical output-hour proof required by achievements.
+  private static readonly CODEX_BACKGROUND_MEASUREMENT_VERSION = 2;
   private static readonly CODEX_FIRST_BACKFILL_BLUR_DEADLINE_MS = 10_000;
   private statusBar: StatusBarManager;
   private webviewProvider: UsageWebviewProvider;
@@ -445,7 +480,13 @@ export class ClaudeCodeUsageExtension {
   private codexWatchedHome: string | null = null;
   private readonly watchDebounce = this.createOwnedRefreshDebounce('claude');
   private readonly refreshGate = new RefreshSingleFlight();
+  private claudeRefreshDrain: Promise<void> | null = null;
+  private readonly achievementCalibration = new AchievementCalibrationSingleFlight();
+  private achievementCalibrationPending: Promise<void> | undefined;
+  private achievementCalibrationGeneration = 0;
   private providerUiSyncFailureReported = false;
+  private claudeFailureDiagnosticBudget: ClaudeFailureDiagnosticBudget | undefined;
+  private claudeRefreshRecovery: ClaudeRefreshRecovery | undefined;
   private readonly codexRefreshGate = new RefreshSingleFlight();
   private codexRefreshDrain: Promise<void> | null = null;
   private codexRefreshSuspensionDepth = 0;
@@ -508,14 +549,19 @@ export class ClaudeCodeUsageExtension {
   private quotaObservationStore: QuotaObservationStoreV2;
   private readonly quotaFingerprintSalt: string;
   private activeClaudeQuotaFingerprint: string | undefined;
+  private readonly claudeQuotaPaceSource = new ClaudeQuotaPaceSource();
   private activePricingBackend: ExtensionConfig['pricingBackend'] = 'anthropic';
   private codexProvider: CodexProvider;
   private readonly codexSalt: string;
   private codexView: CodexUsageView | null = null;
+  private codexAchievementSignals: CodexAchievementSignals = EMPTY_CODEX_ACHIEVEMENT_SIGNALS;
+  private codexAchievementRevision?: string;
+  private codexAchievementMoneyRevision?: string;
   private codexInsights: CodexScopedInsights = emptyCodexScopedInsights();
   private codexAvailable = false;
   private codexHasData = false;
   private codexRefreshing = false;
+  private codexCompressionRuntimeWarned = false;
   private codexProgress: CodexIndexProgress | null = null;
   private codexProgressLastRenderedAt = 0;
   /** In-memory source ownership only; never written as a raw path. */
@@ -553,6 +599,7 @@ export class ClaudeCodeUsageExtension {
   private codexBackgroundStateWrite: Promise<void> = Promise.resolve();
   private initializationWrites: Promise<void> = Promise.resolve();
   private initializationWriteFailure: unknown = null;
+  private pendingReleaseAnnouncementVersion?: string;
   private localDataActionWrite: Promise<void> = Promise.resolve();
   private pendingClientResetReplay: Promise<void> = Promise.resolve();
   private pendingClientResetRevision = 0;
@@ -570,6 +617,8 @@ export class ClaudeCodeUsageExtension {
   private configurationGeneration = 0;
   /** Source/pricing invalidation is separate from presentation settings. */
   private claudeIndexGeneration = 0;
+  /** Pending discovery must not retire callbacks on the installed watcher. */
+  private fileWatcherSetupGeneration = 0;
   private fileWatcherGeneration = 0;
   private codexWatcherGeneration = 0;
   private credentialsWatcherGeneration = 0;
@@ -611,6 +660,7 @@ export class ClaudeCodeUsageExtension {
       this.queueInitializationWrite(() => this.saveCodexBackgroundState());
     }
     this.webviewProvider = new UsageWebviewProvider(context);
+    this.webviewProvider.setAchievementWindowFocused(this.windowActivity.focused);
     const existingQuotaSalt = context.globalState.get<string>(
       'ccu.quota.fingerprintSalt.v1',
     );
@@ -677,7 +727,7 @@ export class ClaudeCodeUsageExtension {
       expectedSourceRevision,
       expectedConsentGeneration,
     ) => {
-      const config = this.getConfiguration();
+      const config = this.getConfiguration(true);
       return this.runAdviceNetwork((signal) =>
         requestPreparedOptimizer(prepared, {
           apiKey: config.adviceApiKey,
@@ -717,7 +767,7 @@ export class ClaudeCodeUsageExtension {
       expectedSourceRevision,
       expectedConsentGeneration,
     ) => {
-      const config = this.getConfiguration();
+      const config = this.getConfiguration(true);
       return this.runAdviceNetwork((signal) =>
         requestStructuredAdvice(prepared, references, {
           apiKey: config.adviceApiKey,
@@ -796,21 +846,23 @@ export class ClaudeCodeUsageExtension {
   private maybeAnnounceWhatsNew(): void {
     const current = (this.context.extension?.packageJSON?.version as string) || '';
     const last = this.context.globalState.get<string>('ccu.lastSeenVersion');
-    if (!current) {
+    if (!current || this.pendingReleaseAnnouncementVersion === current) {
       return;
     }
+    this.pendingReleaseAnnouncementVersion = current;
     const announcement = announcementForUpgrade(
       current,
       last,
       this.getConfiguration().releaseAnnouncements,
       WHATS_NEW,
     );
-    this.queueInitializationWrite(() =>
-      this.context.globalState.update('ccu.lastSeenVersion', current),
-    );
-    if (announcement) {
-      this.showWhatsNew(announcement.version);
-    }
+    this.queueInitializationWrite(async () => {
+      await this.context.globalState.update('ccu.lastSeenVersion', current);
+      // Persist first: a failed store must not turn reload into repeated toasts.
+      if (!this.disposed && !this.clearingAllLocalData && !this.localDataClearedRequiresReload && announcement) {
+        this.showWhatsNew(announcement.version);
+      }
+    });
   }
 
   /** Show the what's-new toast for one exact release, if it is catalogued. */
@@ -819,8 +871,37 @@ export class ClaudeCodeUsageExtension {
     if (!announcement) {
       return;
     }
+    if (version === '2.5.0' && this.getConfiguration().enableAchievements !== false) {
+      const copy = achievementCopyFor(I18n.getLocale());
+      void Promise.resolve(vscode.window.showInformationMessage(
+        `Claude Code Usage ${version}: ${copy.upgradeOn}`, copy.openAchievements, copy.disableAchievements,
+      )).then((pick) => {
+        if (this.disposed || this.clearingAllLocalData || this.localDataClearedRequiresReload) return;
+        if (pick === copy.openAchievements && this.getConfiguration().enableAchievements !== false) {
+          this.webviewProvider.show('achievements');
+        } else if (pick === copy.disableAchievements) {
+          // The clear-all barrier owns this write too; a delayed click cannot
+          // resurrect settings after local data was cleared.
+          this.queueInitializationWrite(async () => {
+            if (this.clearingAllLocalData) return;
+            try {
+              await this.settings.set('enableAchievements', false);
+              if (!this.disposed && !this.localDataClearedRequiresReload) {
+                this.onSettingsChangedFromPanel('enableAchievements');
+              }
+            } catch {
+              if (!this.disposed && !this.localDataClearedRequiresReload) {
+                void vscode.window.showErrorMessage(copy.disableFailed);
+              }
+            }
+          });
+        }
+      }).catch(() => undefined);
+      return;
+    }
     const open = I18n.t.popup.title; // "Show details" entry point label
-    void vscode.window.showInformationMessage(`Claude Code Usage ${version}: ${announcement.body()}`, open).then((pick) => {
+    const body = version === '2.5.0' ? achievementCopyFor(I18n.getLocale()).upgradeOff : announcement.body();
+    void vscode.window.showInformationMessage(`Claude Code Usage ${version}: ${body}`, open).then((pick) => {
       if (pick === open) {
         vscode.commands.executeCommand('claudeCodeUsage.showDetails');
       }
@@ -841,6 +922,8 @@ export class ClaudeCodeUsageExtension {
 
   private setupCommands(): void {
     const commands = [
+      vscode.commands.registerCommand('claudeCodeUsage.recalibrateAchievements', () =>
+        this.recalibrateAchievements()),
       vscode.commands.registerCommand('claudeCodeUsage.refresh', () => {
         // Manual refresh always updates the dashboard even when
         // dashboardAutoRefresh is off.
@@ -906,9 +989,120 @@ export class ClaudeCodeUsageExtension {
     commands.forEach(command => this.context.subscriptions.push(command));
   }
 
+  /** One owner holds progress and quiet mode across duplicate command invocations. */
+  private recalibrateAchievements(): Promise<void> {
+    if (this.achievementCalibrationPending) return this.achievementCalibrationPending;
+    const webview = this.webviewProvider;
+    const pending = Promise.resolve().then(async () => {
+      let result: AchievementCalibrationResult = 'failed';
+      try {
+        if (this.getConfiguration().enableAchievements === false) {
+          result = 'disabled';
+          void vscode.window.showInformationMessage(achievementRecordStatusCopyFor(I18n.getLocale()).disabled);
+          return;
+        }
+        result = await vscode.window.withProgress({
+          location: vscode.ProgressLocation.Notification,
+          title: I18n.achievementManagement.recalibrating,
+          cancellable: true,
+        }, async (_progress, token) => {
+          if (this.getConfiguration().enableAchievements === false) return 'disabled' as const;
+          if (token.isCancellationRequested || this.disposed || this.clearingAllLocalData ||
+              this.localDataClearedRequiresReload) return 'cancelled' as const;
+          webview.setAchievementCalibrationState(true);
+          return this.achievementCalibration.run({
+            enabled: () => this.getConfiguration().enableAchievements !== false,
+            cancelled: () => token.isCancellationRequested || this.disposed ||
+              this.clearingAllLocalData || this.localDataClearedRequiresReload,
+            generation: () => `${this.configurationGeneration}:${this.achievementCalibrationGeneration}`,
+            refreshLocal: current => this.refreshLocalForAchievementCalibration(current),
+            // Preserve completed/partial results; a late cancellation cannot
+            // erase work already saved, and completion need not add new awards.
+            recalibrate: (current): Promise<AchievementCalibrationCommitResult> => webview.recalibrateAchievementsFromCurrentData(current),
+          });
+        });
+        if (result === 'recalibrated') {
+          void vscode.window.showInformationMessage(I18n.achievementManagement.recalibrated);
+        } else if (result === 'partial') {
+          void vscode.window.showWarningMessage(I18n.achievementManagement.recalibratedPartial);
+        } else if (result === 'failed') {
+          void vscode.window.showErrorMessage(I18n.achievementManagement.recalibrationFailed);
+        }
+      } catch {
+        void vscode.window.showErrorMessage(I18n.achievementManagement.recalibrationFailed);
+      } finally {
+        // The panel may optimistically mark its button busy before dispatch.
+        // Even a disabled/cancelled preflight must acknowledge completion.
+        webview.setAchievementCalibrationState(false, result === 'failed');
+      }
+    }).finally(() => {
+      if (this.achievementCalibrationPending === pending) this.achievementCalibrationPending = undefined;
+    });
+    this.achievementCalibrationPending = pending;
+    return pending;
+  }
+
+  private async refreshLocalForAchievementCalibration(current: () => boolean): Promise<void> {
+    // Wait for already-owned production work, never coalesce a local-only
+    // request into an ordinary request (which may legitimately fetch quota).
+    // A permanently busy source fails explicitly instead of adding a retry loop.
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (!current()) return;
+      const drains = [this.claudeRefreshDrain, this.codexRefreshDrain].filter(
+        (value): value is Promise<void> => !!value);
+      if (!drains.length) break;
+      await Promise.all(drains);
+    }
+    if (!current()) return;
+    if (this.claudeRefreshDrain || this.codexRefreshDrain || this.codexRefreshSuspensionDepth > 0) {
+      throw new Error('achievement-calibration:refresh-busy');
+    }
+    const config = this.getConfiguration(), provider = this.codexProvider;
+    const generation = this.configurationGeneration;
+    const indexGeneration = this.claudeIndexGeneration;
+    const achievementGeneration = this.achievementCalibrationGeneration;
+    const sourceCurrent = () => !this.disposed && !this.clearingAllLocalData && !this.localDataClearedRequiresReload &&
+      this.getConfiguration().enableAchievements !== false && achievementGeneration === this.achievementCalibrationGeneration &&
+      generation === this.configurationGeneration && indexGeneration === this.claudeIndexGeneration && provider === this.codexProvider;
+    const ownsSources = () => current() && sourceCurrent();
+    const claudeDirectory = await ClaudeDataLoader.findClaudeDataDirectory(config.dataDirectory || undefined);
+    if (!ownsSources()) throw new Error('achievement-calibration:source-retired');
+    const codexAvailable = config.codexEnabled ? await provider.isAvailable() : false;
+    if (!ownsSources()) throw new Error('achievement-calibration:source-retired');
+    // An absent, never-loaded provider is optional. A previously verified or
+    // explicitly configured source disappearing is a real failure.
+    if ((!claudeDirectory && (this.cache.manifest !== null || !!config.dataDirectory)) ||
+        (config.codexEnabled && !codexAvailable && (!!this.codexView || !!config.codexDataDirectory))) {
+      throw new Error('achievement-calibration:source-unavailable');
+    }
+    if (!claudeDirectory && !codexAvailable) throw new Error('achievement-calibration:no-source');
+
+    if (claudeDirectory) {
+      // No await between admission and starting the owned local pass.
+      if (this.claudeRefreshDrain) throw new Error('achievement-calibration:refresh-busy');
+      const request = this.refreshGate.request(false, 'manual');
+      if (!request) throw new Error('achievement-calibration:refresh-busy');
+      const calibration = { current: ownsSources, sourceCurrent, accepted: false };
+      await this.startClaudeRefresh({ ...request, localOnly: true, calibration });
+      if (!ownsSources()) throw new Error('achievement-calibration:source-retired');
+      if (!calibration.accepted || this.providerRefreshStates.claude.failed) {
+        throw new Error('achievement-calibration:claude-refresh-failed');
+      }
+    }
+    if (codexAvailable) {
+      const calibration = { current: ownsSources, sourceCurrent, accepted: false };
+      await this.refreshCodexData('manual', calibration);
+      if (!ownsSources()) throw new Error('achievement-calibration:source-retired');
+      if (!calibration.accepted || this.providerRefreshStates.codex.failed ||
+          this.codexView?.currentManifestVerified !== true || this.codexView.coverage.complete !== true) {
+        throw new Error('achievement-calibration:codex-refresh-failed');
+      }
+    }
+  }
+
   private async derivedFileFamilyNames(
     filePath: string,
-    family: 'codex-index' | 'quota-observations',
+    family: 'codex-index' | 'quota-observations' | 'achievement-records',
   ): Promise<string[]> {
     const directory = path.dirname(filePath);
     const canonical = path.basename(filePath);
@@ -920,6 +1114,10 @@ export class ClaudeCodeUsageExtension {
       throw error;
     }
     return names.filter((name) => {
+      if (family === 'achievement-records') {
+        return name === ACHIEVEMENT_RECORD_FILE || name === ACHIEVEMENT_LEGACY_RECORD_FILE ||
+          achievementRecordAuxiliaryName(name);
+      }
       if (name === canonical) return true;
       if (family === 'codex-index') {
         return codexIndexCanonicalName(name) === canonical;
@@ -931,7 +1129,7 @@ export class ClaudeCodeUsageExtension {
 
   private async localFileFamilyInventory(
     filePath: string,
-    family: 'codex-index' | 'quota-observations',
+    family: 'codex-index' | 'quota-observations' | 'achievement-records',
   ): Promise<{
     approximateBytes: number | null;
     itemCount: number;
@@ -1114,10 +1312,21 @@ export class ClaudeCodeUsageExtension {
       zh ? chinese : english;
     const indexPath = path.join(this.context.globalStorageUri.fsPath, 'codex-index-v1.json');
     const quotaPath = path.join(this.context.globalStorageUri.fsPath, QUOTA_OBSERVATION_FILE);
-    const [indexFile, quotaFile] = await Promise.all([
+    const achievementPath = path.join(this.context.globalStorageUri.fsPath, ACHIEVEMENT_RECORD_FILE);
+    const [indexFile, quotaFile, achievementFile, achievementRecords] = await Promise.all([
       this.localFileFamilyInventory(indexPath, 'codex-index'),
       this.localFileFamilyInventory(quotaPath, 'quota-observations'),
+      this.localFileFamilyInventory(achievementPath, 'achievement-records'),
+      loadAchievementRecords(achievementPath).then(async current => {
+        // v2 is authoritative. Count its archive once, not again through v1.
+        // Before adoption, only the bounded canonical v1 is a migration input.
+        if (current) return current.schemaVersion === 2 ? current : null;
+        const legacy = await loadAchievementRecords(path.join(
+          this.context.globalStorageUri.fsPath, ACHIEVEMENT_LEGACY_RECORD_FILE));
+        return legacy && legacy.schemaVersion !== 1 ? null : legacy;
+      }).catch(() => null),
     ]);
+    const achievementCopy = ACHIEVEMENT_RECORD_INVENTORY_COPY[artifactLocale(I18n.getLocale())];
     const stateKeys = this.extensionGlobalStateKeys();
     const legacyQuotaKeys = stateKeys.filter((key) =>
       key.startsWith(LEGACY_QUOTA_PREFIX) || key.startsWith(LEGACY_WEEKLY_PREFIX),
@@ -1295,6 +1504,15 @@ export class ClaudeCodeUsageExtension {
         newestAt: null,
         networkInteraction: local('Local export: none; GitHub publish: explicit confirmed action only', '本地导出：无；GitHub 发布：仅明确确认的动作'),
         clearability: local('Reset Sharing Preferences', '重置分享偏好'),
+      },
+      {
+        id: 'P12', category: 'P12 · ' + achievementCopy.category,
+        locationClass: 'VS Code globalStorage', schema: `${achievementRecords?.schemaVersion ?? 2} · ≤64 KiB`,
+        approximateBytes: achievementFile.approximateBytes,
+        itemCount: achievementRecords === null ? null :
+          (achievementRecords?.records.length ?? 0) + (achievementRecords?.legacyRecords?.length ?? 0),
+        oldestAt: null, newestAt: null,
+        networkInteraction: achievementCopy.network, clearability: achievementCopy.clear,
       },
     ];
     return {
@@ -1749,6 +1967,7 @@ export class ClaudeCodeUsageExtension {
         this.cancelQuotaNetworks('cancelled'),
       ]);
       await this.settings.resetAllOwnedData();
+      await this.webviewProvider.clearAchievementGrants({ holdUntilReload: true });
       await this.clearCodexDerivedIndex(false);
       for (const indexPath of await this.codexDerivedIndexPaths()) {
         await this.removeDerivedFileFamilyWithLease(indexPath, 'codex-index');
@@ -1816,13 +2035,37 @@ export class ClaudeCodeUsageExtension {
     if (quota.disposition !== 'valid' || quota.store.observations.length > 0) {
       throw new Error('local-data-clear:quota-postcondition-failed');
     }
+    const achievementPath = path.join(this.context.globalStorageUri.fsPath, ACHIEVEMENT_RECORD_FILE);
+    const legacyPath = path.join(this.context.globalStorageUri.fsPath, ACHIEVEMENT_LEGACY_RECORD_FILE);
+    // Read both fences under the same lease used by old and current writers.
+    const lease = await acquireCodexIndexLease(legacyPath, { timeoutMs: 5_000 });
+    try {
+      const [record, legacy, recordNames] = await Promise.all([
+        loadAchievementRecords(achievementPath),
+        loadAchievementRecords(legacyPath),
+        this.derivedFileFamilyNames(achievementPath, 'achievement-records'),
+      ]);
+      const emptyRecord = (store: AchievementRecordStore): boolean =>
+        store.records.length === 0 && store.pins.length === 0 && store.lastNoticeAt === 0 &&
+        store.auxiliary.activity.features.length === 0 && store.auxiliary.activity.settingKeys.length === 0 &&
+        store.auxiliary.hours.maxStreak === 0 && store.auxiliary.calendarPeak === null;
+      if (!record || record.schemaVersion !== 2 || record.generation <= 1 || !emptyRecord(record) ||
+          record.legacyRecords!.length > 0 || !legacy || legacy.schemaVersion !== 1 ||
+          legacy.generation <= 1 || !emptyRecord(legacy) ||
+          !isDeepStrictEqual(record.legacyBoundary, {
+            generation: legacy.generation, sequence: legacy.sequence,
+            signature: createHash('sha256').update(JSON.stringify(legacy)).digest('hex'),
+          }) || recordNames.some(name => name !== ACHIEVEMENT_RECORD_FILE && name !== ACHIEVEMENT_LEGACY_RECORD_FILE)) {
+        throw new Error('local-data-clear:achievement-postcondition-failed');
+      }
+    } finally { await lease.release(); }
   }
 
   private async refreshPricing(): Promise<void> {
     try {
       const result = await fetchLatestPricing();
       this.invalidateClaudeUsagePricingCache();
-      this.webviewProvider.invalidateShareCardPreview();
+      this.webviewProvider.invalidateShareCardPreview({pricingChanged:true});
       vscode.window.showInformationMessage(`${I18n.t.popup.pricingUpdated} (${result.updated})`);
       // Force a full recompute so the new prices take effect.
       void this.refreshData(true, 'pricing');
@@ -2126,7 +2369,7 @@ export class ClaudeCodeUsageExtension {
       return { error: I18n.t.popup.noDataMessage };
     }
 
-    const config = this.getConfiguration();
+    const config = this.getConfiguration(true);
     const needsKey =
       config.adviceBackend === 'api' && (!config.adviceApiKey || config.adviceApiKey.trim() === '');
     if (needsKey) {
@@ -2160,7 +2403,7 @@ export class ClaudeCodeUsageExtension {
     this.activePricingBackend = config.pricingBackend;
     setPricingBackend(config.pricingBackend);
     this.applyFormattingConfiguration(config);
-    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat);
+    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace);
 
     // Listen for configuration changes
     vscode.workspace.onDidChangeConfiguration(e => {
@@ -2191,7 +2434,7 @@ export class ClaudeCodeUsageExtension {
     I18n.setTimezone(config.timezone);
   }
 
-  private getConfiguration(): ExtensionConfig {
+  private getConfiguration(includeAdviceSecret = false): ExtensionConfig {
     // All settings flow through SettingsStore: language and dataDirectory live
     // in VS Code config, BYOK secrets live in SecretStorage, and the rest use
     // the dashboard-managed store. Defaults come from the settings catalog.
@@ -2215,18 +2458,22 @@ export class ClaudeCodeUsageExtension {
       tokenDecimalPlaces: s.get<number>('tokenDecimalPlaces'),
       compactNumbers: s.get<boolean>('compactNumbers'),
       releaseAnnouncements: s.get<boolean>('releaseAnnouncements'),
+      enableAchievements: s.get<boolean>('enableAchievements') ?? true,
       timezone: s.get<string>('timezone'),
       showCost: s.get<boolean>('showCost'),
       showContext: s.get<boolean>('showContext'),
       contextWindowOverride: s.get<number>('contextWindowOverride'),
       statusBarMetric: s.get<'cost' | 'monthly-cost' | 'tokens'>('statusBarMetric'),
       showScopedWeekly: s.get<boolean>('showScopedWeekly'),
+      showWeeklyQuotaPace: s.get<boolean>('showWeeklyQuotaPace') === true,
       showResetInStatusBar: s.get<boolean>('showResetInStatusBar'),
       quotaFiveHourOnly: s.get<boolean>('quotaFiveHourOnly'),
       resetCountdownFormat: s.get<'decimal' | 'units' | 'clock'>('resetCountdownFormat'),
       statusBarQuotaFormat: s.get<string>('statusBarQuotaFormat'),
       usageLimitTracking: s.get<boolean>('usageLimitTracking'),
-      adviceApiKey: s.get<string>('advice.apiKey'),
+      // Local refresh, presentation and calibration never look up credentials.
+      // Only explicit advice/optimizer preparation or sending opts in.
+      adviceApiKey: includeAdviceSecret ? s.get<string>('advice.apiKey') : '',
       adviceApiUrl: s.get<string>('advice.apiUrl'),
       adviceModel: s.get<string>('advice.model'),
       adviceReasoningEffort: s.get<string>('advice.reasoningEffort'),
@@ -2262,6 +2509,7 @@ export class ClaudeCodeUsageExtension {
       legacyIndexPath: path.join(this.context.globalStorageUri.fsPath, 'codex-index-v1.json'),
       salt: this.codexSalt,
       timeZone: resolveTimeZone(config.timezone),
+      allowAchievementHourProof: config.enableAchievements !== false,
     });
   }
 
@@ -2276,12 +2524,15 @@ export class ClaudeCodeUsageExtension {
     this.statusBar.clearCodex?.();
     this.codexView = null;
     this.codexInsights = emptyCodexScopedInsights();
+    this.codexAchievementRevision = undefined;
+    this.codexAchievementSignals = EMPTY_CODEX_ACHIEVEMENT_SIGNALS;
     this.codexHasData = false;
     this.codexAvailable = false;
     this.codexRefreshing = false;
     this.codexProgress = null;
     this.codexProgressLastRenderedAt = 0;
     this.codexDashboardHydrated = false;
+    this.tryProviderUiUpdate(() => this.webviewProvider.invalidateAchievementEvidence?.('codex'));
     this.providerRefreshStates.codex = { failed: false };
     delete this.deliveredRefreshStates.codex;
     this.tryProviderUiUpdate(() => this.webviewProvider.updateRefreshState?.('codex', { failed: false }));
@@ -2330,6 +2581,11 @@ export class ClaudeCodeUsageExtension {
     this.providerRefreshStates[provider] = failed
       ? { ...previous, failed: true }
       : { failed: false, lastSuccessfulAt: Date.now() };
+    if (failed) {
+      // Revoke award authority even when automatic panel delivery is paused.
+      // Numeric display data remains the last verified snapshot.
+      this.tryProviderUiUpdate(() => this.webviewProvider.invalidateAchievementEvidence?.(provider));
+    }
     // A direct failed retry must reach the compact in-page feedback even when
     // the same failure was already observed by an automatic attempt.
     this.publishRefreshState(provider, trigger, failed && trigger === 'manual');
@@ -2384,6 +2640,11 @@ export class ClaudeCodeUsageExtension {
 
   private syncProviderUi(trigger: RefreshTrigger = 'settings'): void {
     const config = this.getConfiguration();
+    if (config.showWeeklyQuotaPace === true && config.usageLimitTracking) {
+      const pace = this.getClaudeQuotaPaceSnapshot();
+      this.statusBar.updateQuota(this.cache.usageLimits ?? null, pace);
+      this.webviewProvider.updateQuotaPace?.(pace, this.cache.usageLimits ?? null);
+    }
     const claudeHasData = this.cache.records.length > 0;
     // This non-rendering handoff revokes prepared handles when the verified
     // source revision or consent changes, including while the page is paused.
@@ -2404,6 +2665,8 @@ export class ClaudeCodeUsageExtension {
           this.codexView.today,
           config.codexStatusMetric,
           this.codexView.limit,
+          projectCodexQuotaPaceSource({enabled: config.showWeeklyQuotaPace === true && config.usageLimitTracking,
+            snapshot: this.codexView.limit}),
         );
       } else {
         this.statusBar.clearCodex?.();
@@ -2422,7 +2685,8 @@ export class ClaudeCodeUsageExtension {
       codexData: this.codexHasData,
       codexLoading: this.codexRefreshing,
       codexProgress: this.codexDashboardProgress(),
-    });
+    }, this.codexView ? this.codexAchievementSignals : undefined,
+    !this.providerRefreshStates.codex.failed);
     if (this.codexView) this.codexDashboardHydrated = true;
     if (trigger === 'settings' || trigger === 'pricing') {
       this.publishRefreshState('claude', trigger);
@@ -2568,7 +2832,11 @@ export class ClaudeCodeUsageExtension {
     // migration work is represented by main, period and hourly coverage.
     return !coverage.complete ||
       !coverage.period.allTime.complete ||
-      !snapshot.hourlyCoverage?.complete;
+      !snapshot.hourlyCoverage?.complete ||
+      (this.getConfiguration().enableAchievements !== false &&
+        snapshot.outputHourProof?.complete === false &&
+        (snapshot.outputHourProof.backfillableFiles === undefined ||
+          snapshot.outputHourProof.backfillableFiles > 0));
   }
 
   private codexIndexGeneration(snapshot: CodexProviderSnapshot | null): number | null {
@@ -2587,9 +2855,13 @@ export class ClaudeCodeUsageExtension {
     const main = snapshot.coverage;
     const period = main.period.allTime;
     const hourly = snapshot.hourlyCoverage;
+    const hourProof = this.getConfiguration().enableAchievements !== false
+      ? snapshot.outputHourProof : undefined;
     return {
-      completedUnits: main.indexedFiles + period.migratedFiles + (hourly?.indexedFiles ?? 0),
-      totalUnits: main.totalFiles + period.totalFiles + (hourly?.totalFiles ?? 0),
+      completedUnits: main.indexedFiles + period.migratedFiles + (hourly?.indexedFiles ?? 0) +
+        (hourProof?.provenFiles ?? 0),
+      totalUnits: main.totalFiles + period.totalFiles + (hourly?.totalFiles ?? 0) +
+        (hourProof?.totalFiles ?? 0),
       completedBytes: main.indexedBytes + period.migratedBytes + (hourly?.indexedBytes ?? 0),
       totalBytes: main.totalBytes + period.totalBytes + (hourly?.totalBytes ?? 0),
     };
@@ -2793,8 +3065,9 @@ export class ClaudeCodeUsageExtension {
       }
       void this.maybeFetchUsageLimits(this.getConfiguration()).then((retry) => {
         if (retry) {
-          this.statusBar.updateQuota(retry);
+          this.statusBar.updateQuota(retry, this.getClaudeQuotaPaceSnapshot());
           this.webviewProvider.updateQuota(retry);
+          this.webviewProvider.updateQuotaPace?.(this.getClaudeQuotaPaceSnapshot(), this.cache.usageLimits ?? null);
         }
       });
     }, 8_000);
@@ -2847,12 +3120,13 @@ export class ClaudeCodeUsageExtension {
     return context;
   }
 
-  private async refreshCodexData(trigger: RefreshTrigger): Promise<void> {
+  private async refreshCodexData(trigger: RefreshTrigger, calibration?: AchievementCalibrationRefresh): Promise<void> {
     if (
       this.disposed ||
       this.localDataClearedRequiresReload ||
       this.codexRefreshSuspensionDepth > 0
     ) return;
+    if (calibration && (!calibration.current() || this.codexRefreshDrain)) return;
     const request = this.codexRefreshGate.request(false, trigger);
     if (request === null) {
       this.codexCoalescedTriggersSinceRefresh += 1;
@@ -2860,7 +3134,7 @@ export class ClaudeCodeUsageExtension {
       return;
     }
 
-    const drain = Promise.resolve().then(() => this.drainCodexRefreshes(request));
+    const drain = Promise.resolve().then(() => this.drainCodexRefreshes(request, calibration));
     this.codexRefreshDrain = drain;
     try {
       await drain;
@@ -2871,7 +3145,7 @@ export class ClaudeCodeUsageExtension {
     }
   }
 
-  private async drainCodexRefreshes(initial: RefreshRequest): Promise<void> {
+  private async drainCodexRefreshes(initial: RefreshRequest, calibration?: AchievementCalibrationRefresh): Promise<void> {
     let request: RefreshRequest | null = initial;
     try {
       while (request !== null) {
@@ -2880,7 +3154,8 @@ export class ClaudeCodeUsageExtension {
           this.localDataClearedRequiresReload ||
           this.codexRefreshSuspensionDepth > 0
         ) break;
-        await this.runScheduledCodexRefresh(request.trigger);
+        await this.runScheduledCodexRefresh(request.trigger, calibration);
+        calibration = undefined;
         request = this.codexRefreshGate.complete();
       }
     } finally {
@@ -2893,7 +3168,7 @@ export class ClaudeCodeUsageExtension {
     }
   }
 
-  private async runScheduledCodexRefresh(trigger: RefreshTrigger): Promise<void> {
+  private async runScheduledCodexRefresh(trigger: RefreshTrigger, calibration?: AchievementCalibrationRefresh): Promise<void> {
     const generation = this.configurationGeneration;
     try {
       await this.waitForCodexProviderRetirements();
@@ -2909,15 +3184,16 @@ export class ClaudeCodeUsageExtension {
       this.disposed ||
       this.localDataClearedRequiresReload ||
       this.codexRefreshSuspensionDepth > 0 ||
-      generation !== this.configurationGeneration
+      generation !== this.configurationGeneration || (calibration && !calibration.current())
     ) return;
     const diagnosticContext = this.takeCodexRefreshDiagnosticContext();
     const provider = this.codexProvider;
-    const operation = this.runCodexRefresh(trigger, diagnosticContext);
+    const operation = this.runCodexRefresh(trigger, diagnosticContext, calibration);
     this.activeCodexRefreshes.add(operation);
     try {
       await operation;
     } catch {
+      if (calibration) calibration.accepted = false;
       if (this.disposed || generation !== this.configurationGeneration ||
         provider !== this.codexProvider) return;
       this.codexRefreshing = false;
@@ -2928,21 +3204,24 @@ export class ClaudeCodeUsageExtension {
         formatCodexIndexDiagnostic({
           trigger,
           outcome: 'error',
+          failureCode: 'refresh-failed',
           watcherEvents: diagnosticContext.watcherEvents,
           coalescedTriggers: diagnosticContext.coalescedTriggers,
           backfillMode: 'unknown',
           workerMode: 'unknown',
-          indexedFiles: 0,
-          totalFiles: 0,
-          indexedBytes: 0,
-          totalBytes: 0,
-          periodMigratedBytes: 0,
-          periodTotalBytes: 0,
-          migrationPending: false,
-          bodyReads: 0,
-          failedFiles: 1,
-          metadataMs: 0,
-          parseMs: 0,
+          coverageSource: 'unknown',
+          indexedFiles: null,
+          totalFiles: null,
+          indexedBytes: null,
+          totalBytes: null,
+          periodMigratedBytes: null,
+          periodTotalBytes: null,
+          migrationPending: null,
+          indexRecovery: null,
+          bodyReads: null,
+          failedFiles: null,
+          metadataMs: null,
+          parseMs: null,
           qualityFlags: { 'refresh-failed': 1 },
         }),
       );
@@ -2968,18 +3247,29 @@ export class ClaudeCodeUsageExtension {
   private async runCodexRefresh(
     trigger: RefreshTrigger,
     diagnosticContext = this.takeCodexRefreshDiagnosticContext(),
+    calibration?: AchievementCalibrationRefresh,
   ): Promise<void> {
     if (this.disposed) return;
     let ownedBackfillLease: ResourceLease | undefined;
     let ownedWorkerLease: ResourceLease | undefined;
     let workerStoppedSafely = false;
+    let producerResultCommitted = false;
     let continueHistoricalWork = false;
     const workerMode = codexRefreshProfileForTrigger(trigger);
     const config = this.getConfiguration();
     const provider = this.codexProvider;
     const generation = this.configurationGeneration;
-    const ownsCurrentSource = () => !this.disposed && provider === this.codexProvider &&
-      generation === this.configurationGeneration;
+    const achievementGeneration = this.achievementCalibrationGeneration ?? 0;
+    const home = this.codexHome(config);
+    const ownsCurrentSourceBase = () => !this.disposed && !this.clearingAllLocalData &&
+      !this.localDataClearedRequiresReload && provider === this.codexProvider &&
+      generation === this.configurationGeneration && home === this.codexHome(this.getConfiguration()) &&
+      (!calibration || ((this.achievementCalibrationGeneration ?? 0) === achievementGeneration &&
+        this.getConfiguration().enableAchievements !== false && (calibration.sourceCurrent?.() ?? true)));
+    const ownsCurrentSource = () => ownsCurrentSourceBase() && (!calibration || calibration.current());
+    // Used only after the producer has returned, never to admit another scan.
+    const ownsProducedResult = () => ownsCurrentSourceBase() &&
+      (producerResultCommitted || !calibration || calibration.current());
     this.selectCodexSnapshotHome(this.codexHome(config));
     try {
       if (!config.codexEnabled) {
@@ -3002,6 +3292,7 @@ export class ClaudeCodeUsageExtension {
         this.codexRefreshing = false;
         this.codexProgress = null;
         this.codexProgressLastRenderedAt = 0;
+        this.tryProviderUiUpdate(() => this.webviewProvider.invalidateAchievementEvidence?.('codex'));
         return;
       }
       const available = await provider.isAvailable();
@@ -3146,14 +3437,33 @@ export class ClaudeCodeUsageExtension {
           this.codexWorkerLease = ownedWorkerLease;
           this.codexWorkerCancellationRequested = false;
         }
+        let achievementObservation: Awaited<ReturnType<UsageWebviewProvider['beginCodexAchievementObservation']>>;
+        // No worker has started while this optional bounded receipt read waits.
+        // Retirement here may release the registered-but-unused ownership.
+        workerStoppedSafely = true;
+        try {
+          achievementObservation = await this.webviewProvider.beginCodexAchievementObservation?.(ownsCurrentSource, ownsCurrentSourceBase);
+        } catch (error) {
+          if (calibration) throw error;
+          /* Optional achievement receipt failure never stops ordinary indexing. */
+        }
+        if (!ownsCurrentSource()) return;
+        workerStoppedSafely = false;
         const result = await provider.refresh(
           workerMode,
           (progress) => { if (ownsCurrentSource()) this.onCodexIndexProgress(progress, trigger); },
           historicalAttempt,
+          achievementObservation?.window,
         );
         workerStoppedSafely = true;
-        if (!ownsCurrentSource()) {
+        producerResultCommitted = (result.outcome === 'success' || result.outcome === 'partial') &&
+          (result.diagnostic?.failedFiles ?? 0) === 0;
+        if (!ownsProducedResult()) {
           return;
+        }
+        if (result.diagnostic?.errorCode === 'zstd-unsupported' && !this.codexCompressionRuntimeWarned) {
+          this.codexCompressionRuntimeWarned = true;
+          void vscode.window.showWarningMessage(I18n.codexCompressionRuntimeUnsupported);
         }
         if (result.outcome === 'unavailable') {
           this.codexAvailable = Boolean(this.codexView);
@@ -3161,9 +3471,26 @@ export class ClaudeCodeUsageExtension {
           return;
         }
 
+        // Only this host's explicit lifecycle cancellation is neutral. A
+        // cancelled worker alone is not trusted. A reported failed file still
+        // withdraws current evidence; the current facade's thrown/cancelled
+        // response reports zero because final file diagnostics are unavailable.
+        // Keep the defensive guard for richer producers. This branch preserves
+        // only prior accepted proof. Do not accept its display-only snapshot,
+        // timestamp a success, or issue a new achievement receipt.
+        if (this.codexWorkerCancellationRequested && result.outcome === 'error' &&
+            result.failureCode === 'cancelled' && result.diagnostic?.failedFiles === 0) {
+          if (historicalAttempt && this.codexBackgroundState.status === 'running') {
+            this.codexBackgroundState = interruptBackgroundWork(this.codexBackgroundState, {now:Date.now()});
+            await this.saveCodexBackgroundState();
+            if (!ownsCurrentSource()) return;
+          }
+          this.outputChannel.appendLine('refresh: codex-cancelled=1; prior accepted snapshot retained');
+          return;
+        }
         const refreshFailed = result.outcome === 'error' || (result.diagnostic?.failedFiles ?? 0) > 0;
         if (!refreshFailed || (!this.codexSkipPersistedHydration && !this.codexView && result.snapshot.coverage.totalFiles > 0)) {
-          this.applyCodexSnapshot(result.snapshot);
+          this.applyCodexSnapshot(result.snapshot, !refreshFailed);
         }
         if (!refreshFailed &&
           this.codexBackgroundState.indexGeneration !== this.codexIndexGeneration(result.snapshot)) {
@@ -3176,7 +3503,7 @@ export class ClaudeCodeUsageExtension {
             indexGeneration: this.codexIndexGeneration(result.snapshot),
           });
           await this.saveCodexBackgroundState();
-          if (!ownsCurrentSource()) return;
+          if (!ownsProducedResult()) return;
         }
         if (historicalAttempt && this.codexBackgroundState.status === 'running') {
           const complete = !this.codexHistoricalWorkPending(result.snapshot);
@@ -3202,7 +3529,7 @@ export class ClaudeCodeUsageExtension {
             continueHistoricalWork = this.codexBackgroundState.status === 'eligible';
           }
           await this.saveCodexBackgroundState();
-          if (!ownsCurrentSource()) return;
+          if (!ownsProducedResult()) return;
         }
         if (refreshFailed) {
           this.recordRefreshState('codex', true, trigger);
@@ -3212,6 +3539,10 @@ export class ClaudeCodeUsageExtension {
           // its checkpoint too. It is not evidence that the failed work resumed
           // or succeeded, and cannot clear the stale-data marker/time.
           this.recordRefreshState('codex', false, trigger);
+          const accept = () => this.webviewProvider.acceptCodexAchievementSnapshot?.(
+            this.codexView, this.codexAchievementSignals, achievementObservation, result.achievementUsageDelta);
+          if (calibration) accept(); else this.tryProviderUiUpdate(accept);
+          if (calibration) calibration.accepted = true;
         } else {
           this.recordRefreshState('codex', true, trigger);
         }
@@ -3230,7 +3561,7 @@ export class ClaudeCodeUsageExtension {
             indexGeneration: this.codexIndexGeneration(result.snapshot),
           });
           await this.saveCodexBackgroundState();
-          if (!ownsCurrentSource()) return;
+          if (!ownsProducedResult()) return;
           continueHistoricalWork = true;
         }
         this.outputChannel.appendLine(
@@ -3293,12 +3624,12 @@ export class ClaudeCodeUsageExtension {
         if (workerStoppedSafely && this.codexWorkerLease === ownedWorkerLease) {
           this.codexWorkerLease = undefined;
         }
-        if (ownsCurrentSource() && workerStoppedSafely && ownedBackfillLease) {
+        if (ownsProducedResult() && workerStoppedSafely && ownedBackfillLease) {
           this.codexFirstBackfillActive = false;
         }
       }
     } finally {
-      if (ownsCurrentSource()) {
+      if (ownsProducedResult()) {
         this.codexRefreshing = false;
         this.codexProgress = null;
         this.codexProgressLastRenderedAt = 0;
@@ -3306,6 +3637,7 @@ export class ClaudeCodeUsageExtension {
       }
       if (
         ownsCurrentSource() &&
+        !calibration &&
         continueHistoricalWork &&
         provider === this.codexProvider &&
         this.getConfiguration().codexEnabled &&
@@ -3335,8 +3667,10 @@ export class ClaudeCodeUsageExtension {
     }
   }
 
-  private applyCodexSnapshot(snapshot: CodexProviderSnapshot): void {
-    this.selectCodexSnapshotHome(this.codexHome(this.getConfiguration()));
+  private applyCodexSnapshot(snapshot: CodexProviderSnapshot, acceptedForAchievements = true): void {
+    const config = this.getConfiguration();
+    this.selectCodexSnapshotHome(this.codexHome(config));
+    if (!this.codexView) this.codexAchievementRevision = undefined;
     const nextView = buildCodexUsageView(snapshot);
     const capturedObservations = snapshot.weeklyValueInputs?.observations ?? [];
     const capturedQuotaFacts = codexQuotaCapturesFromWeeklyObservations(
@@ -3366,6 +3700,45 @@ export class ClaudeCodeUsageExtension {
     if (!isDeepStrictEqual(this.codexView, nextView)) {
       this.codexView = nextView;
       this.codexInsights = buildScopedCodexInsights(nextView);
+    }
+    // Display equality does not imply proof equality: period lineage markers
+    // and optional effort counters can change without changing any chart.
+    if (config.enableAchievements === false) {
+      this.codexAchievementRevision = undefined;
+      this.codexAchievementMoneyRevision = undefined;
+      this.codexAchievementSignals = EMPTY_CODEX_ACHIEVEMENT_SIGNALS;
+    } else {
+      const indexed = acceptedForAchievements && nextView.currentManifestVerified === true && nextView.coverage.complete;
+      const calendarComplete = indexed && nextView.coverage.identity.complete &&
+        nextView.periodCoverage.allTime.complete;
+      // The provider may reuse a deeply immutable census after reconstructing
+      // current witnesses and comparing every field. Revision/calendar memoize
+      // only that publication; mutable snapshots still take full validation.
+      const revision = codexAchievementProofRevision(snapshot.files, {
+        indexed, calendarComplete, timeZone: nextView.periodCoverage.timeZone,
+      });
+      if (this.codexAchievementRevision !== revision) {
+        this.codexAchievementSignals = codexModelSignals(snapshot.files);
+        this.codexAchievementSignals.effortStatistics = indexed
+          ? codexAchievementEffortStatistics(snapshot.files) : undefined;
+        this.codexAchievementSignals.tokenEvidence = codexAchievementTokenEvidence(snapshot.files, indexed);
+        this.codexAchievementSignals.dayEvidence = codexAchievementCalendarProjection(
+          snapshot.files, nextView.periodCoverage.timeZone,
+          indexed, calendarComplete,
+        ).evidence;
+        this.codexAchievementSignals.historyDayEvidence = indexed
+          ? codexAchievementHistoryEvidence(snapshot.files, nextView.periodCoverage.timeZone, indexed, calendarComplete)
+          : undefined;
+        this.codexAchievementRevision = revision;
+        this.codexAchievementMoneyRevision = undefined;
+      }
+      const moneyDay=dayKeyInZone(new Date(),nextView.periodCoverage.timeZone);
+      const moneyRevision=revision+'|'+moneyDay;
+      if (this.codexAchievementMoneyRevision!==moneyRevision) {
+        this.codexAchievementSignals.money=codexAchievementMoneyScopes({backend:'openai',asOfDay:moneyDay,
+          files:snapshot.files,complete:indexed,calendarComplete,dayEvidence:this.codexAchievementSignals.dayEvidence});
+        this.codexAchievementMoneyRevision=moneyRevision;
+      }
     }
     this.codexSkipPersistedHydration = false;
     this.codexAvailable = true;
@@ -3430,6 +3803,7 @@ export class ClaudeCodeUsageExtension {
     'showCost', 'showContext', 'statusBarMetric',
     'showScopedWeekly', 'quotaFiveHourOnly', 'showResetInStatusBar', 'resetCountdownFormat',
     'statusBarQuotaFormat', 'statusBarProvider', 'codex.statusMetric',
+    'showWeeklyQuotaPace',
   ]);
 
   // Presentation-only dashboard toggles must not restart watchers, recreate
@@ -3438,6 +3812,8 @@ export class ClaudeCodeUsageExtension {
     'dashboardAutoRefresh',
     'showWeeklyEquivalentValue',
     'showProjectUsageMatrix',
+    'enableAchievements',
+    'showAchievementNotices',
   ]);
 
   // These values only reformat already-materialized USD estimates. They must
@@ -3457,13 +3833,28 @@ export class ClaudeCodeUsageExtension {
       return;
     }
     if (key && ClaudeCodeUsageExtension.DASHBOARD_ONLY_SETTINGS.has(key)) {
+      if (key === 'showAchievementNotices' && this.settings.get<boolean>(key) === false) {
+        this.webviewProvider.retireAchievementNotices?.();
+      }
+      if (key === 'enableAchievements') {
+        this.achievementCalibrationGeneration = (this.achievementCalibrationGeneration ?? 0) + 1;
+        this.webviewProvider.retireAchievementUsageObservations?.();
+        if (this.getConfiguration().enableAchievements === false) {
+          this.codexAchievementRevision = undefined;
+          this.codexAchievementSignals = EMPTY_CODEX_ACHIEVEMENT_SIGNALS;
+        }
+        this.codexProvider?.setAchievementHourProofEnabled?.(
+          this.getConfiguration().enableAchievements !== false);
+      }
       this.syncProviderUi();
       return;
     }
     if (key && ClaudeCodeUsageExtension.STATUS_BAR_ONLY_SETTINGS.has(key)) {
       const config = this.getConfiguration();
-      this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat);
-      this.statusBar.updateQuota(this.cache.usageLimits ?? null);
+      this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace);
+      this.statusBar.updateQuota(this.cache.usageLimits ?? null, this.getClaudeQuotaPaceSnapshot());
+      if (key === 'showWeeklyQuotaPace') this.webviewProvider.updateQuotaPace?.(
+        this.getClaudeQuotaPaceSnapshot(),this.cache.usageLimits ?? null);
       this.syncProviderUi();
       return;
     }
@@ -3530,10 +3921,11 @@ export class ClaudeCodeUsageExtension {
     setPricingBackend(config.pricingBackend);
     if (pricingBackendChanged) {
       this.invalidateClaudeUsagePricingCache();
-      this.webviewProvider.invalidateShareCardPreview();
+      this.webviewProvider.invalidateShareCardPreview({pricingChanged:true});
     }
     this.applyFormattingConfiguration(config);
-    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat);
+    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace);
+    this.webviewProvider.updateQuotaPace?.(this.getClaudeQuotaPaceSnapshot(),this.cache.usageLimits ?? null);
 
     // Restart auto-refresh with new interval
     this.startAutoRefresh();
@@ -3544,6 +3936,21 @@ export class ClaudeCodeUsageExtension {
     this.stopCredentialsWatching();
     this.selectClaudeProfile(config.dataDirectory);
     const retiringCodexProvider = this.codexProvider;
+    if (this.codexView) {
+      // A replacement provider has not verified the published display data.
+      // Withdraw award proof before any asynchronous retirement or blur return.
+      this.codexAchievementRevision = undefined;
+      this.codexAchievementMoneyRevision = undefined;
+      this.codexAchievementSignals = {...this.codexAchievementSignals,effortStatistics:undefined};
+      this.codexView = {
+        ...this.codexView,
+        currentManifestVerified: false,
+        ...(this.codexView.outputHourProof ? {
+          outputHourProof: { ...this.codexView.outputHourProof, complete: false, hours: [] },
+        } : {}),
+      };
+      this.syncProviderUiSafely('settings');
+    }
     this.codexWorkerCancellationRequested = true;
     retiringCodexProvider.cancel();
     this.trackCodexProviderRetirement(retiringCodexProvider);
@@ -3780,7 +4187,8 @@ export class ClaudeCodeUsageExtension {
     if (!recoveryAttempt) {
       this.resetWatcherRecovery('claude', 'cancelled');
     }
-    const requestGeneration = ++this.fileWatcherGeneration;
+    const requestGeneration = ++this.fileWatcherSetupGeneration;
+    const installedGeneration = this.fileWatcherGeneration;
     if (!this.windowActivity.focused) {
       this.stopFileWatching('window-blur');
       return;
@@ -3794,14 +4202,18 @@ export class ClaudeCodeUsageExtension {
     try {
       dataDirectory = await ClaudeDataLoader.findClaudeDataDirectory(config.dataDirectory || undefined);
     } catch (error) {
-      if (requestGeneration === this.fileWatcherGeneration) {
+      if (
+        requestGeneration === this.fileWatcherSetupGeneration &&
+        installedGeneration === this.fileWatcherGeneration
+      ) {
         this.scheduleWatcherRecovery('claude', error);
       }
       return;
     }
     if (
       this.disposed ||
-      requestGeneration !== this.fileWatcherGeneration
+      requestGeneration !== this.fileWatcherSetupGeneration ||
+      installedGeneration !== this.fileWatcherGeneration
     ) {
       return;
     }
@@ -3879,6 +4291,7 @@ export class ClaudeCodeUsageExtension {
       'cancelled' | 'window-blur' | 'feature-disabled' | 'extension-dispose' | 'settings-change' | 'profile-change'
     > = 'settings-change',
   ): void {
+    this.fileWatcherSetupGeneration += 1;
     this.fileWatcherGeneration += 1;
     this.watchDebounce.clear();
     const watcher = this.fileWatcher;
@@ -3946,7 +4359,7 @@ export class ClaudeCodeUsageExtension {
           (_event, filename) => {
             if (this.disposed || activeGeneration !== this.codexWatcherGeneration) return;
             this.markWatcherHealthy('codex');
-            if (!filename || !String(filename).endsWith('.jsonl')) {
+            if (!filename || !/\.jsonl(?:\.zst)?$/.test(String(filename))) {
               return;
             }
             const delaySeconds = this.getConfiguration().codexFileWatchSeconds;
@@ -4161,6 +4574,8 @@ export class ClaudeCodeUsageExtension {
     this.cache.usageLimitsBackoffUntil = new Date(0);
     this.claudeProfileGeneration += 1;
     this.activeClaudeQuotaFingerprint = undefined;
+    this.statusBar.updateQuota(this.cache.usageLimits ?? null, null);
+    this.webviewProvider.updateQuotaPace?.(null);
     this.claudeWeeklyQuotaHistory = [];
     this.webviewProvider.updateWeeklyQuotaHistory([]);
     void this.refreshData(false, 'credentials');
@@ -4251,6 +4666,7 @@ export class ClaudeCodeUsageExtension {
 
   private handleWindowFocusChange(focused: boolean): void {
     if (this.disposed) return;
+    this.webviewProvider.setAchievementWindowFocused?.(focused);
     const transition = this.windowActivity.update(focused);
     if (transition === 'suspend') {
       this.suspendRecurringWork();
@@ -4447,6 +4863,20 @@ export class ClaudeCodeUsageExtension {
     if (!this.disposed) this.syncProviderUiSafely('poll');
   }
 
+  /** Existing successful quota only. OFF performs no source/clock/storage work.
+   * A zero cache time explicitly retires even a previously verified response.
+   */
+  private getClaudeQuotaPaceSnapshot(): QuotaPaceAdapterSnapshot | null {
+    if (this.settings.get<boolean>('showWeeklyQuotaPace') !== true ||
+        this.settings.get<boolean>('usageLimitTracking') !== true) return null;
+    const observedAt = this.cache.usageLimitsLastUpdate.getTime();
+    if (!(observedAt > 0) || !this.cache.usageLimits) return null;
+    const signal = this.apiClient.getLastQuotaIdentitySignal();
+    return this.claudeQuotaPaceSource.project({enabled: true, usage: this.cache.usageLimits,
+      observedAt, verifiedAccountFingerprint: signal
+        ? fingerprintForStableIdentity(this.quotaFingerprintSalt, 'claude', signal) ?? null : null});
+  }
+
   private async maybeFetchUsageLimits(config: ExtensionConfig): Promise<ClaudeApiUsageResponse | null> {
     if (
       this.disposed ||
@@ -4530,7 +4960,7 @@ export class ClaudeCodeUsageExtension {
     if (fetched) {
       const observedAt = Date.now();
       this.cache.usageLimits = fetched;
-      this.cache.usageLimitsLastUpdate = new Date();
+      this.cache.usageLimitsLastUpdate = new Date(observedAt);
       this.cache.usageLimitsFailStreak = 0;
       // Even on success, hold off /usage for 30s — this floor also covers the
       // expired-window bypass so a just-rolled window can't trigger an immediate
@@ -4575,7 +5005,18 @@ export class ClaudeCodeUsageExtension {
       this.coalescedTriggersSinceRefresh += 1;
       return;
     }
-    await this.runRefresh(request);
+    await this.startClaudeRefresh(request);
+  }
+
+  private startClaudeRefresh(request: RefreshRequest & {
+    localOnly?: boolean; calibration?: AchievementCalibrationRefresh;
+  }): Promise<void> {
+    const operation = this.runRefresh(request);
+    this.claudeRefreshDrain = operation;
+    void operation.finally(() => {
+      if (this.claudeRefreshDrain === operation) this.claudeRefreshDrain = null;
+    }).catch(() => undefined);
+    return operation;
   }
 
   private handleColdRefreshFailure(updateWebview: boolean, trigger: RefreshTrigger = 'poll'): void {
@@ -4612,6 +5053,7 @@ export class ClaudeCodeUsageExtension {
   private materializeClaudeDashboard(index: ClaudeUsageIndex, config: ExtensionConfig, now: Date):
     ReturnType<typeof claudeUsageDashboardSnapshot> {
     const next = claudeUsageDashboardSnapshot(index, {
+      achievementMoneyBackend: config.enableAchievements === false ? undefined : config.pricingBackend,
       workspacePath: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
       projectGroupingMode: config.projectGroupingMode,
       contextWindowOverride: config.contextWindowOverride,
@@ -4621,7 +5063,9 @@ export class ClaudeCodeUsageExtension {
     return this.claudeRenderSnapshot!;
   }
 
-  private async runRefresh(request: RefreshRequest): Promise<void> {
+  private async runRefresh(request: RefreshRequest & {
+    localOnly?: boolean; calibration?: AchievementCalibrationRefresh;
+  }): Promise<void> {
     const totalStarted = performance.now();
     const watcherEvents = this.watcherEventsSinceRefresh ?? 0;
     const coalescedTriggers = this.coalescedTriggersSinceRefresh ?? 0;
@@ -4632,16 +5076,39 @@ export class ClaudeCodeUsageExtension {
     this.credentialsWatcherMissingFilenameEventsSinceRefresh = 0;
     let updateWebview = request.trigger === 'manual';
     let current = () => !this.disposed;
+    let indexCurrent = () => false;
+    let failureStage: ClaudeRefreshStage = 'discovery';
+    const observed: Partial<RefreshDiagnostic> = {};
+    const recovery = this.claudeRefreshRecovery ??= new ClaudeRefreshRecovery();
+    let recoveryRevision: string | undefined;
+    const reportFailure = (reason: RefreshDiagnostic['failureReason']): void => {
+      if (request.calibration) request.calibration.accepted = false;
+      if (recoveryRevision !== undefined) recovery.fail(recoveryRevision);
+      const budget = this.claudeFailureDiagnosticBudget ??= new ClaudeFailureDiagnosticBudget();
+      if (!budget.accept(failureStage, reason)) return;
+      this.outputChannel.appendLine(formatRefreshDiagnostic({
+        trigger: request.trigger, filesDiscovered: null, filesChanged: null, filesReused: null,
+        filesRemoved: null, filesFailed: null, bytesRead: null, linesParsed: null,
+        bodyReads: null, aggregateMutations: null, manifestMs: null, readParseMs: null,
+        aggregateRenderMs: null, ...observed,
+        watcherEvents, coalescedTriggers, quotaWatcherMissingFilenameEvents,
+        failureStage, failureReason: reason, totalMs: performance.now() - totalStarted,
+      }));
+    };
     try {
-      if (this.disposed) return;
+      if (this.disposed || (request.calibration && !request.calibration.current())) return;
       const config = this.getConfiguration();
       this.selectClaudeUsageSource(config.dataDirectory);
       const generation = this.configurationGeneration;
+      const achievementGeneration = this.achievementCalibrationGeneration ?? 0;
       const source = this.claudeUsageSource;
       let indexGeneration = this.claudeIndexGeneration ?? 0;
-      const indexCurrent = () => !this.disposed && !this.clearingAllLocalData &&
+      const indexSourceCurrent = () => !this.disposed && !this.clearingAllLocalData &&
         !this.localDataClearedRequiresReload && indexGeneration === (this.claudeIndexGeneration ?? 0) &&
-        source === this.claudeUsageSourceKey(this.getConfiguration().dataDirectory);
+        source === this.claudeUsageSourceKey(this.getConfiguration().dataDirectory) &&
+        (!request.calibration || (achievementGeneration === (this.achievementCalibrationGeneration ?? 0) &&
+          this.getConfiguration().enableAchievements !== false));
+      indexCurrent = () => indexSourceCurrent() && (!request.calibration || request.calibration.current());
       current = () => indexCurrent() && generation === this.configurationGeneration;
       const snapshotNow = new Date(Date.now());
       updateWebview = this.shouldDeliverDashboard(request.trigger) ||
@@ -4649,15 +5116,27 @@ export class ClaudeCodeUsageExtension {
 
       // Account quota is independent from local JSONL. Do not let a slow OAuth
       // request delay the local usage refresh.
-      void this.maybeFetchUsageLimits(config).then((limits) => {
+      if (shouldFetchQuotaForRefresh(request)) void this.maybeFetchUsageLimits(config).then((limits) => {
         if (!current()) return;
-        this.statusBar.updateQuota(limits);
+        this.statusBar.updateQuota(limits, this.getClaudeQuotaPaceSnapshot());
         this.webviewProvider.updateQuota(limits);
+        this.webviewProvider.updateQuotaPace?.(this.getClaudeQuotaPaceSnapshot(), this.cache.usageLimits ?? null);
         if (!limits && !this.cache.usageLimits && !this.quotaColdRetryDone) {
           this.quotaColdRetryDone = true;
           this.scheduleQuotaColdRetry();
         }
       }).catch(() => undefined);
+
+      const timeZone = resolveTimeZone('');
+      const revisionForIndex = () => `${indexGeneration}:${config.enableContentAnalysis ? 1 : 0}:` +
+        `${config.enableContentAnalysis ? config.advicePromptWindowDays : 0}:${timeZone}`;
+      recoveryRevision = revisionForIndex();
+      if (!recovery.admit(recoveryRevision, request.trigger)) {
+        // Keep the last verified numbers and failed authority unchanged. An
+        // explicit rapid retry gets feedback, but not another scan/body read.
+        if (request.trigger === 'manual') this.publishRefreshState('claude', request.trigger, true);
+        return;
+      }
 
       const dataDirectory = await ClaudeDataLoader.findClaudeDataDirectory(
         config.dataDirectory || undefined
@@ -4668,23 +5147,7 @@ export class ClaudeCodeUsageExtension {
       }
       if (!dataDirectory) {
         this.handleColdRefreshFailure(updateWebview, request.trigger);
-        this.outputChannel.appendLine(formatRefreshDiagnostic({
-          trigger: request.trigger,
-          filesDiscovered: 0,
-          filesChanged: 0,
-          filesReused: 0,
-          filesRemoved: 0,
-          filesFailed: 0,
-          bytesRead: 0,
-          linesParsed: 0,
-          watcherEvents,
-          coalescedTriggers,
-          quotaWatcherMissingFilenameEvents,
-          manifestMs: 0,
-          readParseMs: 0,
-          aggregateRenderMs: 0,
-          totalMs: performance.now() - totalStarted,
-        }));
+        reportFailure('source-unavailable');
         return;
       }
 
@@ -4693,7 +5156,10 @@ export class ClaudeCodeUsageExtension {
         path.resolve(this.cache.dataDirectory) !== path.resolve(dataDirectory)) {
         this.clearClaudeUsageSource();
         indexGeneration = this.claudeIndexGeneration;
+        recoveryRevision = revisionForIndex();
+        recovery.admit(recoveryRevision, request.trigger);
       }
+      failureStage = 'manifest';
       const manifest = await scanUsageManifest([dataDirectory]);
       if (!current()) {
         if (!this.disposed) this.selectClaudeUsageSource(this.getConfiguration().dataDirectory);
@@ -4701,6 +5167,9 @@ export class ClaudeCodeUsageExtension {
       }
       const delta = diffUsageManifests(this.cache.manifest, manifest);
       const manifestMs = performance.now() - manifestStarted;
+      Object.assign(observed, { filesDiscovered: manifest.entries.size,
+        filesChanged: delta.changed.length, filesReused: delta.reused.length,
+        filesRemoved: delta.removed.length, manifestMs });
       const directoryChanged = this.cache.dataDirectory !== dataDirectory;
       const needFullRefresh = shouldReloadUsage({
         forceReload: request.forceReload,
@@ -4710,7 +5179,31 @@ export class ClaudeCodeUsageExtension {
         removedFiles: delta.removed.length,
       });
 
+      let achievementObservation: Awaited<ReturnType<UsageWebviewProvider['beginClaudeAchievementObservation']>>;
+      try {
+        achievementObservation = await this.webviewProvider.beginClaudeAchievementObservation?.(indexCurrent, indexSourceCurrent);
+      } catch (error) {
+        if (request.calibration) throw error;
+        /* Receipt provenance is optional; ordinary usage refresh must continue. */
+      }
+      if (!indexCurrent()) return;
+      const handoffAchievements = (materialized: ReturnType<typeof claudeUsageDashboardSnapshot>,
+        records: ClaudeUsageRecord[], timeZone: string,
+        proof?: ClaudeUsageIndexUpdateResult['achievementUsageDelta']) => {
+        // Capture this accepted index, without building a set or consuming the
+        // uncapped rows on warm refresh. Explicit calibration replays them later.
+        const sessionRows = this.cache.claudeIndex.sessionRows;
+        const accept = () => this.webviewProvider.acceptClaudeAchievementSnapshot?.({
+          allTime: records.length ? materialized.allTime : null,
+          days: materialized.dailyForAllTime, sessions: materialized.sessions,
+          sessionEvidence: materialized.achievementSessionEvidence, records, timeZone, money: materialized.achievementMoney,
+          sessionHistoryEligibility: () => sessionRows.values(),
+        }, achievementObservation, proof);
+        if (request.calibration) accept(); else this.tryProviderUiUpdate(accept);
+      };
+
       if (!needFullRefresh) {
+        failureStage = 'materialize';
         const materialized = this.materializeClaudeDashboard(this.cache.claudeIndex, config, snapshotNow);
         this.statusBar.updateContext(materialized.context);
         const timeZone = this.cache.claudeIndex.timeZone;
@@ -4749,6 +5242,9 @@ export class ClaudeCodeUsageExtension {
                 materialized.hourlyForLast30DaysByDay,
                 materialized.projectUsageMatrix,
                 materialized.dailyForAllTime,
+                materialized.achievementSessionEvidence,
+                timeZone,
+                materialized.achievementMoney,
               );
               this.claudeDashboardHydrated = true;
             });
@@ -4757,7 +5253,10 @@ export class ClaudeCodeUsageExtension {
         }
         this.cache.manifest = manifest;
         this.cache.dataDirectory = dataDirectory;
+        handoffAchievements(materialized, this.cache.records, this.cache.claudeIndex.timeZone);
         this.recordRefreshState('claude', false, request.trigger);
+        if (request.calibration) request.calibration.accepted = true;
+        recovery.succeed(recoveryRevision);
         this.outputChannel.appendLine(formatRefreshDiagnostic({
           trigger: request.trigger,
           filesDiscovered: manifest.entries.size,
@@ -4767,6 +5266,10 @@ export class ClaudeCodeUsageExtension {
           filesFailed: 0,
           bytesRead: 0,
           linesParsed: 0,
+          // No index pass occurs on this unchanged-manifest path: no source
+          // bodies are opened and the existing aggregates are reused.
+          bodyReads: 0,
+          aggregateMutations: 0,
           watcherEvents,
           coalescedTriggers,
           quotaWatcherMissingFilenameEvents,
@@ -4790,15 +5293,29 @@ export class ClaudeCodeUsageExtension {
       const baseIndex = directoryChanged
         ? createClaudeUsageIndex()
         : this.cache.claudeIndex;
+      failureStage = 'planning';
       const loaded = await updateClaudeUsageIndex(baseIndex, dataDirectory, {
         analyzeContent: config.enableContentAnalysis,
         windowDays: config.advicePromptWindowDays,
         manifest,
+        beforeBodyReads: async () => {
+          if (!indexCurrent()) throw new Error('achievement-calibration:source-retired');
+        },
+        // Explicit rebuilds remain quiet even if their underlying index happens
+        // to reuse an append plan. Only an ordinary accepted observation proves live origin.
+        achievementUsageWindow: request.forceReload ? undefined : achievementObservation?.window,
+        onStage: (stage, counters) => {
+          failureStage = stage;
+          if (counters) Object.assign(observed, counters);
+        },
         log: (line) => this.outputChannel.appendLine(
           `[${new Date().toLocaleTimeString(undefined, { hour12: false })}] ${line}`
         ),
       });
-      const commitLoadedIndex = () => commitRefreshSnapshot(
+      Object.assign(observed, loaded.diagnostics);
+      // The completed in-memory producer result is not another scan. Preserve
+      // its verified native delta under source authority even after UI Cancel.
+      const commitLoadedIndex = () => indexSourceCurrent() && commitRefreshSnapshot(
         manifest,
         { records: loaded.records, contentAnalysis: loaded.contentAnalysis },
         loaded.diagnostics.filesFailed,
@@ -4816,37 +5333,45 @@ export class ClaudeCodeUsageExtension {
         // same-source work. The queued settings refresh can reconcile from this
         // index without repeating a cold read. Source, prices, clear-all and
         // disposal still revoke the index itself, including A -> B -> A changes.
-        if (indexCurrent()) commitLoadedIndex();
+        if (indexSourceCurrent()) {
+          if (shouldCommitUsageLoad(loaded.diagnostics.filesFailed)) {
+            failureStage = 'materialize';
+            const materialized = this.materializeClaudeDashboard(loaded.index, config, snapshotNow);
+            if (commitLoadedIndex()) {
+              handoffAchievements(materialized, loaded.records, loaded.index.timeZone, loaded.achievementUsageDelta);
+              if (request.calibration) {
+                this.recordRefreshState('claude', false, request.trigger);
+                request.calibration.accepted = true;
+              }
+              recovery.succeed(recoveryRevision);
+            }
+          } else {
+            // A presentation generation cannot erase a verified same-source
+            // failure or let the queued settings pass re-read it immediately.
+            this.handleColdRefreshFailure(this.shouldDeliverDashboard(request.trigger), request.trigger);
+            reportFailure(loaded.diagnostics.failureReason ?? 'read-failed');
+          }
+        }
         if (!this.disposed) this.selectClaudeUsageSource(this.getConfiguration().dataDirectory);
         return;
       }
       if (!shouldCommitUsageLoad(loaded.diagnostics.filesFailed)) {
         this.handleColdRefreshFailure(updateWebview, request.trigger);
-        this.outputChannel.appendLine(formatRefreshDiagnostic({
-          trigger: request.trigger,
-          filesDiscovered: manifest.entries.size,
-          filesChanged: delta.changed.length,
-          filesReused: delta.reused.length,
-          filesRemoved: delta.removed.length,
-          filesFailed: loaded.diagnostics.filesFailed,
-          bytesRead: loaded.diagnostics.bytesRead,
-          linesParsed: loaded.diagnostics.linesParsed,
-          bodyReads: loaded.diagnostics.bodyReads,
-          aggregateMutations: loaded.diagnostics.aggregateMutations,
-          watcherEvents,
-          coalescedTriggers,
-          quotaWatcherMissingFilenameEvents,
-          manifestMs,
-          readParseMs: loaded.diagnostics.readParseMs,
-          aggregateRenderMs: 0,
-          totalMs: performance.now() - totalStarted,
-        }));
+        reportFailure(loaded.diagnostics.failureReason ?? 'read-failed');
         return;
       }
 
       const aggregateStarted = performance.now();
+      failureStage = 'materialize';
       const records = loaded.records;
       const contentAnalysis = loaded.contentAnalysis;
+      const materialized = this.materializeClaudeDashboard(loaded.index, config, snapshotNow);
+      failureStage = 'commit';
+      if (!commitLoadedIndex()) return;
+      // Accepted-source observation is committed before either paused or live
+      // presentation. Rendering failure cannot manufacture or erase its provenance.
+      handoffAchievements(materialized, records, loaded.index.timeZone, loaded.achievementUsageDelta);
+      failureStage = 'materialize';
 
       if (records.length === 0) {
         const error = 'No usage records found. Make sure Claude Code is running.';
@@ -4859,7 +5384,6 @@ export class ClaudeCodeUsageExtension {
           });
         }
       } else {
-        const materialized = this.materializeClaudeDashboard(loaded.index, config, snapshotNow);
         const sessionData = materialized.session;
         const todayData = materialized.today;
         const workspaceTodayData = materialized.workspaceToday;
@@ -4883,15 +5407,18 @@ export class ClaudeCodeUsageExtension {
         this.statusBar.updateContext(materialized.context);
         if (updateWebview) {
           this.tryProviderUiUpdate(() => {
-            this.webviewProvider.updateData(sessionData, todayData, rolling30Data, allTimeData, dailyDataForRolling30, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages, hourlyDataForRolling30DaysByDay, materialized.projectUsageMatrix, materialized.dailyForAllTime);
+            this.webviewProvider.updateData(sessionData, todayData, rolling30Data, allTimeData, dailyDataForRolling30, dailyDataForAllTime, hourlyDataForToday, undefined, dataDirectory, records, sessionBreakdown, projectBreakdown, contentAnalysis, branchBreakdown, workflowBreakdown, costliestMessages, hourlyDataForRolling30DaysByDay, materialized.projectUsageMatrix, materialized.dailyForAllTime, materialized.achievementSessionEvidence, loaded.index.timeZone, materialized.achievementMoney);
             this.claudeDashboardHydrated = true;
           });
         }
       }
 
       const aggregateRenderMs = performance.now() - aggregateStarted;
-      commitLoadedIndex();
+      observed.aggregateRenderMs = aggregateRenderMs;
+      failureStage = 'commit';
       this.recordRefreshState('claude', false, request.trigger);
+      if (request.calibration) request.calibration.accepted = true;
+      recovery.succeed(recoveryRevision);
       this.outputChannel.appendLine(formatRefreshDiagnostic({
         trigger: request.trigger,
         filesDiscovered: manifest.entries.size,
@@ -4911,36 +5438,24 @@ export class ClaudeCodeUsageExtension {
         aggregateRenderMs,
         totalMs: performance.now() - totalStarted,
       }));
-    } catch {
+    } catch (error) {
       if (!current()) {
+        if (indexCurrent()) {
+          this.handleColdRefreshFailure(this.shouldDeliverDashboard(request.trigger), request.trigger);
+          reportFailure(claudeRefreshFailureReason(error));
+        }
         if (!this.disposed) this.selectClaudeUsageSource(this.getConfiguration().dataDirectory);
         return;
       }
-      // Keep the previous records and manifest authoritative. The next trigger
-      // retries scanner/reconciliation failures instead of presenting no data.
+      // Keep verified data authoritative. Report the actual failing phase,
+      // not a fabricated scan/file failure, without exposing arbitrary errors.
       this.handleColdRefreshFailure(updateWebview, request.trigger);
-      this.outputChannel.appendLine(formatRefreshDiagnostic({
-        trigger: request.trigger,
-        filesDiscovered: 0,
-        filesChanged: 0,
-        filesReused: 0,
-        filesRemoved: 0,
-        filesFailed: 1,
-        bytesRead: 0,
-        linesParsed: 0,
-        watcherEvents,
-        coalescedTriggers,
-        quotaWatcherMissingFilenameEvents,
-        manifestMs: 0,
-        readParseMs: 0,
-        aggregateRenderMs: 0,
-        totalMs: performance.now() - totalStarted,
-      }));
+      reportFailure(claudeRefreshFailureReason(error));
     } finally {
       if (!this.disposed) this.syncProviderUiSafely(request.trigger);
       const next = this.refreshGate.complete();
       if (!this.disposed && next !== null) {
-        queueMicrotask(() => void this.runRefresh(next));
+        queueMicrotask(() => void this.startClaudeRefresh(next));
       }
     }
   }

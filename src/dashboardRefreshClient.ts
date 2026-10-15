@@ -30,6 +30,7 @@ var __ccuRefreshScrollerKinds = [
   ['local-data-table', '.local-data-table-wrap'],
   ['heatmap', '.heatmap-svg'],
   ['share-preview', '.share-preview'],
+  ['achievement-share-preview', '.achievement-share-preview'],
   ['advice-preview', '.advice-payload-preview pre']
 ];
 var __ccuRefreshScrollerSelector = __ccuRefreshScrollerKinds
@@ -390,6 +391,15 @@ function ccuCaptureRefreshContext(panel) {
     ? document.activeElement
     : null;
   var focus = ccuRefreshDescriptor(focused, panel, true);
+  // A deliberately removed control may nominate at most two existing focus targets.
+  // These are transient DOM descriptors, never client state or host commands.
+  var focusFallbacks = focused && focused.getAttribute ?
+    (focused.getAttribute('data-refresh-focus-fallback') || '').split(' ').slice(0, 2).map(function(id) {
+      if (!id || id.length > 256) { return null; }
+      var target = document.getElementById(id);
+      if (!target || !panel.contains(target) || !target.matches(__ccuFocusableSelector)) { return null; }
+      return { descriptor: { kind: 'id', value: id }, top: target.getBoundingClientRect().top };
+    }).filter(Boolean) : [];
   var controls = [];
   var seen = [];
   [focused, document.getElementById('optDraft'), document.getElementById('optResolve'),
@@ -402,6 +412,7 @@ function ccuCaptureRefreshContext(panel) {
     });
   return {
     focus: focus,
+    focusFallbacks: focusFallbacks,
     anchor: ccuCaptureRefreshAnchor(panel, focus),
     controls: controls,
     advicePreviews: ccuCaptureAdvicePreviews(panel),
@@ -426,25 +437,42 @@ function ccuRestoreTransientControls(context, panel) {
   });
 }
 
+function ccuResolveRefreshFocus(descriptor, panel) {
+  var target = ccuResolveRefreshDescriptor(descriptor, panel);
+  // A surviving ID is not a usable focus target when the confirmed patch
+  // disables it (for example Up after moving a pin to the first position).
+  if (!target || target.disabled === true ||
+      (target.matches && target.matches(':disabled'))) { return null; }
+  return target;
+}
 function ccuRestoreRefreshPosition(context, panel) {
   requestAnimationFrame(function() {
     requestAnimationFrame(function() {
       var anchor = context.anchor
         ? ccuResolveRefreshDescriptor(context.anchor.descriptor, panel)
         : null;
+      var fallback = (context.focusFallbacks || []).find(function(saved) {
+        return !!ccuResolveRefreshFocus(saved.descriptor, panel);
+      });
+      var anchorTop = context.anchor ? context.anchor.top : 0;
+      if (!anchor && fallback) {
+        anchor = ccuResolveRefreshDescriptor(fallback.descriptor, panel);
+        anchorTop = fallback.top;
+      }
       if (anchor) {
-        window.scrollBy(0, anchor.getBoundingClientRect().top - context.anchor.top);
+        window.scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
       } else {
         window.scrollTo(0, context.scrollY);
       }
       ccuRestoreLocalScrollPositions(context.localScrollPositions, panel);
-      var focused = ccuResolveRefreshDescriptor(context.focus, panel);
+      var focused = ccuResolveRefreshFocus(context.focus, panel) ||
+        (fallback ? ccuResolveRefreshFocus(fallback.descriptor, panel) : null);
       if (focused && typeof focused.focus === 'function') {
         try { focused.focus({ preventScroll: true }); } catch (e) { focused.focus(); }
       }
       ccuRestoreLocalScrollPositions(context.localScrollPositions, panel);
       if (anchor) {
-        window.scrollBy(0, anchor.getBoundingClientRect().top - context.anchor.top);
+        window.scrollBy(0, anchor.getBoundingClientRect().top - anchorTop);
       }
       __ccuUiReady = true;
     });
@@ -452,10 +480,13 @@ function ccuRestoreRefreshPosition(context, panel) {
 }
 
 function ccuRestoreDashboardUiAfterPatch(context, panel, tab, adviceSnapshotIds) {
-  try { localStorage.setItem('ccu.activeTab', tab); } catch (e) {}
-  showTab(tab, true);
+  if (ccuProviderName() !== 'compare') {
+    try { localStorage.setItem('ccu.activeTab', tab); } catch (e) {}
+    showTab(tab, true);
+  }
   restoreSessionFilter();
   restorePersistedDetails();
+  restoreAchievementFilter();
   restoreClaudeDrilldownDetails();
   restoreCodexHourlyDetails();
   restoreSessionDetails();
@@ -470,6 +501,11 @@ function ccuRestoreDashboardUiAfterPatch(context, panel, tab, adviceSnapshotIds)
   restoreProjectMatrixState(panel);
   ccuRestoreTransientControls(context, panel);
   scSyncPreviewStatus();
+  // Display hydration is not a deliberate preview or export action. Reapply
+  // saved choices against the newly earned badges and recalculate capacity.
+  restoreSharingTemplate();
+  restoreAchievementShareSelection();
+  restoreAchievementReturnFocus();
   restoreAdviceEffectivenessState();
   ccuRestoreAdvicePreviews(context.advicePreviews, adviceSnapshotIds);
   formatOptSettings();
@@ -486,10 +522,11 @@ function ccuApplyDashboardDataPatch(message) {
   }
   var panel = document.getElementById('provider-panel');
   var valid = panel &&
-    (message.provider === 'claude' || message.provider === 'codex') &&
+    (message.provider === 'claude' || message.provider === 'codex' || message.provider === 'compare') &&
     message.provider === ccuProviderName() &&
-    ['today', 'month', 'all', 'sessions', 'projects', 'content', 'branches', 'workflows', 'settings']
-      .indexOf(message.tab) !== -1 &&
+    (message.provider === 'compare' ? message.tab === 'all' :
+      ['today', 'month', 'all', 'sessions', 'projects', 'content', 'branches', 'workflows', 'achievements', 'settings']
+        .indexOf(message.tab) !== -1) &&
     typeof message.html === 'string' &&
     message.html.length <= 32 * 1024 * 1024 &&
     !/<script(?:\\s|>)/i.test(message.html) &&

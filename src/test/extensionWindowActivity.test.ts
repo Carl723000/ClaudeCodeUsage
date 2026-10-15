@@ -1,4 +1,4 @@
-import { test } from 'node:test';
+import { test, type TestContext } from 'node:test';
 import * as assert from 'node:assert/strict';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -6,6 +6,7 @@ import * as path from 'node:path';
 
 import { ClaudeDataLoader } from '../dataLoader';
 import {
+  ClaudeRefreshRecovery,
   RefreshSingleFlight,
   WindowActivityGate,
 } from '../refreshPolicy';
@@ -19,6 +20,7 @@ import {
 } from '../backgroundWorkState';
 import { ResourceOwnershipRegistry } from '../resourceOwnership';
 import { snapshotFixture } from './codexFixtures';
+import { CODEX_PERIOD_LINEAGE_VERSION } from '../providers/codex/codexPeriodIndex';
 import {
   createEmptyQuotaObservationStore,
   mergeQuotaCaptures,
@@ -59,6 +61,61 @@ const {
   initializeQuotaObservationRuntime,
 } = loadExtensionModule();
 
+test('Claude discovery failure reports unknown counters once without raw error metadata', async (t) => {
+  const { extension } = coordinatorHarness(true);
+  extension.refreshCodexData = async () => undefined;
+  const logs: string[] = [];
+  extension.outputChannel = { appendLine: (line: string) => logs.push(line) };
+  const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
+  (ClaudeDataLoader as any).findClaudeDataDirectory = async () => {
+    throw new Error('/private/fixture/secret prompt credential');
+  };
+  t.after(() => { (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind; });
+  await extension.refreshData(true, 'manual');
+  for (let n = 0; n < 30; n++) await extension.refreshData(false, 'watch');
+  const failures = logs.filter(line => line.includes('failure(stage=discovery'));
+  assert.equal(failures.length, 1, 'same anonymous failure is deduplicated for the host lifetime');
+  assert.match(failures[0], /discovered=unknown.*failed=unknown/);
+  assert.doesNotMatch(JSON.stringify(logs), /private|fixture|secret|prompt|credential/);
+  assert.equal(extension.providerRefreshStates.claude.failed, true);
+});
+
+test('Claude post-read aggregate failure retains measured IO and does not invent a failed file', async (t) => {
+  const { extension, config } = coordinatorHarness(true);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-aggregate-stage-'));
+  const project = path.join(root, 'projects', '-fixture');
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, 'session.jsonl'), JSON.stringify({ type: 'assistant',
+    timestamp: new Date().toISOString(), requestId: 'stage', message: { id: 'stage',
+      model: 'claude-opus-5-5', usage: { input_tokens: 100, output_tokens: 1 } } }) + '\n');
+  config.dataDirectory = root;
+  extension.refreshCodexData = async () => undefined;
+  const logs: string[] = [];
+  extension.outputChannel = { appendLine: (line: string) => logs.push(line) };
+  const indexModule = require('../claudeIncrementalIndex') as typeof import('../claudeIncrementalIndex');
+  const originalUpdate = indexModule.updateClaudeUsageIndex;
+  let measured: any;
+  (indexModule as any).updateClaudeUsageIndex = async (...args: Parameters<typeof originalUpdate>) => {
+    const result = await originalUpdate(...args);
+    measured = result.diagnostics;
+    (args[2] as any)?.onStage?.('aggregate', measured);
+    throw new RangeError('Maximum call stack size exceeded at /private/secret');
+  };
+  t.after(() => {
+    (indexModule as any).updateClaudeUsageIndex = originalUpdate;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await extension.refreshData(true, 'manual');
+  const failure = logs.find(line => line.includes('failure(stage=aggregate'));
+  assert.ok(failure);
+  assert.match(failure, /reason=range-error/);
+  assert.match(failure, /discovered=1 changed=1 reused=0 removed=0 failed=0/);
+  assert.ok(failure.includes('bytes=' + measured.bytesRead + ' lines=' + measured.linesParsed));
+  assert.equal(extension.cache.manifest, null);
+  assert.equal(extension.cache.records.length, 0);
+  assert.doesNotMatch(failure, /private|secret|fixture/);
+});
+
 function bareExtension(): any {
   const extension = Object.create(ClaudeCodeUsageExtension.prototype) as any;
   const quotaSalt = 'extension-window-activity-test-salt';
@@ -75,6 +132,7 @@ function bareExtension(): any {
   extension.codexBackgroundStateWrite = Promise.resolve();
   extension.configurationGeneration = 0;
   extension.claudeIndexGeneration = 0;
+  extension.fileWatcherSetupGeneration = 0;
   extension.fileWatcherGeneration = 0;
   extension.codexWatcherGeneration = 0;
   extension.credentialsWatcherGeneration = 0;
@@ -142,6 +200,148 @@ function completeCoordinatorSnapshot(): ReturnType<typeof snapshotFixture> {
   snapshot.coverage.hourly = snapshot.hourlyCoverage;
   return snapshot;
 }
+
+function recoveryClock(extension: any): (milliseconds: number) => void {
+  let now = 0;
+  extension.claudeRefreshRecovery = new ClaudeRefreshRecovery(() => now);
+  return milliseconds => { now += milliseconds; };
+}
+
+test('Claude automatic trigger storms cannot rescan a failing source; manual retries are cooled', async (t) => {
+  const { extension, config, deliveries } = coordinatorHarness(true);
+  extension.refreshCodexData = async () => undefined;
+  const advance = recoveryClock(extension);
+  const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
+  let discoveries = 0;
+  (ClaudeDataLoader as any).findClaudeDataDirectory = async () => {
+    discoveries++;
+    throw new RangeError('synthetic failure');
+  };
+  t.after(() => { (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind; });
+  await extension.refreshData(false, 'poll');
+  for (let n = 0; n < 100; n++) {
+    config.language = n % 2 ? 'en' : 'zh-CN';
+    extension.configurationGeneration++;
+    await extension.refreshData(false, ['watch', 'focus', 'poll', 'settings'][n % 4] as any);
+  }
+  assert.equal(discoveries, 1, 'presentation settings cannot bypass recovery backoff');
+  const beforeManual = deliveries.filter(d => d.kind === 'refresh:claude').length;
+  await extension.refreshData(true, 'manual');
+  assert.equal(discoveries, 1, 'rapid explicit refresh still has a minimum cooldown');
+  assert.equal(deliveries.filter(d => d.kind === 'refresh:claude').length, beforeManual + 1,
+    'a skipped manual retry still returns compact failure feedback');
+  advance(5_000);
+  await extension.refreshData(true, 'manual');
+  assert.equal(discoveries, 2);
+  advance(59_999);
+  await extension.refreshData(false, 'poll');
+  assert.equal(discoveries, 2);
+  advance(1);
+  await extension.refreshData(false, 'poll');
+  assert.equal(discoveries, 3);
+  config.dataDirectory = '/synthetic/replacement';
+  await extension.refreshData(false, 'settings');
+  assert.equal(discoveries, 4, 'a genuine source replacement is admitted immediately');
+  config.enableContentAnalysis = true;
+  await extension.refreshData(false, 'settings');
+  assert.equal(discoveries, 5, 'a parse-mode replacement gets its own attempt');
+  config.advicePromptWindowDays = 90;
+  await extension.refreshData(false, 'settings');
+  assert.equal(discoveries, 6, 'a content window replacement gets its own attempt');
+  extension.invalidateClaudeUsagePricingCache();
+  await extension.refreshData(false, 'pricing');
+  assert.equal(discoveries, 7, 'price authority revocation gets its own attempt');
+});
+
+test('Claude queued retry after aggregate failure cannot repeat a body read or retire verified data', async (t) => {
+  const { extension, config } = coordinatorHarness(true);
+  extension.refreshCodexData = async () => undefined;
+  const advance = recoveryClock(extension);
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-failed-read-recovery-'));
+  const project = path.join(root, 'projects', '-fixture');
+  fs.mkdirSync(project, { recursive: true });
+  const file = path.join(project, 'session.jsonl');
+  const row = (id: string) => JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(),
+    requestId: id, message: { id, model: 'claude-opus-5-5', usage: { input_tokens: 100, output_tokens: 1 } } }) + '\n';
+  fs.writeFileSync(file, row('first'));
+  config.dataDirectory = root;
+  await extension.refreshData(true, 'manual');
+  const verifiedIndex = extension.cache.claudeIndex;
+  const verifiedManifest = extension.cache.manifest;
+  fs.appendFileSync(file, row('tail'));
+  const indexModule = require('../claudeIncrementalIndex') as typeof import('../claudeIncrementalIndex');
+  const originalUpdate = indexModule.updateClaudeUsageIndex;
+  let bodyReads = 0;
+  let fail = true;
+  (indexModule as any).updateClaudeUsageIndex = async (...args: Parameters<typeof originalUpdate>) => {
+    const result = await originalUpdate(...args);
+    bodyReads += result.diagnostics.bodyReads;
+    if (fail) {
+      if (bodyReads === 1) void extension.refreshData(false, 'watch');
+      throw new RangeError('synthetic post-read failure');
+    }
+    return result;
+  };
+  t.after(() => {
+    (indexModule as any).updateClaudeUsageIndex = originalUpdate;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await extension.refreshData(false, 'watch');
+  for (let n = 0; n < 100 && extension.refreshGate.active; n++) {
+    await new Promise(resolve => setImmediate(resolve));
+  }
+  assert.equal(extension.refreshGate.active, false, 'the bounded queued pass drains');
+  for (let n = 0; n < 40; n++) await extension.refreshData(false, 'focus');
+  assert.equal(bodyReads, 1);
+  assert.equal(extension.cache.claudeIndex, verifiedIndex);
+  assert.equal(extension.cache.manifest, verifiedManifest);
+  assert.equal(extension.providerRefreshStates.claude.failed, true);
+  fail = false;
+  advance(5_000);
+  await extension.refreshData(false, 'manual');
+  assert.equal(bodyReads, 2);
+  assert.equal(extension.cache.records.length, 2);
+  assert.equal(extension.providerRefreshStates.claude.failed, false);
+  await extension.refreshData(false, 'poll');
+  assert.equal(bodyReads, 2, 'successful recovery returns to zero-body-read warm refreshes');
+});
+
+for (const outcome of ['partial', 'throw'] as const) test(`a display generation change cannot discard same-source failure authority or recovery cooling (${outcome})`, async (t) => {
+  const { extension, config } = coordinatorHarness(true);
+  recoveryClock(extension);
+  extension.refreshCodexData = async () => undefined;
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-display-failure-recovery-'));
+  const project = path.join(root, 'projects', '-fixture');
+  fs.mkdirSync(project, { recursive: true });
+  fs.writeFileSync(path.join(project, 'session.jsonl'), JSON.stringify({ type: 'assistant',
+    timestamp: new Date().toISOString(), requestId: 'same-source', message: {
+      id: 'same-source', model: 'claude-opus-5-5', usage: { input_tokens: 100, output_tokens: 1 } } }) + '\n');
+  config.dataDirectory = root;
+  const indexModule = require('../claudeIncrementalIndex') as typeof import('../claudeIncrementalIndex');
+  const originalUpdate = indexModule.updateClaudeUsageIndex;
+  let reads = 0;
+  let withdrawals = 0;
+  extension.webviewProvider.invalidateAchievementEvidence = () => { withdrawals++; };
+  (indexModule as any).updateClaudeUsageIndex = async (...args: Parameters<typeof originalUpdate>) => {
+    const result = await originalUpdate(...args);
+    reads += result.diagnostics.bodyReads;
+    config.language = 'zh-CN';
+    extension.configurationGeneration++;
+    if (outcome === 'throw') throw new RangeError('synthetic post-read failure');
+    result.diagnostics.filesFailed = 1;
+    return result;
+  };
+  t.after(() => {
+    (indexModule as any).updateClaudeUsageIndex = originalUpdate;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  await extension.refreshData(false, 'watch');
+  assert.equal(extension.cache.manifest, null);
+  assert.equal(extension.providerRefreshStates.claude.failed, true);
+  assert.equal(withdrawals, 1);
+  for (let n = 0; n < 30; n++) await extension.refreshData(false, 'settings');
+  assert.equal(reads, 1, 'same-source failure remains cooled even after presentation retirement');
+});
 
 function coordinatorHarness(dashboardAutoRefresh = false): {
   extension: any;
@@ -215,6 +415,154 @@ function coordinatorHarness(dashboardAutoRefresh = false): {
   return { extension, deliveries, statuses, config, snapshot };
 }
 
+for (const mode of ['live', 'display-retired', 'rebuild', 'failed', 'source-retired'] as const)
+for (const paused of [true, false]) test(`real Claude host commits before non-rendering Token handoff (${mode}, paused=${paused})`, async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-real-claude-usage-host-'));
+  const zone = I18n.getTimezone();
+  const { AchievementRecordRepository, loadAchievementRecords } = require('../achievementRecordStore');
+  const { UsageWebviewProvider } = require('../webview');
+  const indexModule = require('../claudeIncrementalIndex') as typeof import('../claudeIncrementalIndex');
+  const originalUpdate = indexModule.updateClaudeUsageIndex;
+  const diagnostics: any[] = [];
+  let owner: any;
+  try {
+    I18n.setTimezone('UTC');
+    const { extension, config, deliveries } = coordinatorHarness(!paused);
+    const project = path.join(root, 'projects', '-fixture'), file = path.join(project, 'session.jsonl');
+    fs.mkdirSync(project, { recursive: true });
+    const row = (id: string, multiplier: number) => JSON.stringify({ type: 'assistant', requestId: id,
+      timestamp: new Date().toISOString(), sessionId: 'fixture', message: { id, model: 'claude-sonnet-5',
+        usage: { input_tokens: 100_000_000 * multiplier, output_tokens: 1_000_000 * multiplier,
+          cache_creation_input_tokens: 199_000_000 * multiplier, cache_read_input_tokens: 200_000_000 * multiplier } } }) + '\n';
+    fs.writeFileSync(file, row('base', 1));
+    config.dataDirectory = root; config.enableAchievements = true;
+    extension.refreshCodexData = async () => undefined;
+    owner = new UsageWebviewProvider({ globalState: { get: () => undefined, update: async () => undefined } });
+    await owner.achievementWrite;
+    const store = path.join(root, 'private-derived', 'achievements-v1.json');
+    owner.achievementRecordRepository = new AchievementRecordRepository(store);
+    owner.achievementRecordState = await owner.achievementRecordRepository.initialize([]);
+    owner.settings = { get: (key: string) => key === 'enableAchievements' };
+    owner.providerAvailability = { claude: false, codex: false, codexData: false };
+    owner.updateWebview = () => assert.fail('host handoff must not paint');
+    const begin = owner.beginClaudeAchievementObservation?.bind(owner);
+    const accept = owner.acceptClaudeAchievementSnapshot?.bind(owner);
+    assert.equal(typeof begin, 'function'); assert.equal(typeof accept, 'function');
+    let handoffs = 0;
+    extension.webviewProvider.beginClaudeAchievementObservation = begin;
+    extension.webviewProvider.invalidateAchievementEvidence = owner.invalidateAchievementEvidence.bind(owner);
+    extension.webviewProvider.clearClaudeSource = owner.clearClaudeSource.bind(owner);
+    extension.webviewProvider.acceptClaudeAchievementSnapshot = (snapshot: any, handle: any, proof: any) => {
+      assert.equal(snapshot.records, extension.cache.records, 'only a committed cache may be delivered');
+      assert.deepEqual(snapshot.allTime, extension.cache.claudeIndex.aggregates.allTime);
+      handoffs++; accept(snapshot, handle, proof);
+    };
+    (indexModule as any).updateClaudeUsageIndex = async (...args: Parameters<typeof originalUpdate>) => {
+      const result = await originalUpdate(...args); diagnostics.push(result);
+      if (diagnostics.length === 2) {
+        if (mode === 'display-retired') extension.configurationGeneration++;
+        if (mode === 'source-retired') config.dataDirectory = path.join(root, 'replacement');
+        if (mode === 'failed') result.diagnostics.filesFailed = 1;
+      }
+      return result;
+    };
+    await extension.refreshData(false, 'watch'); await owner.achievementWrite;
+    assert.equal(handoffs, 1);
+    assert.equal((await loadAchievementRecords(store)).records.find((entry: any) => entry.id === 'sonnet-main').origin, 'history');
+    fs.appendFileSync(file, row('tail', 2));
+    await extension.refreshData(mode === 'rebuild', 'watch'); await owner.achievementWrite;
+    if (mode === 'rebuild') assert.equal(diagnostics[diagnostics.length - 1].achievementUsageDelta, undefined);
+    else assert.equal(diagnostics[diagnostics.length - 1].achievementUsageDelta.processed, 1_000_000_000);
+    const silver = (await loadAchievementRecords(store)).records.find((entry: any) => entry.id === 'sonnet-main-silver');
+    if (mode === 'failed' || mode === 'source-retired') {
+      assert.equal(handoffs, 1); assert.equal(silver, undefined);
+      return;
+    }
+    assert.equal(silver.origin, mode === 'rebuild' ? 'history' : 'usage');
+    assert.equal(silver.unread, mode !== 'rebuild');
+    assert.equal(silver.timeZone, mode === 'rebuild' ? null : 'UTC');
+    await extension.refreshData(false, 'poll'); await owner.achievementWrite;
+    assert.equal(handoffs, 3);
+    assert.equal(diagnostics.length, 2, 'unchanged warm pass bypasses the parser');
+    assert.equal((await loadAchievementRecords(store)).records.filter((entry: any) => entry.id === silver.id).length, 1);
+    if (paused && mode !== 'rebuild') assert.equal(deliveries.filter(entry => entry.kind === 'claude').length, 0);
+  } finally {
+    (indexModule as any).updateClaudeUsageIndex = originalUpdate;
+    await owner?.achievementWrite; await owner?.achievementHourWrite; await owner?.achievementCalendarWrite;
+    I18n.setTimezone(zone); fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('real paused host routes worker tail proof through the facade into shared unread silver awards', async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-real-usage-host-'));
+  const previousZone = I18n.getTimezone();
+  const { CodexProvider } = require('../providers/codex/codexProvider');
+  const { AchievementRecordRepository, loadAchievementRecords } = require('../achievementRecordStore');
+  const { UsageWebviewProvider } = require('../webview');
+  let provider: any;
+  try {
+    I18n.setTimezone('UTC');
+    const { extension, config, deliveries } = coordinatorHarness(false);
+    const home = path.join(root, 'home'), sessions = path.join(home, 'sessions');
+    fs.mkdirSync(sessions, { recursive: true });
+    const token = (input: number, output: number, timestamp: number) => JSON.stringify({
+      timestamp: new Date(timestamp).toISOString(), type: 'event_msg', payload: { type: 'token_count',
+        info: { total_token_usage: { input_tokens: input, output_tokens: output,
+          cached_input_tokens: input / 2, reasoning_output_tokens: output / 2, total_tokens: input + output } } },
+    });
+    const header = (id: string) => JSON.stringify({ type: 'session_meta', payload: { id } }) + '\n' +
+      JSON.stringify({ type: 'turn_context', payload: { model: 'gpt-6.1-astra', effort: 'max' } }) + '\n';
+    const log = path.join(sessions, 'live.jsonl');
+    fs.writeFileSync(log, header('synthetic-live') + token(500_000_000, 100_000_000, Date.now() - 3_600_000) + '\n');
+    for (const [n, input] of [[1, 10], [2, 20]]) fs.writeFileSync(path.join(sessions, 'conflict-' + n + '.jsonl'),
+      header('synthetic-conflict') + token(input, 2, Date.now() - 3_600_000) + '\n');
+    config.codexDataDirectory = home; config.timezone = 'UTC'; config.enableAchievements = true;
+    const file = path.join(root, 'achievements-v1.json');
+    const owner = new UsageWebviewProvider({ globalState: { get: () => undefined, update: async () => undefined } }) as any;
+    await owner.achievementWrite;
+    owner.achievementRecordRepository = new AchievementRecordRepository(file);
+    owner.achievementRecordState = await owner.achievementRecordRepository.initialize([]);
+    owner.settings = { get: (key: string) => key === 'enableAchievements' };
+    owner.updateWebview = () => assert.fail('paused data handoff cannot render');
+    owner.updateAdviceEffectivenessData = () => undefined;
+    owner.updateProviderData = () => assert.fail('paused host cannot deliver a data panel');
+    extension.webviewProvider = owner;
+    provider = new CodexProvider({ enabled: true, codexHome: home, indexPath: path.join(root, 'isolated-index.json'),
+      salt: 'synthetic-isolated-salt', timeZone: 'UTC', allowAchievementHourProof: true });
+    extension.codexProvider = provider;
+    const refresh = provider.refresh.bind(provider);
+    const responses: any[] = [];
+    provider.refresh = async (...args: any[]) => { const result = await refresh(...args); responses.push(result); return result; };
+    await extension.runCodexRefresh('poll');
+    await owner.achievementWrite;
+    assert.equal(extension.codexView.coverage.complete, true);
+    assert.equal(extension.codexView.coverage.identity.complete, false);
+    assert.equal(extension.codexAchievementSignals.familyProcessedTokens.astra, 600_000_000);
+    assert.equal((await loadAchievementRecords(file)).records.find((row: any) => row.id === 'astra-regular').origin, 'history');
+    fs.appendFileSync(log, token(5_500_000_000, 1_100_000_000, Date.now()) + '\n');
+    await extension.runCodexRefresh('poll');
+    await owner.achievementWrite;
+    assert.equal(responses[responses.length - 1].achievementUsageDelta.processed, 6_000_000_000);
+    const silver = (await loadAchievementRecords(file)).records.find((row: any) => row.id === 'astra-regular-silver');
+    assert.equal(silver.origin, 'usage'); assert.equal(silver.unread, true);
+    assert.equal(silver.timeZone, 'UTC'); assert.match(silver.recordedDay, /^\d{4}-\d{2}-\d{2}$/);
+    const weekly = (await loadAchievementRecords(file)).records.find((row: any) => row.id === 'weekly-volume-bronze');
+    assert.ok(weekly, 'witnessed positive date subset may prove the volume milestone despite the unrelated conflict');
+    assert.equal(weekly.origin, 'history');
+    assert.equal(weekly.unread, false, 'recovered calendar proof is not a live calendar origin');
+    assert.equal(weekly.recordedDay, null);
+    await extension.runCodexRefresh('poll'); await owner.achievementWrite;
+    assert.equal(responses[responses.length - 1].diagnostic.bodyReads, 0);
+    assert.equal(responses[responses.length - 1].achievementUsageDelta, undefined);
+    assert.equal((await loadAchievementRecords(file)).records.filter((row: any) => row.id === silver.id).length, 1);
+    assert.equal(deliveries.filter(row => row.kind === 'provider').length, 0);
+    await owner.achievementHourWrite; await owner.achievementCalendarWrite; await owner.achievementNoticeWrite;
+  } finally {
+    await provider?.dispose(); I18n.setTimezone(previousZone);
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('coordinator paused refresh still invalidates prepared advice source revisions without delivering panels', () => {
   const { extension, deliveries } = coordinatorHarness();
   const sourceRevision = 'current-verified-source';
@@ -226,6 +574,82 @@ test('coordinator paused refresh still invalidates prepared advice source revisi
   extension.syncProviderUi('watch');
   assert.equal(preparedHandleValid, false);
   assert.equal(deliveries.filter(value => value.kind === 'provider').length, 0);
+});
+
+test('retirement while waiting for the achievement receipt cannot strand a worker that never started', async () => {
+  const { extension } = coordinatorHarness(false);
+  let entered!: () => void, release!: () => void;
+  const enteredPromise = new Promise<void>(resolve => { entered = resolve; });
+  const waiting = new Promise<void>(resolve => { release = resolve; });
+  extension.webviewProvider.beginCodexAchievementObservation = async () => { entered(); await waiting; return undefined; };
+  let calls = 0;
+  extension.codexProvider.refresh = async () => { calls++; return { outcome: 'unavailable' }; };
+  const refresh = extension.runCodexRefresh('poll');
+  await enteredPromise;
+  extension.configurationGeneration++;
+  release(); await refresh;
+  assert.equal(calls, 0);
+  assert.equal(extension.codexWorkerLease?.active ?? false, false);
+  assert.equal(extension.codexBackfillLease?.active ?? false, false);
+});
+
+test('owned lifecycle cancellation keeps the prior verified display without failure or new award delivery', async () => {
+  const {extension,snapshot}=coordinatorHarness(true);
+  snapshot.currentManifestVerified=true;
+  let accepted=0,withdrawals=0;
+  extension.webviewProvider.acceptCodexAchievementSnapshot=()=>{accepted++;};
+  extension.webviewProvider.invalidateAchievementEvidence=()=>{withdrawals++;};
+  await extension.runCodexRefresh('focus');
+  const priorView=extension.codexView,priorState={...extension.providerRefreshStates.codex};
+  const priorAccepted=accepted;
+  extension.codexProvider.refresh=async()=>{
+    extension.codexWorkerCancellationRequested=true; // real blur owner sets this before cancel().
+    await extension.cancelCodexProviderAndWait();
+    return {outcome:'error',failureCode:'cancelled',snapshot:{...snapshot,currentManifestVerified:false},
+      diagnostic:{bodyReads:0,failedFiles:0,errorCode:'cancelled'}};
+  };
+  await extension.runCodexRefresh('focus');
+  assert.equal(extension.codexView,priorView);
+  assert.deepEqual(extension.providerRefreshStates.codex,priorState);
+  assert.equal(accepted,priorAccepted,'cancellation is not a new accepted source or award receipt');
+  assert.equal(withdrawals,0,'intentional cancellation is not evidence of source failure');
+  assert.equal(extension.codexRefreshing,false);
+  assert.equal(extension.codexWorkerLease?.active ?? false,false);
+});
+
+test('only owned clean cancellation is neutral; unowned cancellation and read/worker failures still revoke', async () => {
+  for(const row of [
+    {requested:false,code:'cancelled',failed:0},
+    {requested:true,code:'worker-failed',failed:0},
+    {requested:true,code:'cancelled',failed:1},
+    {requested:true,code:'cancelled',failed:undefined},
+  ]) {
+    const {extension,snapshot}=coordinatorHarness(true);
+    await extension.runCodexRefresh('focus');
+    let withdrawals=0;
+    extension.webviewProvider.invalidateAchievementEvidence=()=>{withdrawals++;};
+    extension.codexProvider.refresh=async()=>{
+      extension.codexWorkerCancellationRequested=row.requested;
+      return {outcome:'error',failureCode:row.code,snapshot:{...snapshot,currentManifestVerified:false},
+        diagnostic:{bodyReads:0,failedFiles:row.failed,errorCode:row.code}};
+    };
+    await extension.runCodexRefresh('focus');
+    assert.equal(extension.providerRefreshStates.codex.failed,true,JSON.stringify(row));
+    assert.ok(withdrawals>0,JSON.stringify(row));
+  }
+});
+
+test('owned cancellation does not clear an earlier real refresh failure or advance its timestamp', async () => {
+  const {extension,snapshot}=coordinatorHarness(true);
+  await extension.runCodexRefresh('focus');
+  extension.providerRefreshStates.codex={failed:true,lastSuccessfulAt:123};
+  extension.codexProvider.refresh=async()=>{
+    extension.codexWorkerCancellationRequested=true;
+    return {outcome:'error',failureCode:'cancelled',snapshot:{...snapshot,currentManifestVerified:false},
+      diagnostic:{bodyReads:0,failedFiles:0,errorCode:'cancelled'}};
+  };
+  await extension.runCodexRefresh('focus');
+  assert.deepEqual(extension.providerRefreshStates.codex,{failed:true,lastSuccessfulAt:123});
 });
 
 test('coordinator dashboard pause suppresses automatic Codex data, insights and progress but keeps indexing and status', async () => {
@@ -394,6 +818,49 @@ test('coordinator Codex cooldown and user pause retain exact hourly phase after 
   }
 });
 
+test('paused refresh failures withdraw achievement authority without replacing numeric panels', () => {
+  const { extension, deliveries } = coordinatorHarness(false);
+  const invalidated: string[] = [];
+  extension.webviewProvider.invalidateAchievementEvidence = (provider: string) => invalidated.push(provider);
+  extension.applyCodexSnapshot(completeCoordinatorSnapshot());
+  const displayed = extension.codexView;
+  deliveries.length = 0;
+  extension.recordRefreshState('codex', true, 'watch');
+  extension.recordRefreshState('claude', true, 'poll');
+  assert.deepEqual(invalidated, ['codex', 'claude']);
+  assert.equal(extension.codexView, displayed);
+  assert.equal(deliveries.length, 0, 'proof revocation is not a dashboard refresh');
+});
+
+test('disabled achievements do not schedule their independent historical proof migration', () => {
+  const { extension, config, snapshot } = coordinatorHarness(false);
+  snapshot.outputHourProof = { complete: false, hours: [], provenFiles: 0, totalFiles: 3,
+    backfillableFiles: 3 } as any;
+  config.enableAchievements = false;
+  assert.equal(extension.codexHistoricalWorkPending(snapshot), false);
+  assert.equal(extension.codexBackgroundProgress(snapshot).totalUnits,
+    snapshot.coverage.totalFiles + snapshot.coverage.period.allTime.totalFiles +
+      snapshot.hourlyCoverage!.totalFiles);
+  config.enableAchievements = true;
+  assert.equal(extension.codexHistoricalWorkPending(snapshot), true);
+});
+
+test('notice preference changes are presentation-only and do not retire source proof or workers', () => {
+  const { extension, config } = coordinatorHarness(false);
+  const getSetting = extension.settings.get.bind(extension.settings);
+  extension.settings.get = (key: string) => key === 'showAchievementNotices' ? config.showAchievementNotices : getSetting(key);
+  config.showAchievementNotices = false;
+  let dismissed = 0, retired = 0;
+  extension.webviewProvider.retireAchievementNotices = () => { dismissed++; };
+  extension.webviewProvider.retireAchievementUsageObservations = () => { retired++; };
+  extension.onConfigurationChanged = () => assert.fail('notice preference must not restart providers');
+  extension.onSettingsChangedFromPanel('showAchievementNotices');
+  assert.equal(dismissed, 1); assert.equal(retired, 0);
+  config.showAchievementNotices = true;
+  extension.onSettingsChangedFromPanel('showAchievementNotices');
+  assert.equal(dismissed, 1);
+});
+
 test('coordinator warm Codex exceptions preserve verified view and manual failures always send compact state', async () => {
   const { extension, deliveries } = coordinatorHarness();
   extension.applyCodexSnapshot(completeCoordinatorSnapshot());
@@ -493,13 +960,89 @@ test('coordinator identical verified Codex snapshots retain view and insight ide
   extension.applyCodexSnapshot(snapshot);
   const verified = extension.codexView;
   const insights = extension.codexInsights;
+  const signals = extension.codexAchievementSignals;
   extension.applyCodexSnapshot(structuredClone(snapshot));
   assert.equal(extension.codexView, verified);
   assert.equal(extension.codexInsights, insights);
+  assert.equal(extension.codexAchievementSignals, signals, 'unchanged proof does not re-evaluate achievements');
   const renamed = structuredClone(snapshot);
   renamed.files[0].session.sessionTitle = 'A changed safe title';
   extension.applyCodexSnapshot(renamed);
   assert.notEqual(extension.codexView, verified, 'titles are part of the render revision');
+  assert.equal(extension.codexAchievementSignals, signals, 'title-only changes are not achievement proof changes');
+});
+
+test('coordinator accepts and revokes effort-only proof without rebuilding the render view', () => {
+  for (const initiallyValid of [true, false]) {
+    const { extension } = coordinatorHarness(true);
+    const snapshot = completeCoordinatorSnapshot();
+    if (!initiallyValid) snapshot.files[0].byEffort.high.cacheWriteInput = -1;
+    extension.applyCodexSnapshot(snapshot);
+    const view = extension.codexView;
+    const insights = extension.codexInsights;
+    const previous = extension.codexAchievementSignals;
+    const updated = structuredClone(snapshot);
+    if (initiallyValid) updated.files[0].byEffort.high.cacheWriteInput = -1;
+    else delete updated.files[0].byEffort.high.cacheWriteInput;
+    extension.applyCodexSnapshot(updated);
+    assert.equal(extension.codexView, view);
+    assert.equal(extension.codexInsights, insights);
+    assert.notEqual(extension.codexAchievementSignals, previous);
+    assert.deepEqual(extension.codexAchievementSignals.familyProcessedTokens, previous.familyProcessedTokens);
+    assert.equal(extension.codexAchievementSignals.effortProcessedTokens.high, initiallyValid ? 600 : 1_200);
+  }
+});
+
+test('coordinator accepts fresh period lineage proof even when rendered statistics are unchanged', () => {
+  const { extension } = coordinatorHarness(true);
+  const snapshot = completeCoordinatorSnapshot();
+  // One canonical root: the legacy fixture's unattached approval record must not prove dates.
+  snapshot.files = [snapshot.files[0]];
+  snapshot.currentManifestVerified = true;
+  snapshot.coverage.identity.complete = true;
+  snapshot.files[0].achievementPeriodWitness = {size:1,offset:1,expectedPrefixEvents:0,timeZone:'UTC'};
+  extension.applyCodexSnapshot(snapshot);
+  assert.equal(extension.codexAchievementSignals.dayEvidence.complete, false);
+  const view = extension.codexView;
+  const insights = extension.codexInsights;
+  const updated = structuredClone(snapshot);
+  updated.files[0].period!.lineageVersion = CODEX_PERIOD_LINEAGE_VERSION;
+  updated.files[0].period!.lineagePrefixEvents = 0;
+  extension.applyCodexSnapshot(updated);
+  assert.equal(extension.codexView, view);
+  assert.equal(extension.codexInsights, insights);
+  assert.equal(extension.codexAchievementSignals.dayEvidence.complete, true);
+  const fresh = extension.codexAchievementSignals;
+  extension.applyCodexSnapshot(structuredClone(updated));
+  assert.equal(extension.codexAchievementSignals, fresh);
+  delete updated.files[0].period!.lineageVersion;
+  extension.applyCodexSnapshot(updated);
+  assert.equal(extension.codexAchievementSignals.dayEvidence.complete, false, 'proof withdrawal is not a historical award revocation');
+});
+
+test('coordinator disabled achievements skip proof computation and re-enable adopts current proof', (t) => {
+  const proofModule = require('../codexAchievementRevision');
+  const original = proofModule.codexAchievementProofRevision;
+  let revisions = 0;
+  proofModule.codexAchievementProofRevision = (...args: unknown[]) => { revisions++; return original(...args); };
+  t.after(() => { proofModule.codexAchievementProofRevision = original; });
+  const { extension, config, snapshot } = coordinatorHarness(true);
+  extension.applyCodexSnapshot(snapshot);
+  assert.equal(revisions, 1);
+  config.enableAchievements = false;
+  extension.applyCodexSnapshot(snapshot);
+  const disabled = extension.codexAchievementSignals;
+  const updated = structuredClone(snapshot);
+  updated.files[0].byEffort.high.cacheWriteInput = -1;
+  extension.applyCodexSnapshot(updated);
+  assert.equal(revisions, 1, 'OFF does not even fingerprint the achievement projection');
+  assert.equal(extension.codexAchievementSignals, disabled);
+  assert.equal(extension.codexAchievementRevision, undefined);
+  assert.equal(disabled.effortProcessedTokens, undefined, 'OFF cannot retain proof for a newer render snapshot');
+  config.enableAchievements = true;
+  extension.applyCodexSnapshot(updated);
+  assert.equal(revisions, 2);
+  assert.equal(extension.codexAchievementSignals.effortProcessedTokens.high, 600);
 });
 
 test('coordinator retirement during preflight state persistence cannot start a retired worker', async () => {
@@ -754,8 +1297,72 @@ test('coordinator Claude pause keeps append indexing and status active while man
   assert.equal(deliveries.filter(value => value.kind === 'claude').slice(-1)[0]?.value.allTime.totalInputTokens, 20);
 });
 
+test('Claude unchanged-manifest diagnostics report proven zero body I/O and aggregate mutations', async (t) => {
+  const fileApi = require('node:fs/promises') as typeof import('node:fs/promises');
+  const indexModule = require('../claudeIncrementalIndex') as typeof import('../claudeIncrementalIndex');
+  const originalOpen = fileApi.open, originalUpdate = indexModule.updateClaudeUsageIndex;
+  for (const analyzeContent of [false, true]) {
+    for (const empty of [false, true]) {
+      const { extension, config } = coordinatorHarness(true);
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-warm-diagnostic-'));
+      t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+      const project = path.join(root, 'projects', '-synthetic');
+      fs.mkdirSync(project, { recursive: true });
+      const source = path.join(project, 'session.jsonl');
+      const row = (id: string) => JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(),
+        requestId: id, message: { id, model: 'claude-opus-5-5', content: [{ type: 'text', text: 'Synthetic output.' }],
+          usage: { input_tokens: 100, output_tokens: 10 } } });
+      if (!empty) fs.writeFileSync(source, row('cold') + '\n');
+      config.dataDirectory = root;
+      config.enableContentAnalysis = analyzeContent;
+      extension.refreshCodexData = async () => undefined;
+      const logs: string[] = [];
+      extension.outputChannel = { appendLine: (line: string) => logs.push(line) };
+      await extension.refreshData(true, 'manual');
+      assert.ok(extension.cache.manifest);
+      const currentIndex = extension.cache.claudeIndex;
+      logs.length = 0;
+      let jsonlOpenAttempts = 0, indexUpdates = 0;
+      (fileApi as any).open = (...args: Parameters<typeof originalOpen>) => {
+        if (typeof args[0] === 'string' && args[0].startsWith(root + path.sep) && args[0].endsWith('.jsonl')) {
+          jsonlOpenAttempts++;
+        }
+        return originalOpen(...args);
+      };
+      (indexModule as any).updateClaudeUsageIndex = (...args: Parameters<typeof originalUpdate>) => {
+        indexUpdates++;
+        return originalUpdate(...args);
+      };
+      try {
+        for (let i = 0; i < 20; i++) await extension.refreshData(false, 'manual');
+        assert.equal(jsonlOpenAttempts, 0, 'known host JSONL-open path is not entered');
+        assert.equal(indexUpdates, 0, 'existing aggregates are reused without an index pass');
+        assert.equal(extension.cache.claudeIndex, currentIndex);
+        const warm = logs.filter(line => line.startsWith('refresh: trigger=manual'));
+        assert.equal(warm.length, 20);
+        for (const diagnostic of warm) {
+          assert.match(diagnostic, /io\(bytes=0 lines=0\)/);
+          assert.match(diagnostic, /incremental\(bodies=0 aggregate-mutations=0\)/);
+        }
+        if (!empty) {
+          logs.length = 0;
+          fs.appendFileSync(source, row('append') + '\n');
+          await extension.refreshData(false, 'manual');
+          assert.ok(jsonlOpenAttempts > 0);
+          assert.equal(indexUpdates, 1);
+          assert.ok(logs.some(line => /incremental\(bodies=1 /.test(line)), 'append remains a real body read');
+        }
+      } finally {
+        (fileApi as any).open = originalOpen;
+        (indexModule as any).updateClaudeUsageIndex = originalUpdate;
+      }
+    }
+  }
+});
+
 test('coordinator Claude warm manual failures retain data, disclose anonymous state, and clear it on unchanged success', async (t) => {
   const { extension, deliveries, statuses, config } = coordinatorHarness();
+  const advance = recoveryClock(extension);
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-coordinator-claude-failure-'));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const project = path.join(root, 'projects', '-fixture');
@@ -793,6 +1400,7 @@ test('coordinator Claude warm manual failures retain data, disclose anonymous st
     (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
   }
   deliveries.length = 0;
+  advance(5_000);
   await extension.refreshData(false, 'manual');
   assert.equal(extension.providerRefreshStates.claude.failed, false);
   assert.ok(extension.providerRefreshStates.claude.lastSuccessfulAt >= previousSuccess);
@@ -931,6 +1539,7 @@ test('Claude replacement read failure cannot retain the old home, and verified r
   };
   t.after(() => { (indexModule as any).updateClaudeUsageIndex = originalUpdate; });
   const { extension, config } = coordinatorHarness(true);
+  const advance = recoveryClock(extension);
   extension.refreshCodexData = async () => undefined;
   config.dataDirectory = sources[0];
   await extension.refreshData(true, 'manual');
@@ -940,6 +1549,7 @@ test('Claude replacement read failure cannot retain the old home, and verified r
   assert.equal(extension.cache.records.length, 0);
   assert.equal(extension.providerRefreshStates.claude.lastSuccessfulAt, undefined);
   fail = false;
+  advance(5_000);
   await extension.refreshData(false, 'manual');
   assert.equal(extension.cache.claudeIndex.aggregates.allTime.totalInputTokens, 200);
   assert.equal(extension.cache.dataDirectory, sources[1]);
@@ -1164,6 +1774,18 @@ test('background transition stops every Claude and Codex recurring resource once
     'codex:stop',
     'credentials:stop',
   ]);
+});
+
+test('native window transitions forward achievement focus before recurring work without an extra listener', () => {
+  const extension = bareExtension();
+  const calls: string[] = [];
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.webviewProvider.setAchievementWindowFocused = (value: boolean) => calls.push(`notice:${value}`);
+  extension.suspendRecurringWork = () => calls.push('suspend');
+  extension.resumeRecurringWork = () => calls.push('resume');
+  extension.handleWindowFocusChange(false);
+  extension.handleWindowFocusChange(true);
+  assert.deepEqual(calls, ['notice:false', 'suspend', 'notice:true', 'resume']);
 });
 
 test('foreground transition resumes both providers and catches up once', () => {
@@ -2633,6 +3255,149 @@ test('Claude recursive watcher forwards nested subagent JSONL writes to a watch 
   assert.equal(watcherClosed, 1);
 });
 
+function mockClaudeWatcherLifecycle(t: TestContext): {
+  extension: any;
+  root: string;
+  watchers: Array<{
+    directory: string;
+    event: (eventType: string, filename: string | Buffer | null) => void;
+    errors: Array<(error: Error) => void>;
+    closed: number;
+  }>;
+  refreshes: string[];
+} {
+  const extension = bareExtension();
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-watch-lifecycle-'));
+  fs.mkdirSync(path.join(root, 'projects'));
+  const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
+  const originalWatch = fs.watch;
+  const watchers: Array<{
+    directory: string;
+    event: (eventType: string, filename: string | Buffer | null) => void;
+    errors: Array<(error: Error) => void>;
+    closed: number;
+  }> = [];
+  const refreshes: string[] = [];
+  extension.windowActivity = new WindowActivityGate(true);
+  extension.watchDebounce = {
+    clear: () => undefined,
+    push: (_delay: number, callback: () => void) => callback(),
+  };
+  extension.watchedDir = null;
+  extension.getConfiguration = () => ({ fileWatchSeconds: 1, dataDirectory: '' });
+  extension.refreshData = async (_forceReload: boolean, trigger: string) => {
+    refreshes.push(trigger);
+  };
+  (ClaudeDataLoader as any).findClaudeDataDirectory = async () => root;
+  (fs as any).watch = (directory: string, _options: unknown,
+    event: (eventType: string, filename: string | Buffer | null) => void) => {
+    const entry = { directory, event, errors: [] as Array<(error: Error) => void>, closed: 0 };
+    watchers.push(entry);
+    const watcher = {
+      close: () => { entry.closed += 1; },
+      on: (kind: string, callback: (error: Error) => void) => {
+        if (kind === 'error') entry.errors.push(callback);
+        return watcher;
+      },
+    };
+    return watcher;
+  };
+  t.after(async () => {
+    extension.stopFileWatching();
+    await extension.drainResourceStops();
+    (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
+    (fs as any).watch = originalWatch;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+  return { extension, root, watchers, refreshes };
+}
+
+test('same-directory Claude watcher setup preserves the installed event callback', async (t) => {
+  const { extension, watchers, refreshes } = mockClaudeWatcherLifecycle(t);
+  await extension.startFileWatching();
+  watchers[0].event('change', 'session.jsonl');
+  await extension.startFileWatching();
+  watchers[0].event('change', 'session.jsonl');
+  await Promise.resolve();
+  assert.deepEqual(refreshes, ['watch', 'watch']);
+  assert.equal(watchers.length, 1, 'a no-op setup does not create another handle');
+  assert.equal(watchers[0].closed, 0);
+  assert.equal(extension.resourceOwnership.snapshotForTests().byKind.watcher, 1);
+});
+
+test('pending Claude watcher lookup does not silence an installed event callback', async (t) => {
+  const { extension, root, watchers, refreshes } = mockClaudeWatcherLifecycle(t);
+  await extension.startFileWatching();
+  let resolveDirectory!: (value: string) => void;
+  (ClaudeDataLoader as any).findClaudeDataDirectory = () => new Promise<string>((resolve) => {
+    resolveDirectory = resolve;
+  });
+  const pending = extension.startFileWatching();
+  watchers[0].event('change', 'session.jsonl');
+  await Promise.resolve();
+  assert.deepEqual(refreshes, ['watch'], 'the installed watcher stays live while discovery awaits');
+  resolveDirectory(root);
+  await pending;
+  watchers[0].event('change', 'session.jsonl');
+  await Promise.resolve();
+  assert.deepEqual(refreshes, ['watch', 'watch']);
+  assert.equal(watchers.length, 1);
+});
+
+test('same-directory Claude watcher setup preserves error recovery', async (t) => {
+  const { extension, watchers } = mockClaudeWatcherLifecycle(t);
+  const recoveries: string[] = [];
+  extension.scheduleWatcherRecovery = (provider: string) => { recoveries.push(provider); };
+  await extension.startFileWatching();
+  await extension.startFileWatching();
+  watchers[0].errors[0](new Error('synthetic watcher failure'));
+  await extension.drainResourceStops();
+  assert.deepEqual(recoveries, ['claude']);
+  assert.equal(watchers[0].closed, 1);
+  assert.equal(extension.fileWatcher, undefined);
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+});
+
+test('overlapping Claude watcher lookups install only the newest request', async (t) => {
+  const { extension, root, watchers, refreshes } = mockClaudeWatcherLifecycle(t);
+  const newestRoot = path.join(root, 'newest');
+  fs.mkdirSync(path.join(newestRoot, 'projects'), { recursive: true });
+  const resolveDirectories: Array<(value: string) => void> = [];
+  (ClaudeDataLoader as any).findClaudeDataDirectory = () => new Promise<string>((resolve) => {
+    resolveDirectories.push(resolve);
+  });
+  const older = extension.startFileWatching();
+  const newer = extension.startFileWatching();
+  resolveDirectories[1](newestRoot);
+  await newer;
+  resolveDirectories[0](root);
+  await older;
+  assert.equal(watchers.length, 1);
+  assert.equal(watchers[0].directory, path.join(newestRoot, 'projects'));
+  watchers[0].event('change', 'session.jsonl');
+  await Promise.resolve();
+  assert.deepEqual(refreshes, ['watch']);
+});
+
+test('stopping Claude watching cancels pending lookups and installed callbacks', async (t) => {
+  const { extension, root, watchers, refreshes } = mockClaudeWatcherLifecycle(t);
+  await extension.startFileWatching();
+  let resolveDirectory!: (value: string) => void;
+  (ClaudeDataLoader as any).findClaudeDataDirectory = () => new Promise<string>((resolve) => {
+    resolveDirectory = resolve;
+  });
+  const pending = extension.startFileWatching();
+  extension.stopFileWatching('feature-disabled');
+  resolveDirectory(root);
+  await pending;
+  watchers[0].event('change', 'session.jsonl');
+  await extension.drainResourceStops();
+  assert.equal(watchers.length, 1, 'a retired lookup cannot recreate the stopped watcher');
+  assert.equal(watchers[0].closed, 1);
+  assert.deepEqual(refreshes, []);
+  assert.equal(extension.resourceOwnership.snapshotForTests().activeCount, 0);
+});
+
 test('Claude watcher errors back off, recover, and cannot rearm after disposal', async () => {
   const extension = bareExtension();
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'ccu-claude-watch-error-'));
@@ -3383,6 +4148,7 @@ test('Claude refresh diagnostics drain the unnamed quota-watcher event count', a
 
 test('a failing provider UI cannot reject refreshes or strand the pending refresh gate', async () => {
   const extension = bareExtension();
+  const advance = recoveryClock(extension);
   const originalFind = ClaudeDataLoader.findClaudeDataDirectory;
   let scans = 0;
   let release!: () => void;
@@ -3406,9 +4172,11 @@ test('a failing provider UI cannot reject refreshes or strand the pending refres
     release();
     await assert.doesNotReject(first);
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(scans, 2, 'the coalesced pending request must still run');
+    assert.equal(scans, 1, 'the queued request drains without rescanning the failed source');
+    assert.equal(extension.refreshGate.active, false);
+    advance(5_000);
     await extension.refreshData(false, 'manual');
-    assert.equal(scans, 3, 'subsequent refreshes must not remain permanently busy');
+    assert.equal(scans, 2, 'a cooled explicit retry must not remain permanently busy');
   } finally {
     release();
     (ClaudeDataLoader as any).findClaudeDataDirectory = originalFind;
@@ -3600,6 +4368,8 @@ test('real Claude filesystem events flow through manifest, index, and dashboard 
       return;
     }
     const activeWatcher = extension.fileWatcher as fs.FSWatcher;
+    await extension.startFileWatching();
+    assert.equal(extension.fileWatcher, activeWatcher, 'same-directory setup keeps the real handle');
 
     // Recursive fs.watch can drop the first event for a just-created nested
     // file while macOS is attaching its directory handle. Rewriting that
@@ -3693,7 +4463,23 @@ test('rapid settings changes wait for every provider retirement and only latest 
   extension.startCodexWatching = () => { calls.push('codex:start'); };
   extension.startCredentialsWatching = () => { calls.push('credentials:start'); };
 
+  const verifiedView = {
+    currentManifestVerified: true,
+    outputHourProof: { complete: true, hours: [500000] },
+    today: { total: { processed: 123 } },
+  };
+  extension.codexView = verifiedView;
+  const published: any[] = [];
+  extension.syncProviderUi = () => published.push(extension.codexView);
+
   extension.onConfigurationChanged();
+  assert.equal(extension.codexView.currentManifestVerified, false);
+  assert.equal(extension.codexView.outputHourProof.complete, false);
+  assert.deepEqual(extension.codexView.outputHourProof.hours, []);
+  assert.equal(extension.codexView.today.total.processed, 123);
+  assert.equal(published[published.length - 1].currentManifestVerified, false,
+    'withdraw proof from the dashboard before waiting for provider retirement');
+  assert.equal(verifiedView.currentManifestVerified, true, 'published old objects stay immutable');
   extension.onConfigurationChanged();
   finishSecond();
   await Promise.resolve();
@@ -3709,9 +4495,60 @@ test('rapid settings changes wait for every provider retirement and only latest 
   assert.equal(calls.filter((call) => call === 'credentials:start').length, 1);
 });
 
+for (const focused of [false, true]) {
+  test(`provider replacement withdraws dashboard proof even when retirement fails (focused=${focused})`, async () => {
+    const extension = bareExtension();
+    extension.windowActivity = new WindowActivityGate(focused);
+    extension.webviewProvider = { invalidatePreparedAiRequests: () => undefined };
+    extension.statusBar = { setVisibility: () => undefined };
+    extension.getConfiguration = () => ({
+      language: 'en', decimalPlaces: 2, tokenDecimalPlaces: 0,
+      compactNumbers: true, timezone: 'UTC', showCost: true,
+      showContext: true, usageLimitTracking: false, statusBarMetric: 'tokens',
+      showScopedWeekly: false, quotaFiveHourOnly: false, showResetInStatusBar: false,
+      resetCountdownFormat: 'short', dataDirectory: '',
+    });
+    extension.cancelAdviceNetworks = async () => undefined;
+    extension.cancelQuotaNetworks = async () => undefined;
+    extension.stopQuotaColdRetry = () => undefined;
+    extension.startAutoRefresh = () => undefined;
+    extension.stopFileWatching = () => undefined;
+    extension.stopCodexWatching = () => undefined;
+    extension.stopCredentialsWatching = () => undefined;
+    extension.selectClaudeProfile = () => undefined;
+    const verified = {
+      currentManifestVerified: true,
+      outputHourProof: { complete: true, hours: [500000] },
+      today: { total: { processed: 123 } },
+    };
+    extension.codexView = verified;
+    const published: any[] = [];
+    extension.syncProviderUi = () => published.push(extension.codexView);
+    let workerStarted = false;
+    extension.refreshData = async () => { workerStarted = true; };
+    extension.codexProvider = {
+      cancel: () => undefined,
+      dispose: async () => { throw new Error('synthetic retirement failure'); },
+    };
+    extension.createCodexProvider = () => ({ cancel: () => undefined, dispose: async () => undefined });
+    extension.onConfigurationChanged();
+    assert.equal(extension.codexView.currentManifestVerified, false);
+    assert.equal(extension.codexView.outputHourProof.complete, false);
+    assert.deepEqual(extension.codexView.outputHourProof.hours, []);
+    assert.equal(extension.codexView.today.total.processed, 123);
+    assert.equal(published[published.length - 1].currentManifestVerified, false);
+    assert.equal(verified.currentManifestVerified, true);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(workerStarted, false);
+    assert.equal(extension.codexView.currentManifestVerified, false);
+  });
+}
+
 test('credentials change clears quota failure backoff before refreshing', async () => {
   const extension = bareExtension();
   const calls: string[] = [];
+  const quotaUpdates: unknown[][] = [];
+  extension.statusBar = {updateQuota: (...args: unknown[]) => quotaUpdates.push(args)};
   extension.cache = {
     usageLimitsLastUpdate: new Date(123_000),
     usageLimitsFailStreak: 6,
@@ -3732,6 +4569,7 @@ test('credentials change clears quota failure backoff before refreshing', async 
   assert.equal(extension.cache.usageLimitsFailStreak, 0);
   assert.equal(extension.cache.usageLimitsBackoffUntil.getTime(), 0);
   assert.deepEqual(calls, ['refresh:credentials']);
+  assert.deepEqual(quotaUpdates, [[null,null]], 'credential retirement also withdraws the published forecast');
 });
 
 test('changing Claude profiles replaces the quota client and clears account state', () => {
@@ -3809,6 +4647,8 @@ test('a quota response from the previous profile is discarded after a switch', a
 
 test('a same-path credential rotation cannot persist the stale in-flight quota response', async () => {
   const extension = bareExtension();
+  const quotaUpdates: unknown[][] = [];
+  extension.statusBar = {updateQuota: (...args: unknown[]) => quotaUpdates.push(args)};
   let releaseRequest: ((value: unknown) => void) | undefined;
   const client = {
     getCredentialsPath: () => '/private/profile/.credentials.json',
@@ -3844,6 +4684,7 @@ test('a same-path credential rotation cannot persist the stale in-flight quota r
   assert.equal(await pending, null);
   assert.equal(extension.quotaObservationStore.observations.length, 0);
   assert.equal(extension.cache.usageLimits, null);
+  assert.deepEqual(quotaUpdates, [[null,null]], 'old request cannot republish the retired forecast');
 });
 
 test('disabled quota tracking neither calls the provider nor records an observation', async () => {
