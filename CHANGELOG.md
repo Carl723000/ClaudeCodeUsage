@@ -6,6 +6,17 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Fixed
+- **Deleting a transcript re-read the whole history (#99)** — a removed `.jsonl`
+  forced a full body rebuild of every surviving file. The deletion now drops
+  the file's stored contribution, hands UUIDs it owned to the existing
+  ownership-restoration pass (only a surviving twin that also carries them is
+  re-read, including one that only grew a tail in the same refresh), and
+  rebuilds the materialized analysis in memory. An earlier append that
+  preempts a later owner still falls back to one ordered rebuild. Measured on
+  a 976-file, 1.58 GB corpus: 30 s of re-reading becomes one second and zero
+  body reads for an ordinary delete.
+
 ### Changed
 - **Manifest scans stat files concurrently (#99)** — every refresh statted the
   whole history one file at a time; through the Windows filter stack that is

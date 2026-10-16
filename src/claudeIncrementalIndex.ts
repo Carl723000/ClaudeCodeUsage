@@ -2883,7 +2883,16 @@ export async function updateClaudeUsageIndex(
       (previous.analyzeContent ? previous.analysisCutoffMs : undefined);
     const cutoffMovedBackward = priorAnalysisCutoffMs !== undefined &&
       analysisCutoffMs < priorAnalysisCutoffMs;
-    const unsafeSourceMutation = deletions.length > 0 || moves.length > 0 ||
+    // A deletion needs no body re-reads: removeFile below drops the file's
+    // records and its stored contribution, UUIDs it owned are handed to the
+    // ownership restoration pass (a surviving twin that also carries them is
+    // re-read there, and only that twin), and the analysis leaves the append
+    // fast path — deletions.length === 0 is part of its condition — to be
+    // rebuilt in memory from the retained per-file contributions. Measured on
+    // a 976-file, 1.58 GB history: one delete cost 30.0 s of CPU and 975 body
+    // re-reads; now it is 1.0 s and re-reads only twins sharing its UUIDs,
+    // usually nothing.
+    const unsafeSourceMutation = moves.length > 0 ||
       (sourcePlans.length > 0 && !safeTailAppend);
     forcedFullAnalysisRebuild = cutoffMovedBackward || unsafeSourceMutation ||
       canonicalOrderChanged;
@@ -2909,25 +2918,41 @@ export async function updateClaudeUsageIndex(
       }
     }
     if (removedOwnedUuids.size > 0) {
-      const plannedIds = new Set(plans.map((plan) => plan.fileId));
       const deletedIds = new Set(deletions.map((file) => file.fileId));
       for (const entry of currentEntries) {
         const fileId = stableFileId(entry);
-        if (plannedIds.has(fileId) || deletedIds.has(fileId)) continue;
+        if (deletedIds.has(fileId)) continue;
         const prior = previous.files.get(fileId);
         if (!prior) continue;
+        const canRestoreOwnership = [...prior.analysisAllUuids]
+          .some((uuid) => removedOwnedUuids.has(uuid));
+        if (!canRestoreOwnership) continue;
+        const plannedIndex = plans.findIndex((plan) => plan.fileId === fileId);
+        if (plannedIndex >= 0) {
+          const planned = plans[plannedIndex];
+          // A tail read never sees a suppressed duplicate sitting in the
+          // prefix. Promote that append so the claimant is replayed in full;
+          // a plan that already re-reads the body needs nothing more.
+          if (planned.kind !== 'append') continue;
+          analysisRebases.delete(fileId);
+          plans[plannedIndex] = {
+            kind: 'rebuild',
+            analysisReason: 'ownership',
+            entry,
+            fileId,
+            prior: planned.prior ?? prior,
+          };
+          changed.rebuild += 1;
+          continue;
+        }
         const candidate = analysisRebases.get(fileId) ?? prior;
         if (candidate.analysisLastTimestampMs !== undefined &&
           candidate.analysisLastTimestampMs < analysisCutoffMs &&
           !candidate.analysisHasUnboundedTimestamp) {
           continue;
         }
-        const canRestoreOwnership = [...prior.analysisAllUuids]
-          .some((uuid) => removedOwnedUuids.has(uuid));
-        if (!canRestoreOwnership) continue;
         analysisRebases.delete(fileId);
         plans.push({ kind: 'rebuild', analysisReason: 'ownership', entry, fileId, prior });
-        plannedIds.add(fileId);
         changed.rebuild += 1;
       }
     }
@@ -3033,7 +3058,11 @@ export async function updateClaudeUsageIndex(
     const windowRebasedAppends = parsedPlans.some(
       (plan) => plan.analysisReason === 'window',
     );
-    if ((fastAppendAnalysis || windowRebasedAppends) &&
+    // A deletion stays off the append fast path, which used to be the only
+    // place this probe ran. An earlier file can still append a UUID a later
+    // file owns; the in-memory rebuild cannot see that preemption.
+    const deletionMixedWithBodyPlans = deletions.length > 0 && !forcedFullAnalysisRebuild;
+    if ((fastAppendAnalysis || windowRebasedAppends || deletionMixedWithBodyPlans) &&
       previousAnalysisRuntime && parsedPlans.length > 0) {
       let laterOwnerCollision = false;
       for (const appended of parsedPlans) {
