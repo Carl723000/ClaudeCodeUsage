@@ -126,6 +126,14 @@ Squash 合并，不自动合并或发布新版本；既有正式版本交付恢�
 
 ## Pull requests
 
+Describe changes directly; omit private request and approval narratives.
+Use summaries, checklists and review comments for the change, rationale, observed
+tests and factual limitations, not private conversations or agent execution instructions.
+Keep required AI attribution and contributor credit; execution records stay local.
+
+中文审阅：PR 直接写改动、理由、测试和限制，不叙述私人对话中的要求、授权或智能体
+执行指令；概要、核对项、标题和审阅评论均适用。保留必要 AI 归因与真实贡献署名。
+
 - Keep each PR focused on one logical change.
 - Run `npm test` and the relevant browser/host layers below before opening the
   PR.
