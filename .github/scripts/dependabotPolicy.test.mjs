@@ -40,9 +40,9 @@ function validate(source) {
     assert.equal(scalar(body, 'directory', 4), want.directory);
     assert.equal(scalar(body, 'open-pull-requests-limit', 4), 2);
     assert.deepEqual(scalar(body, 'labels', 4), ['dependencies']);
-    assert.match(body, /^    schedule:\n      interval: "weekly"\n      day: "monday"\n      time: "[^"\n]+"\n      timezone: "Asia\/Shanghai"$/m);
+    assert.match(body, /^    schedule:\n      interval: "weekly"\n      day: "sunday"\n      time: "[^"\n]+"\n      timezone: "Asia\/Shanghai"$/m);
     assert.equal(scalar(body, 'interval', 6), 'weekly');
-    assert.equal(scalar(body, 'day', 6), 'monday');
+    assert.equal(scalar(body, 'day', 6), 'sunday');
     assert.equal(scalar(body, 'timezone', 6), 'Asia/Shanghai');
     assert.equal(scalar(body, 'time', 6), want.time);
     assert.match(body, new RegExp(`^    groups:\\n      ${want.group}:\\n`, 'm'));
@@ -93,7 +93,7 @@ test('unsafe schedule, routing, grouping and limit mutations fail the configurat
   const source = read('.github/dependabot.yml');
   for (const [before, after] of [
     ['interval: "weekly"', 'interval: "daily"'],
-    ['day: "monday"', 'day: "friday"'],
+    ['day: "sunday"', 'day: "monday"'],
     ['timezone: "Asia/Shanghai"', 'timezone: "UTC"'],
     ['open-pull-requests-limit: 2', 'open-pull-requests-limit: 20'],
     ['directory: "/.github/build-tools"', 'directory: "/tools"'],

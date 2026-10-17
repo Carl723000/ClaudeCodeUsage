@@ -78,7 +78,7 @@ a default-profile `code --install-extension` or modify the daily installation.
 
 `.github/dependabot.yml` becomes active only after it reaches the default branch.
 It checks development dependencies, separate build tools and GitHub Actions each
-Monday at 09:00, 09:30 and 10:00 respectively in `Asia/Shanghai`. These are requested
+Sunday at 09:00, 09:30 and 10:00 respectively in `Asia/Shanghai`. These are requested
 check times, not guaranteed job start times; first enablement may also prompt an
 initial check. Validate the first real job and generated PR after enablement;
 local checks alone do not establish scheduling or real bot execution.
@@ -106,7 +106,7 @@ release triggers. Removing it stops ordinary version updates; security alerts
 and security updates remain separate repository security settings.
 
 中文审阅：配置进入默认分支后才启用。开发依赖、独立构建工具和 GitHub Actions 分别在
-每周一北京时间 09:00、09:30、10:00 请求检查；实际启动可能排队，初次启用也可能先检查一次。
+每周日北京时间 09:00、09:30、10:00 请求检查；实际启动可能排队，初次启用也可能先检查一次。
 每类最多两个未关闭的普通升级 PR，三类合计最多六个，不是全仓库最多两个。小版本／补丁
 按用途分组；大版本及根目录 Axe、VS Code 类型升级单独提案，仍可能出现，并非忽略。
 不设置忽略／允许筛选或其他目标分支，分组仅用于普通版本升级；已有安全警报和安全修复
