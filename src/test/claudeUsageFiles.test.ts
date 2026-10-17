@@ -50,7 +50,7 @@ test('manifest scanning fails closed on permission errors but tolerates stat ENO
   assert.equal(missing.entries.size, 0);
 });
 
-test('manifest scanning stats files concurrently and keeps discovery order', async () => {
+test('manifest scanning stats files concurrently and keeps discovery order', { timeout: 10_000 }, async () => {
   const { root, file } = await fixture();
   const project = path.dirname(file);
   const names = Array.from({ length: 20 }, (_, index) => `session-${String(index).padStart(2, '0')}.jsonl`);
@@ -59,6 +59,11 @@ test('manifest scanning stats files concurrently and keeps discovery order', asy
   }
   let inFlight = 0;
   let maxInFlight = 0;
+  let started = 0;
+  const admissions = new Map<number, () => void>();
+  const waitForStarted = (count: number): Promise<void> => started >= count
+    ? Promise.resolve()
+    : new Promise((resolve) => admissions.set(count, resolve));
   const pending: Array<() => void> = [];
   const manifestPromise = scanUsageManifest([root], {
     readdir: (dir: string) => readdir(dir, { withFileTypes: true }),
@@ -69,34 +74,33 @@ test('manifest scanning stats files concurrently and keeps discovery order', asy
         inFlight -= 1;
         resolve(stat(filePath));
       });
+      started += 1;
+      admissions.get(started)?.();
+      admissions.delete(started);
     }),
   });
-  const waitFor = async (ready: () => boolean): Promise<void> => {
-    for (let attempt = 0; attempt < 50 && !ready(); attempt += 1) {
-      await new Promise((resolve) => setImmediate(resolve));
-    }
-    assert.ok(ready(), 'the scan did not reach the expected in-flight state');
-  };
-  await waitFor(() => pending.length === 8);
+  // Observe actual worker admission rather than racing a fixed number of
+  // event-loop turns against filesystem completion on a loaded CI runner.
+  await waitForStarted(8);
+  assert.equal(pending.length, 8);
   assert.equal(maxInFlight, 8, 'the eight-worker ceiling is reached, not exceeded');
   // Releasing one worker must admit exactly one more, and never past the ceiling.
   pending.pop()!();
-  await waitFor(() => pending.length === 8);
+  await waitForStarted(9);
+  assert.equal(pending.length, 8);
   assert.equal(maxInFlight, 8);
-  let settled = false;
-  const manifest = manifestPromise.finally(() => { settled = true; });
-  while (!settled) {
-    if (pending.length === 0) {
-      await new Promise((resolve) => setImmediate(resolve));
-      continue;
-    }
+  while (pending.length > 0) {
+    const nextAdmission = started + 1;
     // Reverse of start order, so a completion-order leak cannot pass as discovery order.
     pending.pop()!();
+    if (started < names.length) await waitForStarted(nextAdmission);
   }
   assert.deepEqual(
-    [...(await manifest).entries.keys()],
+    [...(await manifestPromise).entries.keys()],
     names.map((name) => path.join(project, name)),
   );
+  assert.equal(started, names.length, 'every discovered file is statted exactly once');
+  assert.equal(maxInFlight, 8, 'the ceiling holds through the entire drain');
 });
 
 test('a fatal stat stops scheduling files that have not started', async () => {
