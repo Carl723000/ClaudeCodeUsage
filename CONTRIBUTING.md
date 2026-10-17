@@ -28,18 +28,34 @@ Deleting the selected session moves its log to the OS trash.
 
 ## Development setup
 
+Use Node **24 LTS** (`.nvmrc`; `nvm use` if you use nvm).
+
 ```bash
-npm install
+npm ci --ignore-scripts
 npm run compile          # tsc -> out/
 npm run watch            # recompile on change
 ```
 
 - Press **F5** in VS Code to launch the Extension Development Host and test
   your changes manually.
-- Package a `.vsix` with `npx -y @vscode/vsce@3.9.1 package`.
-  This is the pinned contributor recipe, not a claim about the latest stable
-  VSCE. For a candidate, record the actual verified packaging tool/version and
-  freeze its source and package hashes; do not silently upgrade dependencies.
+- Install build-only tools with `npm ci --prefix .github/build-tools --ignore-scripts`,
+  then package with `.github/build-tools/node_modules/.bin/vsce package`.
+  The separate manifest pins VSCE 4.0.0 and OVSX 1.3.0, including their transitive
+  dependencies in its lock. These tools never become extension runtime dependencies.
+  For a candidate, record actual tool versions and freeze source and package hashes.
+- Audit both locks with `npm audit --ignore-scripts --audit-level=high` and
+  `npm audit --prefix .github/build-tools --ignore-scripts --audit-level=high`.
+  CI fails on high/critical advisories or audit service errors; a successful audit
+  only covers known advisories, not all possible supply-chain compromises.
+  Keep installation scripts disabled; investigate any tool requiring one rather
+  than enabling scripts globally. Update the tool lock through a reviewed PR,
+  not `npx` downloads or `npm audit fix --force` in a publish job.
+
+中文审阅：开发和主要 CI 使用 Node 24 LTS。根目录和 `.github/build-tools` 分别锁定
+测试依赖与构建／发布工具；两处均用 `npm ci --ignore-scripts` 安装并审计，高危／严重
+漏洞或审计服务失败会阻止 CI。VSCE 4.0.0／OVSX 1.3.0 及其间接依赖使用独立锁文件，
+不随插件交付，不提高插件最低 VS Code 版本。发布不临时下载工具，也不自动强制修复依赖；
+升级通过审阅的 PR 完成。审计无警报只表示未命中已知漏洞，不能证明供应链绝对安全。
 
 Before host smoke or installation, isolate all writable user-data, extensions,
 shared/agent state, global/workspace storage, provider homes, caches and lock
@@ -124,7 +140,8 @@ does not execute F5 or accept the installed UI.
 CI uses separate gates, with packaging after both test jobs pass on every PR
 (`.github/workflows/test.yml`). Canonical Linux screenshots may only be updated
 with the exact official container
-`mcr.microsoft.com/playwright:v1.61.1-noble`, with
+`mcr.microsoft.com/playwright:v1.64.1-noble` pinned to the multi-platform digest
+in `test.yml`, with
 `PLAYWRIGHT_BROWSERS_PATH=/ms-playwright`. A macOS run must not overwrite a
 Linux snapshot; reproduce and update it in that exact Linux container.
 
@@ -176,6 +193,15 @@ Changes ship through your original PR, preserving its *merged* status. The defau
 squash produces a new commit rather than preserving each branch commit SHA; the
 maintainer verifies its author and applicable `Co-authored-by` trailers and retains
 truthful per-entry Release credit.
+
+Manual retries obtain the release-tool manifest and lock from the exact trusted
+workflow commit, fetching that commit explicitly even when the release checkout
+does not contain it. Tools install and pass audit outside the packaged tree;
+the original tag's source and any restored release asset remain unchanged.
+
+中文审阅：历史版本重试会显式获取当前可信工作流的精确提交，从中读取工具清单和锁文件，
+在打包目录外安装并通过审计；不要求旧版本包含新工具配置，不改变原 tag 源码或已恢复的
+正式安装包。三个交付目标仍独立重试，成功审计不会自动触发版本发布。
 
 ### Release-note attribution
 

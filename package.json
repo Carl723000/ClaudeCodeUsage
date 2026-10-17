@@ -188,10 +188,10 @@
     "test:release": "npm run test:node && npm run test:ui"
   },
   "devDependencies": {
-    "@axe-core/playwright": "4.12.1",
-    "@playwright/test": "1.61.1",
-    "@types/node": "24.0.15",
-    "@types/vscode": "^1.74.0",
-    "typescript": "^5.8.3"
+    "@axe-core/playwright": "4.14.0",
+    "@playwright/test": "1.64.1",
+    "@types/node": "24.19.2",
+    "@types/vscode": "1.74.0",
+    "typescript": "5.9.3"
   }
 }
