@@ -44,6 +44,7 @@ const server = createServer(async (request, response) => {
     const theme = ['dark', 'highContrast'].includes(requestedTheme) ? requestedTheme : 'light';
     const requestedFixture = url.searchParams.get('fixture') ?? 'default';
     const fixture = [
+      'usage-diagnostics-on', 'usage-diagnostics-off', 'usage-diagnostics-updated',
       'default',
       'complete-index',
       'rootless-cycle',
