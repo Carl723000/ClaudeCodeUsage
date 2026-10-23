@@ -6,6 +6,16 @@
 Die Erweiterung liest lokale Nutzungsprotokolle und zeigt Anbieter-Daten mit
 jeweils passender Bedeutung an. Sie ist **kein Abrechnungswerkzeug**.
 
+## Noch unveröffentlichte Visualisierungen
+
+- Galerie, Schaukasten, nächste Ziele, Auswahlvorschauen und SVG-Exporte verwenden dieselben quadratischen Rahmen und Rangverzierungen. Illustrationen und Vergabekriterien bleiben erhalten.
+- Die bestehenden Token-Diagramme für 30/90 Tage erhalten Tages-, Wochen- und Monatsansichten sowie eine Projektauswahl. Unbekannte Werte, bestätigte Nullen und Teilsummen bleiben unterscheidbar; angeschnittene Zeiträume sind markiert.
+- Für Beträge gibt es ein optionales kompaktes Layout; Standard bleibt voreingestellt. Claude und Codex werden getrennt dargestellt. Änderungen erfordern eine neue bestätigte Vorschau; gespeicherte SVG-Bytes werden zurückgelesen und mit ihr verglichen.
+- Siebentägige Mengen- und anbieterbezogene Betragsauszeichnungen verwenden abgeschlossene rollierende Fenster aus sieben Kalendertagen. Vorhandene Auszeichnungen behalten ihre Aufzeichnungen und werden als frühere Regeln gekennzeichnet; fehlende Evidenz erzeugt keine Daten. Tatsächliche Quoten-Resetzyklen bleiben unverändert.
+- Drei Diagnosen sind standardmäßig aus: Ausgabe pro verstrichener Stunde, beobachtete Nutzungsänderungen und Quotenabnahmerate. Sie verwenden vorhandene Zahlenaggregate und geeignete Quotenbeobachtungen. Fehlende Evidenz bleibt nicht verfügbar; Stundenausgabe ist keine Generierungs-TPS, Änderungen belegen keine Ursachen und Quotenraten sind historische Mittelwerte statt Prognosen.
+
+Diese Änderungen sind noch nicht veröffentlicht. Keine zusätzlichen Log-Scans, Authentifizierungsanfragen, Hintergrundsammlungen oder automatischen Veröffentlichungen. Siehe [lokale Daten und Löschung](LOCAL-DATA.md).
+
 ## Auf einen Blick
 
 - **Ruhigere Aktualisierung und klare Wiederherstellung:** Die Pause gilt für beide

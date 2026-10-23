@@ -6,6 +6,16 @@
 extensão lê registros locais e mostra cada provedor conforme o significado
 dos seus dados. **Não é uma ferramenta de cobrança.**
 
+## Visualizações ainda não lançadas
+
+- Galeria, vitrine, próximos objetivos, miniaturas de seleção e SVGs compartilham molduras quadradas e adornos de nível. Ilustrações e critérios de conquista permanecem iguais.
+- Os gráficos de Tokens de 30/90 dias ganham escalas diária, semanal e mensal e seleção de projetos. Valores desconhecidos, zeros verificados e subtotais parciais ficam distintos; semanas e meses incompletos nas extremidades são indicados.
+- O compartilhamento de valores oferece layout compacto opcional; o padrão continua sendo o normal. Claude e Codex ficam separados. Alterações exigem uma nova prévia aceita; os bytes do SVG salvo são relidos e comparados com essa prévia.
+- Conquistas de volume e valores por provedor em sete dias usam janelas móveis encerradas de sete dias civis. Prêmios existentes preservam os registros e são identificados como regras anteriores; evidência ausente não gera datas. Os ciclos reais de redefinição de cota não mudam.
+- Três diagnósticos vêm desativados: saída por hora decorrida, mudanças observadas no uso e taxa de redução da cota. Usam agregados numéricos existentes e observações de cota elegíveis; sem evidência suficiente, ficam indisponíveis. Saída por hora não é TPS de geração, mudanças não provam causas e taxas de cota são médias históricas, não previsões.
+
+Estas mudanças ainda não foram lançadas. Não acrescentam leitura de logs, pedidos de autenticação, coleta em segundo plano ou publicação automática. Consulte [dados locais e limpeza](LOCAL-DATA.md).
+
 ## O essencial
 
 - **Atualização e recuperação mais claras:** a pausa vale para as duas páginas,

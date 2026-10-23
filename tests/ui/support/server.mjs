@@ -64,6 +64,7 @@ const server = createServer(async (request, response) => {
       'local-currency',
       'achievement-token-stages',
       'achievement-share-resources',
+      'achievement-rolling-seven',
       'achievement-calendar-subset',
       'achievement-review-loading',
       'achievement-review-failure',

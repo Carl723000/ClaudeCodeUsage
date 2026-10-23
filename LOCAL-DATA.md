@@ -11,7 +11,7 @@ historical v2.3.1 field-level baseline is in
 [`docs/superpowers/specs/2026-09-02-v2.3.1-local-data-contract.md`](docs/superpowers/specs/2026-09-02-v2.3.1-local-data-contract.md).
 The later compression, sharing, quota-pace and achievement sections here govern their added
 runtime/persistent fields and exact clearing rules, including the canonical v2
-envelope and twelve sharing keys. They do not relax unchanged baseline source-log,
+envelope and thirteen sharing keys. They do not relax unchanged baseline source-log,
 credential, account-separation or explicit-network-consent restrictions.
 
 ## What the extension reads and retains
@@ -87,8 +87,9 @@ The two weekly API-equivalent series each have five levels: Bronze $100, Silver
 $500, Gold $2,500, Platinum $10,000 and Legendary $25,000. Only the last two ranks
 per provider are new; old IDs, thresholds and saved provenance are unchanged.
 The catalog now has 24 monetary conditions within 178 rules and 50 themes. Weekly
-evidence still requires a completed Monday-start week in the configured timezone
-and the existing frozen reference-price basis. No live weekly receipt, extra
+evidence in the released baseline used a completed Monday-start week; the unreleased
+rule-version-3 migration below uses closed rolling seven-day windows in the configured
+timezone with the same frozen reference-price basis. No live weekly receipt, extra
 usage history or storage schema is introduced. The four new IDs are rejected by
 legacy-envelope parsing; a pre-expansion reader fails closed without rewriting
 or clearing either envelope. The reported maximum-envelope fixture is 37,374 bytes
@@ -223,13 +224,14 @@ Document/request checks reject superseded replies; source references, controls,
 pricing/timezone/locale/currency/display revisions bind acceptance. A changed
 source or pending repricing cannot export a previous amount preview. Export checks
 before and after the save dialog, including the current visible/ready document,
-then writes the immutable accepted SVG bytes;
-Markdown copying also requires current acceptance.
+then writes the immutable accepted SVG bytes. It reads the same destination URI back,
+compares exact bytes and rechecks acceptance; a read failure, mismatch or retired
+receipt is not reported as a successful export. Markdown copying also requires current acceptance.
 
-Reset Sharing Preferences clears exactly twelve browser keys: `ccu.sharing.template`,
-`ccu.sharing.achievementBadges`, `ccu.sharing.shareCardDraft`, and the nine
+Reset Sharing Preferences clears exactly thirteen browser keys: `ccu.sharing.template`,
+`ccu.sharing.achievementBadges`, `ccu.sharing.shareCardDraft`, and the ten
 `ccu.combinedHeatmap.` suffixes `title`, `range`, `intensityMode`, `privacyPreview`,
-`palette`, `customAccent`, `provider`, `metric`, `showAmounts`. These are bounded
+`palette`, `customAccent`, `provider`, `metric`, `showAmounts`, `presentation`. These are bounded
 presentation choices, not provider logs, quota observations or credentials. It
 uses the existing request-ID/ACK path and applies defaults only after deletion succeeds.
 
@@ -582,15 +584,16 @@ Numeric evaluation reuses materialized indexes. Six API-equivalent achievement
 themes use fixed versioned USD reference prices
 (`api-reference-2026-10-{backend}-v1`, dated 2026-10-09), exact known models and
 complete component rates (including known Claude
-cache-write TTL). They cover cumulative priced subtotals, completed Monday-start
-weeks in the current data zone and one Claude session/verified Codex task tree.
+cache-write TTL). They cover cumulative priced subtotals, closed rolling-seven-day
+peaks under the unreleased migration below, and one Claude session/verified Codex task tree.
 Priced subsets prove a lower bound, not a bill. Monetary history stays quiet;
 only the four cumulative money tiers per provider can save unread first-record
 day/zone from accepted native Claude/Codex tail-window increments. Before/after
 cumulative evidence and the increment must use the same frozen public pricebook;
 the increment must suffice from the prior total and be necessary to the new total
 crossing the tier. Price changes, imports and rebuilds do not establish live origin.
-Completed-week and single-session/task money awards stay quiet with unknown dates.
+Peak and single-session/task money awards stay quiet. A verified rolling-window
+date does not establish live origin or rewrite the saved first-record date.
 
 Monetary-origin proof is runtime-only: public provider/backend/book version,
 bounded exact units, microUSD and eligible processed Tokens. The new numeric money,
@@ -730,3 +733,77 @@ Webview behavior or installed-package acceptance.
   coverage. They are estimates, not provider bills or subscription prices.
 - Retention of source logs is controlled by Claude Code and Codex, not this
   extension.
+
+## Unreleased visualization data boundaries
+
+Project controls extend the existing provider-scoped `projectUsageMatrix` Webview
+state with `scale`, up to 200 opaque `filters`, a `filterScope` and a bounded
+selection key, alongside range/view/expanded. Selection is encoded as
+`range:scale:h:handle:period` for heatmap cells or `range:scale:t:period` for trend
+periods. It does not persist rendered project labels or detail text. Details are
+rebuilt from matching current DOM data; old free text is not restored as a detail.
+Handles are stable local pseudonyms: SHA-256 over `vscode.env.machineId`, a fixed
+project-filter namespace, provider and the host-only project key, truncated to
+32 hexadecimal characters. This is not encryption or a claim of global anonymity.
+Filtering messages must match the current document/provider/scope and available
+handles. Unavailable restored handles are not sent; their saved filter and
+selection are cleared. Stable handles retain valid choices across same-source reloads.
+
+Before rendering a provider, the host replaces that provider's handle map with
+at most 200 selectable projects, so the two-provider map has at most 400 entries.
+The projection cache is runtime-only, weakly keyed by the materialized snapshot
+and capped at 12 results per snapshot. `clearProjectChartRuntime` drops the host
+selection, handle map/scope and cache on panel disposal or UI/all-client reset;
+it also runs when Claude source data is cleared, its directory/error/timezone
+changes, or Codex has no view, is disabled, loses current evidence or changes
+timezone. Reset UI State additionally clears the Webview state. These operations
+do not delete provider logs; rebuilding controls uses current aggregates only.
+No source-log scan, disk chart cache, upload or network path is added.
+
+These changes reuse the existing data owners. They add no raw-log scanner,
+credential lookup, background sampler, anonymous contribution or publication
+path. Existing optional official quota collection can still make its separately
+authorized network requests; enabling a diagnostic does not enable that collector.
+
+The three shared STATE flags `showUsageThroughput`, `showUsageChange` and
+`showQuotaDeclineRate` default to false and are stored as
+`ccu.setting.showUsageThroughput`, `ccu.setting.showUsageChange` and
+`ccu.setting.showQuotaDeclineRate`. They follow the existing settings reset/clear
+catalog. Reset UI State clears disclosure/selection state, not these feature
+preferences; clearing quota history does not silently opt the feature in or out.
+The diagnostic DTOs, rendered results and bounded two-provider quota projection
+cache remain runtime-only. Off bypasses daily projection and withdraws the rate;
+source/configuration invalidation, clear/reload and disposal make old observations
+ineligible. No diagnostic history file or new quota observation field is written.
+
+Daily diagnostics consume already materialized dates, numeric processed/output
+amounts and available model/role partitions. Codex exposes at most 30 days through
+a lazy host-only adapter. The official quota adapter reads existing P2 records
+only after the current account/source and original observation time match; it
+retains HMAC identity and window matching inside the host. The view receives
+only fixed status/scope/precision values and rate, interval endpoints, percentage
+point change, reset time and sample count. Unverified local-log identity,
+missing timing, gaps, conflicts and expired observations do not become a rate.
+The complete closed-seven-day statistic is a bounded textual result, not a new
+chart, award or persistent receipt.
+
+Compact amount layout is one additional bounded browser preference,
+`ccu.combinedHeatmap.presentation`, cleared with the other sharing keys listed
+above. It defaults to standard; Token/hidden-amount output canonicalizes to
+standard even when a compact amount preference is remembered. One accepted SVG
+remains in memory, with layout included in its identity. Integer rounding does
+not turn a partial subtotal into a guaranteed rounded lower bound. Quality stays
+in descriptions/tooltips rather than visible coverage footers or plus signs.
+Saving reads back only the exact destination URI just written and compares it
+with the accepted bytes; this verification adds no source-log or credential read.
+
+The rolling-seven-day achievement change writes no new history file. It keeps
+the canonical v2 envelope and existing clearing/generation rules, reads catalog
+versions 2/3, and writes catalog version 3. Thirteen affected achievement IDs use
+rule version 3 for new awards. Retained rule-version-1 calendar-week records,
+their original dates/provenance and pins are preserved and labelled as legacy;
+they are not silently recertified. The new window start/end dates are runtime
+derived evidence, not added per-window persistent usage receipts. An older reader
+may reject unknown catalog/rule versions; this is not a universal downgrade-write
+guarantee. This supplement supersedes the earlier Monday-week wording only for
+those peak-award rules; active-week measures and real quota cycles remain separate.

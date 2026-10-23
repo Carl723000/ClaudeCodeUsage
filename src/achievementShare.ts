@@ -1,3 +1,4 @@
+import {achievementRollingCopyFor} from './achievementRollingCopy';
 import { ACHIEVEMENT_DEFINITIONS, ACHIEVEMENT_SERIES, AchievementId, AchievementResult } from './achievements';
 import { renderAchievementIcon } from './achievementIcons';
 import type { AchievementCopy } from './i18n';
@@ -96,6 +97,8 @@ const REPOSITORY_URL = 'https://github.com/ClaudeCodeUsage/ClaudeCodeUsage';
 /** Deterministic, self-contained SVG; carries titles only, never raw usage or identities. */
 export function renderAchievementShareSvg(input: {
   selected: readonly AchievementId[];
+  /** Existing calendar-week receipts stay shareable without claiming rolling proof. */
+  retainedCalendarIds?:readonly AchievementId[];
   titles: Partial<Record<AchievementId, string>>;
   heading: string;
   subtitle: string;
@@ -124,10 +127,12 @@ export function renderAchievementShareSvg(input: {
     const levelLabel = level === undefined ? input.milestone : input.levels[level];
     const target=ACHIEVEMENT_DEFINITIONS.find(row=>row.id===id)!.target;
     const threshold=isAchievementMoneyId(id) ? '≥$'+new Intl.NumberFormat(input.locale ?? 'en').format(target/1_000_000)+' USD' : '';
-    const condition=achievementConditionFor(input.locale ?? 'en',id);
+    const retained=input.retainedCalendarIds?.includes(id)===true;
+    const condition=retained?achievementRollingCopyFor(input.locale??'en').legacy:achievementConditionFor(input.locale ?? 'en',id);
     const publicTitle=[title,levelLabel,threshold,condition].filter(Boolean).join(' · ');
     const groupLines = wrapLabel(input.groups[group], 14);
-    const rankLines = wrapLabel(levelLabel + (threshold ? ' · ' + threshold : ''), 14);
+    const rankLines = wrapLabel(levelLabel + (threshold ? ' · ' + threshold : '')+
+      (retained?' · '+achievementRollingCopyFor(input.locale??'en').legacyShort:''), 14);
     // Reserve three title lines, then grow downward for full group/rank labels.
     const groupY = 88;
     const rankY = groupY + Math.max(0, groupLines.length - 1) * 16 + 24;
@@ -140,7 +145,7 @@ export function renderAchievementShareSvg(input: {
     const x = 48 + (index % 3) * 304;
     const y = gridY + Math.floor(index / 3) * (cellHeight + 20);
     return `<g data-achievement-share-badge="${id}"><title>${escapeXml(publicTitle)}</title>` +
-      `<rect x="${x}" y="${y}" width="280" height="${cellHeight}" rx="14" fill="#202430" stroke="${color}" stroke-width="2"/>` +
+      `<rect x="${x}" y="${y}" width="280" height="${cellHeight}" rx="6" fill="#202430" stroke="#48505f" stroke-width="1" data-share-card-frame="neutral"/>` +
       renderAchievementIcon(id, accent, { x: x + 11, y: y + 24, size: 64 }) +
       `<text x="${x + 86}" y="${y + 26}" font-size="16" font-weight="600" fill="${color}">${textLines(titleLines, x + 86, 19)}</text>` +
       `<text x="${x + 86}" y="${y + groupY}" font-size="12" fill="#b9bfcc">${textLines(groupLines, x + 86, 16)}</text>` +

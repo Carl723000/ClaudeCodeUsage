@@ -1,5 +1,8 @@
+import { projectChartProjection, ProjectChartScale } from './projectChartProjection';
 import * as vscode from 'vscode';
 import { ClaudeDataLoader } from './dataLoader';
+import {adaptClaudeDiagnosticDays, diagnosticThroughput, diagnosticChange, diagnosticSevenDayPeak, type DiagnosticDay} from './usageDiagnostics';
+import type {QuotaDiagnosticsProjection} from './usageDiagnosticsQuota';
 import type { ClaudeUsageRecord } from './types';
 import {achievementTitleWithoutRank} from './achievementTitles';
 import {achievementUiIcon} from './achievementUiIcons';
@@ -17,7 +20,8 @@ import {API_ACHIEVEMENT_DEFINITIONS,isAchievementMoneyId,type AchievementMoneyFa
 import {cumulativeCrossings} from './achievementMoneyOrigin';
 import type {AchievementMoneyScopes} from './achievementMoneyScopes';
 import {achievementMoneyCopyFor} from './achievementMoneyCopy';
-import { achievementRuleVersion } from './achievementRuleVersions';
+import { achievementRuleVersion, isRollingSevenDayAchievement } from './achievementRuleVersions';
+import {achievementRollingCopyFor} from './achievementRollingCopy';
 import {
   ACHIEVEMENT_DEFINITIONS,
   ACHIEVEMENT_SERIES,
@@ -35,7 +39,6 @@ import {
   longestActiveDayStreak,
   notifiableAchievementIds,
   newlyUnlockedPluginAchievements,
-  peakCalendarWeekProcessed,
 } from './achievements';
 import { achievementCalendarSignals, claudeAchievementDayEvidence, AchievementDayEvidence,
   CalendarPeakEvidence, calendarPeakContext, parseCalendarPeakEvidence,
@@ -74,7 +77,7 @@ import { DEFAULT_SECTIONS, ShareSections, buildShareCardData, shareCardFilename 
 import { renderShareCardSvg, ShareCardTheme } from './shareCardSvg';
 import { AchievementSharePreview, highestEarnedAchievements, renderAchievementShareSvg, selectShareAchievements } from './achievementShare';
 import { getAchievementMoneyPricebook } from './achievementMoney';
-import { ACHIEVEMENT_IMAGE_FILES, achievementImageDataUrl, achievementImagePath } from './achievementIcons';
+import { ACHIEVEMENT_IMAGE_FILES, achievementImageDataUrl, achievementImagePath, renderAchievementWebviewIcon } from './achievementIcons';
 import { formatAchievementCompact, formatAchievementInteger } from './achievementFormat';
 import { nextAchievementStage } from './achievementStages';
 import { ACHIEVEMENT_GALLERY, achievementGalleryKey, achievementStatisticsDestination } from './achievementGallery';
@@ -1062,6 +1065,11 @@ export class UsageWebviewProvider {
   private error: string | null = null;
   private dataDirectory: string | null = null;
   private currentTab: string = 'today';
+  private projectChartSelection: Partial<Record<SettingProvider, string[]>> = {};
+  private projectChartHandles?: Map<string, string>;
+  private projectChartCache?: WeakMap<ProjectUsageMatrixSnapshot, Map<string, ReturnType<typeof projectChartProjection>>>;
+  private projectChartHandleScopes?: Partial<Record<SettingProvider,string>>;
+  private projectChartEpochs: Partial<Record<SettingProvider,string>> = {};
   private currentProvider: 'claude' | 'codex' | 'compare' = 'claude';
   private sharingTemplate: SharingTemplate = 'combinedHeatmap';
   private sharingWorkspaceRequested = false;
@@ -1539,7 +1547,7 @@ export class UsageWebviewProvider {
     // paint their old qualification as a current joint-rule achievement.
     this.achievementLegacyRuleGrants = [...new Set([...legacyRuleRecordInput,
       ...[...this.achievementGrants].filter(id => achievementRuleVersion(id) === 2)])];
-    this.achievementGrants = new Set([...this.achievementGrants].filter(id => achievementRuleVersion(id) === 1));
+    this.achievementGrants = new Set([...this.achievementGrants].filter(id => achievementRuleVersion(id) !== 2));
     void this.achievementWrite.catch(() => undefined);
     void this.achievementActivityWrite.catch(() => undefined);
     void this.achievementHourWrite.catch(() => undefined);
@@ -2054,6 +2062,7 @@ export class UsageWebviewProvider {
    * not reported until the live panel confirms its exact allowlists ran.
    */
   public requestClientLocalDataAction(action: LocalDataClientAction): Promise<boolean> {
+    if (action === 'reset-ui-state' || action === 'clear-all-client-state') this.clearProjectChartRuntime(true);
     const panel = this.panel;
     if (!panel) return Promise.resolve(false);
     const requestId = randomBytes(12).toString('hex');
@@ -2469,6 +2478,7 @@ export class UsageWebviewProvider {
     });
 
     this.panel.onDidDispose(() => {
+      this.clearProjectChartRuntime();
       this.panel = undefined;
       this.dashboardDocumentId = randomBytes(24).toString('hex');
       this.achievementUnreadPacket = undefined;
@@ -2495,6 +2505,9 @@ export class UsageWebviewProvider {
 
     this.panel.webview.onDidReceiveMessage(async (message) => {
       switch (message.command) {
+        case 'projectChartFilter':
+          this.handleProjectChartFilter(message);
+          break;
         case 'refresh':
           this.achievementOverviewSelection = undefined;
           vscode.commands.executeCommand('claudeCodeUsage.refresh');
@@ -2724,6 +2737,12 @@ export class UsageWebviewProvider {
             });
             if (uri) {
               await vscode.workspace.fs.writeFile(uri, Buffer.from(svg, 'utf8'));
+              const savedBytes = await vscode.workspace.fs.readFile(uri);
+              // Verify against the captured immutable SVG, not any later preview
+              // or the mutable buffer handed to a filesystem provider.
+              if (!Buffer.from(savedBytes).equals(Buffer.from(svg, 'utf8'))) {
+                throw new Error('achievement-share:readback-mismatch');
+              }
               this.recordAchievementFeature('localShareExport');
               reply({ ok: true });
             } else { reply({ ok: false, cancelled: true }); }
@@ -2754,7 +2773,7 @@ export class UsageWebviewProvider {
               message.palette,
               message.customAccent,
               message.intensityMode,
-              message.provider, message.metric, message.showAmounts,
+              message.provider, message.metric, message.showAmounts, message.presentation,
             );
             const accepted = this.acceptApiHeatmapArtifact(artifact);
             this.panel.webview.postMessage({
@@ -2791,7 +2810,11 @@ export class UsageWebviewProvider {
             });
             if (!uri) { reply({ok:false,cancelled:true}); break; }
             if (this.acceptedApiHeatmapForMessage(message) !== accepted) { reply({ok:false,stale:true}); break; }
-            await vscode.workspace.fs.writeFile(uri, Buffer.from(accepted.artifact.svg, 'utf8'));
+            const expectedBytes = Buffer.from(accepted.artifact.svg, 'utf8');
+            await vscode.workspace.fs.writeFile(uri, expectedBytes);
+            const savedBytes = await vscode.workspace.fs.readFile(uri);
+            if (!expectedBytes.equals(Buffer.from(savedBytes))) { reply({ok:false}); break; }
+            if (this.acceptedApiHeatmapForMessage(message) !== accepted) { reply({ok:false,stale:true}); break; }
             this.recordAchievementFeature('localShareExport');
             reply({ok:true});
           } catch { reply({ok:false}); }
@@ -3153,6 +3176,7 @@ export class UsageWebviewProvider {
 
   /** Drop every source-owned artifact before a replacement source is verified. */
   clearClaudeSource(): void {
+    this.clearProjectChartRuntime(true, 'claude');
     this.invalidateAchievementEvidence('claude');
     this.achievementNoticeBaseline.reset();
     this.usageLimits = null;
@@ -3191,6 +3215,7 @@ export class UsageWebviewProvider {
     achievementTimeZone?: string,
     achievementMoney?: AchievementMoneyScopes,
   ): void {
+    if ((this.dataDirectory && this.dataDirectory !== (dataDirectory || null)) || error || (achievementTimeZone && this.achievementCalendarTimeZone && achievementTimeZone !== this.achievementCalendarTimeZone)) this.clearProjectChartRuntime(true, 'claude');
     if (achievementTimeZone && this.achievementCalendarTimeZone &&
         achievementTimeZone !== this.achievementCalendarTimeZone) this.achievementNoticeBaseline.reset();
     if (error) this.invalidateAchievementEvidence('claude');
@@ -3253,6 +3278,9 @@ export class UsageWebviewProvider {
     codexAchievementSignals?: CodexAchievementSignals,
     awardEvidenceCurrent = true,
   ): void {
+    if (this.codexView && (!codexView || !providerAvailability.codex ||
+        (this.codexView.currentManifestVerified === true && !awardEvidenceCurrent) ||
+        this.codexView.periodCoverage.timeZone !== codexView.periodCoverage.timeZone)) this.clearProjectChartRuntime(true, 'codex');
     if (!providerAvailability.codex) this.invalidateAchievementEvidence('codex');
     if ((this.codexView && !codexView) ||
         (codexView && this.codexView &&
@@ -3797,6 +3825,7 @@ export class UsageWebviewProvider {
     customAccentInput: unknown = '#4f2f87',
     intensityModeInput: unknown = 'quantile',
     providerInput: unknown = 'both', metricInput: unknown = 'tokens', showAmountsInput: unknown = false,
+    presentationInput: unknown = 'standard',
   ): ApiHeatmapConfig {
     const copy = combinedHeatmapUiCopy(I18n.getLocale());
     const title = sanitizeCombinedHeatmapTitle(titleInput, copy.defaultTitle);
@@ -3810,6 +3839,7 @@ export class UsageWebviewProvider {
       intensityMode: normalizeCombinedHeatmapIntensityMode(intensityModeInput),
       provider: providerInput === 'claude' || providerInput === 'codex' ? providerInput : 'both',
       metric: metricInput === 'apiEquivalent' ? 'apiEquivalent' : 'tokens', showAmounts: showAmountsInput === true,
+      presentation: presentationInput === 'compact' ? 'compact' : 'standard',
       claudeBackend: getPricingBackend(), dataRevision: this.apiHeatmapRevision,
       pricingRevision: getPricingLastFetched()?.time ?? 0,
     };
@@ -3820,9 +3850,10 @@ export class UsageWebviewProvider {
     rangeInput: unknown, titleInput: unknown, paletteInput: unknown = 'academicViolet',
     customAccentInput: unknown = '#4f2f87', intensityModeInput: unknown = 'quantile',
     providerInput: unknown = 'both', metricInput: unknown = 'tokens', showAmountsInput: unknown = false,
+    presentationInput: unknown = 'standard',
   ): ApiHeatmapArtifact & {title:string;range:CombinedHeatmapRange;endDateISO:string;hasData:boolean} {
     const config = this.apiHeatmapConfigFor(rangeInput,titleInput,paletteInput,customAccentInput,intensityModeInput,
-      providerInput,metricInput,showAmountsInput);
+      providerInput,metricInput,showAmountsInput,presentationInput);
     if (config.metric === 'apiEquivalent' && this.apiHeatmapPricingPending) throw new Error('Pricing refresh pending');
     if ((config.provider !== 'codex' && this.achievementCalendarTimeZone !== undefined &&
         resolveTimeZone(this.achievementCalendarTimeZone) !== config.timezone) ||
@@ -3862,7 +3893,7 @@ export class UsageWebviewProvider {
         accepted.documentId !== this.dashboardDocumentId || message.previewId !== accepted.id ||
         accepted.sources[0] !== this.dailyDataForEveryDay || accepted.sources[1] !== this.codexView?.daily) return;
     const config = this.apiHeatmapConfigFor(message.range,message.title,message.palette,message.customAccent,
-      message.intensityMode,message.provider,message.metric,message.showAmounts);
+      message.intensityMode,message.provider,message.metric,message.showAmounts,message.presentation);
     return JSON.stringify(config) === JSON.stringify(accepted.artifact.config) ? accepted : undefined;
   }
 
@@ -3950,6 +3981,10 @@ export class UsageWebviewProvider {
       '<select id="combinedHeatmapMetric" data-default-value="tokens" onchange="combinedHeatmapMetricChanged()">' +
       '<option value="tokens" selected>' + this.escapeHtml(apiCopy.tokens) + '</option>' +
       '<option value="apiEquivalent">' + this.escapeHtml(apiCopy.amountMetric) + '</option></select></label>' +
+      '<label class="sc-field" for="combinedHeatmapPresentation"><span>' + this.escapeHtml(apiCopy.presentationLabel) + '</span>' +
+      '<select id="combinedHeatmapPresentation" data-default-value="standard" disabled onchange="combinedHeatmapConfigChanged()">' +
+      '<option value="standard" selected>' + this.escapeHtml(apiCopy.presentationStandard) + '</option>' +
+      '<option value="compact">' + this.escapeHtml(apiCopy.presentationCompact) + '</option></select></label>' +
       '<label class="sc-field" for="combinedHeatmapTitle"><span>' + this.escapeHtml(copy.titleLabel) + '</span>' +
       '<input type="text" id="combinedHeatmapTitle" maxlength="80" value="' + this.escapeHtml(artifact.title) + '" data-default-value="' + this.escapeHtml(artifact.title) + '" oninput="combinedHeatmapConfigChanged()"></label>' +
       '<label class="sc-field" for="combinedHeatmapRange"><span>' + this.escapeHtml(copy.rangeLabel) + '</span>' +
@@ -3971,6 +4006,7 @@ export class UsageWebviewProvider {
       '<label class="sc-check"><input type="checkbox" id="combinedHeatmapShowAmounts" onchange="combinedHeatmapAmountsChanged()"> ' +
       this.escapeHtml(apiCopy.showAmounts) + '</label>' +
       '<p id="combinedHeatmapAmountDisclosure" class="table-hint" hidden>' + this.escapeHtml(apiCopy.amountDisclosure) + '</p>' +
+      '<p id="combinedHeatmapCompactDisclosure" class="table-hint" hidden>' + this.escapeHtml(apiCopy.compactDisclosure) + '</p>' +
       '<p class="table-hint">' + this.escapeHtml(apiCopy.titleDisclosure) + '</p>' +
       '<label class="sc-check combined-privacy-toggle"><input type="checkbox" id="combinedHeatmapPrivacy" checked onchange="toggleCombinedHeatmapPrivacy(true)"> ' +
       this.escapeHtml(copy.privacyToggle) + '</label>' +
@@ -4193,9 +4229,17 @@ export class UsageWebviewProvider {
 
     // The Content tab is hidden when content analysis is disabled via
     // claudeCodeUsage.enableContentAnalysis (the analyser returned null).
+    // Retire diagnostic runtime state even when disabling the last optional
+    // panel also hides the Content tab entirely. No source projection occurs.
+    if (!this.setting<boolean>('showQuotaDeclineRate', false)) this.clearQuotaDiagnosticsProjection?.();
+    if (!this.setting<boolean>('showUsageThroughput', false) && !this.setting<boolean>('showUsageChange', false) &&
+        !this.setting<boolean>('showQuotaDeclineRate', false)) this.usageDiagnosticsRenderCache = undefined;
     const contentEnabled = provider === 'codex'
-      ? Boolean(this.codexView && this.setting<boolean>('codex.optimization.enabled', true))
-      : this.contentAnalysis !== null;
+      ? Boolean(this.codexView && (this.setting<boolean>('codex.optimization.enabled', true) ||
+        this.setting<boolean>('showUsageThroughput', false) || this.setting<boolean>('showUsageChange', false) ||
+        this.setting<boolean>('showQuotaDeclineRate', false)))
+      : this.contentAnalysis !== null || this.setting<boolean>('showUsageThroughput', false) ||
+        this.setting<boolean>('showUsageChange', false) || this.setting<boolean>('showQuotaDeclineRate', false);
     const contentTabButton = contentEnabled
       ? dashboardTab('content', contentTab, contentActive)
       : '';
@@ -4203,7 +4247,7 @@ export class UsageWebviewProvider {
       ? dashboardPanel(
           'content',
           contentActive,
-          this.renderContentData(provider) +
+          this.renderContentData(provider) + this.renderUsageDiagnostics(provider) +
             (provider === 'claude'
               ? this.renderCacheWarmth() + this.renderInsights() + this.renderCostliestMessages()
               : ''),
@@ -4324,6 +4368,7 @@ export class UsageWebviewProvider {
       this.settings?.snapshot?.().map((s) => [s.key, s.value]),
       this.providerAvailability, this.sharingTemplate, this.sharingWorkspaceRequested,
       this.lastShareCardConfig,
+      name === 'projects' ? [this.projectChartSelection?.[provider] ?? null, this.projectChartEpochs?.[provider] ?? ''] : null,
     ]);
     const key = provider + ':' + name;
     const previous = this.dataPanelCache.get(key);
@@ -4875,7 +4920,6 @@ export class UsageWebviewProvider {
     const claudeDayRows = calendar.claudeEvidenceComplete ? currentRows(claudeProof) : [];
     const codexDayRows = calendar.codexEvidenceUsable ? currentRows(codexProof) : [];
     const active = achievementActiveDayKeys(claudeDayRows, codexDayRows, calendar.codexEvidenceUsable === true);
-    const weekRows = [...claudeDayRows, ...codexDayRows];
     const weekCoverageComplete = calendar.peakEvidenceComplete === true;
     const positiveCalendarProof = (availability.claude && calendar.claudeEvidenceComplete === true) ||
       (availability.codex && calendar.codexEvidenceUsable === true);
@@ -4963,7 +5007,7 @@ export class UsageWebviewProvider {
       claudeFamilyTokens,
       claudeFamilyOutputTokens,
       fable: { ...fable, activeDays: claudeProof.complete ? fable.activeDays : 0 },
-      weeklyPeakProcessed: peakCalendarWeekProcessed(weekRows, positiveCalendarProof),
+      weeklyPeakProcessed: calendar.rollingSevenDayPeak,
       outputHourStreak: Math.max(hours.streak, this.achievementHourEvidence.maxStreak),
       nightOutputPeak: hours.nightPeak,
       activity: this.achievementActivity,
@@ -5625,6 +5669,7 @@ export class UsageWebviewProvider {
     const copy = achievementCopyFor(I18n.getLocale());
     const appearance = achievementAppearanceCopyFor(I18n.getLocale());
     const moneyCopy = achievementMoneyCopyFor(I18n.getLocale());
+    const rollingCopy = achievementRollingCopyFor(I18n.getLocale());
     const compact = (value: number): string => formatAchievementCompact(value, I18n.getLocale());
     const integer = (value: number): string => formatAchievementInteger(value, I18n.getLocale());
     const moneyValue = (id:AchievementId,value:number):string => {
@@ -5651,6 +5696,7 @@ export class UsageWebviewProvider {
       if (this.achievementCalendarLowerBounds.has(result.id)) return 'ready';
       const base=this.achievementEvidenceStates?.[achievementEvidenceDomain(result)] ?? 'ready';
       if (base==='stale') return base;
+      if(result.id.startsWith('weekly-volume-')&&this.achievementCalendarCache?.value.rollingSevenDayPeak===undefined)return 'pending';
       const rule=API_ACHIEVEMENT_DEFINITIONS.find(row=>row.id===result.id);
       const quality=rule ? this.achievementMoneyFacts[rule.group]?.coverage[rule.scope] : undefined;
       return rule && !['complete','partial','empty'].includes(quality?.status ?? '') ? 'pending' : base;
@@ -5740,7 +5786,12 @@ export class UsageWebviewProvider {
       const quality = monetary ? moneyProof?.coverage[monetary.scope] : undefined;
       const evidenceState = evidenceFor(nextResult);
       const proofReady = evidenceState === 'ready';
-      const proofLabel = evidenceState === 'stale' ? copy.evidenceStale : quality?.status==='unpriced' ? moneyCopy.unpriced : copy.evidencePending;
+      const proofLabel = evidenceState === 'stale' ? copy.evidenceStale : quality?.status==='unpriced' ? moneyCopy.unpriced :
+        isRollingSevenDayAchievement(nextResult.id)&&!proofReady ? rollingCopy.pending : copy.evidencePending;
+      const peakWindow=key==='weekly-volume'?this.achievementCalendarCache?.value.rollingSevenDayWindow:
+        monetary?.scope==='completedRollingSevenDayPeak'?moneyProof?.rollingSevenDayWindow:undefined;
+      const peakWindowLabel=proofReady&&peakWindow?'<small class="achievement-window">'+
+        this.escapeHtml(rollingCopy.window+': '+peakWindow.startDay+' – '+peakWindow.endDay+' ('+resolveTimeZone(I18n.getTimezone())+')')+'</small>':'';
       const domain=achievementEvidenceDomain(nextResult);
       const proofHintKind=evidenceState==='stale' ? 'stale' : monetary ? 'money' :
         domain.includes('calendar') ? 'calendar' : domain==='codex-lineage' ? 'lineage' : 'index';
@@ -5815,20 +5866,23 @@ export class UsageWebviewProvider {
           '<small class="achievement-level-status" data-level-status="next">'+this.escapeHtml(copy.locked)+'</small>':'';
         const record=this.achievementRecordState?.records.find(row=>row.id===entry.id);
         const proof=this.achievementHistoryAnnotations[entry.id];
+        const retainedCalendar=this.retainedCalendarAchievement(entry.id);
         const usable=evidenceFor(entry)==='ready'&&proof&&proof.ruleVersion===achievementRuleVersion(entry.id)&&
           (!isAchievementMoneyId(entry.id)||!record?.referencePricebook||record.referencePricebook===proof.pricebookVersion);
         const verifiedLabel=usable?management.verifiedDay+': '+proof.day+' ('+proof.timeZone+')'+
+          (proof.windowStartDay&&proof.windowEndDay?' · '+rollingCopy.window+': '+proof.windowStartDay+' – '+proof.windowEndDay:'')+
           (record?.recordedDay?' · '+management.firstRecorded+': '+record.recordedDay+' ('+(record.timeZone??'')+')':''):'';
         const shown=usable?'<small class="achievement-level-date" data-date-source="retained-logs" data-date-scope="'+proof.scope+'" title="'+
           this.escapeHtml(verifiedLabel)+'"><time datetime="'+proof.day+'" aria-label="'+this.escapeHtml(verifiedLabel)+'">'+proof.day+'</time>'+
-          '</small>':'';
+          (proof.windowStartDay&&proof.windowEndDay?' · '+this.escapeHtml(proof.windowStartDay+' – '+proof.windowEndDay):'')+'</small>':'';
         const recorded=record?.recordedDay?'<small class="achievement-level-date achievement-level-date-recorded" data-date-source="first-recorded">'+
           this.escapeHtml(management.firstRecorded)+': <time datetime="'+record.recordedDay+'" title="'+
           this.escapeHtml(record.timeZone??'')+'">'+record.recordedDay+'</time></small>':'';
         return '<small class="achievement-level-status" data-level-status="earned">'+this.escapeHtml(copy.earned)+'</small>'+
-          (shown||recorded?shown||recorded:'<small class="achievement-level-date" data-date-source="unknown" title="'+
+          (shown||recorded?(retainedCalendar?shown+recorded:shown||recorded):'<small class="achievement-level-date" data-date-source="unknown" title="'+
             this.escapeHtml(management.dateUnavailable)+'" aria-label="'+this.escapeHtml(management.unknownDay+'. '+management.dateUnavailable)+'">'+
-            this.escapeHtml(management.unknownDay)+'</small>');
+            this.escapeHtml(management.unknownDay)+'</small>')+
+          (retainedCalendar?'<small class="achievement-retained-rule" data-award-rule-version="1">'+this.escapeHtml(rollingCopy.legacy)+'</small>':'');
       };
       const sharedDetails='<p class="achievement-common-conditions">'+this.escapeHtml(management.sharedConditions+': '+
         [commonUnit,notes.shared].filter(Boolean).join(' · '))+'</p>';
@@ -5847,7 +5901,7 @@ export class UsageWebviewProvider {
           const src = webview?.asWebviewUri && this.context.extensionPath
             ? webview.asWebviewUri(vscode.Uri.file(achievementImagePath(entry.id))).toString() : achievementImageDataUrl(entry.id);
           return '<li data-achievement-milestone="' + entry.id + '" data-achievement-level="' + entry.id + '">' +
-            '<img src="' + this.escapeHtml(src) + '" alt="" loading="lazy"><strong>' + this.escapeHtml(copy.titles[entry.id]) +
+            renderAchievementWebviewIcon(entry.id, src, isEarned(entry) ? 'earned' : 'locked') + '<strong>' + this.escapeHtml(copy.titles[entry.id]) +
             '</strong><span>' + this.escapeHtml(compact(entry.target) + ' ' + unitFor(entry.id)) + '</span>'+
             (metadata?'<div class="achievement-level-meta">'+metadata+'</div>':'')+'</li>';
         }).join('') + '</ul>' : '';
@@ -5863,7 +5917,7 @@ export class UsageWebviewProvider {
         }).join('') + '</ol>' : '';
       const statistics = this.achievementStatisticsSection(key);
       const monetaryDetails = monetary ? '<p class="table-hint achievement-money-scope">' +
-        this.escapeHtml(moneyCopy[monetary.scope==='cumulative' ? 'total' : monetary.scope==='completedMondayWeekPeak' ? 'week' : monetary.group==='claude' ? 'session' : 'task']) +
+        this.escapeHtml(moneyCopy[monetary.scope==='cumulative' ? 'total' : monetary.scope==='completedRollingSevenDayPeak' ? 'week' : monetary.group==='claude' ? 'session' : 'task']) +
         '</p>' +
         (quality?.pricingCoverage === undefined ? '' : '<p class="table-hint achievement-money-coverage">' +
           this.escapeHtml(moneyCopy.coverage.replace('{percent}',integer(Math.floor(quality.pricingCoverage*100)))) + '</p>') +
@@ -5884,12 +5938,10 @@ export class UsageWebviewProvider {
           (proofReady ? bound + formatted + ' ' + unitFor(result.id) : proofLabel) +
           (series ? ' · ' + earnedTiers + '/' + tierCount : '')) + '">' +
         '<span class="achievement-emblem" aria-hidden="true">' +
-        '<img data-achievement-icon="' + result.id + '" data-achievement-artwork="' +
-        this.escapeHtml(ACHIEVEMENT_IMAGE_FILES[result.id]) + '" src="' + this.escapeHtml(iconSrc) +
-        '" alt="" loading="lazy"></span>' +
+        renderAchievementWebviewIcon(result.id, iconSrc, earned ? 'earned' : 'locked') + '</span>' +
         '<h4>' + this.escapeHtml(baseName) + '</h4>' +
         (earned ? '<span class="achievement-rank">' + this.escapeHtml(levelName) + '</span>' : '') +
-        tierPips + '<span class="achievement-next-target">' + faceProgress + '</span>' +
+        tierPips + '<span class="achievement-next-target">' + faceProgress + peakWindowLabel + '</span>' +
         (proofReady && next ? '<span class="achievement-progress-track" aria-hidden="true"><span style="width:' +
           Math.min(100, Math.max(0, progress / nextResult.target * 100)) + '%"></span></span>' : '') + '</summary>' +
         '<div class="achievement-card-detail">' + tierMarkers +
@@ -5970,9 +6022,10 @@ export class UsageWebviewProvider {
             (monetary ? moneyLowerBound ? '≥' : '' : this.achievementCalendarLowerBounds.has(entry.nextResult.id) ||
               cumulativeLowerBound && (entry.series === 'cumulative-volume' || entry.result.group === 'codex') ? '≥' : '') +
             compactValue(entry.nextResult.id,state.progress) + ' / ' + compactValue(entry.nextResult.id,state.target) : proofLabel);
-          const imagePath = achievementImagePath(entry.result.id);
+          const displayId = kind === 'next' ? entry.nextResult.id : entry.result.id;
+          const imagePath = achievementImagePath(displayId);
           const iconSrc = this.panel?.webview?.asWebviewUri && this.context.extensionPath ?
-            this.panel.webview.asWebviewUri(vscode.Uri.file(imagePath)).toString() : achievementImageDataUrl(entry.result.id);
+            this.panel.webview.asWebviewUri(vscode.Uri.file(imagePath)).toString() : achievementImageDataUrl(displayId);
           const selectedPin = pins.find(pin => achievementGalleryKey(pin) === key);
           const pinKey = selectedPin ?? (currentPin(key) ? key : entry.milestones.find(row => currentPin(row.id))?.id);
           return '<div class="achievement-overview-item">' + (kind === 'badges' && pinKey ?
@@ -5982,7 +6035,7 @@ export class UsageWebviewProvider {
             ' aria-label="' + this.escapeHtml(copy.viewBadge + ': ' + name + ' · ' + rank +
               (kind === 'next' ? ' · ' + progress + ' ' + unitFor(entry.result.id) :
                 state.proof === 'ready' ? '' : ' · ' + proofLabel)) + '">' +
-            '<img src="' + this.escapeHtml(iconSrc) + '" alt="" loading="lazy"><span class="achievement-overview-name">' +
+            renderAchievementWebviewIcon(displayId, iconSrc, kind === 'next' ? 'target' : 'earned') + '<span class="achievement-overview-name">' +
             this.escapeHtml(name) + '</span><span class="achievement-overview-rank">' + this.escapeHtml(rank) + '</span>' +
             (kind === 'next' ? '<span class="achievement-overview-progress">' + this.escapeHtml(progress) + '</span>' :
               state.proof === 'ready' ? '' : '<span class="achievement-overview-progress">' + this.escapeHtml(proofLabel) + '</span>') +
@@ -6007,7 +6060,7 @@ export class UsageWebviewProvider {
       return '<button class="achievement-record-badge" data-achievement-record="' + record.id +
         '" data-achievement-open="' + key + '" onclick="openAchievementDetail(this.dataset.achievementOpen)"' +
         ' aria-label="' + this.escapeHtml(copy.viewBadge + ': ' + copy.titles[record.id] + ' · ' + spokenStamp) + '">' +
-        '<img src="' + this.escapeHtml(iconSrc) + '" alt="" loading="lazy"><span class="achievement-record-name">' +
+        renderAchievementWebviewIcon(record.id, iconSrc) + '<span class="achievement-record-name">' +
         this.escapeHtml(copy.titles[record.id]) + '</span><small>' + stamp + '</small></button>';
     };
     const recentSection = records.recent.length ? '<section class="achievement-overview" data-achievement-overview="recent"><h3>' +
@@ -6087,7 +6140,7 @@ export class UsageWebviewProvider {
       '<details class="achievement-evidence-note" data-persist="achievement:evidence"><summary>' +
       achievementUiIcon('info') + this.escapeHtml(copy.evidenceTitle) + '</summary><p>' +
       this.escapeHtml((cumulativeLowerBound || this.achievementCalendarLowerBounds.size > 0 ||
-        this.achievementMoneyFacts.codex?.coverage.completedMondayWeekPeak.scopeLowerBound
+        this.achievementMoneyFacts.codex?.coverage.completedRollingSevenDayPeak?.scopeLowerBound
         ? copy.lowerBoundNote + ' ' : '') + copy.lowerBoundDetails) +
       '</p><p class="achievement-date-note"><strong>'+this.escapeHtml(management.verifiedDay)+': </strong>'+this.escapeHtml(management.dateNote)+'</p>'+this.renderAchievementMoneyReferences()+'</details>' +
       '<p class="achievement-count">' +
@@ -6150,6 +6203,11 @@ export class UsageWebviewProvider {
       '<h4>'+this.escapeHtml(copy.earnedReference)+'</h4><ul class="achievement-reference-history">'+history.join('')+'</ul>':'')+'</section>';
   }
 
+  private retainedCalendarAchievement(id:AchievementId):boolean {
+    return isRollingSevenDayAchievement(id)&&this.achievementGrants.has(id)&&
+      this.achievementRecordState?.records.find(row=>row.id===id)?.ruleVersion!==3;
+  }
+
   private earnedAchievements(): AchievementResult[] {
     return this.achievementResults().map((result) => ({
       ...result,
@@ -6163,6 +6221,7 @@ export class UsageWebviewProvider {
     if (selected.length === 0) return '';
     return renderAchievementShareSvg({
       selected,
+      retainedCalendarIds:selected.filter(id=>this.retainedCalendarAchievement(id)),
       titles: copy.titles,
       heading: copy.shareTitle,
       subtitle: copy.intro,
@@ -6189,9 +6248,11 @@ export class UsageWebviewProvider {
       const title=achievementTitleWithoutRank(copy.titles[result.id],rank);
       return '<label class="sc-check achievement-share-option"><input type="checkbox" class="achievement-share-choice" value="' +
         result.id + '" aria-label="'+this.escapeHtml(copy.titles[result.id])+'"'+(chosen.includes(result.id) ? ' checked' : '') +
-        ' onchange="previewAchievementShare(this)"><img class="achievement-share-choice-icon" src="' +
-        this.escapeHtml(iconSrc(result.id)) + '" alt="" loading="lazy"><span class="achievement-share-option-text"><span class="achievement-share-option-name">'+
-        this.escapeHtml(title)+'</span><small>'+this.escapeHtml(rank)+'</small></span></label>';
+        ' onchange="previewAchievementShare(this)">' +
+        renderAchievementWebviewIcon(result.id, iconSrc(result.id), 'earned', 'achievement-share-choice-icon') +
+        '<span class="achievement-share-option-text"><span class="achievement-share-option-name">'+
+        this.escapeHtml(title)+'</span><small>'+this.escapeHtml(rank)+'</small>'+
+        (this.retainedCalendarAchievement(result.id)?'<small data-award-rule-version="1">'+this.escapeHtml(achievementRollingCopyFor(I18n.getLocale()).legacyShort)+'</small>':'')+'</span></label>';
     }).join('');
     return '<section class="sharing-presentation achievement-share-presentation" data-sharing-presentation="achievements"' +
       (selected === 'achievements' ? '' : ' hidden') + ' aria-labelledby="achievementShareHeading">' +
@@ -8455,126 +8516,156 @@ export class UsageWebviewProvider {
     return copy.noCoverage;
   }
 
-  private renderProjectMatrixHeatmap(
-    snapshot: ProjectUsageMatrixSnapshot,
-    range: 30 | 90,
-    copy: ProjectMatrixUiCopy,
-  ): string {
-    const rows = projectHeatmap(snapshot, range, 40);
-    const headerDays = (rows[0]?.cells ?? []).map((cell, index, cells) => {
-      const monthChanged = index === 0 || cells[index - 1].day.slice(0, 7) !== cell.day.slice(0, 7);
-      const label = monthChanged ? this.getShortDate(cell.day) : cell.day.slice(8);
-      return '<th scope="col" title="' + this.escapeHtml(this.formatDate(cell.day)) + '">' +
-        this.escapeHtml(label) + '</th>';
-    }).join('');
-    const body = rows.map((row, index) => {
-      const name = row.projectName || copy.project;
-      const meta = I18n.formatNumber(row.totalTokens) + ' Token · ' +
-        I18n.formatNumber(row.activeDays) + ' ' + copy.activeDays;
-      const cells = row.cells.map((cell) => {
-        const coverage = this.projectMatrixCoverageLabel(cell.coverage, copy);
-        const title = name + ' · ' + this.formatDate(cell.day) + ' · ' +
-          I18n.formatNumber(cell.tokens) + ' Token · ' + coverage;
-        return '<td class="project-matrix-cell project-matrix-level-' + cell.bucket + '" ' +
-          'data-day="' + this.escapeHtml(cell.day) + '" data-tokens="' + cell.tokens + '" ' +
-          'title="' + this.escapeHtml(title) + '" aria-label="' + this.escapeHtml(title) + '"></td>';
-      }).join('');
-      return '<tr class="project-matrix-row"' +
-        (index >= 12 ? ' data-project-matrix-extra="true" hidden' : '') + '>' +
-        '<th scope="row" class="project-matrix-project"><span>' + this.escapeHtml(name) + '</span>' +
-        '<small>' + this.escapeHtml(meta) + '</small></th>' + cells + '</tr>';
-    }).join('');
-    return '<div class="project-matrix-scroll" tabindex="0" role="region" aria-label="' +
-      this.escapeHtml(copy.matrixAria + ' · ' + (range === 90 ? copy.last90 : copy.last30)) + '">' +
-      '<table class="project-matrix-grid"><thead><tr><th scope="col" class="project-matrix-project">' +
-      this.escapeHtml(copy.project) + '</th>' + headerDays + '</tr></thead><tbody>' + body +
-      '</tbody></table></div>';
+  private clearProjectChartRuntime(retire = false, provider?: SettingProvider): void {
+    if (!this.projectChartEpochs) this.projectChartEpochs = {};
+    if (retire) for (const key of provider ? [provider] : ['claude','codex'] as const) this.projectChartEpochs[key] = randomBytes(12).toString('hex');
+    if (provider) {
+      if (this.projectChartSelection) delete this.projectChartSelection[provider];
+      for (const key of this.projectChartHandles?.keys() ?? []) if (key.startsWith(provider + '|')) this.projectChartHandles!.delete(key);
+    } else { this.projectChartSelection = {}; this.projectChartHandles?.clear(); this.projectChartHandles = undefined; }
+    this.projectChartCache = undefined;
+    if (provider) { if (this.projectChartHandleScopes) delete this.projectChartHandleScopes[provider]; this.dataPanelCache?.delete(provider + ':projects'); }
+    else { this.projectChartHandleScopes = undefined; this.dataPanelCache?.delete('claude:projects'); this.dataPanelCache?.delete('codex:projects'); }
   }
 
-  private renderProjectMatrixTrend(
-    snapshot: ProjectUsageMatrixSnapshot,
-    range: 30 | 90,
-    copy: ProjectMatrixUiCopy,
-  ): string {
-    const series = projectTrend(snapshot, range, 6);
-    const names = series.map((item) => item.other ? copy.otherProjects : (item.projectName || copy.project));
-    const dayTotals = (series[0]?.values ?? []).map((_, dayIndex) =>
-      series.reduce((sum, item) => sum + item.values[dayIndex].tokens, 0));
-    const maxDay = Math.max(1, ...dayTotals);
-    const legend = series.map((item, index) =>
-      '<span class="project-matrix-trend-series"><i class="project-matrix-series-' + index +
-      '" aria-hidden="true"></i><span>' + this.escapeHtml(names[index]) + '</span><strong>' +
-      this.escapeHtml(I18n.formatNumber(item.totalTokens)) + '</strong></span>').join('');
-    const columns = (series[0]?.values ?? []).map((value, dayIndex, values) => {
-      const total = dayTotals[dayIndex];
-      const coverage = this.projectMatrixCoverageLabel(value.coverage, copy);
-      const totalTitle = this.formatDate(value.day) + ' · ' + I18n.formatNumber(total) +
-        ' Token · ' + coverage;
-      const segments = series.map((item, seriesIndex) => {
-        const point = item.values[dayIndex];
-        if (!(point.tokens > 0)) return '';
-        const title = names[seriesIndex] + ' · ' + this.formatDate(point.day) + ' · ' +
-          I18n.formatNumber(point.tokens) + ' Token · ' +
-          this.projectMatrixCoverageLabel(point.coverage, copy);
-        return '<span class="project-matrix-trend-segment project-matrix-series-' + seriesIndex + '" ' +
-          'style="height:' + ((point.tokens / maxDay) * 100).toFixed(4) + '%" ' +
-          'title="' + this.escapeHtml(title) + '" aria-label="' + this.escapeHtml(title) + '"></span>';
-      }).join('');
-      const showLabel = dayIndex === 0 || dayIndex === values.length - 1 || dayIndex % 7 === 0;
-      return '<div class="project-matrix-trend-col" title="' + this.escapeHtml(totalTitle) + '">' +
-        '<div class="project-matrix-trend-stack">' + segments + '</div>' +
-        '<span class="project-matrix-trend-date">' +
-        (showLabel ? this.escapeHtml(this.getShortDate(value.day)) : '') + '</span></div>';
+  private projectChartHandle(provider: string, key: string): string {
+    return createHash('sha256').update(String(vscode.env?.machineId ?? 'test-host') + '|project-filter-v1|' + provider + '|' + key).digest('hex').slice(0,32);
+  }
+
+  private handleProjectChartFilter(message: any): void {
+          if (message.documentId !== this.dashboardDocumentId || message.provider !== this.currentProvider ||
+              !['claude','codex'].includes(message.provider) || message.scope !== this.projectChartHandleScopes?.[message.provider as SettingProvider] ||
+              !Array.isArray(message.handles) || message.handles.length > 200 ||
+              message.handles.some((h: unknown) => typeof h !== 'string' || h.length > 64)) return;
+          const provider = message.provider as SettingProvider;
+          const source = provider === 'codex' ? this.codexView?.projectUsageMatrix : this.claudeProjectUsageMatrix;
+          const keys = [...new Set(source?.points.map(p => p.projectKey) ?? [])];
+          const handles = new Set(message.handles);
+          const selected = keys.filter(key => handles.has(this.projectChartHandles?.get(provider + '|' + key)));
+          if (selected.length !== handles.size) return;
+          this.projectChartSelection[provider] = message.all === true ? undefined : selected;
+          this.dataPanelCache?.delete(provider + ':projects');
+          this.updateWebview();
+  }
+
+  private projectChartProjection(snapshot: ProjectUsageMatrixSnapshot, range: 30 | 90, scale: ProjectChartScale = 'day') {
+    const selected = this.projectChartSelection?.[snapshot.provider];
+    if (!this.projectChartCache) this.projectChartCache = new WeakMap();
+    let cache = this.projectChartCache.get(snapshot);
+    if (!cache) { cache = new Map(); this.projectChartCache.set(snapshot, cache); }
+    const key = JSON.stringify([range,scale,selected ?? null]);
+    const previous = cache.get(key); if (previous) return previous;
+    const projected = projectChartProjection(snapshot, { startDay: snapshot.days.slice(-range)[0], endDay: snapshot.asOfDay,
+      scale, maxRows: 40, maxSeries: 6, ...(selected === undefined ? {} : { projectKeys: selected }) });
+    if (cache.size >= 12) cache.delete(cache.keys().next().value!);
+    cache.set(key, projected); return projected;
+  }
+
+  private renderProjectMatrixHeatmap(snapshot: ProjectUsageMatrixSnapshot, range: 30 | 90,
+    copy: ProjectMatrixUiCopy, scale: ProjectChartScale = 'day'): string {
+    const data = this.projectChartProjection(snapshot, range, scale), esc = (s: string) => this.escapeHtml(s);
+    const header = data.periods.map(p => '<th scope="col" title="' + esc(p.startDay + ' – ' + p.endDay) + '">' +
+      esc(this.getShortDate(p.startDay)) + (p.clipped ? ' *' : '') + '</th>').join('');
+    const body = data.rows.map((row, index) => '<tr class="project-matrix-row"' +
+      (index >= 12 ? ' data-project-matrix-extra="true" hidden' : '') + '><th scope="row" class="project-matrix-project"><span>' +
+      esc(row.projectName || copy.project) + '</span><small>' + (row.total.tokens === null ? '—' : I18n.formatNumber(row.total.tokens)) +
+      ' Token</small></th>' + row.cells.map((cell, i) => {
+        const p = data.periods[i], detail = (row.projectName || copy.project) + ' · ' + p.startDay + ' – ' + p.endDay +
+          ' · ' + (cell.tokens === null ? I18n.projectChartControls.unknown : I18n.formatNumber(cell.tokens) + ' Token') +
+          ' · ' + this.projectMatrixCoverageLabel(cell.coverage, copy);
+        return '<td class="project-matrix-cell project-matrix-level-' + (cell.bucket ?? 'unknown') + '" data-day="' + p.startDay +
+          '" data-tokens="' + (cell.tokens ?? '') + '">' +
+          '<button class="project-matrix-inspect" data-project-selection-key="' + range + ':' + scale + ':h:' + this.projectChartHandle(snapshot.provider, row.projectKeys[0] ?? '') + ':' + p.key + '" data-project-inspect aria-label="' + esc(detail) + '">' +
+          (cell.coverage === 'partial' ? '<span aria-hidden="true">·</span>' : '') + '</button></td>';
+      }).join('') + '</tr>').join('');
+    return '<div class="project-matrix-scroll" tabindex="0" role="region" aria-label="' + esc(copy.matrixAria) +
+      '"><table class="project-matrix-grid"><thead><tr><th scope="col" class="project-matrix-project">' + esc(copy.project) +
+      '</th>' + header + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
+      (!body ? '<p class="table-hint">' + esc(I18n.projectChartControls.empty) + '</p>' : '');
+  }
+
+  private renderProjectMatrixTrend(snapshot: ProjectUsageMatrixSnapshot, range: 30 | 90,
+    copy: ProjectMatrixUiCopy, scale: ProjectChartScale = 'day'): string {
+    const data = this.projectChartProjection(snapshot, range, scale), series = data.series, esc = (s: string) => this.escapeHtml(s);
+    const names = series.map(s => s.other ? copy.otherProjects + ' (' + s.projectCount + ')' : s.projectName || copy.project);
+    const totals = data.periods.map((_, i) => series.reduce((sum, s) => sum + (s.cells[i].tokens ?? 0), 0));
+    const max = Math.max(1, ...totals), width = Math.max(320, data.periods.length * 30), dx = width / Math.max(1, data.periods.length);
+    const lower = (r: number, i: number) => series.slice(0, r).reduce((sum, s) => sum + (s.cells[i].tokens ?? 0), 0);
+    const legend = series.map((s, i) => '<span class="project-matrix-trend-series"><i class="project-matrix-series-' + i +
+      '" aria-hidden="true"></i><span>' + esc(names[i]) + '</span><strong>' + (s.total.tokens === null ? '—' : I18n.formatNumber(s.total.tokens)) + '</strong></span>').join('');
+    const polygons = series.map((s, r) => s.cells.map((cell, i) => {
+      // Do not bridge an unknown contribution in this or a lower stack series.
+      if (cell.tokens === null || series.slice(0, r + 1).some(row => row.cells[i].tokens === null)) return '';
+      const x = dx * (i + .5), y0 = 145 - lower(r, i) / max * 130, y1 = y0 - cell.tokens / max * 130;
+      const next = s.cells[i + 1];
+      if (!next || next.tokens === null || series.slice(0, r + 1).some(row => row.cells[i + 1].tokens === null)) {
+        return '<rect x="' + (x - 1) + '" y="' + y1 + '" width="2" height="' + Math.max(1, y0 - y1) + '" class="project-matrix-area-' + r + '"/>';
+      }
+      const ny0 = 145 - lower(r, i + 1) / max * 130, ny1 = ny0 - next.tokens / max * 130;
+      return '<polygon class="project-matrix-area-' + r + '" points="' + x + ',' + y0 + ' ' + x + ',' + y1 + ' ' +
+        (x + dx) + ',' + ny1 + ' ' + (x + dx) + ',' + ny0 + '"/>';
+    }).join('')).join('');
+    const marks = data.periods.map((p, i) => {
+      const unknown = series.some(s => s.cells[i].tokens === null), partial = series.some(s => s.cells[i].coverage !== 'complete');
+      const detail = p.startDay + ' – ' + p.endDay + (p.clipped ? ' *' : '') + ' · ' + (unknown && totals[i] === 0 ? I18n.projectChartControls.unknown : I18n.formatNumber(totals[i]) + ' Token') +
+        ' · ' + this.projectMatrixCoverageLabel(partial ? 'partial' : 'complete', copy);
+      return '<g><rect x="' + (dx * i) + '" y="0" width="' + dx + '" height="165" fill="transparent" tabindex="0" role="button" data-project-inspect="' + esc(detail) +
+        '" data-project-selection-key="' + range + ':' + scale + ':t:' + p.key + '" aria-label="' + esc(detail) + '"><title>' + esc(detail) + '</title></rect>' +
+        (unknown ? '<text x="' + (dx * i + 4) + '" y="159">?</text>' : '') +
+        (i === 0 || i === data.periods.length - 1 || i % Math.max(1, Math.ceil(data.periods.length / 10)) === 0
+          ? '<text x="' + (dx * i) + '" y="180">' + esc(this.getShortDate(p.startDay)) + (p.clipped ? ' *' : '') + '</text>' : '') + '</g>';
     }).join('');
-    return '<div class="project-matrix-trend-legend">' + legend + '</div>' +
-      '<div class="project-matrix-trend-scroll" tabindex="0" role="img" aria-label="' +
-      this.escapeHtml(copy.trendAria + ' · ' + (range === 90 ? copy.last90 : copy.last30)) + '">' +
-      '<div class="project-matrix-trend-bars project-matrix-trend-' + range + '">' + columns + '</div></div>';
+    const bars = data.periods.map((p,i) => '<div class="project-matrix-trend-col"><div class="project-matrix-trend-stack">' +
+      series.map((row,r) => row.cells[i].tokens === null ? '<span aria-hidden="true">—</span>' :
+        '<span class="project-matrix-trend-segment project-matrix-series-' + r + '" style="height:' + (row.cells[i].tokens! / max * 100) + '%" title="' +
+        esc(names[r] + ' · ' + p.startDay + ' – ' + p.endDay + (p.clipped ? ' *' : '') + ' · ' + I18n.formatNumber(row.cells[i].tokens!) + ' Token · ' + this.projectMatrixCoverageLabel(row.cells[i].coverage,copy)) + '"></span>').join('') +
+      '</div><span class="project-matrix-trend-date">' + (i % Math.max(1,Math.ceil(data.periods.length/10)) === 0 ? esc(this.getShortDate(p.startDay)) + (p.clipped?' *':'') : '') + '</span></div>').join('');
+    return '<div class="project-matrix-trend-legend">' + legend + '</div><div data-project-bars-mode><div class="project-matrix-trend-scroll" tabindex="0"><div class="project-matrix-trend-bars project-matrix-trend-' + range + '">' + bars + '</div></div></div><div data-project-area-mode hidden><div class="project-matrix-trend-scroll" tabindex="0" role="region" aria-label="' +
+      esc(copy.trendAria) + '"><svg class="project-matrix-area" width="' + width + '" height="190" role="group" aria-label="' + esc(copy.trendAria) + '">' +
+      polygons + marks + '</svg></div></div><p class="table-hint">' + esc(I18n.projectChartControls.subtotal) + '</p>';
   }
 
   private renderProjectUsageMatrix(provider: SettingProvider): string {
     if (!this.setting<boolean>('showProjectUsageMatrix', true)) return '';
-    const snapshot = provider === 'codex'
-      ? this.codexView?.projectUsageMatrix
-      : this.claudeProjectUsageMatrix;
-    if (!snapshot || snapshot.points.length === 0) return '';
-    const copy = projectMatrixUiCopy(I18n.getLocale());
-    const coverage = this.projectMatrixCoverageLabel(snapshot.coverage, copy);
-    const rangePanel = (range: 30 | 90): string =>
-      '<div class="project-matrix-range" data-project-matrix-range-panel="' + range + '"' +
-      (range === 90 ? ' hidden' : '') + '>' +
-      '<div class="project-matrix-view" data-project-matrix-heatmap>' +
-      this.renderProjectMatrixHeatmap(snapshot, range, copy) + '</div>' +
-      '<div class="project-matrix-view" data-project-matrix-trend hidden>' +
-      this.renderProjectMatrixTrend(snapshot, range, copy) + '</div></div>';
-    const hasExtraRows = Math.max(
-      projectHeatmap(snapshot, 30, 40).length,
-      projectHeatmap(snapshot, 90, 40).length,
-    ) > 12;
-    return '<section class="project-matrix" data-project-matrix="' + provider + '">' +
-      '<div class="project-matrix-head"><div><h3>' + this.escapeHtml(copy.title) + '</h3>' +
-      '<p>' + this.escapeHtml(copy.description) + '</p></div>' +
-      '<span class="project-matrix-coverage project-matrix-coverage-' + snapshot.coverage + '">' +
-      this.escapeHtml(coverage) + '</span></div>' +
-      '<div class="project-matrix-toolbar">' +
-      '<div class="project-matrix-control" role="group" aria-label="' + this.escapeHtml(copy.rangeLabel) + '">' +
-      '<span>' + this.escapeHtml(copy.rangeLabel) + '</span>' +
-      '<button class="project-matrix-option active" data-project-matrix-range="30" aria-pressed="true">' +
-      this.escapeHtml(copy.last30) + '</button>' +
-      '<button class="project-matrix-option" data-project-matrix-range="90" aria-pressed="false">' +
-      this.escapeHtml(copy.last90) + '</button></div>' +
-      '<div class="project-matrix-control" role="group" aria-label="' + this.escapeHtml(copy.viewLabel) + '">' +
-      '<span>' + this.escapeHtml(copy.viewLabel) + '</span>' +
-      '<button class="project-matrix-option active" data-project-matrix-view="heatmap" aria-pressed="true">' +
-      this.escapeHtml(copy.heatmap) + '</button>' +
-      '<button class="project-matrix-option" data-project-matrix-view="trend" aria-pressed="false">' +
-      this.escapeHtml(copy.trend) + '</button></div></div>' +
-      rangePanel(30) + rangePanel(90) +
-      (hasExtraRows
-        ? '<button class="project-matrix-expand" data-project-matrix-expand aria-expanded="false" ' +
-          'data-show-more="' + this.escapeHtml(copy.showMore) + '" data-show-less="' +
-          this.escapeHtml(copy.showLess) + '">' + this.escapeHtml(copy.showMore) + '</button>'
-        : '') + '</section>';
+    const snapshot = provider === 'codex' ? this.codexView?.projectUsageMatrix : this.claudeProjectUsageMatrix;
+    if (!snapshot) return '';
+    const copy = projectMatrixUiCopy(I18n.getLocale()), controls = I18n.projectChartControls, esc = (s: string) => this.escapeHtml(s);
+    if (!this.projectChartHandles) this.projectChartHandles = new Map();
+    const sourceScope = provider === 'claude' ? this.dataDirectory ?? '' : this.setting<string>('codex.dataDirectory', '');
+    const handleScope = this.projectChartHandle('scope', provider + '|' + sourceScope + '|' + snapshot.timeZone + '|' + (this.projectChartEpochs?.[provider] ?? ''));
+    if (!this.projectChartHandleScopes) this.projectChartHandleScopes = {};
+    this.projectChartHandleScopes[provider] = handleScope;
+    const known = new Map(snapshot.points.map(p => [p.projectKey, p.projectName]));
+    // Only machine-salted handles enter Webview state. Rebuild the bounded map
+    // from current selectable projects; stale source handles cannot revive data.
+    for (const key of this.projectChartHandles.keys()) if (key.startsWith(provider + '|')) this.projectChartHandles.delete(key);
+    for (const [key] of [...known].sort((a,b) => a[1].localeCompare(b[1])).slice(0,200)) if (!this.projectChartHandles.has(provider + '|' + key)) this.projectChartHandles.set(provider + '|' + key, this.projectChartHandle(provider, key));
+    let selected = this.projectChartSelection?.[provider];
+    const normalized = selected !== undefined && selected.some(key => !known.has(key));
+    if (normalized) { this.projectChartSelection[provider] = undefined; selected = undefined; this.projectChartCache = undefined; }
+    const choices = [...known].sort((a,b) => a[1].localeCompare(b[1])).slice(0, 200).map(([key,name]) => {
+      const handle = this.projectChartHandles!.get(provider + '|' + key)!;
+      return '<label><input type="checkbox" data-project-filter="' + handle + '"' +
+        (selected === undefined || selected.includes(key) ? ' checked' : '') + '>' + esc(name || copy.project) + '</label>';
+    }).join('');
+    const rangePanel = (range: 30 | 90) => '<div class="project-matrix-range" data-project-matrix-range-panel="' + range + '"' + (range === 90 ? ' hidden' : '') + '>' +
+      (['day','week','month'] as const).map(scale => '<div data-project-scale-panel="' + scale + '"' + (scale === 'day' ? '' : ' hidden') + '>' +
+        '<div class="project-matrix-view" data-project-matrix-heatmap>' + this.renderProjectMatrixHeatmap(snapshot, range, copy, scale) + '</div>' +
+        '<div class="project-matrix-view" data-project-matrix-trend hidden>' + this.renderProjectMatrixTrend(snapshot, range, copy, scale) + '</div></div>').join('') + '</div>';
+    return '<section class="project-matrix" data-project-matrix="' + provider + '" data-project-filter-scope="' + handleScope + '" data-project-filter-normalized="' + normalized + '" data-project-reset-label="' + esc(controls.reset) + '">' +
+      '<div class="project-matrix-head"><div><h3>' + esc(copy.title) + '</h3><p>' + esc(copy.description) + '</p></div>' +
+      '<span class="project-matrix-coverage project-matrix-coverage-' + snapshot.coverage + '">' + esc(this.projectMatrixCoverageLabel(snapshot.coverage, copy)) + '</span></div>' +
+      '<div class="project-matrix-toolbar"><div class="project-matrix-control" role="group" aria-label="' + esc(copy.rangeLabel) + '"><span>' + esc(copy.rangeLabel) + '</span>' +
+      [30,90].map(n => '<button class="project-matrix-option' + (n === 30 ? ' active' : '') + '" data-project-matrix-range="' + n + '" aria-pressed="' + (n === 30) + '">' + esc(n === 30 ? copy.last30 : copy.last90) + '</button>').join('') + '</div>' +
+      '<div class="project-matrix-control" role="group" aria-label="' + esc(copy.viewLabel) + '"><span>' + esc(copy.viewLabel) + '</span>' +
+      ['heatmap','trend','area'].map(v => '<button class="project-matrix-option' + (v === 'heatmap' ? ' active' : '') + '" data-project-matrix-view="' + v + '" aria-pressed="' + (v === 'heatmap') + '">' + esc(v === 'heatmap' ? copy.heatmap : v === 'area' ? controls.area : copy.trend) + '</button>').join('') + '</div>' +
+      '<label>' + esc(controls.scale) + ' <select id="project-scale-' + provider + '" data-project-scale>' +
+      (['day','week','month'] as const).map(v=>'<option value="'+v+'">'+esc(controls[v])+'</option>').join('') + '</select></label></div>' +
+      '<details data-persist="project-filter-' + provider + '"><summary>' + esc(controls.filter) + '</summary><div class="project-matrix-filters">' + choices + '</div>' +
+      '<button data-project-filter-all>' + esc(controls.all) + '</button> <button data-project-filter-none>' + esc(controls.none) + '</button>' +
+      (known.size > 200 ? '<p class="table-hint">' + esc(controls.bounded) + '</p>' : '') + '</details>' +
+      rangePanel(30) + rangePanel(90) + '<p class="table-hint">' + esc(controls.legend) + '</p><p data-project-selection role="status"></p>' +
+      (known.size > 12 ? '<button class="project-matrix-expand" data-project-matrix-expand aria-expanded="false" data-show-more="' + esc(copy.showMore) + '" data-show-less="' + esc(copy.showLess) + '">' + esc(copy.showMore) + '</button>' : '') + '</section>';
   }
 
   private renderProjectData(provider: SettingProvider = 'claude'): string {
@@ -10390,6 +10481,129 @@ export class UsageWebviewProvider {
     );
   }
 
+  private quotaDiagnosticsProjector?: (provider: SettingProvider, now: number) => QuotaDiagnosticsProjection | null;
+  private clearQuotaDiagnosticsProjection?: () => void;
+  setQuotaDiagnosticsProjector(projector: (provider: SettingProvider, now: number) => QuotaDiagnosticsProjection | null, clear?: () => void): void {
+    this.quotaDiagnosticsProjector = projector;
+    this.clearQuotaDiagnosticsProjection = clear;
+    this.usageDiagnosticsRenderCache = undefined;
+  }
+  /** Host callback owns all identity/source checks. OFF does not call it. */
+  getQuotaDiagnostics(provider: SettingProvider, now: number): QuotaDiagnosticsProjection | null {
+    if (!this.setting<boolean>('showQuotaDeclineRate', false)) { this.clearQuotaDiagnosticsProjection?.(); return null; }
+    return this.quotaDiagnosticsProjector?.(provider, now) ?? null;
+  }
+
+  private usageDiagnosticsRenderCache?: Partial<Record<SettingProvider, {
+    source: unknown; diagnosticSource: unknown; observations: unknown; key: string; html: string;
+  }>>;
+
+  /** Default-off, numeric-only diagnostics in the existing Content panel. The
+   * lazy provider source and calendar projection are untouched while disabled. */
+  private renderUsageDiagnostics(provider: SettingProvider): string {
+    const throughput = this.setting<boolean>('showUsageThroughput', false);
+    const changes = this.setting<boolean>('showUsageChange', false);
+    const quota = this.setting<boolean>('showQuotaDeclineRate', false);
+    if (!quota) this.clearQuotaDiagnosticsProjection?.();
+    if (!throughput && !changes && !quota) {
+      this.usageDiagnosticsRenderCache = undefined;
+      return '';
+    }
+    const copy = I18n.usageDiagnostics;
+    const esc = (value: string): string => this.escapeHtml(value);
+    const zone = resolveTimeZone(I18n.getTimezone());
+    const now = Date.now();
+    const today = dayKeyInZone(new Date(now), zone);
+    const source = provider === 'codex' ? this.codexView : this.dailyDataForEveryDay;
+    const diagnosticSource = provider === 'codex' ? this.codexView?.diagnosticDays : undefined;
+    const quotaProjection = quota ? this.getQuotaDiagnostics(provider, now) : null;
+    const observations = quotaProjection;
+    const expired = JSON.stringify(quotaProjection);
+    const claudeComplete = this.achievementCalendarTimeZone === zone && !!this.allTimeData &&
+      !this.revokedAchievementEvidence?.has('claude');
+    const key = [I18n.getCurrentLanguage(), zone, today, throughput, changes, quota, expired, claudeComplete].join('|');
+    const previous = this.usageDiagnosticsRenderCache?.[provider];
+    if (previous && previous.source === source && previous.diagnosticSource === diagnosticSource && previous.observations === observations && previous.key === key) return previous.html;
+    const selectedDays = rollingDayKeysFromDayKey(today, 30);
+    const selected = new Set(selectedDays);
+    let days: readonly DiagnosticDay[] = [];
+    if (throughput || changes) {
+      if (provider === 'codex') {
+        if (this.codexView?.periodCoverage.timeZone === zone) days = this.codexView.diagnosticDays?.() ?? [];
+      } else if (this.achievementCalendarTimeZone === zone) {
+        days = adaptClaudeDiagnosticDays(this.dailyDataForEveryDay.filter(row => selected.has(row.date)), claudeComplete);
+        // A complete accepted local census establishes idle days inside this
+        // bounded range. Incomplete sources must never receive artificial zeros.
+        if (claudeComplete) {
+          const present = new Set(days.map(day => day.day));
+          days = [...days, ...selectedDays.filter(day => !present.has(day)).map(day => ({
+            day, output:0, processed:0, coverage:'complete' as const, models:{},
+          }))];
+        }
+      }
+    }
+    const closedKeys = rollingDayKeysFromDayKey(today, 3).slice(0,2);
+    const before = days.find(day => day.day === closedKeys[0]);
+    const after = days.find(day => day.day === closedKeys[1]);
+    let body = '<p class="table-hint">' + esc(copy.scope) + '</p>';
+    const heading = (title:string):string => '<h4 class="cbar-subhead">' + esc(title) + '</h4>';
+    if (throughput) {
+      const rate = diagnosticThroughput(after, zone);
+      body += heading(copy.throughput) + '<p><strong>' + (rate.value === null ? '—' :
+        I18n.formatNumber(rate.value)) + '</strong> ' + esc(copy.outputPerHour) + '</p>' +
+        '<p class="table-hint">' + esc(closedKeys[1] + ' · ' + zone +
+          (rate.hours === undefined ? '' : ' · ' + rate.hours + ' ' + copy.hour)) + '</p>' +
+        '<p class="table-hint">' + esc(rate.status === 'partial' ? copy.partial : rate.value === null ? copy.unavailable : copy.throughputNote) + '</p>';
+      const rolling = diagnosticSevenDayPeak(days, today);
+      const peak = rolling?.history.exactWindowPeak;
+      body += '<p class="table-hint">' + esc(copy.seven + ' · ' + (provider === 'codex' ? I18n.t.providers.codex.processed : I18n.t.popup.totalTokens)) + ': ' + (peak && peak.value.status === 'exact'
+        ? esc(peak.value.units.toLocaleString(I18n.getLocale()) + ' Token · ' + peak.startDay + ' → ' + peak.endDay)
+        : esc(copy.sevenUnavailable)) + '</p>';
+    }
+    if (changes) {
+      body += heading(copy.change) + '<p class="table-hint">' + esc(copy.basis + ' · ' +
+        closedKeys.join(' → ') + ' · ' + zone) + '</p>';
+      const beforeHours = diagnosticThroughput(before, zone).hours;
+      const afterHours = diagnosticThroughput(after, zone).hours;
+      if (beforeHours !== undefined && afterHours !== undefined) body += '<p class="table-hint">' +
+        esc(copy.before + ': ' + beforeHours + ' ' + copy.hour + ' · ' + copy.after + ': ' + afterHours + ' ' + copy.hour) + '</p>';
+      for (const dimension of ['models','roles'] as const) {
+        const result = diagnosticChange(before, after, zone, dimension);
+        const label = dimension === 'models' ? copy.model : copy.role;
+        const maximum = result.rows.reduce((max,row)=>Math.max(max,Math.abs(row.delta)),1);
+        const labels: Record<string,string> = {unknown:copy.unknown, root:copy.root, subagent:copy.subagent, 'approval-reviewer':copy.reviewer};
+        body += '<details data-persist="diagnostics:' + provider + ':' + dimension + '"><summary>' + esc(label) +
+          ' · ' + (result.delta === null ? '—' : esc((result.delta > 0 ? '+' : '') + I18n.formatNumber(result.delta) + ' Token')) + '</summary>' +
+          (result.delta === null ? '<p class="table-hint">' + esc(copy.unavailable) + '</p>' :
+            '<div class="cbar-list">' + result.rows.map(row => '<div class="cbar-row">' +
+              '<div class="cbar-label" style="width:35%;min-width:0;flex-shrink:1" title="' + esc(row.key) + '">' + esc(labels[row.key] ?? row.key) + '</div>' +
+              '<div class="cbar-track"><div class="cbar-fill cf-1" style="width:' + (100*Math.abs(row.delta)/maximum).toFixed(1) + '%"></div></div>' +
+              '<div class="cbar-val" style="width:70px" aria-label="' + esc(copy.before + ': ' + row.before + ' · ' + copy.after + ': ' + row.after) + '">' +
+              esc((row.delta>0?'+':'')+I18n.formatNumber(row.delta)) + '</div></div><p class="table-hint">' +
+              esc(copy.before + ': ' + I18n.formatNumber(row.before) + ' → ' + copy.after + ': ' + I18n.formatNumber(row.after)) + '</p>').join('') + '</div>') + '</details>';
+      }
+      body += '<p class="table-hint">' + esc(copy.overlap) + '</p>';
+    }
+    if (quota) {
+      const projected = quotaProjection;
+      const rate = {value:projected?.rate??null,status:projected?.status??'unknown',
+        start:projected?.from,end:projected?.through,samples:projected?.count};
+      const value = rate.value === null ? '—' : rate.value > 0 && rate.value < 1 ? '&lt;1' : I18n.formatNumber(Math.round(rate.value));
+      body += heading(copy.quota) + '<p><strong>' + value + '</strong> ' + esc(copy.quotaUnit) + '</p>' +
+        '<p class="table-hint">' + esc(rate.value === null ? rate.status==='unknown'?copy.unavailable:rate.status==='identity'?copy.identity:
+          ['boundary','regression','conflict'].includes(rate.status)?copy.boundary:copy.samples : copy.quotaNote) + '</p>';
+      if (rate.start !== undefined && rate.end !== undefined) body += '<p class="table-hint">' +
+        esc(new Date(rate.start).toISOString() + ' → ' + new Date(rate.end).toISOString() + ' · n=' + rate.samples) + '</p>';
+      if (projected?.resetAt !== undefined) body += '<p class="table-hint">' + esc(copy.reset + ': ' + new Date(projected.resetAt).toISOString()) + '</p>';
+      body += '<p class="table-hint">' + esc(copy.quotaPolicy) + '</p>';
+    }
+    body += '<p class="table-hint">' + esc(copy.tps) + '</p>';
+    const html = '<div class="daily-breakdown" data-usage-diagnostics="' + provider + '"><div class="section-header"><h3>' +
+      esc(copy.title) + '</h3></div>' + body + '</div>';
+    (this.usageDiagnosticsRenderCache ??= {})[provider] = {source,diagnosticSource,observations,key,html};
+    return html;
+  }
+
   private renderContentData(provider: SettingProvider = 'claude'): string {
     if (provider === 'codex') {
       const view = this.codexView;
@@ -10400,18 +10614,18 @@ export class UsageWebviewProvider {
       const behavior = view.behaviorScopes.last30Days;
       const percent = (value: number): string => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
       const metric = (label: string, value: string): string =>
-        '<div class="summary-item"><div class="label">' + this.escapeHtml(label) +
-        '</div><div class="value">' + this.escapeHtml(value) + '</div></div>';
-      const behaviorSummary = '<div class="usage-summary"><div class="summary-grid">' +
+        '<div class="cbar-row"><span style="flex:1;min-width:0;overflow-wrap:anywhere">' + this.escapeHtml(label) +
+        '</span><strong class="cbar-val">' + this.escapeHtml(value) + '</strong></div>';
+      const behaviorSummary = '<div class="cbar-list">' +
         metric(copy.childThreadsPerRootTask, behavior.childThreadsPerRootTask.toFixed(1)) +
         metric(copy.childFreshShare, percent(behavior.childFreshShare)) +
         metric(copy.approvalFreshShare, percent(behavior.approvalReviewerFreshShare)) +
         metric(copy.highEffortFreshShare, percent(behavior.highEffortFreshShare)) +
-        metric(copy.processedToFreshRatio, behavior.processedToFreshRatio.toFixed(1) + '×') +
+        metric(copy.processedToFreshRatio, behavior.processedToFreshRatio.toFixed(1)) +
         metric(copy.reasoningOutputShare, percent(behavior.reasoningOutputShare)) +
         metric(copy.postPatchToolCallsPerPatchCall, behavior.postPatchToolCallsPerPatchCall.toFixed(1)) +
         metric(copy.compactions, I18n.formatNumber(behavior.compactCount)) +
-        '</div></div>';
+        '</div>';
       const insights = this.codexInsights.last30Days;
       const insightHtml = insights.length === 0
         ? '<div class="model-item"><p class="table-hint">' + this.escapeHtml(copy.recommendationEmpty) + '</p></div>'
@@ -10422,13 +10636,13 @@ export class UsageWebviewProvider {
               return '<span><span class="model-stat-label">' + this.escapeHtml(label) + '</span><strong>' +
                 this.escapeHtml(formattedValue) + '</strong></span>';
             }).join('');
-            return '<div class="model-item"><div class="model-header"><span class="model-name">' +
-              this.escapeHtml(copy.insightTitles[insight.kind]) + '</span></div>' +
+            return '<details class="model-item" data-persist="codex-insight:' + this.escapeHtml(insight.kind) + '"><summary class="model-header"><span class="model-name">' +
+              this.escapeHtml(copy.insightTitles[insight.kind]) + '</span></summary>' +
               '<p class="model-details"><strong>' + this.escapeHtml(copy.insightObservation) + ':</strong> ' +
               this.escapeHtml(copy.insightObservations[insight.kind]) + '</p>' +
               '<div class="model-details model-details-stacked">' + evidence + '</div>' +
               '<p class="model-details"><strong>' + this.escapeHtml(copy.insightConditionalAction) + ':</strong> ' +
-              this.escapeHtml(copy.insightTips[insight.kind]) + '</p></div>';
+              this.escapeHtml(copy.insightTips[insight.kind]) + '</p></details>';
           }).join('') + '</div>';
       const partial = view.periodCoverage.last30Days.complete
         ? ''
@@ -11679,6 +11893,18 @@ export class UsageWebviewProvider {
         border-top: 1px solid var(--ccu-border);
         border-bottom: 1px solid var(--ccu-border);
       }
+
+      .project-matrix-level-unknown { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--vscode-descriptionForeground) 3px 4px); }
+      .project-matrix-inspect { padding:0; margin:0; width:100%; height:20px; min-width:12px; border:0; border-radius:0; color:var(--vscode-foreground); background:transparent; }
+      .project-matrix-inspect:hover { background:transparent; outline:1px solid var(--vscode-focusBorder); }
+      .project-matrix-filters { display:flex; flex-wrap:wrap; gap:4px 12px; max-height:160px; overflow:auto; margin:8px 0; }
+      .project-matrix-filters label { display:inline-flex; align-items:center; font-size:12px; }
+      .project-matrix-area text { fill:var(--vscode-foreground); font-size:10px; }
+      .project-matrix-area [role="button"]:focus-visible { outline:2px solid var(--vscode-focusBorder); outline-offset:-2px; }
+      .project-matrix-area-0 {fill:var(--vscode-charts-blue)} .project-matrix-area-1 {fill:var(--vscode-charts-green)}
+      .project-matrix-area-2 {fill:var(--vscode-charts-purple)} .project-matrix-area-3 {fill:var(--vscode-charts-yellow)}
+      .project-matrix-area-4 {fill:var(--vscode-charts-red)} .project-matrix-area-5 {fill:var(--vscode-charts-foreground)}
+
       .project-matrix-head {
         display: flex;
         align-items: flex-start;
@@ -13937,7 +14163,7 @@ export class UsageWebviewProvider {
         text-align: left; padding: 10px; min-width: 0; width: 100%; box-sizing: border-box; border-radius: 8px; }
       [data-achievement-overview="badges"] .achievement-overview-badge { padding-right: 48px; }
       .achievement-overview-badge:hover { background: var(--vscode-list-hoverBackground); }
-      .achievement-overview-badge img { width: var(--achievement-showcase-size); max-width: 100%; height: auto; aspect-ratio: 1; object-fit: contain;
+      .achievement-overview-badge > .achievement-framed-icon { width: var(--achievement-showcase-size); max-width: 100%; height: auto; aspect-ratio: 1;
         grid-column: 1; grid-row: 1 / span 4; }
       .achievement-overview-name, .achievement-overview-rank, .achievement-overview-progress, .achievement-overview-track { grid-column: 2; min-width: 0; }
       .achievement-overview-name { font-weight: 650; text-wrap: balance; overflow-wrap: anywhere; }
@@ -13981,14 +14207,14 @@ export class UsageWebviewProvider {
       .achievement-record-badge { display: grid; grid-template-columns: 56px minmax(0, 1fr); column-gap: 12px;
         row-gap: 4px; align-items: center; width: 100%; padding: 8px 0; border: 0; background: transparent;
         color: var(--vscode-foreground); text-align: left; }
-      .achievement-record-badge img { width: 56px; height: 56px; object-fit: contain; grid-row: 1 / span 2; }
+      .achievement-record-badge > .achievement-framed-icon { width: 56px; height: 56px; grid-row: 1 / span 2; }
       .achievement-record-name { font-weight: 600; overflow-wrap: anywhere; }
       .achievement-record-badge small { color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
       .achievement-record-badge:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
       .achievement-record-history > summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
       .achievement-records-list { display: grid; gap: 4px; margin: 8px 0 0; padding: 0; list-style: none; }
       .achievement-records-list .achievement-record-badge { grid-template-columns: 40px minmax(0, 1fr); }
-      .achievement-records-list img { width: 40px; height: 40px; }
+      .achievement-records-list .achievement-framed-icon { width: 40px; height: 40px; }
       @media (max-width: 720px) { .achievement-recent-grid { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
       @media (max-width: 480px) {
         .achievement-overview-grid { gap: 8px; }
@@ -14067,14 +14293,14 @@ export class UsageWebviewProvider {
       .achievement-group h3 { margin: 0 0 12px; font-size: 1.05rem; font-weight: 650; }
       .achievement-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--achievement-card-width)), 1fr)); gap: 10px; align-items: start; }
       .achievement-card { --achievement-tier-color: var(--achievement-accent); position: relative; min-width: 0; border: 1px solid var(--vscode-panel-border); border-radius: 11px; background: var(--vscode-editor-background); overflow: hidden; }
-      .achievement-card.earned { border-color: var(--achievement-accent); }
+      .achievement-card.earned { border-color: var(--vscode-panel-border); }
       .achievement-card[data-achievement-tier="bronze"] { --achievement-tier-color: var(--vscode-charts-orange); }
-      .achievement-card[data-achievement-tier="silver"] { --achievement-tier-color: var(--vscode-descriptionForeground); }
+      .achievement-card[data-achievement-tier="silver"] { --achievement-tier-color: var(--vscode-editor-foreground); }
       .achievement-card[data-achievement-tier="gold"] { --achievement-tier-color: var(--vscode-charts-yellow); }
       .achievement-card[data-achievement-tier="platinum"] { --achievement-tier-color: var(--vscode-charts-blue); }
       .achievement-card[data-achievement-tier="legendary"] { --achievement-tier-color: var(--vscode-charts-purple); }
       .achievement-card[data-achievement-series] { --achievement-tier-label-color: var(--vscode-foreground); }
-      .achievement-card[data-achievement-series].earned { border-color: var(--achievement-tier-color); }
+      .achievement-card[data-achievement-series].earned { border-color: var(--vscode-panel-border); }
       .achievement-card details { min-width: 0; }
       .achievement-card.achievement-statistics-expanded { grid-column: 1 / -1; }
       .achievement-effort-statistics { color: var(--vscode-foreground); font-size: .85rem; line-height: 1.5; overflow-wrap: anywhere; }
@@ -14092,18 +14318,29 @@ export class UsageWebviewProvider {
       .achievement-card summary::after { content: '⌄'; color: var(--vscode-descriptionForeground); line-height: 1; }
       .achievement-card details[open] summary::after { content: '⌃'; }
       .achievement-card summary:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -3px; border-radius: 10px; }
-      .achievement-emblem { display: grid; place-items: center; width: var(--achievement-emblem-size); height: var(--achievement-emblem-size); border-radius: 13px; overflow: hidden; }
+      .achievement-emblem { display: grid; place-items: center; width: var(--achievement-emblem-size); height: var(--achievement-emblem-size); }
       .achievement-card summary .achievement-emblem { margin-bottom: 4px; }
-      .achievement-emblem img { display: block; width: 100%; height: 100%; object-fit: contain; }
+      .achievement-emblem > .achievement-framed-icon { width: 100%; height: 100%; }
+      .achievement-framed-icon { position: relative; display: inline-block; flex: none; vertical-align: middle; color: var(--vscode-foreground); }
+      .achievement-framed-icon > img { position: absolute; inset: 14.0625% auto auto 18.75%; display: block; width: 62.5%; height: 64.0625%; object-fit: contain; }
+      .achievement-framed-icon > .achievement-adornment { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      .achievement-framed-icon[data-achievement-frame="bronze"] { color: var(--vscode-charts-orange); color: color-mix(in srgb,var(--vscode-charts-red) 40%,var(--vscode-charts-yellow)); }
+      .achievement-framed-icon[data-achievement-frame="silver"] { color: var(--vscode-editor-foreground); }
+      .achievement-framed-icon[data-achievement-frame="gold"] { color: var(--vscode-charts-yellow); }
+      .achievement-framed-icon[data-achievement-frame="platinum"] { color: var(--vscode-charts-blue); }
+      .achievement-framed-icon[data-achievement-frame="legendary"] { color: var(--vscode-charts-purple); }
+      .achievement-framed-icon[data-achievement-frame="locked"] { color: var(--vscode-descriptionForeground); }
+      .achievement-framed-icon[data-emblem-state="locked"] > img { filter: grayscale(.45); opacity: .75; }
+      .vscode-high-contrast .achievement-framed-icon, .vscode-high-contrast-light .achievement-framed-icon { color: var(--vscode-foreground); }
       .achievement-card.locked .achievement-emblem img { filter: grayscale(.45); opacity: .75; }
       .achievement-card h4 { margin: 0; font-size: .9rem; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
       .achievement-card[data-achievement-series].earned h4 { color: var(--achievement-tier-label-color); }
       .achievement-rank { display: inline-block; max-width: 100%; padding: 2px 7px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; color: var(--vscode-descriptionForeground); font-size: .72rem; line-height: 1.25; overflow-wrap: anywhere; }
       .achievement-next-target { color: var(--vscode-descriptionForeground); font-size: .72rem; line-height: 1.4; overflow-wrap: anywhere; }
-      .achievement-current-progress, .achievement-stage-target { display: block; }
+      .achievement-current-progress, .achievement-stage-target, .achievement-window { display: block; }
       .achievement-current-progress { color: var(--vscode-foreground); font-variant-numeric: tabular-nums; }
       .achievement-progress-track { display: block; width: 100%; max-width: 108px; height: 3px; background: var(--vscode-panel-border); overflow: hidden; }
-      .achievement-progress-track > span { display: block; height: 100%; background: var(--achievement-accent); }
+      .achievement-progress-track > span { display: block; height: 100%; background: var(--vscode-progressBar-background); }
       .achievement-card-detail h5 { margin: 12px 0 6px; font-size: .8rem; }
       .achievement-level-rules { min-width: 0; list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
       .achievement-level-rules li { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) max-content; align-items: baseline; gap: 4px 8px; padding-block: 6px; font-size: .8rem; line-height: 1.45; overflow-wrap: anywhere; }
@@ -14121,18 +14358,18 @@ export class UsageWebviewProvider {
       .achievement-level-name[data-rank="legendary"] { --achievement-level-accent: var(--vscode-charts-purple); }
       .vscode-high-contrast .achievement-level-rules .achievement-level-name, .vscode-high-contrast-light .achievement-level-rules .achievement-level-name { color: var(--vscode-foreground); }
       .achievement-milestones li { grid-template-columns: 40px minmax(0, 1fr); column-gap: 8px; }
-      .achievement-milestones img { grid-row: 1 / span 3; width: 40px; height: 40px; object-fit: contain; }
-      .achievement-milestones strong, .achievement-milestones small, .achievement-milestones span { grid-column: 2; }
+      .achievement-milestones .achievement-framed-icon { grid-column: 1; grid-row: 1 / span 3; width: 40px; height: 40px; }
+      .achievement-milestones strong, .achievement-milestones small, .achievement-milestones span:not(.achievement-framed-icon) { grid-column: 2; }
       .achievement-milestones .achievement-level-meta { grid-column: 2; }
       .achievement-feature-journey { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
       .achievement-feature-journey li { min-width: 0; display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 6px; font-size: .76rem; line-height: 1.4; overflow-wrap: anywhere; }
       .achievement-step-marker { grid-row: 1 / span 2; }
       .achievement-feature-journey small { grid-column: 2; color: var(--vscode-descriptionForeground); }
-      .achievement-share-choice-icon { flex: none; width: 32px; height: 32px; object-fit: contain; }
+      .achievement-share-option > .achievement-framed-icon { width: 48px; height: 48px; }
       .achievement-share-presentation .sc-check { min-width: 0; }
       .achievement-share-presentation .sc-check span { overflow-wrap: anywhere; }
       .achievement-share-presentation .achievement-share-options { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,230px),1fr)); gap: 8px; }
-      .achievement-share-presentation .achievement-share-option { display: grid; grid-template-columns: 16px 36px minmax(0,1fr); align-items: center; gap: 10px; min-height: 64px; box-sizing: border-box; padding: 8px 10px; border-radius: 6px; }
+      .achievement-share-presentation .achievement-share-option { display: grid; grid-template-columns: 16px 48px minmax(0,1fr); align-items: center; gap: 10px; min-height: 64px; box-sizing: border-box; padding: 8px 10px; border-radius: 6px; }
       .achievement-share-option:has(input:checked) { border-color: var(--vscode-focusBorder); }
       .achievement-share-option:focus-within { outline: 2px solid var(--vscode-focusBorder); outline-offset: 1px; }
       .achievement-share-option input { margin: 0; }
@@ -14152,7 +14389,7 @@ export class UsageWebviewProvider {
       .achievement-tier-marker.complete { border-color: var(--achievement-tier-color); color: var(--achievement-tier-label-color); font-weight: 700; }
       .achievement-tier-marker.next { border-style: dashed; }
       .achievement-progress-label { display: block; margin-bottom: 5px; font-size: .82rem; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
-      .achievement-card progress { display: block; width: 100%; height: 5px; accent-color: var(--achievement-accent); }
+      .achievement-card progress { display: block; width: 100%; height: 5px; accent-color: var(--vscode-progressBar-background); }
       .achievement-unlock-notice { position: fixed; inset-inline-end: 16px; bottom: 17px; z-index: 100; display: flex; align-items: center; gap: 10px; max-width: min(360px, calc(100vw - 32px)); padding: 10px 12px; border: 1px solid var(--vscode-focusBorder); border-radius: 9px; background: var(--vscode-editorWidget-background, var(--vscode-editor-background)); color: var(--vscode-editorWidget-foreground, var(--vscode-foreground)); box-shadow: 0 4px 16px var(--vscode-widget-shadow, rgba(0,0,0,.22)); }
       .achievement-unlock-notice img { flex: none; width: 44px; height: 44px; object-fit: contain; animation: ccuBadgeArrive 440ms ease-out 1; }
       @keyframes ccuBadgeArrive {
@@ -14293,8 +14530,12 @@ function ccuProjectMatrixState(root) {
   var saved = provider && all[provider] ? all[provider] : {};
   return {
     range: saved.range === '90' ? '90' : '30',
-    view: saved.view === 'trend' ? 'trend' : 'heatmap',
-    expanded: saved.expanded === true
+    view: ['trend','area'].indexOf(saved.view)>=0 ? saved.view : 'heatmap',
+    expanded: saved.expanded === true,
+    scale: ['day','week','month'].indexOf(saved.scale) >= 0 ? saved.scale : 'day',
+    filters: Array.isArray(saved.filters) ? saved.filters.slice(0,200) : null,
+    filterScope: saved.filterScope || '',
+    selection: typeof saved.selection === 'string' && /^[a-z0-9:-]{1,128}$/.test(saved.selection) ? saved.selection : ''
   };
 }
 function ccuSaveProjectMatrixState(root, state) {
@@ -14304,7 +14545,7 @@ function ccuSaveProjectMatrixState(root, state) {
   all[provider] = {
     range: state.range,
     view: state.view,
-    expanded: state.expanded === true
+    expanded: state.expanded === true, scale: state.scale, filters: state.filters, filterScope: state.filterScope, selection: state.selection
   };
   ccuWriteUiState('projectUsageMatrix', all);
 }
@@ -14326,9 +14567,16 @@ function ccuApplyProjectMatrixState(root, state) {
       view.hidden = state.view !== 'heatmap';
     });
     panel.querySelectorAll('[data-project-matrix-trend]').forEach(function(view) {
-      view.hidden = state.view !== 'trend';
+      view.hidden = state.view !== 'trend' && state.view !== 'area';
     });
   });
+  root.querySelectorAll('[data-project-area-mode]').forEach(function(n){n.hidden=state.view!=='area';});
+  root.querySelectorAll('[data-project-bars-mode]').forEach(function(n){n.hidden=state.view!=='trend';});
+  root.querySelectorAll('[data-project-scale-panel]').forEach(function(panel) { panel.hidden = panel.getAttribute('data-project-scale-panel') !== state.scale; });
+  var scaleControl = root.querySelector('[data-project-scale]'); if (scaleControl) scaleControl.value = state.scale;
+  var detail = root.querySelector('[data-project-selection]');
+  var selectedCell = Array.prototype.find.call(root.querySelectorAll('[data-project-selection-key]'), function(n){return n.getAttribute('data-project-selection-key')===state.selection;});
+  if (detail) detail.textContent = selectedCell ? (selectedCell.getAttribute('aria-label') || selectedCell.getAttribute('title')) : '';
   root.querySelectorAll('[data-project-matrix-extra]').forEach(function(row) {
     row.hidden = !state.expanded;
   });
@@ -14346,7 +14594,22 @@ function restoreProjectMatrixState(scope) {
   if (root.matches && root.matches('[data-project-matrix]')) { matrices.push(root); }
   root.querySelectorAll('[data-project-matrix]').forEach(function(matrix) { matrices.push(matrix); });
   matrices.forEach(function(matrix) {
-    ccuApplyProjectMatrixState(matrix, ccuProjectMatrixState(matrix));
+    var state = ccuProjectMatrixState(matrix);
+    ccuApplyProjectMatrixState(matrix, state);
+    var scope = matrix.getAttribute('data-project-filter-scope');
+    if ((state.filterScope && state.filterScope !== scope) || matrix.getAttribute('data-project-filter-normalized') === 'true') {
+      state.filters=null;state.selection='';state.filterScope=scope;ccuSaveProjectMatrixState(matrix,state);
+      var status=matrix.querySelector('[data-project-selection]');if(status)status.textContent=matrix.getAttribute('data-project-reset-label') || '';
+    }
+    if (state.filterScope === scope && Array.isArray(state.filters)) {
+      var rendered = Array.prototype.filter.call(matrix.querySelectorAll('[data-project-filter]'), function(n){return n.checked;}).map(function(n){return n.getAttribute('data-project-filter');}).sort();
+      var available = Array.prototype.map.call(matrix.querySelectorAll('[data-project-filter]'),function(n){return n.getAttribute('data-project-filter');});
+      if (state.filters.some(function(h){return available.indexOf(h)<0;})) {state.filters=null;state.selection='';ccuSaveProjectMatrixState(matrix,state);vscode.postMessage({command:'projectChartFilter',documentId:__ccuDocumentId,provider:matrix.getAttribute('data-project-matrix'),scope:scope,handles:[],all:true});}
+      else if (JSON.stringify(rendered) !== JSON.stringify(state.filters.slice().sort())) {
+        vscode.postMessage({ command:'projectChartFilter', documentId:__ccuDocumentId, provider:matrix.getAttribute('data-project-matrix'), scope:scope, handles:state.filters });
+      }
+    }
+
   });
 }
 document.addEventListener('click', function(event) {
@@ -14361,11 +14624,32 @@ document.addEventListener('click', function(event) {
   var range = control.getAttribute('data-project-matrix-range');
   var view = control.getAttribute('data-project-matrix-view');
   if (range === '30' || range === '90') { state.range = range; }
-  if (view === 'heatmap' || view === 'trend') { state.view = view; }
+  if (view === 'heatmap' || view === 'trend' || view === 'area') { state.view = view; }
   if (control.hasAttribute('data-project-matrix-expand')) { state.expanded = !state.expanded; }
   ccuApplyProjectMatrixState(root, state);
   ccuSaveProjectMatrixState(root, state);
 });
+
+document.addEventListener('change', function(event) {
+  var control = event.target, root = control.closest ? control.closest('[data-project-matrix]') : null;
+  if (!root) return;
+  var state = ccuProjectMatrixState(root);
+  if (control.hasAttribute('data-project-scale')) {state.scale=control.value;ccuSaveProjectMatrixState(root,state);ccuApplyProjectMatrixState(root,state);}
+  if (control.hasAttribute('data-project-filter')) ccuProjectFilterSend(root, false);
+});
+function ccuProjectFilterSend(root, all) {
+  var state=ccuProjectMatrixState(root), scope=root.getAttribute('data-project-filter-scope');
+  var handles=Array.prototype.filter.call(root.querySelectorAll('[data-project-filter]'),function(n){return n.checked;}).map(function(n){return n.getAttribute('data-project-filter');});
+  state.filters=all?null:handles;state.filterScope=scope;ccuSaveProjectMatrixState(root,state);
+  vscode.postMessage({command:'projectChartFilter',documentId:__ccuDocumentId,provider:root.getAttribute('data-project-matrix'),scope:scope,handles:handles,all:all});
+}
+document.addEventListener('click', function(event) {
+  var control=event.target.closest?event.target.closest('[data-project-filter-all],[data-project-filter-none],[data-project-inspect]'):null;
+  if(!control)return;var root=control.closest('[data-project-matrix]');if(!root)return;
+  if(control.hasAttribute('data-project-inspect')){var state=ccuProjectMatrixState(root);state.selection=control.getAttribute('data-project-selection-key') || '';ccuSaveProjectMatrixState(root,state);ccuApplyProjectMatrixState(root,state);return;}
+  var all=control.hasAttribute('data-project-filter-all');root.querySelectorAll('[data-project-filter]').forEach(function(n){n.checked=all;});ccuProjectFilterSend(root,all);
+});
+document.addEventListener('keydown', function(event){if((event.key==='Enter'||event.key===' ')&&event.target.matches('[data-project-inspect]')){event.preventDefault();event.target.dispatchEvent(new MouseEvent('click',{bubbles:true}));}});
 
 function adviceRoot(provider) {
   if (provider === 'optimizer') {
@@ -15183,6 +15467,7 @@ function combinedHeatmapReadConfig() {
   var provider = document.getElementById('combinedHeatmapProvider');
   var metric = document.getElementById('combinedHeatmapMetric');
   var amounts = document.getElementById('combinedHeatmapShowAmounts');
+  var presentation = document.getElementById('combinedHeatmapPresentation');
   var showAmounts = !!(amounts && amounts.checked && metric && metric.value === 'apiEquivalent');
   return {
     title: title ? title.value : __combinedHeatmapCopy.defaultTitle,
@@ -15192,7 +15477,8 @@ function combinedHeatmapReadConfig() {
     palette: palette ? palette.value : 'academicViolet',
     customAccent: customAccent ? customAccent.value : '#4f2f87',
     provider: provider ? provider.value : 'both',
-    metric: showAmounts ? 'apiEquivalent' : 'tokens', showAmounts: showAmounts
+    metric: showAmounts ? 'apiEquivalent' : 'tokens', showAmounts: showAmounts,
+    presentation: showAmounts && presentation && presentation.value === 'compact' ? 'compact' : 'standard'
   };
 }
 function combinedHeatmapSaveConfig(config) {
@@ -15206,6 +15492,8 @@ function combinedHeatmapSaveConfig(config) {
     localStorage.setItem('ccu.combinedHeatmap.provider', config.provider);
     localStorage.setItem('ccu.combinedHeatmap.metric', config.metric);
     localStorage.setItem('ccu.combinedHeatmap.showAmounts', config.showAmounts ? 'true' : 'false');
+    var presentation = document.getElementById('combinedHeatmapPresentation');
+    localStorage.setItem('ccu.combinedHeatmap.presentation', presentation && presentation.value === 'compact' ? 'compact' : 'standard');
   } catch (e) {}
 }
 function toggleCombinedCustomAccent(changed) {
@@ -15219,7 +15507,7 @@ var __apiHeatmapPendingConfigKey = '';
 var __apiHeatmapExportPreviewId = '';
 function combinedHeatmapConfigKey(config) {
   return JSON.stringify([config.title,config.range,config.intensityMode,config.palette,config.customAccent,
-    config.provider,config.metric,config.showAmounts]);
+    config.provider,config.metric,config.showAmounts,config.presentation]);
 }
 function combinedHeatmapSetExportState() {
   var preview = document.getElementById('combinedHeatmapPreview');
@@ -15247,6 +15535,16 @@ function combinedHeatmapUpdateDisclosure() {
   var config = combinedHeatmapReadConfig();
   var disclosure = document.getElementById('combinedHeatmapAmountDisclosure');
   var includes = document.getElementById('combinedHeatmapPrivacyIncludes');
+  var presentation = document.getElementById('combinedHeatmapPresentation');
+  var intensity = document.getElementById('combinedHeatmapIntensityMode');
+  var compactDisclosure = document.getElementById('combinedHeatmapCompactDisclosure');
+  if (presentation) { presentation.disabled = !config.showAmounts; }
+  if (intensity) {
+    intensity.disabled = config.presentation === 'compact';
+    if (config.presentation === 'compact') { intensity.setAttribute('aria-describedby','combinedHeatmapCompactDisclosure'); }
+    else { intensity.removeAttribute('aria-describedby'); }
+  }
+  if (compactDisclosure) { compactDisclosure.hidden = config.presentation !== 'compact'; }
   if (disclosure) { disclosure.hidden = !config.showAmounts; }
   if (includes) { includes.textContent = '✓ ' + (config.showAmounts ? __apiHeatmapCopy.amountDisclosure : includes.dataset.tokenCopy); }
 }
@@ -15285,6 +15583,7 @@ function restoreCombinedHeatmapConfig() {
   var provider = document.getElementById('combinedHeatmapProvider');
   var metric = document.getElementById('combinedHeatmapMetric');
   var amounts = document.getElementById('combinedHeatmapShowAmounts');
+  var presentation = document.getElementById('combinedHeatmapPresentation');
   if (!title || !range || !intensityMode || !privacy || !customAccent) { return; }
   var changed = false;
   try {
@@ -15297,6 +15596,8 @@ function restoreCombinedHeatmapConfig() {
     var storedProvider = localStorage.getItem('ccu.combinedHeatmap.provider');
     var storedMetric = localStorage.getItem('ccu.combinedHeatmap.metric');
     var storedAmounts = localStorage.getItem('ccu.combinedHeatmap.showAmounts');
+    var storedPresentation = localStorage.getItem('ccu.combinedHeatmap.presentation');
+    if (presentation && storedPresentation === 'compact') { presentation.value = 'compact'; }
     var sourceAvailable = true;
     if (provider && ['claude','codex','both'].includes(storedProvider)) {
       var option = Array.from(provider.options).find(function(option) { return option.value === storedProvider; });
@@ -15445,7 +15746,8 @@ var __ccuSharingPreferenceKeys = [
   'ccu.combinedHeatmap.customAccent',
   'ccu.combinedHeatmap.provider',
   'ccu.combinedHeatmap.metric',
-  'ccu.combinedHeatmap.showAmounts'
+  'ccu.combinedHeatmap.showAmounts',
+  'ccu.combinedHeatmap.presentation'
 ];
 function ccuCountPresentStorageKeys(storage, keys) {
   var count = 0;
@@ -15527,9 +15829,11 @@ function ccuApplyDefaultSharingControls() {
   var provider = document.getElementById('combinedHeatmapProvider');
   var metric = document.getElementById('combinedHeatmapMetric');
   var amounts = document.getElementById('combinedHeatmapShowAmounts');
+  var presentation = document.getElementById('combinedHeatmapPresentation');
   if (provider) { provider.value = provider.dataset.defaultValue; }
   if (metric) { metric.value = 'tokens'; }
   if (amounts) { amounts.checked = false; }
+  if (presentation) { presentation.value = 'standard'; }
   selectDefaultSharingTemplate();
   scApplyDefaultControls();
   toggleCombinedCustomAccent();

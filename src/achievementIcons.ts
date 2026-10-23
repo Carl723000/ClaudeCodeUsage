@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
-import type { AchievementId } from './achievements';
+import { ACHIEVEMENT_SERIES, type AchievementId } from './achievements';
+import { ACHIEVEMENT_EXPORT_RANK_COLORS, renderAchievementAdornment, type AchievementEmblemState, type AchievementRank } from './achievementAdornment';
 import { API_ACHIEVEMENT_DEFINITIONS, type AchievementMoneyId } from './achievementMoneyCatalog';
 import { LONG_TERM_ACHIEVEMENT_DEFINITIONS, type LongTermAchievementId } from './achievementLongTerm';
 const apiImageFiles = Object.fromEntries(API_ACHIEVEMENT_DEFINITIONS.map(row=>
@@ -156,6 +157,30 @@ export function achievementImageDataUrl(id: AchievementId): string {
   return url;
 }
 
+const ranks: readonly AchievementRank[] = ['bronze', 'silver', 'gold', 'platinum', 'legendary'];
+const rankById = new Map<AchievementId, AchievementRank>(Object.values(ACHIEVEMENT_SERIES)
+  .flatMap(ids => ids.map((id, index) => [id, ranks[index]] as const)));
+
+/** Catalog order is authoritative; suffixes cannot identify legacy IDs or milestones. */
+export function achievementIconRank(id: AchievementId): AchievementRank {
+  return rankById.get(id) ?? 'milestone';
+}
+
+function escapeAttribute(value: string): string {
+  return value.replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[char]!);
+}
+
+/** Keep resource URIs and lazy PNG loading in webviews; adornments are native SVG. */
+export function renderAchievementWebviewIcon(id: AchievementId, imageSrc: string,
+  state: AchievementEmblemState = 'earned', imageClass?: 'achievement-share-choice-icon'): string {
+  const rank = achievementIconRank(id), frame = state === 'locked' ? 'locked' : rank;
+  return '<span class="achievement-framed-icon" data-achievement-frame="' + frame + '" data-emblem-state="' + state + '" aria-hidden="true">' +
+    '<img' + (imageClass ? ' class="' + imageClass + '"' : '') + ' data-achievement-icon="' + id +
+    '" data-achievement-artwork="' + ACHIEVEMENT_IMAGE_FILES[id] + '" src="' + escapeAttribute(imageSrc) + '" alt="" loading="lazy">' +
+    '<svg class="achievement-adornment" viewBox="0 0 64 64" aria-hidden="true" focusable="false">' +
+    renderAchievementAdornment(rank, state) + '</svg></span>';
+}
+
 /** Self-contained exported SVG uses only local, allowlisted PNG bytes. */
 export function renderAchievementIcon(
   id: AchievementId,
@@ -164,5 +189,6 @@ export function renderAchievementIcon(
 ): string {
   const coordinates = position ? ` x="${position.x}" y="${position.y}"` : '';
   const size = position?.size ?? 48;
-  return `<svg data-achievement-icon="${id}"${coordinates} width="${size}" height="${size}" viewBox="0 0 48 48" aria-hidden="true"><image href="${achievementImageDataUrl(id)}" width="48" height="48" /></svg>`;
+  const rank = achievementIconRank(id);
+  return `<svg data-achievement-icon="${id}" data-achievement-frame="${rank}" data-emblem-state="earned"${coordinates} width="${size}" height="${size}" viewBox="0 0 64 64" color="${ACHIEVEMENT_EXPORT_RANK_COLORS[rank]}" aria-hidden="true"><image href="${achievementImageDataUrl(id)}" x="12" y="9" width="40" height="41" />${renderAchievementAdornment(rank)}</svg>`;
 }

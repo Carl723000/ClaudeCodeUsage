@@ -12,6 +12,16 @@
 
 > Screenshot mencakup UI bahasa Inggris dan Tionghoa Sederhana. Lihat [README utama](README.md) untuk referensi lengkap.
 
+## Pembaruan visualisasi yang belum dirilis
+
+- Galeri pencapaian, etalase, target berikutnya, gambar pilihan berbagi, dan ekspor SVG memakai bingkai persegi serta ornamen tingkat yang sama. Ilustrasi dan syarat penghargaan tetap dipertahankan.
+- Grafik Token 30/90 hari mendapat tampilan hari/minggu/bulan serta pilihan proyek. Nilai tidak diketahui, nol terverifikasi, dan subtotal parsial tetap dibedakan; minggu/bulan yang terpotong diberi label.
+- Berbagi nilai uang menyediakan tata letak ringkas opsional; standar tetap menjadi bawaan. Nilai Claude dan Codex terpisah. Perubahan pengaturan memerlukan pratinjau baru yang diterima; byte SVG tersimpan dibaca ulang dan dibandingkan dengan pratinjau tersebut.
+- Pencapaian volume dan nilai per penyedia selama tujuh hari memakai jendela bergulir tujuh hari kalender yang telah berakhir. Penghargaan lama mempertahankan catatan dan ditandai sebagai aturan lama; bukti yang kurang tidak menghasilkan tanggal buatan. Siklus reset kuota sebenarnya tidak berubah.
+- Tiga diagnostik nonaktif secara default: keluaran per jam berlalu, perubahan penggunaan teramati, dan laju penurunan kuota. Hanya agregat numerik yang ada dan pengamatan kuota yang memenuhi syarat digunakan; bukti yang kurang tetap tidak tersedia. Keluaran per jam bukan TPS generasi, perubahan tidak membuktikan sebab, dan laju kuota merupakan rata-rata historis, bukan prediksi.
+
+Perubahan ini belum dirilis. Tidak menambah pemindaian log, permintaan autentikasi, pengumpulan latar belakang, atau publikasi otomatis. Lihat [data lokal dan pembersihan](LOCAL-DATA.md).
+
 ## Screenshot
 
 ### Status bar

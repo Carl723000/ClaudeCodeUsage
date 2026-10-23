@@ -173,7 +173,7 @@ for (const [locale, copy] of Object.entries(ACHIEVEMENT_COPY)) {
         levels: copy.levels, milestone: copy.milestone, footer: copy.heading });
       const badge = shareBadge(svg, entry.id);
       const threshold = `≥$${new Intl.NumberFormat(locale).format(entry.target / 1_000_000)} USD`;
-      assert.equal(badge.title, `${copy.titles[entry.id]} · ${threshold}`, entry.id);
+      assert.equal(badge.title, [copy.titles[entry.id],threshold,achievementConditionFor(locale,entry.id)].filter(Boolean).join(' · '), entry.id);
       const rank = copy.titles[entry.id].split(' · ').slice(-1)[0];
       assert.equal(badge.rank, `${rank} · ${threshold}`, entry.id);
       assert.equal(badge.title.split(rank).length - 1, 1, entry.id);

@@ -912,6 +912,26 @@ exports.renderHarness = async function renderHarness({
       provider.achievementRecordLoading = fixture === 'achievement-review-loading';
       provider.achievementRecordLoadFailed = fixture === 'achievement-review-failure';
     }
+    if (fixture === 'achievement-rolling-seven') {
+      const {parseAchievementRecordStore}=require('../../../out/achievementRecordStore.js');
+      const {claudeAchievementMoneyScopes}=require('../../../out/achievementMoneyScopes.js');
+      const usage=n=>({...claudeUsage(),totalInputTokens:n,totalOutputTokens:0,totalCacheCreationTokens:0,totalCacheReadTokens:0,
+        modelBreakdown:{'claude-sonnet-4-5':{inputTokens:n,outputTokens:0,cacheCreationTokens:0,cacheReadTokens:0,cost:0,count:1,
+          referenceUsage:{inputTokens:n,outputTokens:0,cacheReadTokens:0,cacheCreation5mTokens:0,cacheCreation1hTokens:0}}}});
+      provider.providerAvailability={claude:true,codex:false,codexData:false};
+      provider.allTimeData=usage(9_600_000_000);
+      provider.dailyDataForEveryDay=[{date:'2026-07-09',data:usage(300_000_000)},
+        {date:'2026-07-13',data:usage(300_000_000)},{date:'2026-07-20',data:usage(9_000_000_000)}];
+      provider.sessionBreakdown=[];provider.achievementCalendarTimeZone=timeZone;
+      provider.claudeAchievementMoney=claudeAchievementMoneyScopes({backend:'anthropic',asOfDay:'2026-07-20',
+        allTimeModels:provider.allTimeData.modelBreakdown,days:{complete:true,
+          rows:provider.dailyDataForEveryDay.map(row=>({date:row.date,models:row.data.modelBreakdown}))}});
+      provider.achievementRecordState=parseAchievementRecordStore({schemaVersion:2,catalogVersion:2,generation:1,
+        sequence:1,lastNoticeAt:0,pinRevision:1,showcaseMode:'manual',legacyBoundary:null,legacyRecords:[],pins:['weekly-volume'],
+        records:[{id:'weekly-volume-bronze',seq:1,ruleVersion:1,origin:'usage',unread:false,recordedDay:'2026-06-10',timeZone}],
+        auxiliary:{activity:{schemaVersion:2,settingKeys:[],features:[]},hours:{schemaVersion:3,maxStreak:0},calendarPeak:null}});
+      provider.achievementGrants=new Set(['weekly-volume-bronze']);
+    }
     if (fixture === 'achievement-management-history' || fixture === 'achievement-management-full' || fixture === 'achievement-management-history-recorded') {
       const {parseAchievementRecordStore}=require('../../../out/achievementRecordStore.js');
       const full=fixture==='achievement-management-full';
@@ -956,6 +976,11 @@ exports.renderHarness = async function renderHarness({
           hours: { schemaVersion: 3, maxStreak: 0 }, calendarPeak: null },
       });
       provider.achievementGrants = new Set(['hundred-million-club']);
+    }
+
+    if (fixture.startsWith('usage-diagnostics-')) {
+      require('./usage-diagnostics-fixture.cjs').applyUsageDiagnosticsFixture(provider,baseSnapshot,
+        {fixture,timeZone,now:CODEX_WEBVIEW_NOW,locale});
     }
 
     if (/^\d{4}-\d{2}$/.test(codexMonth)) {
