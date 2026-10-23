@@ -191,3 +191,20 @@ for (const provider of ['claude','codex']) test(`${provider}: calendar scale and
   await root.locator('[data-project-matrix-view="area"]').click();
   await expect(panel.locator('svg.project-matrix-area')).toBeVisible();
 });
+
+test('unknown cells retain visible hatching instead of the confirmed-zero fill',async({page},info)=>{
+ await openCodex(page,{locale:'zh-CN',theme:'dark'});await openProjects(page);
+ const unknown=page.locator('[data-project-matrix-range-panel="30"] [data-project-scale-panel="day"] .project-matrix-level-unknown').first();
+ await expect(unknown).toBeVisible();
+ expect(await unknown.evaluate(node=>getComputedStyle(node).backgroundImage)).toContain('repeating-linear-gradient');
+ await page.screenshot({path:info.outputPath('production-projects.png'),fullPage:false});
+ await page.locator('[data-project-matrix-view="area"]').click();
+ await expect(page.locator('[data-project-matrix-view="area"]')).toHaveAttribute('aria-pressed','true');
+ for(let index=0;index<3;index++){
+  const root=page.locator('[data-project-matrix-range-panel="30"] [data-project-scale-panel="day"]');
+  const fill=await root.locator('.project-matrix-area-'+index).first().evaluate(n=>getComputedStyle(n).fill);
+  const legend=await root.locator('i.project-matrix-series-'+index).evaluate(n=>getComputedStyle(n).backgroundColor);
+  expect(fill).toBe(legend);
+ }
+ await page.screenshot({path:info.outputPath('production-project-areas.png'),fullPage:false});
+});

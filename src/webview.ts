@@ -8611,7 +8611,7 @@ export class UsageWebviewProvider {
         ' · ' + this.projectMatrixCoverageLabel(partial ? 'partial' : 'complete', copy);
       return '<g><rect x="' + (dx * i) + '" y="0" width="' + dx + '" height="165" fill="transparent" tabindex="0" role="button" data-project-inspect="' + esc(detail) +
         '" data-project-selection-key="' + range + ':' + scale + ':t:' + p.key + '" aria-label="' + esc(detail) + '"><title>' + esc(detail) + '</title></rect>' +
-        (unknown ? '<text x="' + (dx * i + 4) + '" y="159">?</text>' : '') +
+        (unknown ? '<rect x="' + (dx * i) + '" y="151" width="' + dx + '" height="6" fill="url(#project-unknown-' + snapshot.provider + '-' + range + '-' + scale + ')"/>' : '') +
         (i === 0 || i === data.periods.length - 1 || i % Math.max(1, Math.ceil(data.periods.length / 10)) === 0
           ? '<text x="' + (dx * i) + '" y="180">' + esc(this.getShortDate(p.startDay)) + (p.clipped ? ' *' : '') + '</text>' : '') + '</g>';
     }).join('');
@@ -8622,7 +8622,7 @@ export class UsageWebviewProvider {
       '</div><span class="project-matrix-trend-date">' + (i % Math.max(1,Math.ceil(data.periods.length/10)) === 0 ? esc(this.getShortDate(p.startDay)) + (p.clipped?' *':'') : '') + '</span></div>').join('');
     return '<div class="project-matrix-trend-legend">' + legend + '</div><div data-project-bars-mode><div class="project-matrix-trend-scroll" tabindex="0"><div class="project-matrix-trend-bars project-matrix-trend-' + range + '">' + bars + '</div></div></div><div data-project-area-mode hidden><div class="project-matrix-trend-scroll" tabindex="0" role="region" aria-label="' +
       esc(copy.trendAria) + '"><svg class="project-matrix-area" width="' + width + '" height="190" role="group" aria-label="' + esc(copy.trendAria) + '">' +
-      polygons + marks + '</svg></div></div><p class="table-hint">' + esc(I18n.projectChartControls.subtotal) + '</p>';
+      '<defs><pattern id="project-unknown-' + snapshot.provider + '-' + range + '-' + scale + '" width="6" height="6" patternUnits="userSpaceOnUse"><path d="M0 6L6 0" stroke="currentColor" stroke-width="1"/></pattern></defs>' + polygons + marks + '</svg></div></div><p class="table-hint">' + esc(I18n.projectChartControls.subtotal) + '</p>';
   }
 
   private renderProjectUsageMatrix(provider: SettingProvider): string {
@@ -11894,16 +11894,17 @@ export class UsageWebviewProvider {
         border-bottom: 1px solid var(--ccu-border);
       }
 
-      .project-matrix-level-unknown { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--vscode-descriptionForeground) 3px 4px); }
+      .project-matrix-cell.project-matrix-level-unknown { background: repeating-linear-gradient(135deg, transparent 0 3px, var(--vscode-descriptionForeground) 3px 4px); }
       .project-matrix-inspect { padding:0; margin:0; width:100%; height:20px; min-width:12px; border:0; border-radius:0; color:var(--vscode-foreground); background:transparent; }
       .project-matrix-inspect:hover { background:transparent; outline:1px solid var(--vscode-focusBorder); }
       .project-matrix-filters { display:flex; flex-wrap:wrap; gap:4px 12px; max-height:160px; overflow:auto; margin:8px 0; }
+      .project-matrix-toolbar select { background:var(--vscode-dropdown-background); color:var(--vscode-dropdown-foreground); border:1px solid var(--vscode-dropdown-border); border-radius:4px; padding:3px 6px; font:inherit; }
       .project-matrix-filters label { display:inline-flex; align-items:center; font-size:12px; }
       .project-matrix-area text { fill:var(--vscode-foreground); font-size:10px; }
       .project-matrix-area [role="button"]:focus-visible { outline:2px solid var(--vscode-focusBorder); outline-offset:-2px; }
       .project-matrix-area-0 {fill:var(--vscode-charts-blue)} .project-matrix-area-1 {fill:var(--vscode-charts-green)}
-      .project-matrix-area-2 {fill:var(--vscode-charts-purple)} .project-matrix-area-3 {fill:var(--vscode-charts-yellow)}
-      .project-matrix-area-4 {fill:var(--vscode-charts-red)} .project-matrix-area-5 {fill:var(--vscode-charts-foreground)}
+      .project-matrix-area-2 {fill:var(--vscode-charts-yellow)} .project-matrix-area-3 {fill:var(--vscode-charts-purple)}
+      .project-matrix-area-4 {fill:var(--vscode-charts-red)} .project-matrix-area-5 {fill:var(--vscode-charts-orange)}
 
       .project-matrix-head {
         display: flex;
