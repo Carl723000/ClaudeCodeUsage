@@ -35,8 +35,8 @@ bar. See [features](#features-at-a-glance), [privacy](#privacy),
 
 ## Unreleased visualization updates
 
-- Achievements reuse one square-frame and tier-adornment design in the gallery, showcase, next targets, selection thumbnails and SVG exports. Existing illustrations and award eligibility remain unchanged.
-- Projects adds day/week/month views and project selection within the existing 30/90-day Token charts. Unknown cells, verified zero and partial subtotals remain distinct; clipped weeks/months are labelled.
+- Achievements reuse one square-frame and tier-adornment design in the gallery, showcase, next targets, selection thumbnails and SVG exports. Existing illustrations and award eligibility remain unchanged. Artwork keeps its original display size, with simpler ornaments at small sizes.
+- Projects adds day/week/month views and project selection within the existing 30/90-day Token charts. Unknown cells, verified zero and partial subtotals remain distinct; clipped weeks/months are labelled. The area overview fits the full selected date span and includes a numeric Token axis while preserving unknown gaps.
 - Amount sharing offers an optional compact layout; standard remains the default. Claude and Codex amounts stay separate. Changed settings require a new accepted preview, and saved SVG bytes are read back and checked against that preview.
 - Seven-day volume and provider amount achievements use completed rolling seven-civil-day windows. Existing awards keep their original records and are labelled as legacy rules; missing evidence does not invent dates. Actual quota reset cycles remain unchanged.
 - Three diagnostics are off by default: output per elapsed hour, observed usage changes and quota decline rate. They use existing numeric aggregates and eligible quota observations; missing evidence stays unavailable. Hourly output is not generation TPS, changes do not establish causes, and quota rates are historical averages rather than forecasts.

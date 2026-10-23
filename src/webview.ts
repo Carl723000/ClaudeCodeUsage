@@ -8589,7 +8589,16 @@ export class UsageWebviewProvider {
     const data = this.projectChartProjection(snapshot, range, scale), series = data.series, esc = (s: string) => this.escapeHtml(s);
     const names = series.map(s => s.other ? copy.otherProjects + ' (' + s.projectCount + ')' : s.projectName || copy.project);
     const totals = data.periods.map((_, i) => series.reduce((sum, s) => sum + (s.cells[i].tokens ?? 0), 0));
-    const max = Math.max(1, ...totals), width = Math.max(320, data.periods.length * 30), dx = width / Math.max(1, data.periods.length);
+    const peak = Math.max(1, ...totals), step = 10 ** Math.floor(Math.log10(peak));
+    const max = Math.ceil(peak / step) * step, width = 900, dx = width / Math.max(1, data.periods.length);
+    const axis = '<div class="project-chart-axis"><small>Token</small>' + [max, max / 2, 0].map((value, i) =>
+      '<span data-axis-tokens="' + value + '" title="' + esc(I18n.formatNumber(value) + ' Token') + '" style="top:' + (15 + i * 65) + 'px">' + esc(I18n.formatTokensCompact(value)) + '</span>').join('') + '</div>';
+    const grid = [15,80,145].map(y => '<line x1="0" x2="' + width + '" y1="' + y + '" y2="' + y +
+      '" stroke="var(--vscode-panel-border)" vector-effect="non-scaling-stroke"/>').join('');
+    // Keep labels outside the stretched SVG: the whole range fits, while type stays legible.
+    const dates = '<div class="project-chart-dates">' + [0, Math.floor((data.periods.length - 1) / 2), data.periods.length - 1]
+      .filter((index, position, all) => index >= 0 && all.indexOf(index) === position)
+      .map(index => '<span>' + esc(this.getShortDate(data.periods[index].startDay)) + (data.periods[index].clipped ? ' *' : '') + '</span>').join('') + '</div>';
     const lower = (r: number, i: number) => series.slice(0, r).reduce((sum, s) => sum + (s.cells[i].tokens ?? 0), 0);
     const legend = series.map((s, i) => '<span class="project-matrix-trend-series"><i class="project-matrix-series-' + i +
       '" aria-hidden="true"></i><span>' + esc(names[i]) + '</span><strong>' + (s.total.tokens === null ? '—' : I18n.formatNumber(s.total.tokens)) + '</strong></span>').join('');
@@ -8599,8 +8608,10 @@ export class UsageWebviewProvider {
       const x = dx * (i + .5), y0 = 145 - lower(r, i) / max * 130, y1 = y0 - cell.tokens / max * 130;
       const next = s.cells[i + 1];
       if (!next || next.tokens === null || series.slice(0, r + 1).some(row => row.cells[i + 1].tokens === null)) {
+        if (cell.tokens === 0) return '';
         return '<rect x="' + (x - 1) + '" y="' + y1 + '" width="2" height="' + Math.max(1, y0 - y1) + '" class="project-matrix-area-' + r + '"/>';
       }
+      if (cell.tokens === 0 && next.tokens === 0) return '';
       const ny0 = 145 - lower(r, i + 1) / max * 130, ny1 = ny0 - next.tokens / max * 130;
       return '<polygon class="project-matrix-area-' + r + '" points="' + x + ',' + y0 + ' ' + x + ',' + y1 + ' ' +
         (x + dx) + ',' + ny1 + ' ' + (x + dx) + ',' + ny0 + '"/>';
@@ -8612,17 +8623,18 @@ export class UsageWebviewProvider {
       return '<g><rect x="' + (dx * i) + '" y="0" width="' + dx + '" height="165" fill="transparent" tabindex="0" role="button" data-project-inspect="' + esc(detail) +
         '" data-project-selection-key="' + range + ':' + scale + ':t:' + p.key + '" aria-label="' + esc(detail) + '"><title>' + esc(detail) + '</title></rect>' +
         (unknown ? '<rect x="' + (dx * i) + '" y="151" width="' + dx + '" height="6" fill="url(#project-unknown-' + snapshot.provider + '-' + range + '-' + scale + ')"/>' : '') +
-        (i === 0 || i === data.periods.length - 1 || i % Math.max(1, Math.ceil(data.periods.length / 10)) === 0
-          ? '<text x="' + (dx * i) + '" y="180">' + esc(this.getShortDate(p.startDay)) + (p.clipped ? ' *' : '') + '</text>' : '') + '</g>';
+        '</g>';
     }).join('');
     const bars = data.periods.map((p,i) => '<div class="project-matrix-trend-col"><div class="project-matrix-trend-stack">' +
-      series.map((row,r) => row.cells[i].tokens === null ? '<span aria-hidden="true">—</span>' :
+      series.map((row,r) => row.cells[i].tokens === 0 ? '' : row.cells[i].tokens === null ? '<span class="project-matrix-trend-unknown" aria-hidden="true">—</span>' :
         '<span class="project-matrix-trend-segment project-matrix-series-' + r + '" style="height:' + (row.cells[i].tokens! / max * 100) + '%" title="' +
         esc(names[r] + ' · ' + p.startDay + ' – ' + p.endDay + (p.clipped ? ' *' : '') + ' · ' + I18n.formatNumber(row.cells[i].tokens!) + ' Token · ' + this.projectMatrixCoverageLabel(row.cells[i].coverage,copy)) + '"></span>').join('') +
       '</div><span class="project-matrix-trend-date">' + (i % Math.max(1,Math.ceil(data.periods.length/10)) === 0 ? esc(this.getShortDate(p.startDay)) + (p.clipped?' *':'') : '') + '</span></div>').join('');
-    return '<div class="project-matrix-trend-legend">' + legend + '</div><div data-project-bars-mode><div class="project-matrix-trend-scroll" tabindex="0"><div class="project-matrix-trend-bars project-matrix-trend-' + range + '">' + bars + '</div></div></div><div data-project-area-mode hidden><div class="project-matrix-trend-scroll" tabindex="0" role="region" aria-label="' +
-      esc(copy.trendAria) + '"><svg class="project-matrix-area" width="' + width + '" height="190" role="group" aria-label="' + esc(copy.trendAria) + '">' +
-      '<defs><pattern id="project-unknown-' + snapshot.provider + '-' + range + '-' + scale + '" width="6" height="6" patternUnits="userSpaceOnUse"><path d="M0 6L6 0" stroke="currentColor" stroke-width="1"/></pattern></defs>' + polygons + marks + '</svg></div></div><p class="table-hint">' + esc(I18n.projectChartControls.subtotal) + '</p>';
+    return '<div class="project-matrix-trend-legend">' + legend + '</div><div data-project-bars-mode><div class="project-chart-layout">' + axis +
+      '<div class="project-matrix-trend-scroll" tabindex="0"><div class="project-matrix-trend-bars project-matrix-trend-' + range + '">' + bars +
+      '</div></div></div></div><div data-project-area-mode hidden><div class="project-chart-layout">' + axis + '<div class="project-chart-overview" role="region" aria-label="' +
+      esc(copy.trendAria) + '"><svg class="project-matrix-area" width="100%" height="165" viewBox="0 0 ' + width + ' 165" preserveAspectRatio="none" role="group" aria-label="' + esc(copy.trendAria) + '">' +
+      '<defs><pattern id="project-unknown-' + snapshot.provider + '-' + range + '-' + scale + '" width="6" height="6" patternUnits="userSpaceOnUse"><path d="M0 6L6 0" stroke="currentColor" stroke-width="1"/></pattern></defs>' + grid + polygons + marks + '</svg>' + dates + '</div></div></div><p class="table-hint">' + esc(I18n.projectChartControls.subtotal) + '</p>';
   }
 
   private renderProjectUsageMatrix(provider: SettingProvider): string {
@@ -11900,6 +11912,21 @@ export class UsageWebviewProvider {
       .project-matrix-filters { display:flex; flex-wrap:wrap; gap:4px 12px; max-height:160px; overflow:auto; margin:8px 0; }
       .project-matrix-toolbar select { background:var(--vscode-dropdown-background); color:var(--vscode-dropdown-foreground); border:1px solid var(--vscode-dropdown-border); border-radius:4px; padding:3px 6px; font:inherit; }
       .project-matrix-filters label { display:inline-flex; align-items:center; font-size:12px; }
+      .project-chart-layout { display: grid; grid-template-columns: 64px minmax(0,1fr); margin-top: 16px; }
+      .project-chart-axis { position: relative; height: 165px; font-size: 11px; color: var(--vscode-descriptionForeground); font-variant-numeric: tabular-nums; }
+      .project-chart-axis small { position: absolute; top: -13px; right: 8px; font-size: inherit; }
+      .project-chart-axis > span { position: absolute; right: 8px; transform: translateY(-50%); }
+      .project-chart-overview { min-width: 0; }
+      .project-chart-overview > svg { display: block; width: 100%; }
+      .project-chart-dates { display: flex; justify-content: space-between; gap: 4px; font-size: 11px; color: var(--vscode-descriptionForeground); white-space: nowrap; }
+      .project-chart-layout .project-matrix-trend-bars { height: 171px; padding: 0 2px; border: 0; box-sizing: border-box;
+        background: linear-gradient(to bottom, transparent 14px, var(--vscode-panel-border) 14px, var(--vscode-panel-border) 15px,
+          transparent 15px, transparent 79px, var(--vscode-panel-border) 79px, var(--vscode-panel-border) 80px,
+          transparent 80px, transparent 144px, var(--vscode-panel-border) 144px, var(--vscode-panel-border) 145px, transparent 145px); }
+      .project-chart-layout .project-matrix-trend-col { height: 156px; }
+      .project-chart-layout .project-matrix-trend-stack { position: relative; height: 130px; flex-shrink: 0; }
+      .project-matrix-trend-unknown { position: absolute; bottom: 0; inset-inline-start: 0; }
+      .project-chart-layout .project-matrix-trend-date { height: 26px; box-sizing: border-box; }
       .project-matrix-area text { fill:var(--vscode-foreground); font-size:10px; }
       .project-matrix-area [role="button"]:focus-visible { outline:2px solid var(--vscode-focusBorder); outline-offset:-2px; }
       .project-matrix-area-0 {fill:var(--vscode-charts-blue)} .project-matrix-area-1 {fill:var(--vscode-charts-green)}
@@ -14323,8 +14350,12 @@ export class UsageWebviewProvider {
       .achievement-card summary .achievement-emblem { margin-bottom: 4px; }
       .achievement-emblem > .achievement-framed-icon { width: 100%; height: 100%; }
       .achievement-framed-icon { position: relative; display: inline-block; flex: none; vertical-align: middle; color: var(--vscode-foreground); }
-      .achievement-framed-icon > img { position: absolute; inset: 14.0625% auto auto 18.75%; display: block; width: 62.5%; height: 64.0625%; object-fit: contain; }
+      .achievement-framed-icon > img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
       .achievement-framed-icon > .achievement-adornment { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+      /* Tiny thumbnails retain rank color/shape without a dense wreath over the artwork. */
+      :is(.achievement-record-badge, .achievement-records-list, .achievement-milestones, .achievement-share-option,
+        .achievement-collection[data-achievement-size="small"]) .achievement-adornment
+        :is([data-frame-part="laurel"], [data-frame-part="stem"], [data-frame-part="corners"], [data-frame-part="inner-square"]) { display: none; }
       .achievement-framed-icon[data-achievement-frame="bronze"] { color: var(--vscode-charts-orange); color: color-mix(in srgb,var(--vscode-charts-red) 40%,var(--vscode-charts-yellow)); }
       .achievement-framed-icon[data-achievement-frame="silver"] { color: var(--vscode-editor-foreground); }
       .achievement-framed-icon[data-achievement-frame="gold"] { color: var(--vscode-charts-yellow); }

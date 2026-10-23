@@ -208,3 +208,25 @@ test('unknown cells retain visible hatching instead of the confirmed-zero fill',
  }
  await page.screenshot({path:info.outputPath('production-project-areas.png'),fullPage:false});
 });
+
+for (const provider of ['claude','codex']) for (const width of [320,1280]) test(`${provider}: area overview fits all dates without shrinking labels at ${width}px`,async({page},info)=>{
+ await (provider==='claude'?openClaude:openCodex)(page,{locale:'zh-CN',theme:'dark',width});await openProjects(page);
+ await page.locator('[data-project-matrix-view="area"]').click();
+ for(const range of ['30','90']){
+  await page.locator('[data-project-matrix-range="'+range+'"]').click();
+  const plot=page.locator('[data-project-matrix-range-panel="'+range+'"] [data-project-scale-panel="day"] [data-project-area-mode]');
+  await expect(plot.locator('.project-chart-axis')).toContainText('Token');
+  await expect(plot.locator('.project-chart-axis')).toContainText('0');
+  const geometry=await plot.evaluate(el=>{
+   const svg=el.querySelector('svg').getBoundingClientRect(),box=el.getBoundingClientRect();
+   return {fits:svg.left>=box.left&&svg.right<=box.right+1,overflow:el.scrollWidth>el.clientWidth+1,
+    font:parseFloat(getComputedStyle(el.querySelector('.project-chart-dates')).fontSize),
+    ticksFit:[...el.querySelectorAll('.project-chart-axis > span')].every(t=>t.getBoundingClientRect().left>=box.left)};
+  });
+  expect(geometry.ticksFit).toBe(true);expect(geometry.fits).toBe(true);expect(geometry.overflow).toBe(false);expect(geometry.font).toBeGreaterThanOrEqual(11);
+  const marks=plot.locator('svg [data-project-inspect]');
+  await marks.last().focus();await page.keyboard.press('Enter');
+  await expect(page.locator('[data-project-selection]')).not.toBeEmpty();
+  await plot.screenshot({path:info.outputPath(`area-${range}-${width}.png`)});
+ }
+});

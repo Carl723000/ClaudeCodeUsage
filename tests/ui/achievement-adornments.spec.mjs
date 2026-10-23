@@ -16,9 +16,9 @@ for (const theme of ['dark','light','highContrast']) {
         const geometry=await gallery.locator('summary .achievement-framed-icon').evaluate(el=>{
           const box=el.getBoundingClientRect(), art=el.querySelector('img').getBoundingClientRect(),frame=el.querySelector('svg').getBoundingClientRect();
           return {artInside:art.left>=box.left&&art.right<=box.right&&art.top>=box.top&&art.bottom<=box.bottom,
-            bounded:frame.width===box.width&&frame.height===box.height};
+            bounded:frame.width===box.width&&frame.height===box.height, artworkWidth:art.width, artworkHeight:art.height};
         });
-        expect(geometry).toEqual({artInside:true,bounded:true});
+        expect(geometry).toEqual({artInside:true,bounded:true,artworkWidth:{small:56,medium:80,large:112}[size],artworkHeight:{small:56,medium:80,large:112}[size]});
       }
     }
     const targets=page.locator('[data-achievement-overview="next"] .achievement-framed-icon');
@@ -73,3 +73,29 @@ test('sharing keeps native image URIs and the same frame geometry as the gallery
     }
   }
 });
+
+for (const theme of ['dark','light']) {
+  test(`readable artwork at original scale in every achievement surface: ${theme}`,async({page},info)=>{
+    await openClaude(page,{fixture:'achievement-share-resources',theme,locale:'zh-CN',width:1280});
+    await page.locator('#tab-achievements').click();
+    await page.locator('#achievementSize').selectOption('medium');
+    for(const selector of ['.achievement-card summary','.achievement-overview-badge','.achievement-record-badge']) {
+      for(const icon of await page.locator(selector+' > .achievement-framed-icon, '+selector+' > .achievement-emblem > .achievement-framed-icon').all()) {
+        if(!await icon.isVisible()) continue;
+        const dimensions=await icon.evaluate(el=>{
+          const box=el.getBoundingClientRect(),art=el.querySelector('img').getBoundingClientRect();
+          return {box:box.width,width:art.width,height:art.height};
+        });
+        expect(dimensions.width).toBe(dimensions.box);
+        expect(dimensions.height).toBe(dimensions.box);
+      }
+    }
+    await page.locator('.achievement-showcase').screenshot({path:info.outputPath(`overview-${theme}.png`)});
+    await page.locator('.achievement-group').first().screenshot({path:info.outputPath(`gallery-${theme}.png`)});
+    await page.locator('#achievementSize').selectOption('small');
+    const leaf=page.locator('.achievement-card summary [data-frame-part="laurel"]').first();
+    if(await leaf.count()) await expect(leaf).toBeHidden();
+    await page.locator('#achievementSize').selectOption('large');
+    if(await leaf.count()) await expect(leaf).toBeVisible();
+  });
+}

@@ -10,7 +10,7 @@ test('catalog identities select square ranks, including IDs without rank suffixe
   for(const [id,rank] of [['hundred-million-club','bronze'],['billion-token-club','silver'],
     ['ten-billion-token-club','gold'],['hundred-billion-token-club','platinum'],['trillion-token-club','legendary'],
     ['streak-machine','milestone']] as const){
-    const svg=renderAchievementIcon(id,'currentColor').replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/g,'data:image/png;base64,fixture');
+    const svg=renderAchievementIcon(id,'currentColor',{x:0,y:0,size:80}).replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/g,'data:image/png;base64,fixture');
     assert.match(svg,new RegExp('data-achievement-frame="'+rank+'"'));
     assert.match(svg,/<rect[^>]+data-frame-part="square"/);
     assert.equal(svg.includes('data-frame-part="laurel"'),['gold','platinum','legendary'].includes(rank));
@@ -35,7 +35,7 @@ test('webview resource PNGs and self-contained exports use identical adornment g
     const geometry=renderAchievementAdornment(achievementIconRank(id));
     const web=renderAchievementWebviewIcon(id,'/__achievement_icons__/fixture.png');
     assert.ok(web.includes(geometry),id);
-    assert.ok(renderAchievementIcon(id,'currentColor').includes(geometry),id);
+    assert.ok(renderAchievementIcon(id,'currentColor',{x:0,y:0,size:80}).includes(geometry),id);
     assert.ok(web.includes('src="/__achievement_icons__/fixture.png"'));
     assert.ok(web.includes('loading="lazy"'));
     assert.ok(!web.includes('data:image/'));
@@ -61,4 +61,12 @@ test('catalog series preserve their real number of tiers and webview resources r
   const escaped=renderAchievementWebviewIcon('local-share-export','fixture.png" onload="bad<&');
   assert.ok(escaped.includes('src="fixture.png&quot; onload=&quot;bad&lt;&amp;"'));
   assert.doesNotMatch(escaped,/ src="[^"]*" onload=/);
+});
+
+test('exported artwork keeps its full requested size instead of shrinking for ornaments',()=>{
+  for (const size of [40,48,56,64,80,112]) {
+    const svg=renderAchievementIcon('trillion-token-club','currentColor',{x:0,y:0,size});
+    assert.match(svg.match(/<image[^>]+>/)![0].replace(/href="[^"]+"/,'href="fixture"'),/x="0" y="0" width="64" height="64"/);
+    assert.equal(svg.includes('data-frame-part="laurel"'), size > 56);
+  }
 });

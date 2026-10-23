@@ -190,5 +190,5 @@ export function renderAchievementIcon(
   const coordinates = position ? ` x="${position.x}" y="${position.y}"` : '';
   const size = position?.size ?? 48;
   const rank = achievementIconRank(id);
-  return `<svg data-achievement-icon="${id}" data-achievement-frame="${rank}" data-emblem-state="earned"${coordinates} width="${size}" height="${size}" viewBox="0 0 64 64" color="${ACHIEVEMENT_EXPORT_RANK_COLORS[rank]}" aria-hidden="true"><image href="${achievementImageDataUrl(id)}" x="12" y="9" width="40" height="41" />${renderAchievementAdornment(rank)}</svg>`;
+  return `<svg data-achievement-icon="${id}" data-achievement-frame="${rank}" data-emblem-state="earned"${coordinates} width="${size}" height="${size}" viewBox="0 0 64 64" color="${ACHIEVEMENT_EXPORT_RANK_COLORS[rank]}" aria-hidden="true"><image href="${achievementImageDataUrl(id)}" x="0" y="0" width="64" height="64" />${renderAchievementAdornment(rank, 'earned', size <= 56)}</svg>`;
 }

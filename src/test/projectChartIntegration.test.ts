@@ -70,3 +70,35 @@ test('real cached panel changes with host filtering and retains provider-specifi
  p.handleProjectChartFilter({documentId:'doc',provider:'codex',scope,handles:[],all:true});
  assert.equal((render().match(/class="project-matrix-row"/g)||[]).length,12);
 });
+
+test('large Token axes remain compact while retaining exact accessible values',()=>{
+ const p=owner();p.codexView.projectUsageMatrix=buildProjectUsageMatrixSnapshot('codex',[
+  {projectKey:'large',projectName:'Large',day:'2026-10-22',tokens:1_000_000_000,coverage:'complete'},
+ ],{asOfDay:'2026-10-23',timeZone:'UTC',coverage:'complete'});
+ const html=p.renderProjectUsageMatrix('codex');
+ const labels=[...html.matchAll(/<span data-axis-tokens="([^"]+)"([^>]*)>([^<]+)<\/span>/g)];
+ assert.ok(labels.length>0);
+ for(const [,value,attributes,label] of labels) {
+  assert.ok(label.length<=8,'axis exceeds narrow gutter: '+label);
+  assert.ok(attributes.includes('title="'+I18n.formatNumber(Number(value))+' Token"'));
+ }
+});
+
+test('confirmed zero periods paint no positive Token segment',()=>{
+ const p=owner();p.codexView.projectUsageMatrix=buildProjectUsageMatrixSnapshot('codex',[
+  {projectKey:'zero',projectName:'Zero',day:'2026-10-22',tokens:0,coverage:'complete'},
+ ],{asOfDay:'2026-10-23',timeZone:'UTC',coverage:'complete'});
+ const html=p.renderProjectUsageMatrix('codex');
+ assert.ok(!html.includes('class="project-matrix-trend-segment'));
+ assert.ok(!/class="project-matrix-area-\d"/.test(html));
+ assert.ok(html.includes('0 Token'));
+});
+
+test('area transitions from confirmed zero to known positive remain connected',()=>{
+ const p=owner();p.codexView.projectUsageMatrix=buildProjectUsageMatrixSnapshot('codex',[
+  {projectKey:'rise',projectName:'Rise',day:'2026-10-22',tokens:0,coverage:'complete'},
+  {projectKey:'rise',projectName:'Rise',day:'2026-10-23',tokens:10,coverage:'complete'},
+ ],{asOfDay:'2026-10-23',timeZone:'UTC',coverage:'complete'});
+ const html=p.renderProjectUsageMatrix('codex');
+ assert.match(html,/<polygon class="project-matrix-area-0" points="[\d.]+,145 [\d.]+,145 [\d.]+,15 [\d.]+,145"/);
+});
