@@ -24,6 +24,7 @@ test('real Projects renderer filters the source before ranking and preserves emp
  p.projectChartSelection.codex=[];const empty=p.renderProjectUsageMatrix('codex');
  assert.equal((empty.match(/class="project-matrix-row"/g)||[]).length,0);
  assert.ok(empty.includes(I18n.projectChartControls.empty));
+ assert.ok(!empty.includes('class="project-matrix-area"'),'empty selection does not draw a numeric trend');
 });
 
 test('actual host filter boundary rejects foreign/stale handles and never reads source logs',()=>{

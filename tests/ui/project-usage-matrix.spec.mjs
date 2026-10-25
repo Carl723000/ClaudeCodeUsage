@@ -230,3 +230,24 @@ for (const provider of ['claude','codex']) for (const width of [320,1280]) test(
   await plot.screenshot({path:info.outputPath(`area-${range}-${width}.png`)});
  }
 });
+
+for (const provider of ['claude','codex']) test(`${provider}: project heading and recent scroller retain evidence through update/reload`,async({page},info)=>{
+ await (provider==='claude'?openClaude:openCodex)(page,{locale:'zh-CN',theme:'dark',width:360});await openProjects(page);
+ const root=page.locator('[data-project-matrix="'+provider+'"]');
+ const summary=root.locator('[data-project-summary-range="30"][data-project-summary-scale="day"]');
+ await expect(summary).toBeVisible();await expect(summary).toContainText('Token');await expect(summary).toContainText('2026-07-20');
+ const area=root.locator('[data-project-matrix-range-panel="30"] [data-project-scale-panel="day"] .project-matrix-scroll');
+ await expect.poll(()=>area.evaluate(el=>el.scrollLeft>0&&Math.abs(el.scrollWidth-el.clientWidth-el.scrollLeft)<2)).toBe(true);
+ await area.evaluate(el=>{el.scrollLeft=123;el.dispatchEvent(new Event('scroll'))});await page.clock.runFor(100);
+ await root.locator('.project-matrix-basis > summary').click();
+ await patchCurrentDashboard(page,provider);
+ await expect(root.locator('.project-matrix-basis')).toHaveAttribute('open');
+ await expect.poll(()=>area.evaluate(el=>el.scrollLeft)).toBeCloseTo(123,0);
+ await page.reload();await openProjects(page);
+ await expect(root.locator('.project-matrix-basis')).toHaveAttribute('open');
+ await expect.poll(()=>area.evaluate(el=>el.scrollLeft)).toBeCloseTo(123,0);
+ await root.locator('[data-project-matrix-range="90"]').click();
+ await expect(root.locator('[data-project-summary-range="90"][data-project-summary-scale="day"]')).toBeVisible();
+ await root.locator('[data-project-matrix-view="area"]').click();
+ await root.screenshot({path:info.outputPath(`project-approved-${provider}.png`)});
+});

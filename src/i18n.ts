@@ -6671,6 +6671,8 @@ export class I18n {
     return SHARING_WORKSPACE_TRANSLATIONS[this.currentLanguage];
   }
 
+  static get visualization() { return VISUALIZATION_COPY[this.getCurrentLanguage()]; }
+
   static get projectChartControls() { return PROJECT_CHART_CONTROLS[this.getCurrentLanguage()]; }
 
   static get apiHeatmap() {
@@ -6898,4 +6900,17 @@ export const PROJECT_CHART_CONTROLS = {
     "legend": "Nol: tidak aktif terverifikasi; arsiran: tidak diketahui; titik: subtotal parsial. *: periode kalender terpotong.",
     "subtotal": "Area menunjukkan subtotal Token terindeks; kontribusi tak diketahui memutus pita."
   }
+} as const;
+
+
+/** Shared presentation copy; metrics and eligibility remain provider-specific. */
+export const VISUALIZATION_COPY = {
+  en: { evidenceDetails: 'Methods and evidence', observedChange: 'Output change: {delta} Token' },
+  'zh-CN': { evidenceDetails: '统计口径与依据', observedChange: '输出变化：{delta} Token' },
+  'zh-TW': { evidenceDetails: '統計口徑與依據', observedChange: '輸出變化：{delta} Token' },
+  'de-DE': { evidenceDetails: 'Methoden und Belege', observedChange: 'Änderung der Ausgabe: {delta} Token' },
+  ja: { evidenceDetails: '集計方法と根拠', observedChange: '出力の変化：{delta} Token' },
+  ko: { evidenceDetails: '집계 방법 및 근거', observedChange: '출력 변화: {delta} Token' },
+  'pt-BR': { evidenceDetails: 'Métodos e evidências', observedChange: 'Variação da saída: {delta} Token' },
+  id: { evidenceDetails: 'Metode dan bukti', observedChange: 'Perubahan keluaran: {delta} Token' },
 } as const;

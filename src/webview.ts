@@ -8572,7 +8572,7 @@ export class UsageWebviewProvider {
           '<button class="project-matrix-inspect" data-project-selection-key="' + range + ':' + scale + ':h:' + this.projectChartHandle(snapshot.provider, row.projectKeys[0] ?? '') + ':' + p.key + '" data-project-inspect aria-label="' + esc(detail) + '">' +
           (cell.coverage === 'partial' ? '<span aria-hidden="true">·</span>' : '') + '</button></td>';
       }).join('') + '</tr>').join('');
-    return '<div class="project-matrix-scroll" tabindex="0" role="region" aria-label="' + esc(copy.matrixAria) +
+    return '<div class="project-matrix-scroll" data-project-scroll-kind="heatmap" tabindex="0" role="region" aria-label="' + esc(copy.matrixAria) +
       '"><table class="project-matrix-grid"><thead><tr><th scope="col" class="project-matrix-project">' + esc(copy.project) +
       '</th>' + header + '</tr></thead><tbody>' + body + '</tbody></table></div>' +
       (!body ? '<p class="table-hint">' + esc(I18n.projectChartControls.empty) + '</p>' : '');
@@ -8581,6 +8581,7 @@ export class UsageWebviewProvider {
   private renderProjectMatrixTrend(snapshot: ProjectUsageMatrixSnapshot, range: 30 | 90,
     copy: ProjectMatrixUiCopy, scale: ProjectChartScale = 'day'): string {
     const data = this.projectChartProjection(snapshot, range, scale), series = data.series, esc = (s: string) => this.escapeHtml(s);
+    if (!series.length) return '<p class="table-hint" data-project-empty>' + esc(I18n.projectChartControls.empty) + '</p>';
     const names = series.map(s => s.other ? copy.otherProjects + ' (' + s.projectCount + ')' : s.projectName || copy.project);
     const totals = data.periods.map((_, i) => series.reduce((sum, s) => sum + (s.cells[i].tokens ?? 0), 0));
     const peak = Math.max(1, ...totals), step = 10 ** Math.floor(Math.log10(peak));
@@ -8625,7 +8626,7 @@ export class UsageWebviewProvider {
         esc(names[r] + ' · ' + p.startDay + ' – ' + p.endDay + (p.clipped ? ' *' : '') + ' · ' + I18n.formatNumber(row.cells[i].tokens!) + ' Token · ' + this.projectMatrixCoverageLabel(row.cells[i].coverage,copy)) + '"></span>').join('') +
       '</div><span class="project-matrix-trend-date">' + (i % Math.max(1,Math.ceil(data.periods.length/10)) === 0 ? esc(this.getShortDate(p.startDay)) + (p.clipped?' *':'') : '') + '</span></div>').join('');
     return '<div class="project-matrix-trend-legend">' + legend + '</div><div data-project-bars-mode><div class="project-chart-layout">' + axis +
-      '<div class="project-matrix-trend-scroll" tabindex="0"><div class="project-matrix-trend-bars project-matrix-trend-' + range + '">' + bars +
+      '<div class="project-matrix-trend-scroll" data-project-scroll-kind="trend" tabindex="0"><div class="project-matrix-trend-bars project-matrix-trend-' + range + '">' + bars +
       '</div></div></div></div><div data-project-area-mode hidden><div class="project-chart-layout">' + axis + '<div class="project-chart-overview" role="region" aria-label="' +
       esc(copy.trendAria) + '"><svg class="project-matrix-area" width="100%" height="165" viewBox="0 0 ' + width + ' 165" preserveAspectRatio="none" role="group" aria-label="' + esc(copy.trendAria) + '">' +
       '<defs><pattern id="project-unknown-' + snapshot.provider + '-' + range + '-' + scale + '" width="6" height="6" patternUnits="userSpaceOnUse"><path d="M0 6L6 0" stroke="currentColor" stroke-width="1"/></pattern></defs>' + grid + polygons + marks + '</svg>' + dates + '</div></div></div><p class="table-hint">' + esc(I18n.projectChartControls.subtotal) + '</p>';
@@ -8654,13 +8655,23 @@ export class UsageWebviewProvider {
       return '<label><input type="checkbox" data-project-filter="' + handle + '"' +
         (selected === undefined || selected.includes(key) ? ' checked' : '') + '>' + esc(name || copy.project) + '</label>';
     }).join('');
+    const summary = (range: 30 | 90, scale: ProjectChartScale) => {
+      const data = this.projectChartProjection(snapshot,range,scale);
+      const first = data.periods[0]?.startDay ?? snapshot.asOfDay;
+      const last = data.periods[data.periods.length-1]?.endDay ?? snapshot.asOfDay;
+      return '<div class="project-matrix-summary" data-project-summary-range="' + range + '" data-project-summary-scale="' + scale + '"' +
+        (range === 30 && scale === 'day' ? '' : ' hidden') + '><div><strong>' +
+        (data.total.tokens === null ? '—' : I18n.formatNumber(data.total.tokens)) + '</strong> <span>Token</span> <span class="project-matrix-summary-quality">' +
+        esc(this.projectMatrixCoverageLabel(data.total.coverage,copy)) + '</span></div><p>' + esc(first + ' – ' + last + ' · ' + data.timeZone) + '</p></div>';
+    };
     const rangePanel = (range: 30 | 90) => '<div class="project-matrix-range" data-project-matrix-range-panel="' + range + '"' + (range === 90 ? ' hidden' : '') + '>' +
       (['day','week','month'] as const).map(scale => '<div data-project-scale-panel="' + scale + '"' + (scale === 'day' ? '' : ' hidden') + '>' +
         '<div class="project-matrix-view" data-project-matrix-heatmap>' + this.renderProjectMatrixHeatmap(snapshot, range, copy, scale) + '</div>' +
         '<div class="project-matrix-view" data-project-matrix-trend hidden>' + this.renderProjectMatrixTrend(snapshot, range, copy, scale) + '</div></div>').join('') + '</div>';
     return '<section class="project-matrix" data-project-matrix="' + provider + '" data-project-filter-scope="' + handleScope + '" data-project-filter-normalized="' + normalized + '" data-project-reset-label="' + esc(controls.reset) + '">' +
-      '<div class="project-matrix-head"><div><h3>' + esc(copy.title) + '</h3><p>' + esc(copy.description) + '</p></div>' +
+      '<div class="project-matrix-head"><div><h3>' + esc(copy.title) + '</h3></div>' +
       '<span class="project-matrix-coverage project-matrix-coverage-' + snapshot.coverage + '">' + esc(this.projectMatrixCoverageLabel(snapshot.coverage, copy)) + '</span></div>' +
+      ([30,90] as const).map(range=>(['day','week','month'] as const).map(scale=>summary(range,scale)).join('')).join('') +
       '<div class="project-matrix-toolbar"><div class="project-matrix-control" role="group" aria-label="' + esc(copy.rangeLabel) + '"><span>' + esc(copy.rangeLabel) + '</span>' +
       [30,90].map(n => '<button class="project-matrix-option' + (n === 30 ? ' active' : '') + '" data-project-matrix-range="' + n + '" aria-pressed="' + (n === 30) + '">' + esc(n === 30 ? copy.last30 : copy.last90) + '</button>').join('') + '</div>' +
       '<div class="project-matrix-control" role="group" aria-label="' + esc(copy.viewLabel) + '"><span>' + esc(copy.viewLabel) + '</span>' +
@@ -8670,7 +8681,8 @@ export class UsageWebviewProvider {
       '<details data-persist="project-filter-' + provider + '"><summary>' + esc(controls.filter) + '</summary><div class="project-matrix-filters">' + choices + '</div>' +
       '<button data-project-filter-all>' + esc(controls.all) + '</button> <button data-project-filter-none>' + esc(controls.none) + '</button>' +
       (known.size > 200 ? '<p class="table-hint">' + esc(controls.bounded) + '</p>' : '') + '</details>' +
-      rangePanel(30) + rangePanel(90) + '<p class="table-hint">' + esc(controls.legend) + '</p><p data-project-selection role="status"></p>' +
+      rangePanel(30) + rangePanel(90) + '<p class="project-matrix-selection" data-project-selection role="status"></p>' +
+      '<details class="project-matrix-basis" data-persist="project-basis-' + provider + '"><summary>' + esc(I18n.visualization.evidenceDetails) + '</summary><p class="table-hint">' + esc(copy.description) + '</p><p class="table-hint">' + esc(controls.legend) + '</p></details>' +
       (known.size > 12 ? '<button class="project-matrix-expand" data-project-matrix-expand aria-expanded="false" data-show-more="' + esc(copy.showMore) + '" data-show-less="' + esc(copy.showLess) + '">' + esc(copy.showMore) + '</button>' : '') + '</section>';
   }
 
@@ -11921,6 +11933,17 @@ export class UsageWebviewProvider {
       .project-chart-layout .project-matrix-trend-stack { position: relative; height: 130px; flex-shrink: 0; }
       .project-matrix-trend-unknown { position: absolute; bottom: 0; inset-inline-start: 0; }
       .project-chart-layout .project-matrix-trend-date { height: 26px; box-sizing: border-box; }
+      .project-matrix-summary { margin: 8px 0 16px; }
+      .project-matrix-summary[hidden] { display: none; }
+      .project-matrix-summary strong { font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; }
+      .project-matrix-summary span, .project-matrix-summary p { font-size: 12px; color: var(--vscode-descriptionForeground); }
+      .project-matrix-summary p { margin: 4px 0 0; overflow-wrap: anywhere; }
+      .project-matrix-summary-quality { margin-inline-start: 8px; }
+      .project-matrix-trend-series strong { text-align: end; font-variant-numeric: tabular-nums; }
+      .project-matrix-selection { display: flex; flex-wrap: wrap; gap: 8px; border-top: 1px solid var(--vscode-panel-border); padding-top: 10px; font-size: 13px; font-variant-numeric: tabular-nums; }
+      .project-matrix-selection:empty { display: none; }
+      .project-matrix-basis { margin-top: 12px; border-top: 1px solid var(--vscode-panel-border); padding-top: 10px; font-size: 12px; }
+      .project-matrix-basis > summary { cursor: pointer; }
       .project-matrix-area text { fill:var(--vscode-foreground); font-size:10px; }
       .project-matrix-area [role="button"]:focus-visible { outline:2px solid var(--vscode-focusBorder); outline-offset:-2px; }
       .project-matrix-area-0 {fill:var(--vscode-charts-blue)} .project-matrix-area-1 {fill:var(--vscode-charts-green)}
@@ -12077,13 +12100,14 @@ export class UsageWebviewProvider {
       }
       .project-matrix-trend-series {
         display: inline-grid;
-        grid-template-columns: 8px minmax(0, auto) auto;
+        grid-template-columns: 8px minmax(0, auto) max-content;
         align-items: center;
         gap: 5px;
         min-width: 0;
         color: var(--vscode-descriptionForeground);
-        font-size: 10px;
+        font-size: 12px;
       }
+      .project-matrix-trend-series > span { min-width: 0; overflow-wrap: anywhere; }
       .project-matrix-trend-series i {
         width: 8px;
         height: 8px;
@@ -14574,6 +14598,44 @@ function ccuElementStateKey(element, kind) {
   return ccuProviderName() + ':' + (tab ? tab.id : 'page') + ':' + kind + ':' + Math.max(0, elements.indexOf(element));
 }
 
+var __ccuProjectScrollPending = {};
+var __ccuProjectScrollTimer = 0;
+function flushProjectScrollPositions() {
+  if(__ccuProjectScrollTimer){clearTimeout(__ccuProjectScrollTimer);__ccuProjectScrollTimer=0;}
+  var pending=__ccuProjectScrollPending;__ccuProjectScrollPending={};
+  document.querySelectorAll('[data-project-matrix]').forEach(function(root){
+    var provider=root.getAttribute('data-project-matrix'),scope=root.getAttribute('data-project-filter-scope');
+    var entries=Object.keys(pending).map(function(k){return pending[k];}).filter(function(row){return row.provider===provider&&row.scope===scope;});
+    if(!entries.length)return;
+    var state=ccuProjectMatrixState(root),changed=false;
+    entries.forEach(function(row){if(state.scrolls[row.key]!==row.left){state.scrolls[row.key]=row.left;changed=true;}});
+    if(changed)ccuSaveProjectMatrixState(root,state);
+  });
+}
+window.addEventListener('pagehide',flushProjectScrollPositions);
+document.addEventListener('visibilitychange',function(){if(document.visibilityState==='hidden')flushProjectScrollPositions();});
+function ccuProjectScrollState(saved) {
+  var positions = {};
+  if (!saved || typeof saved !== 'object') return positions;
+  Object.keys(saved).filter(function(key){return /^(30|90):(day|week|month):(heatmap|trend)$/.test(key);}).slice(0,12).forEach(function(key){
+    var value=saved[key];if(typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=1000000)positions[key]=value;
+  });
+  return positions;
+}
+function ccuProjectScrollerKey(scroller) {
+  var range=scroller.closest('[data-project-matrix-range-panel]'),scale=scroller.closest('[data-project-scale-panel]');
+  return range&&scale ? range.getAttribute('data-project-matrix-range-panel')+':'+scale.getAttribute('data-project-scale-panel')+':'+scroller.getAttribute('data-project-scroll-kind') : '';
+}
+function ccuRestoreProjectScrollers(root,state) {
+  root.querySelectorAll('[data-project-scroll-kind]').forEach(function(scroller){
+    if(!scroller.clientWidth)return;
+    var key=ccuProjectScrollerKey(scroller),maximum=Math.max(0,scroller.scrollWidth-scroller.clientWidth);
+    var pending=__ccuProjectScrollPending[root.getAttribute('data-project-matrix')+'|'+key];
+    var saved=pending&&pending.scope===root.getAttribute('data-project-filter-scope')?pending.left:state.scrolls[key],left=typeof saved==='number'?Math.min(maximum,saved):maximum;
+    if(Math.abs(scroller.scrollLeft-left)<1)return;
+    scroller.__ccuExpectedProjectScroll=left;scroller.scrollLeft=left;
+  });
+}
 function ccuProjectMatrixState(root) {
   var provider = root ? root.getAttribute('data-project-matrix') : '';
   var all = ccuReadUiState().projectUsageMatrix || {};
@@ -14582,6 +14644,7 @@ function ccuProjectMatrixState(root) {
     range: saved.range === '90' ? '90' : '30',
     view: ['trend','area'].indexOf(saved.view)>=0 ? saved.view : 'heatmap',
     expanded: saved.expanded === true,
+    scrolls: ccuProjectScrollState(saved.scrolls),
     scale: ['day','week','month'].indexOf(saved.scale) >= 0 ? saved.scale : 'day',
     filters: Array.isArray(saved.filters) ? saved.filters.slice(0,200) : null,
     filterScope: saved.filterScope || '',
@@ -14595,7 +14658,7 @@ function ccuSaveProjectMatrixState(root, state) {
   all[provider] = {
     range: state.range,
     view: state.view,
-    expanded: state.expanded === true, scale: state.scale, filters: state.filters, filterScope: state.filterScope, selection: state.selection
+    expanded: state.expanded === true, scrolls: state.scrolls, scale: state.scale, filters: state.filters, filterScope: state.filterScope, selection: state.selection
   };
   ccuWriteUiState('projectUsageMatrix', all);
 }
@@ -14605,6 +14668,9 @@ function ccuApplyProjectMatrixState(root, state) {
     var selected = button.getAttribute('data-project-matrix-range') === state.range;
     button.classList.toggle('active', selected);
     button.setAttribute('aria-pressed', selected ? 'true' : 'false');
+  });
+  root.querySelectorAll('[data-project-summary-range]').forEach(function(summary){
+    summary.hidden=summary.getAttribute('data-project-summary-range')!==state.range||summary.getAttribute('data-project-summary-scale')!==state.scale;
   });
   root.querySelectorAll('[data-project-matrix-view]').forEach(function(button) {
     var selected = button.getAttribute('data-project-matrix-view') === state.view;
@@ -14624,6 +14690,7 @@ function ccuApplyProjectMatrixState(root, state) {
   root.querySelectorAll('[data-project-bars-mode]').forEach(function(n){n.hidden=state.view!=='trend';});
   root.querySelectorAll('[data-project-scale-panel]').forEach(function(panel) { panel.hidden = panel.getAttribute('data-project-scale-panel') !== state.scale; });
   var scaleControl = root.querySelector('[data-project-scale]'); if (scaleControl) scaleControl.value = state.scale;
+  ccuRestoreProjectScrollers(root,state);
   var detail = root.querySelector('[data-project-selection]');
   var selectedCell = Array.prototype.find.call(root.querySelectorAll('[data-project-selection-key]'), function(n){return n.getAttribute('data-project-selection-key')===state.selection;});
   if (detail) detail.textContent = selectedCell ? (selectedCell.getAttribute('aria-label') || selectedCell.getAttribute('title')) : '';
@@ -14648,7 +14715,7 @@ function restoreProjectMatrixState(scope) {
     ccuApplyProjectMatrixState(matrix, state);
     var scope = matrix.getAttribute('data-project-filter-scope');
     if ((state.filterScope && state.filterScope !== scope) || matrix.getAttribute('data-project-filter-normalized') === 'true') {
-      state.filters=null;state.selection='';state.filterScope=scope;ccuSaveProjectMatrixState(matrix,state);
+      state.filters=null;state.selection='';state.scrolls={};state.filterScope=scope;ccuSaveProjectMatrixState(matrix,state);ccuApplyProjectMatrixState(matrix,state);
       var status=matrix.querySelector('[data-project-selection]');if(status)status.textContent=matrix.getAttribute('data-project-reset-label') || '';
     }
     if (state.filterScope === scope && Array.isArray(state.filters)) {
@@ -14662,6 +14729,19 @@ function restoreProjectMatrixState(scope) {
 
   });
 }
+document.addEventListener('scroll',function(event){
+  var scroller=event.target;if(!scroller.matches||!scroller.matches('[data-project-scroll-kind]'))return;
+  var root=scroller.closest('[data-project-matrix]');if(!root||!scroller.clientWidth)return;
+  var expected=scroller.__ccuExpectedProjectScroll;delete scroller.__ccuExpectedProjectScroll;
+  if(typeof expected==='number'&&Math.abs(scroller.scrollLeft-expected)<1)return;
+  var state=ccuProjectMatrixState(root),key=ccuProjectScrollerKey(scroller);
+  var left=Math.max(0,Math.min(1000000,scroller.scrollLeft));
+  if(!key||state.scrolls[key]===left)return;
+  var provider=root.getAttribute('data-project-matrix');
+  __ccuProjectScrollPending[provider+'|'+key]={provider:provider,scope:root.getAttribute('data-project-filter-scope'),key:key,left:left};
+  if(__ccuProjectScrollTimer)clearTimeout(__ccuProjectScrollTimer);
+  __ccuProjectScrollTimer=setTimeout(flushProjectScrollPositions,180);
+},true);
 document.addEventListener('click', function(event) {
   var control = event.target && event.target.closest
     ? event.target.closest('[data-project-matrix-range],[data-project-matrix-view],[data-project-matrix-expand]')
@@ -16501,6 +16581,7 @@ function showTab(tabName, restoring, preserveAchievementDetails) {
       selectedTab.setAttribute('tabindex', '0');
       selectedContent.classList.add('active');
       selectedContent.hidden = false;
+      if(tabName==='projects') selectedContent.querySelectorAll('[data-project-matrix]').forEach(function(root){ccuApplyProjectMatrixState(root,ccuProjectMatrixState(root));});
 
       if (!restoring) {
         vscode.postMessage({ command: 'tabChanged', tab: tabName, documentId: __ccuDocumentId });
