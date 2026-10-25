@@ -7,27 +7,49 @@ export const ACHIEVEMENT_EXPORT_RANK_COLORS: Readonly<Record<AchievementRank | '
   legendary: '#cfadff', milestone: '#d6dce5', locked: '#929ba8',
 };
 
-/** All marks stay within the same 64-unit square, including the legendary apex.
- * The same fragment is used over webview PNGs and inside standalone SVG exports.
- * Keep geometry free of nested groups so share cells retain their simple structure. */
-export function renderAchievementAdornment(rank: AchievementRank, state: AchievementEmblemState = 'earned', compact = false): string {
+/** `artSize` is the actual PNG size, never the enclosing decorated square. */
+export function achievementIconLayout(artSize: number): { artSize: number; edge: number; totalSize: number } {
+  if (!Number.isFinite(artSize) || artSize <= 0) throw new RangeError('Invalid achievement artwork size');
+  const edge = artSize > 56 ? 8 : 0;
+  return { artSize, edge, totalSize: artSize + edge * 2 };
+}
+
+/** Marks use CSS/SVG pixel coordinates, with a separate eight-pixel ornament
+ * margin on full-size artwork. Compact thumbnails keep only identifying marks.
+ * The same fragment is used over resource PNGs and inside standalone exports. */
+export function renderAchievementAdornment(rank: AchievementRank, state: AchievementEmblemState = 'earned', artSize = 80): string {
+  const { edge, totalSize: total } = achievementIconLayout(artSize);
   const frame = state === 'locked' ? 'locked' : rank;
-  const advanced = ['gold', 'platinum', 'legendary'].includes(frame);
-  let marks = '<rect data-frame-part="square" x="1.5" y="1.5" width="61" height="61" rx="5" fill="none" stroke="currentColor" stroke-width="' +
-    (frame === 'bronze' || frame === 'locked' ? '1.5' : '2') + '"' + (state === 'target' ? ' stroke-dasharray="3 2"' : '') + '/>';
-  if (frame === 'silver' && !compact) marks += '<rect data-frame-part="inner-square" x="3.5" y="3.5" width="57" height="57" rx="4" fill="none" stroke="currentColor" stroke-width=".8"/>';
-  if (advanced && !compact) {
-    // Keep leaves on the outer artwork border; never reserve space by shrinking the PNG.
-    for (const x of [4, 60]) for (let i = 0; i < 4; i++) {
-      const side = x < 32 ? -1 : 1;
-      marks += '<path data-frame-part="laurel" d="M' + x + ' ' + (59 - i * 6) +
-        'q' + side * 4 + ' -4 ' + side * 1.5 + ' -9q' + -side * 4 + ' 3 ' + -side * 1.5 + ' 9" fill="currentColor"/>';
+  const full = edge > 0;
+  const low = full ? edge - .8 : 1.5;
+  const span = full ? artSize + 1.6 : artSize - 3;
+  let marks = '<rect data-frame-part="square" x="' + low + '" y="' + low + '" width="' + span +
+    '" height="' + span + '" rx="4" fill="none" stroke="currentColor" stroke-width="' +
+    (frame === 'bronze' || frame === 'locked' ? '1.5' : '2') + '"' + (state === 'target' ? ' stroke-dasharray="4 3"' : '') + '/>';
+  if (frame === 'silver') marks += '<rect data-frame-part="inner-square" x="' + (low + 2.5) +
+    '" y="' + (low + 2.5) + '" width="' + (span - 5) + '" height="' + (span - 5) +
+    '" rx="3" fill="none" stroke="currentColor" stroke-width=".7"/>';
+  if (full && ['gold', 'platinum', 'legendary'].includes(frame)) {
+    // Leaves sit in the added edge allowance, preserving the complete PNG.
+    const count = frame === 'gold' ? 3 : frame === 'platinum' ? 4 : 5;
+    for (const side of [-1, 1]) for (let i = 0; i < count; i++) {
+      const x = side < 0 ? edge - 2 : total - edge + 2;
+      const y = total - edge - 4 - i * 8;
+      marks += '<path data-frame-part="laurel" d="M' + x + ' ' + y + 'q' + side * 7 + ' -3 ' +
+        side * 3 + ' -10q' + -side * 5 + ' 3 ' + -side * 3 + ' 10Z" fill="currentColor"/>';
     }
-    marks += '<path data-frame-part="stem" d="M4 58Q32 66 60 58" fill="none" stroke="currentColor" stroke-width="1.2"/>';
+    marks += '<path data-frame-part="stem" d="M' + (edge - 2) + ' ' + (total - edge - 5) + 'Q' +
+      total / 2 + ' ' + (total + 3) + ' ' + (total - edge + 2) + ' ' + (total - edge - 5) +
+      '" fill="none" stroke="currentColor" stroke-width="1.5"/>';
   }
-  if (!compact && (frame === 'platinum' || frame === 'legendary')) marks += '<path data-frame-part="corners" d="M3 11l8-8M53 3l8 8M3 53l8 8M53 61l8-8" fill="none" stroke="currentColor" stroke-width="1.2"/>';
-  if (frame === 'legendary') marks += '<path data-frame-part="apex" d="m32 0 4 4-4 4-4-4Z" fill="currentColor"/>';
-  if (frame === 'milestone' && state === 'earned') marks += '<path data-frame-part="complete" d="m49 59 4 3 8-10" fill="none" stroke="currentColor" stroke-width="2.5"/>';
-  if (frame === 'locked') marks += '<path data-frame-part="lock" d="M51 54v-3a3 3 0 0 1 6 0v3m-7 0h8v8h-8Z" fill="none" stroke="currentColor" stroke-width="1.5"/>';
+  if (full && (frame === 'platinum' || frame === 'legendary')) marks += '<path data-frame-part="corners" d="M' +
+    low + ' ' + (low + 10) + 'l10-10M' + (total - low - 10) + ' ' + low +
+    'l10 10" fill="none" stroke="currentColor" stroke-width="1.5"/>';
+  if (frame === 'legendary') marks += '<path data-frame-part="apex" d="m' + total / 2 + ' ' +
+    (full ? 1 : 0) + ' 5 5-5 5-5-5Z" fill="currentColor"/>';
+  if (frame === 'milestone' && state === 'earned') marks += '<path data-frame-part="complete" d="m' +
+    (total - 17) + ' ' + (total - 7) + ' 4 4 10-12" fill="none" stroke="currentColor" stroke-width="2.5"/>';
+  if (frame === 'locked') marks += '<path data-frame-part="lock" d="M' + (total - 11) + ' ' +
+    (total - 10) + 'v-3a3 3 0 0 1 6 0v3m-7 0h8v8h-8Z" fill="none" stroke="currentColor" stroke-width="1.5"/>';
   return marks;
 }

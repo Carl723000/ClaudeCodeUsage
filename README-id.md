@@ -14,7 +14,7 @@
 
 ## Pembaruan visualisasi yang belum dirilis
 
-- Galeri pencapaian, etalase, target berikutnya, gambar pilihan berbagi, dan ekspor SVG memakai bingkai persegi serta ornamen tingkat yang sama. Ilustrasi dan syarat penghargaan tetap dipertahankan. Ilustrasi mempertahankan ukuran tampilan semula, dengan ornamen yang disederhanakan pada ikon kecil.
+- Halaman pencapaian Claude dan Codex memakai tata letak baru yang konsisten. Ilustrasi tetap berukuran penuh dengan ornamen tingkat di tepinya; kartu berbagi mengutamakan gambar dalam baris lencana yang rata tengah, tanpa mengubah syarat penghargaan.
 - Grafik Token 30/90 hari mendapat tampilan hari/minggu/bulan serta pilihan proyek. Nilai tidak diketahui, nol terverifikasi, dan subtotal parsial tetap dibedakan; minggu/bulan yang terpotong diberi label. Ringkasan grafik area menampilkan seluruh rentang tanggal terpilih dalam tampilan, dilengkapi sumbu Token numerik dan tetap mempertahankan celah data yang tidak diketahui.
 - Berbagi nilai uang menyediakan tata letak ringkas opsional; standar tetap menjadi bawaan. Nilai Claude dan Codex terpisah. Perubahan pengaturan memerlukan pratinjau baru yang diterima; byte SVG tersimpan dibaca ulang dan dibandingkan dengan pratinjau tersebut.
 - Pencapaian volume dan nilai per penyedia selama tujuh hari memakai jendela bergulir tujuh hari kalender yang telah berakhir. Penghargaan lama mempertahankan catatan dan ditandai sebagai aturan lama; bukti yang kurang tidak menghasilkan tanggal buatan. Siklus reset kuota sebenarnya tidak berubah.

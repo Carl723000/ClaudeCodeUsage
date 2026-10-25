@@ -8,7 +8,7 @@ jeweils passender Bedeutung an. Sie ist **kein Abrechnungswerkzeug**.
 
 ## Noch unveröffentlichte Visualisierungen
 
-- Galerie, Schaukasten, nächste Ziele, Auswahlvorschauen und SVG-Exporte verwenden dieselben quadratischen Rahmen und Rangverzierungen. Illustrationen und Vergabekriterien bleiben erhalten. Die Grafiken behalten ihre ursprüngliche Anzeigegröße; bei kleinen Symbolen sind die Verzierungen vereinfacht.
+- Die Auszeichnungsseiten von Claude und Codex verwenden ein klareres gemeinsames Layout. Grafiken behalten ihre volle Größe mit Rangverzierungen am Rand; Freigabekarten stellen die Grafiken in zentrierten Abzeichenreihen heraus. Vergabekriterien bleiben erhalten.
 - Die bestehenden Token-Diagramme für 30/90 Tage erhalten Tages-, Wochen- und Monatsansichten sowie eine Projektauswahl. Unbekannte Werte, bestätigte Nullen und Teilsummen bleiben unterscheidbar; angeschnittene Zeiträume sind markiert. Die Flächenübersicht zeigt den gesamten gewählten Zeitraum mit einer numerischen Token-Achse und erhält Lücken bei unbekannten Werten.
 - Für Beträge gibt es ein optionales kompaktes Layout; Standard bleibt voreingestellt. Claude und Codex werden getrennt dargestellt. Änderungen erfordern eine neue bestätigte Vorschau; gespeicherte SVG-Bytes werden zurückgelesen und mit ihr verglichen.
 - Siebentägige Mengen- und anbieterbezogene Betragsauszeichnungen verwenden abgeschlossene rollierende Fenster aus sieben Kalendertagen. Vorhandene Auszeichnungen behalten ihre Aufzeichnungen und werden als frühere Regeln gekennzeichnet; fehlende Evidenz erzeugt keine Daten. Tatsächliche Quoten-Resetzyklen bleiben unverändert.

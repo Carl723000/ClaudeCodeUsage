@@ -1,6 +1,7 @@
 import {achievementRollingCopyFor} from './achievementRollingCopy';
 import { ACHIEVEMENT_DEFINITIONS, ACHIEVEMENT_SERIES, AchievementId, AchievementResult } from './achievements';
 import { renderAchievementIcon } from './achievementIcons';
+import { achievementIconLayout } from './achievementAdornment';
 import type { AchievementCopy } from './i18n';
 import { randomUUID } from 'node:crypto';
 import {isAchievementMoneyId} from './achievementMoneyCatalog';
@@ -109,6 +110,9 @@ export function renderAchievementShareSvg(input: {
   locale?: string;
 }): string {
   const rows = input.selected.slice(0, 9);
+  const artSize = rows.length === 1 ? 112 : rows.length <= 3 ? 96 : 80;
+  const iconSize = achievementIconLayout(artSize).totalSize;
+  const cellWidth = 280, cellGap = 24;
   const headingLines = wrapLabel(input.heading, 28);
   const subtitleLines = wrapLabel(input.subtitle, 56, 2);
   const subtitleY = 66 + Math.max(0, headingLines.length - 1) * 38 + 35;
@@ -118,7 +122,7 @@ export function renderAchievementShareSvg(input: {
     const level = series?.indexOf(id);
     const title = achievementTitleWithoutRank(input.titles[id] || id,
       level === undefined ? undefined : input.levels[level]);
-    const titleLines = wrapLabel(title, 11, 3);
+    const titleLines = wrapLabel(title, 14);
     const group = ACHIEVEMENT_DEFINITIONS.find((entry) => entry.id === id)?.group ?? 'combined';
     const accent: Parameters<typeof renderAchievementIcon>[1] =
       group === 'claude' ? '#db8b5b' : group === 'codex' ? '#82a9ed' : '#ad99e2';
@@ -130,26 +134,31 @@ export function renderAchievementShareSvg(input: {
     const retained=input.retainedCalendarIds?.includes(id)===true;
     const condition=retained?achievementRollingCopyFor(input.locale??'en').legacy:achievementConditionFor(input.locale ?? 'en',id);
     const publicTitle=[title,levelLabel,threshold,condition].filter(Boolean).join(' · ');
-    const groupLines = wrapLabel(input.groups[group], 14);
+    const groupLines = wrapLabel(input.groups[group], 20);
     const rankLines = wrapLabel(levelLabel + (threshold ? ' · ' + threshold : '')+
-      (retained?' · '+achievementRollingCopyFor(input.locale??'en').legacyShort:''), 14);
-    // Reserve three title lines, then grow downward for full group/rank labels.
-    const groupY = 88;
-    const rankY = groupY + Math.max(0, groupLines.length - 1) * 16 + 24;
-    const height = rankY + Math.max(0, rankLines.length - 1) * 16 + 20;
-    return { id, titleLines, groupLines, rankLines, publicTitle, accent, color, groupY, rankY, height };
+      (retained?' · '+achievementRollingCopyFor(input.locale??'en').legacyShort:''), 20);
+    return { id, titleLines, groupLines, rankLines, publicTitle, accent, color };
   });
-  const cellHeight = Math.max(132, ...badges.map(badge => badge.height));
+  // Keep typography aligned across the complete artifact. Actual localized
+  // names and rank/threshold labels grow the card instead of eliding evidence.
+  const titleY = 24 + iconSize + 24;
+  const rankY = titleY + Math.max(0, ...badges.map(badge => badge.titleLines.length - 1)) * 19 + 24;
+  const groupY = rankY + Math.max(0, ...badges.map(badge => badge.rankLines.length - 1)) * 16 + 24;
+  const cellHeight = groupY + Math.max(0, ...badges.map(badge => badge.groupLines.length - 1)) * 16 + 24;
   const cells = badges.map((badge, index) => {
-    const { id, titleLines, groupLines, rankLines, publicTitle, accent, color, groupY, rankY } = badge;
-    const x = 48 + (index % 3) * 304;
+    const { id, titleLines, groupLines, rankLines, publicTitle, accent, color } = badge;
+    const rowStart = Math.floor(index / 3) * 3;
+    const inRow = Math.min(3, badges.length - rowStart);
+    const rowWidth = inRow * cellWidth + (inRow - 1) * cellGap;
+    const x = (1000 - rowWidth) / 2 + (index % 3) * (cellWidth + cellGap);
     const y = gridY + Math.floor(index / 3) * (cellHeight + 20);
+    const center = x + cellWidth / 2;
     return `<g data-achievement-share-badge="${id}"><title>${escapeXml(publicTitle)}</title>` +
-      `<rect x="${x}" y="${y}" width="280" height="${cellHeight}" rx="6" fill="#202430" stroke="#48505f" stroke-width="1" data-share-card-frame="neutral"/>` +
-      renderAchievementIcon(id, accent, { x: x + 11, y: y + 24, size: 64 }) +
-      `<text x="${x + 86}" y="${y + 26}" font-size="16" font-weight="600" fill="${color}">${textLines(titleLines, x + 86, 19)}</text>` +
-      `<text x="${x + 86}" y="${y + groupY}" font-size="12" fill="#b9bfcc">${textLines(groupLines, x + 86, 16)}</text>` +
-      `<text x="${x + 86}" y="${y + rankY}" font-size="12" fill="${color}">${textLines(rankLines, x + 86, 16)}</text></g>`;
+      `<rect x="${x}" y="${y}" width="${cellWidth}" height="${cellHeight}" rx="6" fill="#202430" stroke="#48505f" stroke-width="1" data-share-card-frame="neutral"/>` +
+      renderAchievementIcon(id, accent, { x: center - iconSize / 2, y: y + 24, size: artSize }) +
+      `<text data-share-field="name" x="${center}" y="${y + titleY}" text-anchor="middle" font-size="16" font-weight="600" fill="#f3f4f8">${textLines(titleLines, center, 19)}</text>` +
+      `<text data-share-field="rank" x="${center}" y="${y + rankY}" text-anchor="middle" font-size="13" font-weight="600" fill="${color}">${textLines(rankLines, center, 16)}</text>` +
+      `<text data-share-field="group" x="${center}" y="${y + groupY}" text-anchor="middle" font-size="12" fill="#b9bfcc">${textLines(groupLines, center, 16)}</text></g>`;
   }).join('');
   const rowCount = Math.ceil(badges.length / 3);
   const gridBottom = gridY + rowCount * (cellHeight + 20) - (rowCount ? 20 : 0);

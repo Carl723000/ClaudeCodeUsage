@@ -156,7 +156,7 @@ test('money UI: partial priced proof displays ≥ USD and coverage, with dollar 
     const rule = html.match(/<li data-achievement-level="claude-api-total-bronze">[\s\S]*?<\/li>/)?.[0];
     assert.ok(rule); assert.match(visibleText(rule), /(?:US\$|\$)\s*100\b/);
     assert.doesNotMatch(visibleText(rule), /tokens|100M|100,000,000/i);
-    const stage=html.match(/class="achievement-stage-target" title="([^"]+)"/);
+    const stage=html.match(/class="table-hint achievement-intermediate-stage" title="([^"]+)"/);
     assert.ok(stage);assert.match(stage[1],/\$200 USD/);
     assert.doesNotMatch(stage[1],/200,000,000/,'display dollars, not microUSD, in the stage tooltip');
     assert.ok(!text.includes(money.pricebookVersion!), 'card uses the shared reference disclosure');

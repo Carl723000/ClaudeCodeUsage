@@ -97,7 +97,7 @@ test.describe('money v2 artwork narrow captures', () => {
           closed:!el.querySelector('details').open,
           noPageOverflow:document.documentElement.scrollWidth <= innerWidth + 1,
         }));
-        expect(geometry).toEqual({emblem,titleFont:expect.any(Number),titleFits:true,closed:true,noPageOverflow:true});
+        expect(geometry).toEqual({emblem:emblem+(emblem>56?16:0),titleFont:expect.any(Number),titleFits:true,closed:true,noPageOverflow:true});
         expect(geometry.titleFont).toBeGreaterThanOrEqual(13);
         // The standard fixture has no invented money awards. These captures
         // faithfully show the production locked/evidence-pending card state.
@@ -169,7 +169,7 @@ test.describe('gallery locale, size, theme and narrow-layout matrix', () => {
             const fonts = textSelectors.map(selector => parseFloat(getComputedStyle(first.querySelector(selector)).fontSize));
             const overflowingText = Array.from(root.querySelectorAll('.achievement-card h4,.achievement-next-target,.achievement-overview-name,.achievement-selected-pins li > span'))
               .filter(el => el.getClientRects().length && el.scrollWidth > el.clientWidth + 1)
-              .map(el => el.textContent.trim());
+              .map(el => ({text:el.textContent.trim(),class:el.className,width:el.clientWidth,scroll:el.scrollWidth}));
             const pinTargets = Array.from(root.querySelectorAll('.achievement-pin-icon'))
               .filter(el => el.getClientRects().length)
               .map(el => ({width:el.getBoundingClientRect().width/zoom,height:el.getBoundingClientRect().height/zoom}));
@@ -182,17 +182,17 @@ test.describe('gallery locale, size, theme and narrow-layout matrix', () => {
                 return rect.right > innerWidth + 1 || rect.left < -1;
               }).slice(0,8).map(el => ({tag:el.tagName,id:el.id,class:el.className,
                 right:el.getBoundingClientRect().right,left:el.getBoundingClientRect().left})),
-              toolbarBeforeEditor:Boolean(toolbar.compareDocumentPosition(editor) & Node.DOCUMENT_POSITION_FOLLOWING),
-              toolbarBeforeOverview:Boolean(toolbar.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING),
+              editorBeforeToolbar:Boolean(editor.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING),
+              overviewBeforeToolbar:Boolean(overview.compareDocumentPosition(toolbar) & Node.DOCUMENT_POSITION_FOLLOWING),
               emblem:first.querySelector('.achievement-emblem').getBoundingClientRect().width/zoom,
             };
           },{zoom});
           expect(layout.overflow,JSON.stringify({locale,theme,width,zoom,size,
             documentWidth:layout.documentWidth,viewportWidth:layout.viewportWidth,overflowElements:layout.overflowElements})).toBe(false);
           expect(layout.overflowingText).toEqual([]);
-          expect(layout.toolbarBeforeEditor).toBe(true);
-          expect(layout.toolbarBeforeOverview).toBe(true);
-          expect(layout.emblem).toBeCloseTo(emblem,1);
+          expect(layout.editorBeforeToolbar).toBe(true);
+          expect(layout.overviewBeforeToolbar).toBe(true);
+          expect(layout.emblem).toBeCloseTo(emblem+(emblem>56?16:0),1);
           expect(layout.fonts[0]).toBeGreaterThanOrEqual(13);
           expect(layout.fonts[1]).toBeGreaterThanOrEqual(11.5);
           if (!baseFonts) baseFonts = layout.fonts;

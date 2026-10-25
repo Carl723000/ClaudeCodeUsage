@@ -17,7 +17,7 @@ This is not a billing tool: Claude costs and Codex API-equivalent values are est
 
 ## Unreleased visualization updates
 
-- Achievements reuse one square-frame and tier-adornment design in the gallery, showcase, next targets, selection thumbnails and SVG exports. Existing illustrations and award eligibility remain unchanged. Artwork keeps its original display size, with simpler ornaments at small sizes.
+- Claude and Codex achievement pages share a clearer layout. Artwork keeps its full size with rank ornaments around its edges; sharing cards put artwork first with centered badge rows, preserving award eligibility.
 - Projects adds day/week/month views and project selection within the existing 30/90-day Token charts. Unknown cells, verified zero and partial subtotals remain distinct; clipped weeks/months are labelled. The area overview fits the full selected date span and includes a numeric Token axis while preserving unknown gaps.
 - Amount sharing offers an optional compact layout; standard remains the default. Claude and Codex amounts stay separate. Changed settings require a new accepted preview, and saved SVG bytes are read back and checked against that preview.
 - Seven-day volume and provider amount achievements use completed rolling seven-civil-day windows. Existing awards keep their original records and are labelled as legacy rules; missing evidence does not invent dates. Actual quota reset cycles remain unchanged.

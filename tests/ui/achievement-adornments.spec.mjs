@@ -25,7 +25,7 @@ for (const theme of ['dark','light','highContrast']) {
     expect(await targets.count()).toBeGreaterThan(0);
     for (const target of await targets.all()) {
       await expect(target).toHaveAttribute('data-emblem-state','target');
-      await expect(target.locator('[data-frame-part="square"]')).toHaveAttribute('stroke-dasharray','3 2');
+      await expect(target.locator('[data-art-size]:visible [data-frame-part="square"]')).toHaveAttribute('stroke-dasharray','4 3');
     }
     const records=page.locator('.achievement-record-badge .achievement-framed-icon');
     expect(await records.count()).toBeGreaterThan(0);
@@ -43,7 +43,7 @@ for (const locale of ['en','de-DE','zh-TW','zh-CN','ja','ko','pt-BR','id']) {
     await page.locator('#tab-achievements').click();
     const card=page.locator('[data-achievement-key="active-day-streak"]');
     await expect(card.locator('summary .achievement-framed-icon')).toHaveAttribute('data-achievement-frame','milestone');
-    await expect(card.locator('summary [data-frame-part="complete"]')).toHaveCount(1);
+    await expect(card.locator('summary [data-art-size]:visible [data-frame-part="complete"]')).toHaveCount(1);
     await expect(card.locator('summary [data-frame-part="laurel"]')).toHaveCount(0);
     await card.locator('summary').click();
     await expect(card.locator('[data-achievement-milestone="streak-machine"] .achievement-framed-icon')).toHaveAttribute('data-achievement-frame','milestone');
@@ -54,7 +54,7 @@ for (const locale of ['en','de-DE','zh-TW','zh-CN','ja','ko','pt-BR','id']) {
   });
 }
 
-test('sharing keeps native image URIs and the same frame geometry as the gallery',async({page})=>{
+test('sharing keeps native image URIs and compact versions of the same rank identities',async({page})=>{
   await page.setViewportSize({width:360,height:900});
   await page.goto(`http://127.0.0.1:${process.env.CCU_UI_TEST_PORT ?? 4173}/?provider=claude&fixture=achievement-share-resources&commandTemplate=achievements`);
   await expect(page.locator('#sharingTemplate')).toHaveValue('achievements');
@@ -68,8 +68,9 @@ test('sharing keeps native image URIs and the same frame geometry as the gallery
     const frame=option.locator('svg');
     const gallery=page.locator(`.achievement-card summary img[data-achievement-icon="${id}"]`);
     if(await gallery.count()) {
-      const geometry=await frame.innerHTML();
-      expect(await gallery.locator('..').locator('svg').innerHTML()).toBe(geometry);
+      expect(await gallery.locator('..').getAttribute('data-achievement-frame')).toBe(await option.locator('.achievement-framed-icon').getAttribute('data-achievement-frame'));
+      await expect(frame.locator('[data-art-size="48"]')).toHaveCount(1);
+      await expect(frame.locator('[data-frame-part="laurel"]')).toHaveCount(0);
     }
   }
 });
@@ -86,14 +87,14 @@ for (const theme of ['dark','light']) {
           const box=el.getBoundingClientRect(),art=el.querySelector('img').getBoundingClientRect();
           return {box:box.width,width:art.width,height:art.height};
         });
-        expect(dimensions.width).toBe(dimensions.box);
-        expect(dimensions.height).toBe(dimensions.box);
+        expect(dimensions.width).toBe(dimensions.box-(dimensions.box>56?16:0));
+        expect(dimensions.height).toBe(dimensions.box-(dimensions.box>56?16:0));
       }
     }
     await page.locator('.achievement-showcase').screenshot({path:info.outputPath(`overview-${theme}.png`)});
     await page.locator('.achievement-group').first().screenshot({path:info.outputPath(`gallery-${theme}.png`)});
     await page.locator('#achievementSize').selectOption('small');
-    const leaf=page.locator('.achievement-card summary [data-frame-part="laurel"]').first();
+    const leaf=page.locator('.achievement-card summary [data-art-size="112"] [data-frame-part="laurel"]').first();
     if(await leaf.count()) await expect(leaf).toBeHidden();
     await page.locator('#achievementSize').selectOption('large');
     if(await leaf.count()) await expect(leaf).toBeVisible();

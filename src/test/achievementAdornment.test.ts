@@ -44,7 +44,7 @@ test('webview resource PNGs and self-contained exports use identical adornment g
 test('target and locked marks cannot look like a granted milestone or high-tier award',()=>{
   const target=renderAchievementWebviewIcon('trillion-token-club','fixture.png','target');
   assert.match(target,/data-achievement-frame="legendary" data-emblem-state="target"/);
-  assert.match(target,/stroke-dasharray="3 2"/);
+  assert.match(target,/stroke-dasharray="4 3"/);
   const locked=renderAchievementWebviewIcon('trillion-token-club','fixture.png','locked');
   assert.match(locked,/data-achievement-frame="locked"/);
   assert.match(locked,/data-frame-part="lock"/);
@@ -63,10 +63,43 @@ test('catalog series preserve their real number of tiers and webview resources r
   assert.doesNotMatch(escaped,/ src="[^"]*" onload=/);
 });
 
-test('exported artwork keeps its full requested size instead of shrinking for ornaments',()=>{
-  for (const size of [40,48,56,64,80,112]) {
-    const svg=renderAchievementIcon('trillion-token-club','currentColor',{x:0,y:0,size});
-    assert.match(svg.match(/<image[^>]+>/)![0].replace(/href="[^"]+"/,'href="fixture"'),/x="0" y="0" width="64" height="64"/);
+test('exported artwork keeps its full requested size with separate eight-unit ornament margins',()=>{
+  for (const size of [40,48,56,64,72,80,96,112]) {
+    const svg=renderAchievementIcon('trillion-token-club','currentColor',{x:5,y:7,size});
+    const edge=size>56?8:0,total=size+2*edge;
+    const image=svg.match(/<image[^>]+>/)![0].replace(/href="[^"]+"/,'href="fixture"');
+    assert.match(svg,new RegExp('x="5" y="7" width="'+total+'" height="'+total+'" viewBox="0 0 '+total+' '+total+'"'));
+    assert.match(image,new RegExp('x="'+edge+'" y="'+edge+'" width="'+size+'" height="'+size+'"'));
     assert.equal(svg.includes('data-frame-part="laurel"'), size > 56);
+  }
+});
+
+test('full size rank outlines use increasing outer laurel counts',()=>{
+  for(const [rank,count] of [['gold',6],['platinum',8],['legendary',10]] as const) {
+    const geometry=renderAchievementAdornment(rank);
+    assert.equal((geometry.match(/data-frame-part="laurel"/g)||[]).length,count);
+  }
+});
+
+test('gallery webview holds bounded size variants without duplicating the resource image',()=>{
+  const web=renderAchievementWebviewIcon('trillion-token-club','fixture.png');
+  assert.match(web,/data-icon-context="gallery"/);
+  assert.equal((web.match(/<img\b/g)||[]).length,1);
+  assert.equal((web.match(/<svg\b/g)||[]).length,1);
+  assert.deepEqual([...web.matchAll(/data-art-size="(\d+)"/g)].map(m=>Number(m[1])),[56,80,112]);
+});
+
+test('each webview context includes only its bounded size variants with export-identical geometry',()=>{
+  const sizes = {gallery:[56,80,112],overview:[56,72,96],record:[40,56],detail:[40],selection:[48]} as const;
+  for (const context of Object.keys(sizes) as (keyof typeof sizes)[]) {
+    const web=renderAchievementWebviewIcon('trillion-token-club','fixture.png','earned',undefined,context);
+    assert.match(web,new RegExp('data-icon-context="'+context+'"'));
+    assert.deepEqual([...web.matchAll(/data-art-size="(\d+)"/g)].map(m=>Number(m[1])),[...sizes[context]]);
+    for (const size of sizes[context]) {
+      const geometry=renderAchievementAdornment('legendary','earned',size);
+      assert.ok(web.includes('<g data-art-size="'+size+'">'+geometry+'</g>'));
+      assert.ok(renderAchievementIcon('trillion-token-club','currentColor',{x:0,y:0,size}).includes(geometry));
+      assert.equal(geometry.includes('data-frame-part="laurel"'),size>56);
+    }
   }
 });

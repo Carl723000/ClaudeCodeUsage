@@ -29,7 +29,7 @@ for (const locale of ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'
       const milestone = card.locator('[data-achievement-milestone="streak-machine"]');
       await expect(milestone.locator('img')).toBeVisible();
       await expect(card.locator('[data-achievement-level]')).toHaveCount(4);
-      await expect(card.locator('.achievement-tier-pip')).toHaveCount(3);
+      await expect(card.locator('.achievement-tier-pip')).toHaveCount(0);
       expect(await milestone.locator('img').evaluate(img => img.complete && img.naturalWidth > 0)).toBe(true);
       await page.clock.runFor(200);
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

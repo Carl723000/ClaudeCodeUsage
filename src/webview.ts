@@ -5828,11 +5828,6 @@ export class UsageWebviewProvider {
             '<span class="achievement-tier-marker' + (earnedLevels[index] ? ' complete' : '') +
             (index === nextTierIndex && hasNextTier ? ' next' : '') + '">' + marker + '</span>')
             .join('') + '</div>' : '';
-      const tierPips = series
-        ? '<span class="achievement-tier-pips" aria-hidden="true">' +
-          earnedLevels.map((complete, index) => '<span class="achievement-tier-pip' +
-            (complete ? ' complete' : index === nextTierIndex ? ' next' : '') + '"></span>').join('') +
-          '</span>' : '';
       const allResults = [...(tiers ?? [result]), ...milestones];
       const savedPins = (this.achievementRecordState?.pins ?? []).filter(pin => achievementGalleryKey(pin) === key);
       const canPin = this.achievementRecordState?.records.some(row => allResults.some(entry => entry.id === row.id)) === true;
@@ -5849,15 +5844,12 @@ export class UsageWebviewProvider {
       const stage = series && next ? nextAchievementStage(series, nextResult.progress, nextResult.target, proofReady) : undefined;
       const faceProgress = proofReady && next
         ? '<span class="achievement-current-progress" title="' + this.escapeHtml(copy.nextTarget + ': ' + bound +
-          exactProgress + ' ' + unitFor(result.id)) + '">' + this.escapeHtml(bound + formatted) + '</span>' +
-          (stage === undefined ? '' : '<span class="achievement-stage-target" title="' +
-            this.escapeHtml(copy.nextStage + ': ' + integerValue(nextResult.id,stage) + ' ' + unitFor(result.id)) + '">' +
-            this.escapeHtml(copy.nextStage + ' · ' + compactValue(nextResult.id,stage)) + '</span>')
-        : !proofReady?this.escapeHtml(proofLabel):fullRank&&current!==undefined?
-          '<span>'+this.escapeHtml(copy.complete)+'</span><span class="achievement-current-value" title="'+
-          this.escapeHtml(management.currentValue+': '+bound+exactProgress+' '+unitFor(nextResult.id))+'">'+
-          this.escapeHtml(management.currentValue+': '+bound+formatted)+'</span>':
-          this.escapeHtml(next ? copy.milestone : copy.complete);
+          exactProgress + ' ' + unitFor(result.id)) + '">' + this.escapeHtml(bound + compactValue(nextResult.id,progress)) + '</span>' +
+          '<span class="achievement-stage-target" title="' + this.escapeHtml(copy.nextTarget + ': ' + integerValue(nextResult.id,nextResult.target) + ' ' + unitFor(result.id)) + '"> / ' + this.escapeHtml(compactValue(nextResult.id,nextResult.target) + ' ' + unitFor(result.id)) + '</span>'
+        : !proofReady ? this.escapeHtml(proofLabel) : fullRank && current !== undefined
+          ? '<span class="achievement-current-value" title="' + this.escapeHtml(management.currentValue + ': ' + bound + exactProgress + ' ' + unitFor(nextResult.id)) + '">' +
+            this.escapeHtml(management.currentValue + ': ' + bound + formatted + ' ' + unitFor(result.id)) + '</span><span> · ' + this.escapeHtml(copy.complete) + '</span>'
+          : this.escapeHtml(next ? copy.milestone : copy.complete);
       const levelEntries=tiers??[result];
       const notes=compactAchievementLevelNotes(levelEntries.map(entry=>achievementConditionFor(I18n.getLocale(),entry.id)));
       const commonUnit=levelEntries.every(entry=>unitFor(entry.id)===unitFor(levelEntries[0].id))?unitFor(levelEntries[0].id):undefined;
@@ -5901,7 +5893,7 @@ export class UsageWebviewProvider {
           const src = webview?.asWebviewUri && this.context.extensionPath
             ? webview.asWebviewUri(vscode.Uri.file(achievementImagePath(entry.id))).toString() : achievementImageDataUrl(entry.id);
           return '<li data-achievement-milestone="' + entry.id + '" data-achievement-level="' + entry.id + '">' +
-            renderAchievementWebviewIcon(entry.id, src, isEarned(entry) ? 'earned' : 'locked') + '<strong>' + this.escapeHtml(copy.titles[entry.id]) +
+            renderAchievementWebviewIcon(entry.id, src, isEarned(entry) ? 'earned' : 'locked', undefined, 'detail') + '<strong>' + this.escapeHtml(copy.titles[entry.id]) +
             '</strong><span>' + this.escapeHtml(compact(entry.target) + ' ' + unitFor(entry.id)) + '</span>'+
             (metadata?'<div class="achievement-level-meta">'+metadata+'</div>':'')+'</li>';
         }).join('') + '</ul>' : '';
@@ -5938,13 +5930,14 @@ export class UsageWebviewProvider {
           (proofReady ? bound + formatted + ' ' + unitFor(result.id) : proofLabel) +
           (series ? ' · ' + earnedTiers + '/' + tierCount : '')) + '">' +
         '<span class="achievement-emblem" aria-hidden="true">' +
-        renderAchievementWebviewIcon(result.id, iconSrc, earned ? 'earned' : 'locked') + '</span>' +
+        renderAchievementWebviewIcon(result.id, iconSrc, earned ? 'earned' : 'locked', undefined, 'gallery') + '</span>' +
         '<h4>' + this.escapeHtml(baseName) + '</h4>' +
         (earned ? '<span class="achievement-rank">' + this.escapeHtml(levelName) + '</span>' : '') +
-        tierPips + '<span class="achievement-next-target">' + faceProgress + peakWindowLabel + '</span>' +
+        '<span class="achievement-next-target">' + faceProgress + peakWindowLabel + '</span>' +
         (proofReady && next ? '<span class="achievement-progress-track" aria-hidden="true"><span style="width:' +
           Math.min(100, Math.max(0, progress / nextResult.target * 100)) + '%"></span></span>' : '') + '</summary>' +
         '<div class="achievement-card-detail">' + tierMarkers +
+        (stage === undefined ? '' : '<p class="table-hint achievement-intermediate-stage" title="' + this.escapeHtml(copy.nextStage + ': ' + integerValue(nextResult.id,stage) + ' ' + unitFor(result.id)) + '">' + this.escapeHtml(copy.nextStage + ': ' + integerValue(nextResult.id,stage) + ' ' + unitFor(result.id)) + '</p>') +
         (proofReady ?
         '<label class="achievement-progress-label" for="achievement-progress-' + result.id +
         '" title="' + this.escapeHtml(bound + exactProgress + ' ' + unitFor(result.id)) + '">' +
@@ -6035,7 +6028,7 @@ export class UsageWebviewProvider {
             ' aria-label="' + this.escapeHtml(copy.viewBadge + ': ' + name + ' · ' + rank +
               (kind === 'next' ? ' · ' + progress + ' ' + unitFor(entry.result.id) :
                 state.proof === 'ready' ? '' : ' · ' + proofLabel)) + '">' +
-            renderAchievementWebviewIcon(displayId, iconSrc, kind === 'next' ? 'target' : 'earned') + '<span class="achievement-overview-name">' +
+            renderAchievementWebviewIcon(displayId, iconSrc, kind === 'next' ? 'target' : 'earned', undefined, 'overview') + '<span class="achievement-overview-name">' +
             this.escapeHtml(name) + '</span><span class="achievement-overview-rank">' + this.escapeHtml(rank) + '</span>' +
             (kind === 'next' ? '<span class="achievement-overview-progress">' + this.escapeHtml(progress) + '</span>' :
               state.proof === 'ready' ? '' : '<span class="achievement-overview-progress">' + this.escapeHtml(proofLabel) + '</span>') +
@@ -6060,7 +6053,7 @@ export class UsageWebviewProvider {
       return '<button class="achievement-record-badge" data-achievement-record="' + record.id +
         '" data-achievement-open="' + key + '" onclick="openAchievementDetail(this.dataset.achievementOpen)"' +
         ' aria-label="' + this.escapeHtml(copy.viewBadge + ': ' + copy.titles[record.id] + ' · ' + spokenStamp) + '">' +
-        renderAchievementWebviewIcon(record.id, iconSrc) + '<span class="achievement-record-name">' +
+        renderAchievementWebviewIcon(record.id, iconSrc, 'earned', undefined, 'record') + '<span class="achievement-record-name">' +
         this.escapeHtml(copy.titles[record.id]) + '</span><small>' + stamp + '</small></button>';
     };
     const recentSection = records.recent.length ? '<section class="achievement-overview" data-achievement-overview="recent"><h3>' +
@@ -6159,10 +6152,9 @@ export class UsageWebviewProvider {
         management.recalibrating:this.achievementCalibrationFailed?management.recalibrationFailed:'')+'</p>'+
       '<p id="achievementPinStatus" class="table-hint" role="status"></p>' +
       '<p id="achievementUnreadStatus" class="table-hint" role="status"></p>' +
-      filterToolbar +
       showcaseEditor + '<div class="achievement-showcase">' + overviewSection('badges', copy.myBadges) +
       overviewSection('next', copy.nextGoals) + '</div>' + hiddenPinSection + legacySection + unreadSection + recentSection + historySection +
-      '<h3 class="achievement-gallery-heading">' + this.escapeHtml(copy.galleryTitle) + '</h3>' +
+      '<h3 class="achievement-gallery-heading">' + this.escapeHtml(copy.galleryTitle) + '</h3>' + filterToolbar +
       '<p id="achievementFilterEmpty" class="table-hint" hidden>' + this.escapeHtml(copy.filterEmpty) + '</p>' +
       visibleGroups
         .map((group) => '<section class="achievement-group achievement-group-' + group + '"><h3>' +
@@ -6249,7 +6241,7 @@ export class UsageWebviewProvider {
       return '<label class="sc-check achievement-share-option"><input type="checkbox" class="achievement-share-choice" value="' +
         result.id + '" aria-label="'+this.escapeHtml(copy.titles[result.id])+'"'+(chosen.includes(result.id) ? ' checked' : '') +
         ' onchange="previewAchievementShare(this)">' +
-        renderAchievementWebviewIcon(result.id, iconSrc(result.id), 'earned', 'achievement-share-choice-icon') +
+        renderAchievementWebviewIcon(result.id, iconSrc(result.id), 'earned', 'achievement-share-choice-icon', 'selection') +
         '<span class="achievement-share-option-text"><span class="achievement-share-option-name">'+
         this.escapeHtml(title)+'</span><small>'+this.escapeHtml(rank)+'</small>'+
         (this.retainedCalendarAchievement(result.id)?'<small data-award-rule-version="1">'+this.escapeHtml(achievementRollingCopyFor(I18n.getLocale()).legacyShort)+'</small>':'')+'</span></label>';
@@ -6258,13 +6250,15 @@ export class UsageWebviewProvider {
       (selected === 'achievements' ? '' : ' hidden') + ' aria-labelledby="achievementShareHeading">' +
       '<h3 id="achievementShareHeading" class="sharing-presentation-title">' + this.escapeHtml(copy.shareTitle) + '</h3>' +
       '<p class="sharing-presentation-description">' + this.escapeHtml(copy.shareIntro) + '</p>' +
+      '<div class="sharing-controls-panel"><fieldset class="sc-checks achievement-share-options"><legend>' + this.escapeHtml(copy.shareChoose) +
+      ' <span id="achievementShareCount" aria-live="polite">' + chosen.length + '/9</span></legend>' + choices +
+      '</fieldset><p id="achievementShareLimit" class="table-hint" role="status"></p>' +
+      '</div>' +
       '<div class="combined-preview-toolbar"><strong>' + this.escapeHtml(workspaceCopy.previewLabel) + '</strong></div>' +
       '<div id="achievementSharePreview" class="sharing-artifact-preview achievement-share-preview" role="region" tabindex="0" aria-label="' +
       this.escapeHtml(copy.shareTitle) + '" data-preview-id="' + this.escapeHtml(accepted?.previewId ?? '') + '">' +
       (preview || '<p class="table-hint">' + this.escapeHtml(results.length ? copy.shareSelect : copy.shareEmpty) + '</p>') + '</div>' +
-      '<div class="sharing-controls-panel"><fieldset class="sc-checks achievement-share-options"><legend>' + this.escapeHtml(copy.shareChoose) +
-      ' <span id="achievementShareCount" aria-live="polite">' + chosen.length + '/9</span></legend>' + choices +
-      '</fieldset><p id="achievementShareLimit" class="table-hint" role="status"></p>' +
+      '<div class="sharing-controls-panel">' +
       '<p id="achievementShareStatus" class="table-hint" role="status"></p><div class="share-actions">' +
       '<button class="btn-primary btn-small" onclick="previewAchievementShare()"' + (results.length ? '' : ' disabled') + '>' +
       this.escapeHtml(workspaceCopy.updatePreview) + '</button>' +
@@ -14165,15 +14159,15 @@ export class UsageWebviewProvider {
           grid-template-columns: minmax(0, 1fr);
         }
       }
-      .achievement-collection { --achievement-emblem-size: 80px; --achievement-card-width: 168px;
+      .achievement-collection { --achievement-emblem-size: 80px; --achievement-card-width: 180px;
         --achievement-showcase-size: 72px; --achievement-overview-width: 320px; --achievement-card-height: 180px; display: grid; gap: 12px; }
       .achievement-collection[data-achievement-size="small"] { --achievement-emblem-size: 56px;
-        --achievement-card-width: 136px; --achievement-showcase-size: 56px; --achievement-overview-width: 280px; --achievement-card-height: 156px; }
+        --achievement-card-width: 152px; --achievement-showcase-size: 56px; --achievement-overview-width: 280px; --achievement-card-height: 156px; }
       .achievement-collection[data-achievement-size="large"] { --achievement-emblem-size: 112px;
-        --achievement-card-width: 208px; --achievement-showcase-size: 96px; --achievement-overview-width: 360px; --achievement-card-height: 212px; }
+        --achievement-card-width: 216px; --achievement-showcase-size: 96px; --achievement-overview-width: 360px; --achievement-card-height: 212px; }
       .achievement-ui-icon { width: 17px; height: 17px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.7;
         stroke-linecap: round; stroke-linejoin: round; vertical-align: middle; }
-      .achievement-showcase { display: grid; grid-template-columns: fit-content(calc(2 * var(--achievement-overview-width) + 8px)) minmax(0,1fr);
+      .achievement-showcase { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,320px),1fr));
         gap: 16px; align-items: start; }
       .achievement-showcase:empty { display: none; }
       .achievement-showcase > :only-child { grid-column: 1 / -1; }
@@ -14184,14 +14178,14 @@ export class UsageWebviewProvider {
       .achievement-gallery-heading { margin-bottom: 0; }
       .achievement-overview-grid { display: flex; flex-wrap: wrap; gap: 8px; }
       .achievement-overview-item { position: relative; min-width: 0; width: var(--achievement-overview-width); max-width: 100%;
-        border: 1px solid var(--vscode-panel-border); border-radius: 8px; box-sizing: border-box; }
+        border: 0; border-radius: 6px; box-sizing: border-box; }
       .achievement-overview-badge { background: transparent; color: var(--vscode-foreground); border: 0;
-        display: grid; grid-template-columns: var(--achievement-showcase-size) minmax(0, 1fr);
+        display: grid; grid-template-columns: calc(var(--achievement-showcase-size) + var(--achievement-overview-edge, 8px) * 2) minmax(0, 1fr);
         align-content: center; align-items: center; column-gap: 12px; row-gap: 4px;
         text-align: left; padding: 10px; min-width: 0; width: 100%; box-sizing: border-box; border-radius: 8px; }
       [data-achievement-overview="badges"] .achievement-overview-badge { padding-right: 48px; }
       .achievement-overview-badge:hover { background: var(--vscode-list-hoverBackground); }
-      .achievement-overview-badge > .achievement-framed-icon { width: var(--achievement-showcase-size); max-width: 100%; height: auto; aspect-ratio: 1;
+      .achievement-overview-badge > .achievement-framed-icon { --achievement-art-size: var(--achievement-showcase-size); --achievement-edge: var(--achievement-overview-edge, 8px);
         grid-column: 1; grid-row: 1 / span 4; }
       .achievement-overview-name, .achievement-overview-rank, .achievement-overview-progress, .achievement-overview-track { grid-column: 2; min-width: 0; }
       .achievement-overview-name { font-weight: 650; text-wrap: balance; overflow-wrap: anywhere; }
@@ -14310,7 +14304,7 @@ export class UsageWebviewProvider {
       #achievementShownCount { margin-inline-start: auto; font-size: .85rem; }
       #achievementShowcaseEditor { border-block-end: 1px solid var(--vscode-panel-border); padding-bottom: 8px; }
       #achievementShowcaseEditorSummary { width: fit-content; font-size: .9rem; color: var(--vscode-foreground); }
-      @media (max-width: 960px) { .achievement-showcase { grid-template-columns: minmax(0,1fr); gap: 12px; } }
+      @media (max-width: 600px) { .achievement-showcase { grid-template-columns: minmax(0,1fr); gap: 12px; } }
       @media (max-width: 480px) { .achievement-filter-control { width: 100%; box-sizing: border-box; }
         .achievement-filter-control select { margin-inline-start: auto; min-width: 0; } }
       .achievement-filter-toolbar select { max-width: 100%; background: var(--vscode-dropdown-background); color: var(--vscode-dropdown-foreground); border: 1px solid var(--vscode-dropdown-border); border-radius: 4px; padding: 5px 7px; }
@@ -14339,23 +14333,37 @@ export class UsageWebviewProvider {
       .achievement-effort-metric strong { font-variant-numeric: tabular-nums; }
       .achievement-effort-metric progress { width: 100%; max-width: 100%; }
       .achievement-effort-rows p { margin: 7px 0 0; }
-      .achievement-card summary { display: grid; justify-items: center; align-content: start; gap: 4px; min-height: var(--achievement-card-height); padding: 38px 10px 12px; cursor: pointer; list-style: none; text-align: center; }
+      .achievement-card summary { display: grid; justify-items: center; align-content: start; gap: 8px; min-height: var(--achievement-card-height); padding: 38px 12px 12px; cursor: pointer; list-style: none; text-align: center; }
       .achievement-card summary::-webkit-details-marker { display: none; }
       .achievement-card summary:hover { background: var(--vscode-list-hoverBackground); }
       .achievement-card summary > * { min-width: 0; max-width: 100%; }
       .achievement-card summary::after { content: '⌄'; color: var(--vscode-descriptionForeground); line-height: 1; }
       .achievement-card details[open] summary::after { content: '⌃'; }
       .achievement-card summary:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: -3px; border-radius: 10px; }
-      .achievement-emblem { display: grid; place-items: center; width: var(--achievement-emblem-size); height: var(--achievement-emblem-size); }
+      .achievement-emblem { display: grid; place-items: center; width: calc(var(--achievement-emblem-size) + var(--achievement-gallery-edge, 8px) * 2); height: calc(var(--achievement-emblem-size) + var(--achievement-gallery-edge, 8px) * 2); }
       .achievement-card summary .achievement-emblem { margin-bottom: 4px; }
-      .achievement-emblem > .achievement-framed-icon { width: 100%; height: 100%; }
-      .achievement-framed-icon { position: relative; display: inline-block; flex: none; vertical-align: middle; color: var(--vscode-foreground); }
-      .achievement-framed-icon > img { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+      .achievement-emblem > .achievement-framed-icon { --achievement-art-size: var(--achievement-emblem-size); --achievement-edge: var(--achievement-gallery-edge, 8px); }
+      .achievement-framed-icon { --achievement-art-size: 80px; --achievement-edge: 8px; position: relative; display: inline-block; flex: none; vertical-align: middle; width: calc(var(--achievement-art-size) + var(--achievement-edge) * 2); height: calc(var(--achievement-art-size) + var(--achievement-edge) * 2); color: var(--vscode-foreground); }
+      .achievement-framed-icon > img { position: absolute; top: var(--achievement-edge); left: var(--achievement-edge); display: block; width: var(--achievement-art-size); height: var(--achievement-art-size); max-width: none; object-fit: contain; }
       .achievement-framed-icon > .achievement-adornment { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
-      /* Tiny thumbnails retain rank color/shape without a dense wreath over the artwork. */
-      :is(.achievement-record-badge, .achievement-records-list, .achievement-milestones, .achievement-share-option,
-        .achievement-collection[data-achievement-size="small"]) .achievement-adornment
-        :is([data-frame-part="laurel"], [data-frame-part="stem"], [data-frame-part="corners"], [data-frame-part="inner-square"]) { display: none; }
+      .achievement-adornment > [data-art-size] { display: none; }
+      [data-icon-context="gallery"] .achievement-adornment > [data-art-size="80"],
+      [data-icon-context="overview"] .achievement-adornment > [data-art-size="72"],
+      [data-icon-context="record"] .achievement-adornment > [data-art-size="56"],
+      [data-icon-context="detail"] .achievement-adornment > [data-art-size="40"],
+      [data-icon-context="selection"] .achievement-adornment > [data-art-size="48"] { display: inline; }
+      [data-icon-context="record"] { --achievement-art-size: 56px; --achievement-edge: 0px; }
+      [data-icon-context="detail"] { --achievement-art-size: 40px; --achievement-edge: 0px; }
+      [data-icon-context="selection"] { --achievement-art-size: 48px; --achievement-edge: 0px; }
+      .achievement-records-list [data-icon-context="record"] { --achievement-art-size: 40px; }
+      .achievement-records-list [data-icon-context="record"] .achievement-adornment > [data-art-size="56"] { display: none; }
+      .achievement-records-list [data-icon-context="record"] .achievement-adornment > [data-art-size="40"] { display: inline; }
+      .achievement-collection[data-achievement-size="small"] { --achievement-gallery-edge: 0px; --achievement-overview-edge: 0px; }
+      .achievement-collection[data-achievement-size="small"] :is([data-icon-context="gallery"],[data-icon-context="overview"]) .achievement-adornment > [data-art-size],
+      .achievement-collection[data-achievement-size="large"] :is([data-icon-context="gallery"],[data-icon-context="overview"]) .achievement-adornment > [data-art-size] { display: none; }
+      .achievement-collection[data-achievement-size="small"] :is([data-icon-context="gallery"],[data-icon-context="overview"]) .achievement-adornment > [data-art-size="56"],
+      .achievement-collection[data-achievement-size="large"] [data-icon-context="gallery"] .achievement-adornment > [data-art-size="112"],
+      .achievement-collection[data-achievement-size="large"] [data-icon-context="overview"] .achievement-adornment > [data-art-size="96"] { display: inline; }
       .achievement-framed-icon[data-achievement-frame="bronze"] { color: var(--vscode-charts-orange); color: color-mix(in srgb,var(--vscode-charts-red) 40%,var(--vscode-charts-yellow)); }
       .achievement-framed-icon[data-achievement-frame="silver"] { color: var(--vscode-editor-foreground); }
       .achievement-framed-icon[data-achievement-frame="gold"] { color: var(--vscode-charts-yellow); }
@@ -14365,13 +14373,14 @@ export class UsageWebviewProvider {
       .achievement-framed-icon[data-emblem-state="locked"] > img { filter: grayscale(.45); opacity: .75; }
       .vscode-high-contrast .achievement-framed-icon, .vscode-high-contrast-light .achievement-framed-icon { color: var(--vscode-foreground); }
       .achievement-card.locked .achievement-emblem img { filter: grayscale(.45); opacity: .75; }
-      .achievement-card h4 { margin: 0; font-size: .9rem; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+      .achievement-card h4 { margin: 0; min-height: 2.8em; display: flex; align-items: center; justify-content: center; font-size: .95rem; font-weight: 600; line-height: 1.4; overflow-wrap: anywhere; }
       .achievement-card[data-achievement-series].earned h4 { color: var(--achievement-tier-label-color); }
-      .achievement-rank { display: inline-block; max-width: 100%; padding: 2px 7px; border: 1px solid var(--vscode-panel-border); border-radius: 999px; color: var(--vscode-descriptionForeground); font-size: .72rem; line-height: 1.25; overflow-wrap: anywhere; }
-      .achievement-next-target { color: var(--vscode-descriptionForeground); font-size: .72rem; line-height: 1.4; overflow-wrap: anywhere; }
-      .achievement-current-progress, .achievement-stage-target, .achievement-window { display: block; }
-      .achievement-current-progress { color: var(--vscode-foreground); font-variant-numeric: tabular-nums; }
-      .achievement-progress-track { display: block; width: 100%; max-width: 108px; height: 3px; background: var(--vscode-panel-border); overflow: hidden; }
+      .achievement-rank { display: inline-block; max-width: 100%; padding: 0; border: 0; color: var(--achievement-tier-color, var(--vscode-foreground)); font-size: .85rem; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+      .achievement-next-target { color: var(--vscode-descriptionForeground); font-size: .85rem; line-height: 1.5; overflow-wrap: anywhere; }
+      .achievement-current-progress, .achievement-stage-target { display: inline; }
+      .achievement-window { display: block; }
+      .achievement-current-progress { color: var(--vscode-foreground); font-weight: 650; font-variant-numeric: tabular-nums; }
+      .achievement-progress-track { display: block; width: 100%; max-width: none; height: 4px; background: var(--vscode-panel-border); overflow: hidden; }
       .achievement-progress-track > span { display: block; height: 100%; background: var(--vscode-progressBar-background); }
       .achievement-card-detail h5 { margin: 12px 0 6px; font-size: .8rem; }
       .achievement-level-rules { min-width: 0; list-style: none; padding: 0; margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
@@ -14435,11 +14444,20 @@ export class UsageWebviewProvider {
       .achievement-unlock-notice button:focus-visible { outline: 2px solid var(--vscode-focusBorder); outline-offset: 2px; }
       .achievement-intro .btn-secondary { margin-top: 0; }
       .achievement-share-preview { overflow-x: auto; border: 1px solid var(--vscode-panel-border); border-radius: 10px; background: var(--vscode-editor-background); }
-      .achievement-share-preview svg { display: block; width: 100%; min-width: 320px; height: auto; }
-      @media (max-width: 480px) {
-        .achievement-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
-        .achievement-card summary { min-height: 160px; padding: 11px 6px 10px; }
-        .achievement-card h4 { font-size: .82rem; }
+      .achievement-share-preview svg { display: block; width: 100%; min-width: 720px; height: auto; }
+      @media (max-width: 600px) {
+        .achievement-showcase { grid-template-columns: minmax(0,1fr); }
+        .achievement-overview-item { width: 100%; }
+        .achievement-grid { grid-template-columns: minmax(0,1fr); gap: 10px; }
+        .achievement-card summary { grid-template-columns: calc(var(--achievement-emblem-size) + var(--achievement-gallery-edge,8px) * 2) minmax(0,1fr); column-gap: 12px;
+          justify-items: start; text-align: left; min-height: 0; padding: 16px 10px 12px; }
+        .achievement-card summary > .achievement-emblem { grid-column: 1; grid-row: 1 / span 5; margin: 0; }
+        .achievement-card summary > :not(.achievement-emblem) { grid-column: 2; }
+        .achievement-card h4 { min-height: 0; justify-content: flex-start; padding-inline-end: 28px; }
+        .achievement-card .achievement-next-target { width: 100%; }
+        .achievement-card summary::after { grid-column: 1 / -1; justify-self: start; margin-top: 4px; }
+        .achievement-card summary > .achievement-progress-track { align-self: end; }
+        .achievement-card-pins { top: 4px; right: 4px; }
       }
       @media (prefers-reduced-motion: reduce) {
         .achievement-unlock-notice img { animation: none !important; }

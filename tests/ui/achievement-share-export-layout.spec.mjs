@@ -5,7 +5,7 @@ const {renderAchievementShareSvg}=require('../../out/achievementShare.js');
 const {achievementCopyFor}=require('../../out/i18n.js');
 const ids=['claude-api-week-legendary','codex-api-week-legendary','claude-api-total-platinum',
  'codex-api-total-platinum','claude-api-session-gold','codex-api-task-gold','sonnet-main','model-rainbow','root-portfolio-gold'];
-for(const locale of ['en','de-DE','zh-TW','zh-CN','ja','ko','pt-BR','id'])for(const count of [1,3,9]){
+for(const locale of ['en','de-DE','zh-TW','zh-CN','ja','ko','pt-BR','id'])for(const count of [0,1,2,3,4,5,6,7,8,9]){
  test(`${locale} exported ${count}-badge SVG keeps labels and repository link inside the artifact`,async({page},info)=>{
   const copy=achievementCopyFor(locale);
   const svg=renderAchievementShareSvg({selected:ids.slice(0,count),titles:copy.titles,heading:copy.shareTitle,
@@ -13,6 +13,23 @@ for(const locale of ['en','de-DE','zh-TW','zh-CN','ja','ko','pt-BR','id'])for(co
   await page.setViewportSize({width:1040,height:1000});
   await page.setContent('<style>body{margin:20px}body>svg{display:block;width:1000px;height:auto}</style>'+svg);
   await expect(page.locator('[data-achievement-share-badge]')).toHaveCount(count);
+  const expectedArt=count===1?112:count<=3?96:80;
+  for(const badge of await page.locator('[data-achievement-share-badge]').all()){
+    const geometry=await badge.evaluate(node=>{
+      const card=node.querySelector('[data-share-card-frame]').getBBox(),icon=node.querySelector('svg'),art=icon.querySelector('image').getBoundingClientRect();
+      const box=icon.getBoundingClientRect(),name=node.querySelector('[data-share-field="name"]').getBoundingClientRect();
+      return {artWidth:art.width,artHeight:art.height,clear:name.top>=box.bottom+5,centered:Math.abs(Number(icon.getAttribute('x'))+Number(icon.getAttribute('width'))/2-(card.x+card.width/2))<.5};
+    });
+    expect(geometry).toEqual({artWidth:expectedArt,artHeight:expectedArt,clear:true,centered:true});
+  }
+  const centeredRows=await page.locator('body>svg').evaluate(svg=>{
+    const rows=new Map();
+    for(const node of svg.querySelectorAll('[data-share-card-frame]')){
+      const box=node.getBBox(),key=box.y;rows.set(key,[...(rows.get(key)||[]),box]);
+    }
+    return [...rows.values()].every(row=>Math.abs((Math.min(...row.map(b=>b.x))+Math.max(...row.map(b=>b.x+b.width)))/2-500)<.5);
+  });
+  expect(centeredRows).toBe(true);
   const link=page.locator('svg > a');
   await expect(link).toHaveAttribute('href','https://github.com/ClaudeCodeUsage/ClaudeCodeUsage');
   await expect(link).toContainText('https://github.com/ClaudeCodeUsage/ClaudeCodeUsage');
@@ -30,6 +47,6 @@ for(const locale of ['en','de-DE','zh-TW','zh-CN','ja','ko','pt-BR','id'])for(co
    }return failures;
   });
   expect(failures).toEqual([]);
-  if(locale==='zh-CN'&&count===9)await page.locator('body>svg').screenshot({path:info.outputPath('share-export-zh-CN-9.png')});
+  if(locale==='zh-CN'&&[1,3,9].includes(count))await page.locator('body>svg').screenshot({path:info.outputPath(`share-export-zh-CN-${count}.png`)});
  });
 }

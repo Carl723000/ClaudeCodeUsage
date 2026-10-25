@@ -8,7 +8,7 @@ dos seus dados. **Não é uma ferramenta de cobrança.**
 
 ## Visualizações ainda não lançadas
 
-- Galeria, vitrine, próximos objetivos, miniaturas de seleção e SVGs compartilham molduras quadradas e adornos de nível. Ilustrações e critérios de conquista permanecem iguais. As ilustrações mantêm o tamanho original de exibição, com adornos simplificados nos ícones pequenos.
+- As páginas de conquistas Claude e Codex compartilham um layout mais claro. As ilustrações mantêm o tamanho integral com adornos de nível nas bordas; os cartões de compartilhamento destacam as imagens em fileiras de emblemas centralizadas, preservando os critérios de conquista.
 - Os gráficos de Tokens de 30/90 dias ganham escalas diária, semanal e mensal e seleção de projetos. Valores desconhecidos, zeros verificados e subtotais parciais ficam distintos; semanas e meses incompletos nas extremidades são indicados. A visão geral de áreas ajusta todo o período selecionado à tela, inclui um eixo numérico de Tokens e preserva as lacunas de dados desconhecidos.
 - O compartilhamento de valores oferece layout compacto opcional; o padrão continua sendo o normal. Claude e Codex ficam separados. Alterações exigem uma nova prévia aceita; os bytes do SVG salvo são relidos e comparados com essa prévia.
 - Conquistas de volume e valores por provedor em sete dias usam janelas móveis encerradas de sete dias civis. Prêmios existentes preservam os registros e são identificados como regras anteriores; evidência ausente não gera datas. Os ciclos reais de redefinição de cota não mudam.

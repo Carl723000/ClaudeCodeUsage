@@ -13,9 +13,9 @@ import { achievementTitleWithoutRank } from '../achievementTitles';
 function shareBadge(svg: string, id: string): { title: string; name: string; rank: string } {
   const cell = svg.split(`<g data-achievement-share-badge="${id}">`)[1]?.split('</g>')[0];
   assert.ok(cell, id);
-  const text = [...cell.matchAll(/<text\b[^>]*>([\s\S]*?)<\/text>/g)].map(match => match[1]);
+  const text = new Map([...cell.matchAll(/<text\b[^>]*data-share-field="([^"]+)"[^>]*>([\s\S]*?)<\/text>/g)].map(match => [match[1],match[2]]));
   return { title: /<title>([\s\S]*?)<\/title>/.exec(cell)![1],
-    name: text[0].replace(/<[^>]+>/g, ''), rank: text[2].replace(/<\/tspan><tspan[^>]*>/g, ' ').replace(/<[^>]+>/g, '') };
+    name: text.get('name')!.replace(/<[^>]+>/g, ''), rank: text.get('rank')!.replace(/<\/tspan><tspan[^>]*>/g, ' ').replace(/<[^>]+>/g, '') };
 }
 
 const repositoryUrl = 'https://github.com/ClaudeCodeUsage/ClaudeCodeUsage';
@@ -68,12 +68,12 @@ for (const [locale, copy] of Object.entries(ACHIEVEMENT_COPY)) {
         const rect = /<rect x="(\d+)" y="(\d+)" width="(\d+)" height="(\d+)"/.exec(cell)!;
         const [, x, y, width, height] = rect.map(Number);
         assert.ok(subtitle.bottom + 12 < y, 'subtitle/cards gap');
-        const [title, group, rank] = textBlocks(cell);
-        assert.ok(title.bottom + 4 < group.y - group.size, 'title/group gap');
-        assert.ok(group.bottom + 4 < rank.y - rank.size, 'group/rank gap');
-        assert.ok(rank.bottom + 8 < y + height, 'rank stays in card');
+        const [title, rank, group] = textBlocks(cell);
+        assert.ok(title.bottom + 4 < rank.y - rank.size, 'title/rank gap');
+        assert.ok(rank.bottom + 4 < group.y - group.size, 'rank/group gap');
+        assert.ok(group.bottom + 8 < y + height, 'group stays in card');
         for (const block of [title, group, rank]) {
-          assert.ok(block.x >= x + 80 && block.x < x + width, `${id}: labels clear the icon column`);
+          assert.equal(block.x, x + width / 2, `${id}: labels center below the artwork`);
         }
         const entry = API_ACHIEVEMENT_DEFINITIONS.find(entry => entry.id === id)!;
         const threshold = `≥$${new Intl.NumberFormat(locale).format(entry.target / 1_000_000)} USD`;

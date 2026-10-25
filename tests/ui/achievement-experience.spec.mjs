@@ -376,17 +376,18 @@ for (const locale of ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'
       // Close the previous case's restored disclosure before testing its face.
       if (await card.locator('details').evaluate(details => details.open)) await card.locator('summary').click();
       await expect(card.locator('details')).not.toHaveAttribute('open');
-      await expect(card.locator('.achievement-current-progress')).toHaveText('295M / 1B');
-      await expect(card.locator('.achievement-stage-target')).toContainText('500M');
+      await expect(card.locator('.achievement-current-progress')).toHaveText('295M');
+      await expect(card.locator('.achievement-stage-target')).toContainText('1B');
       const fit = await card.locator('summary').evaluate(element => element.scrollWidth <= element.clientWidth + 1);
       expect(fit).toBe(true);
       await card.locator('summary').focus();
       await card.locator('summary').press('Enter');
       await expect(card.locator('[data-achievement-level]')).toHaveCount(5);
       await expect(card.locator('.achievement-level-rules')).not.toContainText('500M');
+      await expect(card.locator('.achievement-intermediate-stage')).toContainText('500,000,000');
       await page.reload();
       await expect(card.locator('details')).toHaveAttribute('open');
-      await expect(card.locator('.achievement-stage-target')).toContainText('500M');
+      await expect(card.locator('.achievement-stage-target')).toContainText('1B');
       expect((await page.evaluate(() => window.__ccuPostedMessages)).some(message =>
         ['refresh', 'updateSetting', 'previewAchievementShare'].includes(message.command))).toBe(false);
       if (locale === 'zh-CN') await card.screenshot({ path: testInfo.outputPath(`stage-${width}-${theme}.png`) });
