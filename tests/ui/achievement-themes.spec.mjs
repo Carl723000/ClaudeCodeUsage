@@ -114,3 +114,21 @@ test('merged display themes do not merge the exact legacy share choices or opt i
   for (const command of ['refresh', 'achievementNoticeAck', 'exportAchievementShare', 'updateSetting'])
     expect(commands).not.toContain(command);
 });
+
+test.describe('multiple retained pins remain clear of narrow artwork and titles',()=>{
+ test.use({hasTouch:true});
+ for(const locale of ['zh-CN','de-DE'])test(`${locale}: two retained theme pins do not cover a large card`,async({page})=>{
+  await openCodex(page,{fixture:'achievement-theme-pins',locale,width:320,theme:'dark'});await page.locator('#tab-achievements').click();
+  await page.locator('#achievementSize').selectOption('large');
+  const card=page.locator('[data-achievement-key="active-day-streak"]');await card.scrollIntoViewIfNeeded();
+  await expect(card.locator(':scope > .achievement-card-pins button')).toHaveCount(2);
+  const collisions=await card.evaluate(el=>{
+   const title=el.querySelector('h4'),range=document.createRange();range.selectNodeContents(title);
+   const areas=[...range.getClientRects(),el.querySelector('summary img').getBoundingClientRect()];
+   return [...el.querySelectorAll(':scope > .achievement-card-pins button')].some(pin=>{
+    const box=pin.getBoundingClientRect();return areas.some(area=>area.right>box.left+1&&area.left<box.right&&area.bottom>box.top&&area.top<box.bottom);
+   });
+  });
+  expect(collisions).toBe(false);
+ });
+});

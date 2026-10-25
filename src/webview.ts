@@ -5677,7 +5677,7 @@ export class UsageWebviewProvider {
       const positive=rule && this.achievementMoneyFacts[rule.group]?.coverage[rule.scope].amountPositive;
       return value<1_000_000 && (value>0 || value===0 && positive===true) ? '<$1' : '$'+integer(Math.floor(value/1_000_000));
     };
-    const compactValue = (id:AchievementId,value:number):string => isAchievementMoneyId(id) ? moneyValue(id,value) : compact(value);
+    const compactValue = (id:AchievementId,value:number):string => isAchievementMoneyId(id) ? moneyValue(id,value) : tokenDisplayUnits.has(unitFor(id)) ? compact(value) : integer(value);
     const integerValue = (id:AchievementId,value:number):string => isAchievementMoneyId(id) ? moneyValue(id,value) : integer(value);
     const results = this.achievementResults(),management=I18n.achievementManagement;
     const recordState = !this.setting<boolean>('enableAchievements',true) ? 'disabled' :
@@ -5734,6 +5734,7 @@ export class UsageWebviewProvider {
       id === 'fable-relay' ? copy.units.relay :
       id.startsWith('model-rainbow') ? copy.units.families :
       id === 'multi-core-human' || id.startsWith('same-root-models-') ? copy.units.models : copy.units.tokens;
+    const tokenDisplayUnits = new Set([copy.units.tokens,copy.units.outputTokens,copy.units.codexCachedTokens,copy.units.cacheReadTokens,copy.units.cacheCreationTokens,copy.units.weeklyAverage]);
     const byId = new Map(results.map((result) => [result.id, result]));
     const tierOrder = ['bronze', 'silver', 'gold', 'platinum', 'legendary'];
     const isEarned = (result: AchievementResult): boolean => result.unlocked || this.achievementGrants.has(result.id);
@@ -5920,7 +5921,7 @@ export class UsageWebviewProvider {
         '" data-statistics-section="' + statistics + '" onclick="openAchievementStatistics(this)">' +
         this.escapeHtml(statistics === 'models' ? copy.viewCurrentModels : copy.viewCurrentTokens) + '</button>' : '';
       return '<article class="achievement-card ' + (earned ? 'earned' : 'locked') +
-        '"' + seriesAttrs + ' data-achievement-key="' + key + '" data-achievement-earned="' + earned +
+        '"' + (savedPins.length > 1 ? ' data-achievement-multiple-pins="true"' : '') + seriesAttrs + ' data-achievement-group="' + result.group + '" data-achievement-key="' + key + '" data-achievement-earned="' + earned +
         '" data-achievement-next="' + (next && proofReady) + '" data-achievement-proof="' + evidenceState +
         '" data-achievement-id="' + result.id + '">' +
         (pinButtons ? '<div class="achievement-card-pins">' + pinButtons + '</div>' : '') +
@@ -5933,10 +5934,11 @@ export class UsageWebviewProvider {
         renderAchievementWebviewIcon(result.id, iconSrc, earned ? 'earned' : 'locked', undefined, 'gallery') + '</span>' +
         '<h4>' + this.escapeHtml(baseName) + '</h4>' +
         (earned ? '<span class="achievement-rank">' + this.escapeHtml(levelName) + '</span>' : '') +
+        (this.retainedCalendarAchievement(result.id) ? '<span class="achievement-legacy-rule">' + this.escapeHtml(rollingCopy.legacyShort) + '</span>' : '') +
         '<span class="achievement-next-target">' + faceProgress + peakWindowLabel + '</span>' +
         (proofReady && next ? '<span class="achievement-progress-track" aria-hidden="true"><span style="width:' +
           Math.min(100, Math.max(0, progress / nextResult.target * 100)) + '%"></span></span>' : '') + '</summary>' +
-        '<div class="achievement-card-detail">' + tierMarkers +
+        '<div class="achievement-card-detail">' + tierMarkers + '<p class="table-hint">' + this.escapeHtml(copy.groups[result.group]) + '</p>' +
         (stage === undefined ? '' : '<p class="table-hint achievement-intermediate-stage" title="' + this.escapeHtml(copy.nextStage + ': ' + integerValue(nextResult.id,stage) + ' ' + unitFor(result.id)) + '">' + this.escapeHtml(copy.nextStage + ': ' + integerValue(nextResult.id,stage) + ' ' + unitFor(result.id)) + '</p>') +
         (proofReady ?
         '<label class="achievement-progress-label" for="achievement-progress-' + result.id +
@@ -6030,6 +6032,7 @@ export class UsageWebviewProvider {
                 state.proof === 'ready' ? '' : ' · ' + proofLabel)) + '">' +
             renderAchievementWebviewIcon(displayId, iconSrc, kind === 'next' ? 'target' : 'earned', undefined, 'overview') + '<span class="achievement-overview-name">' +
             this.escapeHtml(name) + '</span><span class="achievement-overview-rank">' + this.escapeHtml(rank) + '</span>' +
+            (kind === 'badges' && this.retainedCalendarAchievement(displayId) ? '<span class="achievement-legacy-rule">' + this.escapeHtml(rollingCopy.legacyShort) + '</span>' : '') +
             (kind === 'next' ? '<span class="achievement-overview-progress">' + this.escapeHtml(progress) + '</span>' :
               state.proof === 'ready' ? '' : '<span class="achievement-overview-progress">' + this.escapeHtml(proofLabel) + '</span>') +
             (kind === 'next' && state.proof === 'ready' ? '<span class="achievement-overview-track" aria-hidden="true"><span style="width:' +
@@ -6054,7 +6057,8 @@ export class UsageWebviewProvider {
         '" data-achievement-open="' + key + '" onclick="openAchievementDetail(this.dataset.achievementOpen)"' +
         ' aria-label="' + this.escapeHtml(copy.viewBadge + ': ' + copy.titles[record.id] + ' · ' + spokenStamp) + '">' +
         renderAchievementWebviewIcon(record.id, iconSrc, 'earned', undefined, 'record') + '<span class="achievement-record-name">' +
-        this.escapeHtml(copy.titles[record.id]) + '</span><small>' + stamp + '</small></button>';
+        this.escapeHtml(copy.titles[record.id]) + '</span><small>' + stamp + '</small>' +
+        (this.retainedCalendarAchievement(record.id) ? '<span class="achievement-legacy-rule">' + this.escapeHtml(rollingCopy.legacyShort) + '</span>' : '') + '</button>';
     };
     const recentSection = records.recent.length ? '<section class="achievement-overview" data-achievement-overview="recent"><h3>' +
       this.escapeHtml(copy.recentAwards) + '</h3><div class="achievement-recent-grid">' +
@@ -6154,14 +6158,10 @@ export class UsageWebviewProvider {
       '<p id="achievementUnreadStatus" class="table-hint" role="status"></p>' +
       showcaseEditor + '<div class="achievement-showcase">' + overviewSection('badges', copy.myBadges) +
       overviewSection('next', copy.nextGoals) + '</div>' + hiddenPinSection + legacySection + unreadSection + recentSection + historySection +
-      '<h3 class="achievement-gallery-heading">' + this.escapeHtml(copy.galleryTitle) + '</h3>' + filterToolbar +
+      '<h3 id="achievementGalleryHeading" class="achievement-gallery-heading">' + this.escapeHtml(copy.galleryTitle) + '</h3>' + filterToolbar +
       '<p id="achievementFilterEmpty" class="table-hint" hidden>' + this.escapeHtml(copy.filterEmpty) + '</p>' +
-      visibleGroups
-        .map((group) => '<section class="achievement-group achievement-group-' + group + '"><h3>' +
-          this.escapeHtml(copy.groups[group]) + '</h3><div class="achievement-grid">' +
-          visibleCards.filter((entry) => entry.result.group === group)
-            .map(card).join('') +
-          '</div></section>').join('') + '</section>';
+      '<section class="achievement-group" aria-labelledby="achievementGalleryHeading"><div class="achievement-grid">' +
+      visibleCards.map(card).join('') + '</div></section>'  + '</section>';
   }
 
   /** One common disclosure; historical books keep their exact award association. */
@@ -14376,7 +14376,7 @@ export class UsageWebviewProvider {
       .achievement-group-codex { --achievement-accent: var(--vscode-charts-blue); }
       .achievement-group h3 { margin: 0 0 12px; font-size: 1.05rem; font-weight: 650; }
       .achievement-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--achievement-card-width)), 1fr)); gap: 10px; align-items: start; }
-      .achievement-card { --achievement-tier-color: var(--achievement-accent); position: relative; min-width: 0; border: 1px solid var(--vscode-panel-border); border-radius: 11px; background: var(--vscode-editor-background); overflow: hidden; }
+      .achievement-card { --achievement-tier-color: var(--vscode-foreground); position: relative; min-width: 0; border: 1px solid var(--vscode-panel-border); border-radius: 11px; background: var(--vscode-editor-background); overflow: hidden; }
       .achievement-card.earned { border-color: var(--vscode-panel-border); }
       .achievement-card[data-achievement-tier="bronze"] { --achievement-tier-color: var(--vscode-charts-orange); }
       .achievement-card[data-achievement-tier="silver"] { --achievement-tier-color: var(--vscode-editor-foreground); }
@@ -14396,6 +14396,10 @@ export class UsageWebviewProvider {
       .achievement-effort-metric progress { width: 100%; max-width: 100%; }
       .achievement-effort-rows p { margin: 7px 0 0; }
       .achievement-card summary { display: grid; justify-items: center; align-content: start; gap: 8px; min-height: var(--achievement-card-height); padding: 38px 12px 12px; cursor: pointer; list-style: none; text-align: center; }
+      .achievement-card[data-achievement-multiple-pins] summary { padding-top: 56px; }
+      .achievement-card[data-achievement-multiple-pins] h4 { padding-inline-end: 0; }
+      .achievement-legacy-rule { display: block; font-size: 12px; line-height: 1.5; color: var(--vscode-foreground); border-inline-start: 2px solid var(--vscode-charts-yellow); padding-inline-start: 6px; overflow-wrap: anywhere; }
+      .achievement-overview-badge > .achievement-legacy-rule, .achievement-record-badge > .achievement-legacy-rule { grid-column: 2; }
       .achievement-card summary::-webkit-details-marker { display: none; }
       .achievement-card summary:hover { background: var(--vscode-list-hoverBackground); }
       .achievement-card summary > * { min-width: 0; max-width: 100%; }

@@ -823,6 +823,49 @@ exports.renderHarness = async function renderHarness({
       // patch can preserve a deliberate choice independently of showcase pins.
       provider.sharingTemplate = 'achievements';
     }
+    if (fixture === 'visual-correction-approved') {
+      // Display-only comparison facts matching the approved design's states.
+      // This fixture exercises the real renderer/catalog/record validator, not
+      // eligibility qualification, date proof, source ingestion or persistence.
+      const {ACHIEVEMENT_DEFINITIONS,ACHIEVEMENT_SERIES}=require('../../../out/achievements.js');
+      const {parseAchievementRecordStore}=require('../../../out/achievementRecordStore.js');
+      const {achievementRuleVersion}=require('../../../out/achievementRuleVersions.js');
+      const {getAchievementMoneyPricebook}=require('../../../out/achievementMoney.js');
+      const {ACHIEVEMENT_EVIDENCE_DOMAINS}=require('../../../out/achievementEvidence.js');
+      const progress={ 'cumulative-volume':15_000_000_000,'codex-api-total':120_000_000_000,
+        'codex-api-week':30_000_000_000,'claude-api-total':20_000_000_000,'claude-api-session':200_000_000,
+        'codex-api-task':1_200_000_000,'active-days':800,'settings-explorer':5,'output-hours':3 };
+      const values=new Map();
+      for(const [series,value]of Object.entries(progress))for(const id of ACHIEVEMENT_SERIES[series])values.set(id,value);
+      values.set('local-share-export',1);
+      provider.providerAvailability={claude:true,codex:true,codexData:true};
+      provider.codexAchievementVolume=()=>({processed:15_000_000_000,lowerBound:false});
+      provider.achievementCalendarLowerBounds=new Set();provider.achievementCalendarCache=undefined;
+      provider.achievementEvidenceStates=Object.fromEntries(ACHIEVEMENT_EVIDENCE_DOMAINS.map(domain=>[domain,'ready']));
+      provider.achievementResults=()=>ACHIEVEMENT_DEFINITIONS.map(row=>({...row,progress:values.get(row.id)??0,
+        unlocked:values.has(row.id)&&values.get(row.id)>=row.target}));
+      const scopes=(providerName,total,week,session)=>{
+        const backend=providerName==='claude'?'anthropic':'openai',pricebookVersion=getAchievementMoneyPricebook(backend).version;
+        const complete={status:'complete',pricingCoverage:1,totalTokens:1,pricedTokens:1,unpricedTokens:0,amountPositive:true};
+        return {provider:providerName,backend,pricebookVersion,
+          cumulative:{provider:providerName,backend,pricebookVersion,microUsd:total,exactMicroUsdUnits:String(total),
+            totalTokens:1,pricedTokens:1,unpricedTokens:0,pricingCoverage:1,status:'complete'},
+          completedRollingSevenDayPeak:week,maxSessionTask:session,
+          coverage:{cumulative:complete,completedRollingSevenDayPeak:week===undefined?{status:'scopepending'}:complete,
+            maxSessionTask:complete,verifiedFiles:1,excludedFiles:0}};
+      };
+      provider.achievementMoneyFacts={claude:scopes('claude',20_000_000_000,undefined,200_000_000),
+        codex:scopes('codex',120_000_000_000,30_000_000_000,1_200_000_000)};
+      const ids=['ten-billion-token-club','codex-api-total-platinum','codex-api-week-legendary','claude-api-total-gold',
+        'claude-api-session-silver','codex-api-task-gold','active-days-platinum','settings-explorer-bronze','local-share-export'];
+      provider.achievementRecordState=parseAchievementRecordStore({schemaVersion:2,catalogVersion:3,generation:1,
+        sequence:ids.length,lastNoticeAt:0,pinRevision:0,showcaseMode:'manual',legacyBoundary:null,legacyRecords:[],
+        pins:['cumulative-volume','codex-api-week'],records:ids.map((id,index)=>({id,seq:index+1,
+          ruleVersion:id==='codex-api-week-legendary'?1:achievementRuleVersion(id),origin:'history',unread:false,
+          recordedDay:null,timeZone:null,...(id.includes('-api-')?{referencePricebook:getAchievementMoneyPricebook(id.startsWith('codex-')?'openai':'anthropic').version}:{})})),
+        auxiliary:{activity:{schemaVersion:2,settingKeys:[],features:[]},hours:{schemaVersion:3,maxStreak:0},calendarPeak:null}});
+      provider.achievementGrants=new Set(ids);
+    }
     if (fixture.startsWith('achievement-long-term-')) {
       const {ACHIEVEMENT_DEFINITIONS,ACHIEVEMENT_SERIES}=require('../../../out/achievements.js');
       const {parseAchievementRecordStore}=require('../../../out/achievementRecordStore.js');

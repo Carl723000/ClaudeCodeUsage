@@ -384,7 +384,7 @@ for (const locale of ['en', 'de-DE', 'zh-TW', 'zh-CN', 'ja', 'ko', 'pt-BR', 'id'
       await card.locator('summary').press('Enter');
       await expect(card.locator('[data-achievement-level]')).toHaveCount(5);
       await expect(card.locator('.achievement-level-rules')).not.toContainText('500M');
-      await expect(card.locator('.achievement-intermediate-stage')).toContainText('500,000,000');
+      await expect(card.locator('.achievement-intermediate-stage')).toContainText(new Intl.NumberFormat(locale).format(500_000_000));
       await page.reload();
       await expect(card.locator('details')).toHaveAttribute('open');
       await expect(card.locator('.achievement-stage-target')).toContainText('1B');

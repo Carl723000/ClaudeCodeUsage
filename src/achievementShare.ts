@@ -1,7 +1,7 @@
 import {achievementRollingCopyFor} from './achievementRollingCopy';
 import { ACHIEVEMENT_DEFINITIONS, ACHIEVEMENT_SERIES, AchievementId, AchievementResult } from './achievements';
 import { renderAchievementIcon } from './achievementIcons';
-import { achievementIconLayout } from './achievementAdornment';
+import { achievementIconLayout, ACHIEVEMENT_EXPORT_RANK_COLORS } from './achievementAdornment';
 import type { AchievementCopy } from './i18n';
 import { randomUUID } from 'node:crypto';
 import {isAchievementMoneyId} from './achievementMoneyCatalog';
@@ -126,7 +126,7 @@ export function renderAchievementShareSvg(input: {
     const group = ACHIEVEMENT_DEFINITIONS.find((entry) => entry.id === id)?.group ?? 'combined';
     const accent: Parameters<typeof renderAchievementIcon>[1] =
       group === 'claude' ? '#db8b5b' : group === 'codex' ? '#82a9ed' : '#ad99e2';
-    const color = level === undefined ? accent :
+    const color = level === undefined ? ACHIEVEMENT_EXPORT_RANK_COLORS.milestone :
       ['#e7b899', '#d6dce5', '#efce76', '#8dcaf0', '#cfadff'][level];
     const levelLabel = level === undefined ? input.milestone : input.levels[level];
     const target=ACHIEVEMENT_DEFINITIONS.find(row=>row.id===id)!.target;
