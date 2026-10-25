@@ -251,3 +251,20 @@ for (const provider of ['claude','codex']) test(`${provider}: project heading an
  await root.locator('[data-project-matrix-view="area"]').click();
  await root.screenshot({path:info.outputPath(`project-approved-${provider}.png`)});
 });
+
+test('first project scroll binds its source scope and retires on a source change',async({page})=>{
+ await openCodex(page,{locale:'zh-CN',theme:'dark',width:360});await openProjects(page);
+ const root=page.locator('[data-project-matrix="codex"]');
+ const scroller=root.locator('[data-project-matrix-range-panel="30"] [data-project-scale-panel="day"] .project-matrix-scroll');
+ await scroller.evaluate(el=>{el.scrollLeft=123;el.dispatchEvent(new Event('scroll'))});await page.clock.runFor(250);
+ const scope=await root.getAttribute('data-project-filter-scope');
+ expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('__ccu-vscode-state')).projectUsageMatrix.codex.filterScope)).toBe(scope);
+ const response=await page.request.get(page.url());
+ await page.evaluate(html=>{
+  const doc=new DOMParser().parseFromString(html,'text/html'),panel=doc.getElementById('provider-panel');
+  panel.querySelector('[data-project-matrix="codex"]').setAttribute('data-project-filter-scope','11111111111111111111111111111111');
+  dispatchEvent(new MessageEvent('message',{data:{command:'dashboardDataPatch',provider:'codex',tab:'projects',revision:93,html:panel.innerHTML,claudeLast30HoursByDay:{}}}));
+ },await response.text());await page.clock.runFor(250);
+ expect(await page.evaluate(()=>JSON.parse(localStorage.getItem('__ccu-vscode-state')).projectUsageMatrix.codex.scrolls)).toEqual({});
+ await expect.poll(()=>scroller.evaluate(el=>Math.abs(el.scrollWidth-el.clientWidth-el.scrollLeft))).toBeLessThan(2);
+});

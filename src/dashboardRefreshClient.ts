@@ -40,6 +40,7 @@ var __ccuRefreshScrollerSelector = __ccuRefreshScrollerKinds
   .join(',');
 var __ccuRefreshScrollLandmarkAttributes = [
   'data-project-matrix',
+  'data-project-filter-scope',
   'data-project-matrix-range-panel',
   'data-project-scale-panel',
   'data-project-matrix-heatmap',
@@ -136,6 +137,7 @@ function ccuRefreshSafeScrollLandmark(attribute, value) {
   if (attribute === 'data-project-matrix') {
     return value === 'claude' || value === 'codex' ? value : '';
   }
+  if (attribute === 'data-project-filter-scope') { return /^[a-f0-9]{32}$/.test(value) ? value : ''; }
   if (attribute === 'data-project-matrix-range-panel') {
     return value === '30' || value === '90' ? value : '';
   }

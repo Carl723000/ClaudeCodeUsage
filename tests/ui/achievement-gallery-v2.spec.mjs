@@ -173,7 +173,13 @@ test.describe('gallery locale, size, theme and narrow-layout matrix', () => {
             const pinTargets = Array.from(root.querySelectorAll('.achievement-pin-icon'))
               .filter(el => el.getClientRects().length)
               .map(el => ({width:el.getBoundingClientRect().width/zoom,height:el.getBoundingClientRect().height/zoom}));
-            return { fonts,overflowingText,pinTargets,
+            const pinTextCollisions=Array.from(root.querySelectorAll('.achievement-card')).filter(card=>{
+              const title=card.querySelector('h4'),pin=card.querySelector('.achievement-pin-icon');
+              if(!title||!pin||!pin.getClientRects().length)return false;
+              const bounds=pin.getBoundingClientRect(),range=document.createRange();range.selectNodeContents(title);
+              return Array.from(range.getClientRects()).some(text=>text.right>bounds.left+1&&text.left<bounds.right&&text.bottom>bounds.top&&text.top<bounds.bottom);
+            }).map(card=>card.getAttribute('data-achievement-key'));
+            return { fonts,overflowingText,pinTargets,pinTextCollisions,
               overflow:document.documentElement.scrollWidth > innerWidth + 1,
               documentWidth:document.documentElement.scrollWidth,viewportWidth:innerWidth,
               overflowElements:Array.from(root.querySelectorAll('*')).filter(el => {
@@ -190,6 +196,7 @@ test.describe('gallery locale, size, theme and narrow-layout matrix', () => {
           expect(layout.overflow,JSON.stringify({locale,theme,width,zoom,size,
             documentWidth:layout.documentWidth,viewportWidth:layout.viewportWidth,overflowElements:layout.overflowElements})).toBe(false);
           expect(layout.overflowingText).toEqual([]);
+          expect(layout.pinTextCollisions).toEqual([]);
           expect(layout.editorBeforeToolbar).toBe(true);
           expect(layout.overviewBeforeToolbar).toBe(true);
           expect(layout.emblem).toBeCloseTo(emblem+(emblem>56?16:0),1);

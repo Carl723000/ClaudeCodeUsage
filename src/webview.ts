@@ -14515,7 +14515,7 @@ export class UsageWebviewProvider {
           justify-items: start; text-align: left; min-height: 0; padding: 16px 10px 12px; }
         .achievement-card summary > .achievement-emblem { grid-column: 1; grid-row: 1 / span 5; margin: 0; }
         .achievement-card summary > :not(.achievement-emblem) { grid-column: 2; }
-        .achievement-card h4 { min-height: 0; justify-content: flex-start; padding-inline-end: 28px; }
+        .achievement-card h4 { min-height: 0; justify-content: flex-start; padding-inline-end: 44px; }
         .achievement-card .achievement-next-target { width: 100%; }
         .achievement-card summary::after { grid-column: 1 / -1; justify-self: start; margin-top: 4px; }
         .achievement-card summary > .achievement-progress-track { align-self: end; }
@@ -14693,6 +14693,7 @@ function ccuSaveProjectMatrixState(root, state) {
   var provider = root ? root.getAttribute('data-project-matrix') : '';
   if (provider !== 'claude' && provider !== 'codex') { return; }
   var all = ccuReadUiState().projectUsageMatrix || {};
+  state.filterScope = root.getAttribute('data-project-filter-scope') || '';
   all[provider] = {
     range: state.range,
     view: state.view,
@@ -14770,8 +14771,9 @@ function restoreProjectMatrixState(scope) {
 document.addEventListener('scroll',function(event){
   var scroller=event.target;if(!scroller.matches||!scroller.matches('[data-project-scroll-kind]'))return;
   var root=scroller.closest('[data-project-matrix]');if(!root||!scroller.clientWidth)return;
-  var expected=scroller.__ccuExpectedProjectScroll;delete scroller.__ccuExpectedProjectScroll;
+  var expected=scroller.__ccuExpectedProjectScroll;
   if(typeof expected==='number'&&Math.abs(scroller.scrollLeft-expected)<1)return;
+  delete scroller.__ccuExpectedProjectScroll;
   var state=ccuProjectMatrixState(root),key=ccuProjectScrollerKey(scroller);
   var left=Math.max(0,Math.min(1000000,scroller.scrollLeft));
   if(!key||state.scrolls[key]===left)return;
