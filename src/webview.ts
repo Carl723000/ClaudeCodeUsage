@@ -4247,7 +4247,7 @@ export class UsageWebviewProvider {
       ? dashboardPanel(
           'content',
           contentActive,
-          this.renderContentData(provider) + this.renderUsageDiagnostics(provider) +
+          this.renderContentData(provider) +
             (provider === 'claude'
               ? this.renderCacheWarmth() + this.renderInsights() + this.renderCostliestMessages()
               : ''),
@@ -10564,58 +10564,67 @@ export class UsageWebviewProvider {
     const before = days.find(day => day.day === closedKeys[0]);
     const after = days.find(day => day.day === closedKeys[1]);
     let body = '<p class="table-hint">' + esc(copy.scope) + '</p>';
-    const heading = (title:string):string => '<h4 class="cbar-subhead">' + esc(title) + '</h4>';
-    if (throughput) {
-      const rate = diagnosticThroughput(after, zone);
-      body += heading(copy.throughput) + '<p><strong>' + (rate.value === null ? '—' :
-        I18n.formatNumber(rate.value)) + '</strong> ' + esc(copy.outputPerHour) + '</p>' +
-        '<p class="table-hint">' + esc(closedKeys[1] + ' · ' + zone +
-          (rate.hours === undefined ? '' : ' · ' + rate.hours + ' ' + copy.hour)) + '</p>' +
-        '<p class="table-hint">' + esc(rate.status === 'partial' ? copy.partial : rate.value === null ? copy.unavailable : copy.throughputNote) + '</p>';
-      const rolling = diagnosticSevenDayPeak(days, today);
-      const peak = rolling?.history.exactWindowPeak;
-      body += '<p class="table-hint">' + esc(copy.seven + ' · ' + (provider === 'codex' ? I18n.t.providers.codex.processed : I18n.t.popup.totalTokens)) + ': ' + (peak && peak.value.status === 'exact'
-        ? esc(peak.value.units.toLocaleString(I18n.getLocale()) + ' Token · ' + peak.startDay + ' → ' + peak.endDay)
-        : esc(copy.sevenUnavailable)) + '</p>';
-    }
+    const method = (kind:string,content:string):string => '<details class="diagnostic-method" data-diagnostic-method="' + kind +
+      '" data-persist="diagnostics:' + provider + ':method:' + kind + '"><summary>' + esc(I18n.visualization.evidenceDetails) +
+      '</summary>' + content + '<p class="table-hint">' + esc(copy.tps) + '</p></details>';
+    const section = (kind:string,title:string,content:string):string => '<section class="usage-diagnostic" data-diagnostic="' + kind +
+      '"><h4 class="cbar-subhead">' + esc(title) + '</h4>' + content + '</section>';
     if (changes) {
-      body += heading(copy.change) + '<p class="table-hint">' + esc(copy.basis + ' · ' +
-        closedKeys.join(' → ') + ' · ' + zone) + '</p>';
-      const beforeHours = diagnosticThroughput(before, zone).hours;
-      const afterHours = diagnosticThroughput(after, zone).hours;
-      if (beforeHours !== undefined && afterHours !== undefined) body += '<p class="table-hint">' +
-        esc(copy.before + ': ' + beforeHours + ' ' + copy.hour + ' · ' + copy.after + ': ' + afterHours + ' ' + copy.hour) + '</p>';
-      for (const dimension of ['models','roles'] as const) {
-        const result = diagnosticChange(before, after, zone, dimension);
-        const label = dimension === 'models' ? copy.model : copy.role;
-        const maximum = result.rows.reduce((max,row)=>Math.max(max,Math.abs(row.delta)),1);
-        const labels: Record<string,string> = {unknown:copy.unknown, root:copy.root, subagent:copy.subagent, 'approval-reviewer':copy.reviewer};
-        body += '<details data-persist="diagnostics:' + provider + ':' + dimension + '"><summary>' + esc(label) +
-          ' · ' + (result.delta === null ? '—' : esc((result.delta > 0 ? '+' : '') + I18n.formatNumber(result.delta) + ' Token')) + '</summary>' +
-          (result.delta === null ? '<p class="table-hint">' + esc(copy.unavailable) + '</p>' :
-            '<div class="cbar-list">' + result.rows.map(row => '<div class="cbar-row">' +
-              '<div class="cbar-label" style="width:35%;min-width:0;flex-shrink:1" title="' + esc(row.key) + '">' + esc(labels[row.key] ?? row.key) + '</div>' +
-              '<div class="cbar-track"><div class="cbar-fill cf-1" style="width:' + (100*Math.abs(row.delta)/maximum).toFixed(1) + '%"></div></div>' +
-              '<div class="cbar-val" style="width:70px" aria-label="' + esc(copy.before + ': ' + row.before + ' · ' + copy.after + ': ' + row.after) + '">' +
-              esc((row.delta>0?'+':'')+I18n.formatNumber(row.delta)) + '</div></div><p class="table-hint">' +
-              esc(copy.before + ': ' + I18n.formatNumber(row.before) + ' → ' + copy.after + ': ' + I18n.formatNumber(row.after)) + '</p>').join('') + '</div>') + '</details>';
+      const dimensions = (['models','roles'] as const).map(dimension=>({dimension,result:diagnosticChange(before,after,zone,dimension)}));
+      const primary = dimensions.find(row=>row.result.delta!==null);
+      const signed = (value:number):string => (value>0?'+':'') + I18n.formatNumber(value);
+      const labels: Record<string,string> = {unknown:copy.unknown,root:copy.root,subagent:copy.subagent,'approval-reviewer':copy.reviewer};
+      const barRows = (result:typeof dimensions[number]['result']):string => {
+        const maximum=result.rows.reduce((max,row)=>Math.max(max,Math.abs(row.delta)),1);
+        return '<div class="cbar-list">' + result.rows.map(row=>'<div class="cbar-row"><div class="cbar-label" title="' + esc(row.key) + '">' +
+          esc(labels[row.key]??row.key) + '</div><div class="cbar-track"><div class="cbar-fill cf-1" style="width:' +
+          (100*Math.abs(row.delta)/maximum).toFixed(1) + '%"></div></div><div class="cbar-val" aria-label="' +
+          esc(copy.before+': '+row.before+' · '+copy.after+': '+row.after) + '">' + esc(signed(row.delta)) + '</div></div>').join('') + '</div>';
+      };
+      let changeBody = '<p class="diagnostic-primary" data-diagnostic-result>' + (primary
+        ? esc(I18n.visualization.observedChange.replace('{delta}',signed(primary.result.delta!))) : '—') + '</p>' +
+        '<p class="diagnostic-context">' + esc(copy.basis + ' · ' + closedKeys.join(' → ') + ' · ' + zone) + '</p>';
+      if (primary) changeBody += '<p class="diagnostic-dimension-label">' + esc(primary.dimension==='models'?copy.model:copy.role) + '</p>' + barRows(primary.result);
+      else changeBody += '<p class="diagnostic-quality">' + esc(copy.unavailable) + '</p>';
+      for (const {dimension,result} of dimensions) {
+        const label=dimension==='models'?copy.model:copy.role;
+        changeBody += '<details data-persist="diagnostics:' + provider + ':' + dimension + '"><summary>' + esc(label) + ' · ' +
+          (result.delta===null?'—':esc(signed(result.delta)+' Token')) + '</summary>' + (result.delta===null
+            ? '<p class="table-hint">' + esc(copy.unavailable) + '</p>'
+            : '<div class="diagnostic-evidence">' + result.rows.map(row=>'<div><span>' + esc(labels[row.key]??row.key) +
+              '</span><span>' + esc(copy.before+': '+I18n.formatNumber(row.before)+' → '+copy.after+': '+I18n.formatNumber(row.after)) +
+              '</span><strong>' + esc(signed(row.delta)) + '</strong></div>').join('') + '</div>') + '</details>';
       }
-      body += '<p class="table-hint">' + esc(copy.overlap) + '</p>';
+      changeBody += '<p class="diagnostic-quality">' + esc(copy.overlap) + '</p>';
+      const beforeHours=diagnosticThroughput(before,zone).hours,afterHours=diagnosticThroughput(after,zone).hours;
+      changeBody += method('change','<p class="table-hint">' + esc(copy.basis+' · '+closedKeys.join(' → ')+' · '+zone) + '</p>' +
+        (beforeHours===undefined||afterHours===undefined?'':'<p class="table-hint">'+esc(copy.before+': '+beforeHours+' '+copy.hour+' · '+copy.after+': '+afterHours+' '+copy.hour)+'</p>'));
+      body += section('change',copy.change,changeBody);
+    }
+    if (throughput) {
+      const rate=diagnosticThroughput(after,zone);
+      const rolling=diagnosticSevenDayPeak(days,today),peak=rolling?.history.exactWindowPeak;
+      const quality=rate.status==='partial'?copy.partial:rate.value===null?copy.unavailable:'';
+      body += section('throughput',copy.throughput,'<p class="diagnostic-primary" data-diagnostic-result><strong>' +
+        (rate.value===null?'—':I18n.formatNumber(rate.value)) + '</strong> <span>' + esc(copy.outputPerHour) + '</span></p>' +
+        '<p class="diagnostic-context">' + esc(closedKeys[1]+' · '+zone+(rate.hours===undefined?'':' · '+rate.hours+' '+copy.hour)) + '</p>' +
+        (quality?'<p class="diagnostic-quality">'+esc(quality)+'</p>':'') + method('throughput','<p class="table-hint">'+esc(copy.throughputNote)+'</p><p class="table-hint">'+
+          esc(copy.seven+' · '+(provider==='codex'?I18n.t.providers.codex.processed:I18n.t.popup.totalTokens))+': '+
+          (peak&&peak.value.status==='exact'?esc(peak.value.units.toLocaleString(I18n.getLocale())+' Token · '+peak.startDay+' → '+peak.endDay):esc(copy.sevenUnavailable))+'</p>'));
     }
     if (quota) {
-      const projected = quotaProjection;
-      const rate = {value:projected?.rate??null,status:projected?.status??'unknown',
-        start:projected?.from,end:projected?.through,samples:projected?.count};
-      const value = rate.value === null ? '—' : rate.value > 0 && rate.value < 1 ? '&lt;1' : I18n.formatNumber(Math.round(rate.value));
-      body += heading(copy.quota) + '<p><strong>' + value + '</strong> ' + esc(copy.quotaUnit) + '</p>' +
-        '<p class="table-hint">' + esc(rate.value === null ? rate.status==='unknown'?copy.unavailable:rate.status==='identity'?copy.identity:
-          ['boundary','regression','conflict'].includes(rate.status)?copy.boundary:copy.samples : copy.quotaNote) + '</p>';
-      if (rate.start !== undefined && rate.end !== undefined) body += '<p class="table-hint">' +
-        esc(new Date(rate.start).toISOString() + ' → ' + new Date(rate.end).toISOString() + ' · n=' + rate.samples) + '</p>';
-      if (projected?.resetAt !== undefined) body += '<p class="table-hint">' + esc(copy.reset + ': ' + new Date(projected.resetAt).toISOString()) + '</p>';
-      body += '<p class="table-hint">' + esc(copy.quotaPolicy) + '</p>';
+      const projected=quotaProjection;
+      const rate={value:projected?.rate??null,status:projected?.status??'unknown',start:projected?.from,end:projected?.through,samples:projected?.count};
+      const value=rate.value===null?'—':rate.value>0&&rate.value<1?'&lt;1':I18n.formatNumber(Math.round(rate.value));
+      const quality=rate.value!==null?copy.quotaNote:rate.status==='identity'?copy.identity:
+        rate.status==='expired'?I18n.visualization.expired:rate.status==='stale'?I18n.visualization.stale:
+        ['boundary','regression','conflict'].includes(rate.status)?copy.boundary:rate.status==='samples'?copy.samples:copy.unavailable;
+      body += section('quota',copy.quota,'<p class="diagnostic-primary" data-diagnostic-result><strong>'+value+'</strong> <span>'+esc(copy.quotaUnit)+'</span></p>'+
+        '<p class="diagnostic-quality">'+esc(quality)+'</p>'+(rate.samples===undefined?'':'<p class="diagnostic-context">n = '+rate.samples+'</p>')+
+        method('quota',(rate.start===undefined||rate.end===undefined?'':'<p class="table-hint">'+esc(new Date(rate.start).toISOString()+' → '+new Date(rate.end).toISOString()+' · n='+rate.samples)+'</p>')+
+          (projected?.resetAt===undefined?'':'<p class="table-hint">'+esc(copy.reset+': '+new Date(projected.resetAt).toISOString())+'</p>')+
+          '<p class="table-hint">'+esc(copy.quotaPolicy)+'</p>'));
     }
-    body += '<p class="table-hint">' + esc(copy.tps) + '</p>';
     const html = '<div class="daily-breakdown" data-usage-diagnostics="' + provider + '"><div class="section-header"><h3>' +
       esc(copy.title) + '</h3></div>' + body + '</div>';
     (this.usageDiagnosticsRenderCache ??= {})[provider] = {source,diagnosticSource,observations,key,html};
@@ -10623,27 +10632,31 @@ export class UsageWebviewProvider {
   }
 
   private renderContentData(provider: SettingProvider = 'claude'): string {
+    const summaryMetric = (label:string,value:string):string => '<div class="analysis-summary-metric"><strong>' +
+      this.escapeHtml(value) + '</strong><span>' + this.escapeHtml(label) + '</span></div>';
+
     if (provider === 'codex') {
       const view = this.codexView;
       const copy = I18n.t.providers.codex;
       if (!view) {
-        return this.renderCodexEmptyState();
+        return this.renderCodexEmptyState() + this.renderUsageDiagnostics('codex');
       }
       const behavior = view.behaviorScopes.last30Days;
       const percent = (value: number): string => `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
       const metric = (label: string, value: string): string =>
         '<div class="cbar-row"><span style="flex:1;min-width:0;overflow-wrap:anywhere">' + this.escapeHtml(label) +
         '</span><strong class="cbar-val">' + this.escapeHtml(value) + '</strong></div>';
-      const behaviorSummary = '<div class="cbar-list">' +
-        metric(copy.childThreadsPerRootTask, behavior.childThreadsPerRootTask.toFixed(1)) +
+      const behaviorSummary = '<div class="analysis-summary-metrics">' +
+        summaryMetric(copy.childThreadsPerRootTask,behavior.childThreadsPerRootTask.toFixed(1)) +
+        summaryMetric(copy.highEffortFreshShare,percent(behavior.highEffortFreshShare)) +
+        summaryMetric(copy.reasoningOutputShare,percent(behavior.reasoningOutputShare)) + '</div>' +
+        '<details class="analysis-basis" data-persist="analysis:codex:behavior"><summary>' + this.escapeHtml(I18n.visualization.evidenceDetails) + '</summary><div class="cbar-list">' +
         metric(copy.childFreshShare, percent(behavior.childFreshShare)) +
         metric(copy.approvalFreshShare, percent(behavior.approvalReviewerFreshShare)) +
-        metric(copy.highEffortFreshShare, percent(behavior.highEffortFreshShare)) +
         metric(copy.processedToFreshRatio, behavior.processedToFreshRatio.toFixed(1)) +
-        metric(copy.reasoningOutputShare, percent(behavior.reasoningOutputShare)) +
         metric(copy.postPatchToolCallsPerPatchCall, behavior.postPatchToolCallsPerPatchCall.toFixed(1)) +
         metric(copy.compactions, I18n.formatNumber(behavior.compactCount)) +
-        '</div>';
+        '</div></details>';
       const insights = this.codexInsights.last30Days;
       const insightHtml = insights.length === 0
         ? '<div class="model-item"><p class="table-hint">' + this.escapeHtml(copy.recommendationEmpty) + '</p></div>'
@@ -10665,19 +10678,19 @@ export class UsageWebviewProvider {
       const partial = view.periodCoverage.last30Days.complete
         ? ''
         : '<p class="table-hint">' + this.escapeHtml(copy.recommendationPartial) + '</p>';
-      return '<div class="action-card"><div class="action-card-head"><span class="action-icon">✨</span>' +
-        '<div class="action-card-titles"><h3>' + this.escapeHtml(copy.optimization) + '</h3>' +
-        '<p class="action-card-desc">' + this.escapeHtml(copy.structuralProxy) + '</p></div></div>' +
-        this.renderAdviceEffectivenessBody('codex') + '</div>' +
-        '<div class="daily-breakdown"><div class="section-header"><h3>' +
-        this.escapeHtml(copy.behavior + ' · ' + copy.last30Days) + '</h3></div>' +
-        partial + behaviorSummary + insightHtml + '</div>';
+      return '<div class="daily-breakdown" data-analysis-summary="codex"><div class="section-header"><h3>' +
+        this.escapeHtml(copy.behavior+' · '+copy.last30Days) + '</h3></div><p class="table-hint">' + this.escapeHtml(copy.structuralProxy) + '</p>' +
+        partial + behaviorSummary + insightHtml + '</div>' + this.renderUsageDiagnostics('codex') +
+        '<div class="action-card"><div class="action-card-head"><span class="action-icon">✨</span><div class="action-card-titles"><h3>' +
+        this.escapeHtml(copy.optimization) + '</h3><p class="action-card-desc">' + this.escapeHtml(copy.structuralProxy) +
+        '</p></div></div>' + this.renderAdviceEffectivenessBody('codex') + '</div>';
+
     }
     const t = I18n.t.popup;
     const topCards = this.renderAdviceCard() + this.renderOptimizerCard();
     const analysis = this.contentAnalysis;
     if (!analysis || analysis.categories.length === 0 || analysis.totalEstimatedTokens === 0) {
-      return topCards + (this.renderAttributionSection() ||
+      return this.renderUsageDiagnostics('claude') + topCards + (this.renderAttributionSection() ||
         '<div class="no-data"><p>' + I18n.t.popup.noDataMessage + '</p></div>');
     }
 
@@ -10777,19 +10790,17 @@ export class UsageWebviewProvider {
     const totalPrefix = cal ? '' : '~';
     const noteLine = cal ? t.calibratedNote : t.estimatedNote;
 
-    return (
-      topCards +
-      this.renderAttributionSection() +
-      '<div class="daily-breakdown">' +
-      '<div class="section-header"><h3>' + t.contentAnalysis + '</h3>' +
-      '<span class="section-header-right">' +
-      '<span class="cbar-total">' + totalLabel + ': ' + totalPrefix + I18n.formatNumber(total) + '</span>' +
-      '</span></div>' +
-      '<p class="table-hint">' + t.last30days + ' · ' + noteLine + '</p>' +
-      '<div class="cbar-list">' + catRows + '</div>' +
-      toolSection +
-      '</div>'
-    );
+    const categorySummary = (key:string):string => {
+      const category=analysis.categories.find(row=>row.key===key);
+      return category ? totalPrefix+I18n.formatNumber(tokensFor(key,category.estimatedTokens)) : '—';
+    };
+    return '<div class="daily-breakdown" data-analysis-summary="claude"><div class="section-header"><h3>' + t.contentAnalysis + '</h3></div>' +
+      '<p class="table-hint">' + t.last30days + ' · ' + noteLine + '</p><div class="analysis-summary-metrics">' +
+      summaryMetric(totalLabel,totalPrefix+I18n.formatNumber(total)) + summaryMetric(t.catToolResults+' · Token',categorySummary('toolResults')) +
+      summaryMetric(t.catAssistantText+' · Token',categorySummary('assistantText')) + '</div><div class="cbar-list">' + catRows + '</div>' +
+      (toolSection?'<details class="analysis-basis" data-persist="analysis:claude:tools"><summary>'+t.byTool+'</summary>'+toolSection+'</details>':'') +
+      '</div>' + this.renderUsageDiagnostics('claude') + this.renderAttributionSection() + topCards;
+
   }
 
   /**
@@ -13739,6 +13750,33 @@ export class UsageWebviewProvider {
         color: var(--vscode-descriptionForeground);
       }
 
+      .analysis-summary-metrics { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); border-block: 1px solid var(--vscode-panel-border); margin: 16px 0; }
+      .analysis-summary-metric { min-width: 0; padding: 14px 12px; }
+      .analysis-summary-metric + .analysis-summary-metric { border-inline-start: 1px solid var(--vscode-panel-border); }
+      .analysis-summary-metric strong { display: block; font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+      .analysis-summary-metric span { display: block; margin-top: 4px; font-size: 12px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+      .analysis-basis, .diagnostic-method { border-top: 1px solid var(--vscode-panel-border); margin-top: 12px; padding-top: 10px; font-size: 12px; }
+      .analysis-basis > summary, .diagnostic-method > summary { cursor: pointer; }
+      .usage-diagnostic { padding: 14px 0; border-bottom: 1px solid var(--vscode-panel-border); }
+      .usage-diagnostic .cbar-subhead { margin: 0 0 8px; }
+      .diagnostic-primary { margin: 8px 0; font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+      .diagnostic-primary > span { font-size: 13px; font-weight: 400; }
+      .diagnostic-context, .diagnostic-quality { font-size: 12px; color: var(--vscode-descriptionForeground); line-height: 1.5; overflow-wrap: anywhere; }
+      .diagnostic-dimension-label { margin: 12px 0 4px; font-size: 13px; font-weight: 600; }
+      .usage-diagnostic .cbar-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(32px,1.5fr) minmax(0,80px); gap: 12px; }
+      .usage-diagnostic .cbar-label, .usage-diagnostic .cbar-val { width: auto; min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+      .usage-diagnostic .cbar-track { min-width: 0; width: 100%; }
+      .diagnostic-evidence > div { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,2fr) minmax(0,80px); gap: 8px; margin: 8px 0; }
+      .diagnostic-evidence strong { text-align: end; font-variant-numeric: tabular-nums; }
+      .diagnostic-evidence span, .diagnostic-evidence strong { overflow-wrap: anywhere; }
+      @media (max-width: 600px) {
+        .analysis-summary-metrics { grid-template-columns: minmax(0,1fr); }
+        .analysis-summary-metric { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; }
+        .analysis-summary-metric + .analysis-summary-metric { border-inline-start: 0; border-top: 1px solid var(--vscode-panel-border); }
+        .analysis-summary-metric strong { order: 2; font-size: 20px; }
+        .analysis-summary-metric span { margin: 0; }
+        .usage-diagnostic .cbar-row { gap: 6px; }
+      }
       .cbar-list {
         display: flex;
         flex-direction: column;

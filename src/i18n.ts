@@ -6905,12 +6905,12 @@ export const PROJECT_CHART_CONTROLS = {
 
 /** Shared presentation copy; metrics and eligibility remain provider-specific. */
 export const VISUALIZATION_COPY = {
-  en: { evidenceDetails: 'Methods and evidence', observedChange: 'Output change: {delta} Token' },
-  'zh-CN': { evidenceDetails: '统计口径与依据', observedChange: '输出变化：{delta} Token' },
-  'zh-TW': { evidenceDetails: '統計口徑與依據', observedChange: '輸出變化：{delta} Token' },
-  'de-DE': { evidenceDetails: 'Methoden und Belege', observedChange: 'Änderung der Ausgabe: {delta} Token' },
-  ja: { evidenceDetails: '集計方法と根拠', observedChange: '出力の変化：{delta} Token' },
-  ko: { evidenceDetails: '집계 방법 및 근거', observedChange: '출력 변화: {delta} Token' },
-  'pt-BR': { evidenceDetails: 'Métodos e evidências', observedChange: 'Variação da saída: {delta} Token' },
-  id: { evidenceDetails: 'Metode dan bukti', observedChange: 'Perubahan keluaran: {delta} Token' },
+  en: { evidenceDetails: 'Methods and evidence', observedChange: 'Output change: {delta} Token', expired: 'Expired observation; no current rate is available.', stale: 'The last observation is stale; no current rate is available.' },
+  'zh-CN': { evidenceDetails: '统计口径与依据', observedChange: '输出变化：{delta} Token', expired: '观测已过期，当前速率不可用。', stale: '末次观测已陈旧，当前速率不可用。' },
+  'zh-TW': { evidenceDetails: '統計口徑與依據', observedChange: '輸出變化：{delta} Token', expired: '觀測已過期，目前速率不可用。', stale: '最後觀測已陳舊，目前速率不可用。' },
+  'de-DE': { evidenceDetails: 'Methoden und Belege', observedChange: 'Änderung der Ausgabe: {delta} Token', expired: 'Beobachtung abgelaufen; keine aktuelle Rate verfügbar.', stale: 'Letzte Beobachtung veraltet; keine aktuelle Rate verfügbar.' },
+  ja: { evidenceDetails: '集計方法と根拠', observedChange: '出力の変化：{delta} Token', expired: '観測の有効期限切れのため、現在の率は利用できません。', stale: '最終観測が古いため、現在の率は利用できません。' },
+  ko: { evidenceDetails: '집계 방법 및 근거', observedChange: '출력 변화: {delta} Token', expired: '관측이 만료되어 현재 속도를 확인할 수 없습니다.', stale: '최근 관측이 오래되어 현재 속도를 확인할 수 없습니다.' },
+  'pt-BR': { evidenceDetails: 'Métodos e evidências', observedChange: 'Variação da saída: {delta} Token', expired: 'Observação expirada; taxa atual indisponível.', stale: 'Última observação desatualizada; taxa atual indisponível.' },
+  id: { evidenceDetails: 'Metode dan bukti', observedChange: 'Perubahan keluaran: {delta} Token', expired: 'Pengamatan kedaluwarsa; laju saat ini tidak tersedia.', stale: 'Pengamatan terakhir sudah lama; laju saat ini tidak tersedia.' },
 } as const;

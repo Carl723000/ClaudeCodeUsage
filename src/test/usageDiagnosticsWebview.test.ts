@@ -15,3 +15,12 @@ test('retained equal display object invalidates diagnostic HTML when its hidden 
  const fresh={diagnosticDays:()=>{reads++;return []}};adoptCodexDiagnosticSource(p.codexView,fresh);
  p.renderUsageDiagnostics('codex');assert.equal(reads,2);p.renderUsageDiagnostics('codex');assert.equal(reads,2);
 });
+
+for(const status of ['expired','stale'] as const)test(status+' quota evidence stays explicit before folded methods',()=>{
+ const p=provider();p.setting=(key:string)=>key==='showQuotaDeclineRate';
+ p.quotaDiagnosticsProjector=()=>({status,rate:null,scope:'historical-interval',precision:'unknown'});
+ const html=p.renderUsageDiagnostics('codex');
+ const visibleQuota=html.split('data-diagnostic="quota"')[1].split('<details')[0];
+ assert.ok(visibleQuota.includes(I18n.visualization[status]));
+ assert.ok(visibleQuota.includes('—'));
+});
