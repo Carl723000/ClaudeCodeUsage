@@ -13768,6 +13768,9 @@ export class UsageWebviewProvider {
       .analysis-summary-metric + .analysis-summary-metric { border-inline-start: 1px solid var(--vscode-panel-border); }
       .analysis-summary-metric strong { display: block; font-size: 22px; font-weight: 650; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
       .analysis-summary-metric span { display: block; margin-top: 4px; font-size: 12px; color: var(--vscode-descriptionForeground); overflow-wrap: anywhere; }
+      [data-analysis-summary="claude"] .cbar-row { display: grid; grid-template-columns: minmax(0,1fr) minmax(32px,1.5fr) minmax(0,96px) minmax(0,52px); }
+      [data-analysis-summary="claude"] .cbar-label, [data-analysis-summary="claude"] .cbar-val, [data-analysis-summary="claude"] .cbar-pct { width: auto; min-width: 0; max-width: 100%; overflow-wrap: anywhere; white-space: normal; }
+      [data-analysis-summary="claude"] .cbar-track { min-width: 0; width: 100%; }
       .analysis-basis, .diagnostic-method { border-top: 1px solid var(--vscode-panel-border); margin-top: 12px; padding-top: 10px; font-size: 12px; }
       .analysis-basis > summary, .diagnostic-method > summary { cursor: pointer; }
       .usage-diagnostic { padding: 14px 0; border-bottom: 1px solid var(--vscode-panel-border); }
@@ -13788,6 +13791,11 @@ export class UsageWebviewProvider {
         .analysis-summary-metric + .analysis-summary-metric { border-inline-start: 0; border-top: 1px solid var(--vscode-panel-border); }
         .analysis-summary-metric strong { order: 2; font-size: 20px; }
         .analysis-summary-metric span { margin: 0; }
+        [data-analysis-summary="claude"] .cbar-row { grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(0,52px); gap: 6px; }
+        [data-analysis-summary="claude"] .cbar-label { grid-column: 1; grid-row: 1; }
+        [data-analysis-summary="claude"] .cbar-val { grid-column: 2; grid-row: 1; }
+        [data-analysis-summary="claude"] .cbar-pct { grid-column: 3; grid-row: 1; }
+        [data-analysis-summary="claude"] .cbar-track { grid-column: 1 / -1; grid-row: 2; }
         .usage-diagnostic .cbar-row { gap: 6px; }
       }
       .cbar-list {

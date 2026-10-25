@@ -34,7 +34,8 @@ exports.applyUsageDiagnosticsFixture=function(provider,baseSnapshot,{fixture,tim
    inputTokens:1000,outputTokens:output,cacheReadTokens:500,cacheCreationTokens:200,cost:0,count:2}}});
  provider.dailyDataForEveryDay=[{date:days[0],data:claude(3000)},{date:days[1],data:claude(changed?6500:4500)}];
  provider.allTimeData=claude(changed?9500:7500);provider.achievementCalendarTimeZone=timeZone;
- provider.contentAnalysis={categories:[],toolResultBreakdown:[],totalEstimatedTokens:0,recentPrompts:[]};
+ provider.contentAnalysis={categories:[{key:'toolResults',estimatedTokens:7000},{key:'assistantText',estimatedTokens:3000}],
+  toolResultBreakdown:[{key:'synthetic-tool-with-a-long-localized-label',estimatedTokens:7000}],totalEstimatedTokens:10000,recentPrompts:[]};
  const projector=new QuotaDiagnosticsProjector();
  const account='SYNTHETIC_ACCOUNT_FINGERPRINT',window='SYNTHETIC_WINDOW_FINGERPRINT';
  const makeRows=selected=>[.4,.46].map((usedFraction,index)=>({schemaVersion:2,provider:selected,accountFingerprint:account,

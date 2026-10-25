@@ -81,3 +81,17 @@ for(const provider of ['claude','codex']) {
   await expect(page.locator('[data-diagnostic-result],[data-diagnostic-method]')).toHaveCount(0);
  });
 }
+
+for (const width of [320,960]) test(`Claude nonempty content categories and tool details fit at ${width}px`,async({page},info)=>{
+ await openDiagnostics(page,'claude',{width});
+ const content=page.locator('[data-analysis-summary="claude"]');
+ await expect(content.locator(':scope > .cbar-list > .cbar-row')).toHaveCount(2);
+ await expect(content).toContainText('7,000');await expect(content).toContainText('70.0%');
+ await content.locator('details[data-persist="analysis:claude:tools"] > summary').click();
+ const geometry=await content.evaluate(el=>({fits:document.documentElement.scrollWidth<=innerWidth+1,
+  rows:[...el.querySelectorAll('.cbar-row')].map(row=>{const box=row.getBoundingClientRect();
+   return row.scrollWidth<=row.clientWidth+1&&[...row.children].every(cell=>{const r=cell.getBoundingClientRect();
+    return r.left>=box.left-1&&r.right<=box.right+1;});})}));
+ expect(geometry.fits).toBe(true);expect(geometry.rows.every(Boolean)).toBe(true);
+ await content.screenshot({path:info.outputPath(`content-categories-${width}.png`),animations:'disabled'});
+});
