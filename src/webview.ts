@@ -5735,6 +5735,19 @@ export class UsageWebviewProvider {
       id.startsWith('model-rainbow') ? copy.units.families :
       id === 'multi-core-human' || id.startsWith('same-root-models-') ? copy.units.models : copy.units.tokens;
     const tokenDisplayUnits = new Set([copy.units.tokens,copy.units.outputTokens,copy.units.codexCachedTokens,copy.units.cacheReadTokens,copy.units.cacheCreationTokens,copy.units.weeklyAverage]);
+    const faceUnitFor = (id:AchievementId):string => {
+      if(isAchievementMoneyId(id))return 'USD';
+      const unit=unitFor(id),short=I18n.visualization;
+      if(tokenDisplayUnits.has(unit))return 'Token';
+      if(unit===copy.units.qualifiedDays||unit===copy.units.sharedDays)return copy.units.days;
+      if(unit===copy.units.hours)return short.compactOutputHours;
+      if(unit===copy.units.weeks)return short.compactWeeks;
+      if(unit===copy.units.features)return short.compactFeatures;
+      if(unit===copy.units.settings)return short.compactSettings;
+      if(unit===copy.units.threeFamilyDay||unit===copy.units.nightPeak||unit===copy.units.exports||unit===copy.units.feedback)return short.compactConditions;
+      if(unit===copy.units.relay)return copy.units.outputSessions;
+      return unit;
+    };
     const byId = new Map(results.map((result) => [result.id, result]));
     const tierOrder = ['bronze', 'silver', 'gold', 'platinum', 'legendary'];
     const isEarned = (result: AchievementResult): boolean => result.unlocked || this.achievementGrants.has(result.id);
@@ -5846,10 +5859,10 @@ export class UsageWebviewProvider {
       const faceProgress = proofReady && next
         ? '<span class="achievement-current-progress" title="' + this.escapeHtml(copy.nextTarget + ': ' + bound +
           exactProgress + ' ' + unitFor(result.id)) + '">' + this.escapeHtml(bound + compactValue(nextResult.id,progress)) + '</span>' +
-          '<span class="achievement-stage-target" title="' + this.escapeHtml(copy.nextTarget + ': ' + integerValue(nextResult.id,nextResult.target) + ' ' + unitFor(result.id)) + '"> / ' + this.escapeHtml(compactValue(nextResult.id,nextResult.target) + ' ' + unitFor(result.id)) + '</span>'
-        : !proofReady ? this.escapeHtml(proofLabel) : fullRank && current !== undefined
+          '<span class="achievement-stage-target" title="' + this.escapeHtml(copy.nextTarget + ': ' + integerValue(nextResult.id,nextResult.target) + ' ' + unitFor(result.id)) + '"> / ' + this.escapeHtml(compactValue(nextResult.id,nextResult.target) + ' ' + faceUnitFor(result.id)) + '</span>'
+        : !proofReady ? this.escapeHtml(proofLabel) : !series && earned ? this.escapeHtml(I18n.visualization.completed) : fullRank && current !== undefined
           ? '<span class="achievement-current-value" title="' + this.escapeHtml(management.currentValue + ': ' + bound + exactProgress + ' ' + unitFor(nextResult.id)) + '">' +
-            this.escapeHtml(management.currentValue + ': ' + bound + formatted + ' ' + unitFor(result.id)) + '</span><span> · ' + this.escapeHtml(copy.complete) + '</span>'
+            this.escapeHtml(management.currentValue + ': ' + bound + formatted + ' ' + faceUnitFor(result.id)) + '</span><span> · ' + this.escapeHtml(copy.complete) + '</span>'
           : this.escapeHtml(next ? copy.milestone : copy.complete);
       const levelEntries=tiers??[result];
       const notes=compactAchievementLevelNotes(levelEntries.map(entry=>achievementConditionFor(I18n.getLocale(),entry.id)));

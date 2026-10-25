@@ -219,7 +219,7 @@ test('a long Token ladder exposes current and target while retaining display-onl
       .match(/<article[^>]*data-achievement-series="astra-regular"[\s\S]*?<\/article>/)![0];
     const summary = read().split('</summary>')[0];
     assert.match(summary, /class="achievement-current-progress"[^>]*>600M<\/span>/);
-    assert.match(summary, /class="achievement-stage-target"[^>]*> \/ 5B processed tokens/);
+    assert.match(summary, /class="achievement-stage-target"[^>]*> \/ 5B Token/);
     assert.match(read(), /achievement-intermediate-stage[^>]*>Next stage: 1,000,000,000 processed tokens/);
     assert.doesNotMatch(summary, /data-achievement-id="[^"]*stage/);
     provider.codexAchievementVolume = () => ({ processed: 600_000_000, lowerBound: true });

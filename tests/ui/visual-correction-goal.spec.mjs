@@ -19,3 +19,11 @@ for(const provider of ['claude','codex'])for(const width of [320,960]) {
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
  });
 }
+
+for(const provider of ['claude','codex'])test(`${provider}: closed cards show short units while full qualifications stay in details`,async({page})=>{
+ await (provider==='claude'?openClaude:openCodex)(page,{fixture:'visual-correction-approved',locale:'zh-CN',theme:'dark',width:320});await page.locator('#tab-achievements').click();
+ const card=page.locator('[data-achievement-key="fable-days"]');
+ await expect(card.locator('summary .achievement-next-target')).not.toContainText('100万');
+ await card.locator('summary').click();await expect(card.locator('.achievement-card-detail')).toContainText('100万');
+ await expect(page.locator('[data-achievement-key="local-share-export"] summary')).toContainText('已完成');
+});
