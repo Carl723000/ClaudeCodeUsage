@@ -9,6 +9,7 @@ import { ACHIEVEMENT_COPY } from '../i18n';
 import { API_ACHIEVEMENT_DEFINITIONS } from '../achievementMoneyCatalog';
 import { achievementConditionFor } from '../achievementConditions';
 import { achievementTitleWithoutRank } from '../achievementTitles';
+import {achievementUnitFor} from '../achievementUnit';
 
 function shareBadge(svg: string, id: string): { title: string; name: string; rank: string } {
   const cell = svg.split(`<g data-achievement-share-badge="${id}">`)[1]?.split('</g>')[0];
@@ -36,7 +37,7 @@ function textBlocks(svg: string) {
     const attribute = (name: string) => Number(new RegExp(`\\b${name}="([^"]+)"`).exec(attributes)?.[1]);
     const y = attribute('y');
     const spans = [...body.matchAll(/<tspan\b[^>]*dy="([^"]+)"[^>]*>([^<]*)<\/tspan>/g)];
-    return { x: attribute('x'), y, size: attribute('font-size'),
+    return { field: /data-share-field="([^"]+)"/.exec(attributes)?.[1], x: attribute('x'), y, size: attribute('font-size'),
       bottom: y + spans.reduce((sum, span) => sum + Number(span[1]), 0),
       lines: spans.length ? spans.map(span => span[2]) : [body] };
   });
@@ -55,7 +56,9 @@ for (const [locale, copy] of Object.entries(ACHIEVEMENT_COPY)) {
       const svg = renderAchievementShareSvg(args);
       const blocks = textBlocks(svg);
       const [heading, subtitle] = blocks;
-      const [footer, link] = blocks.slice(-2);
+      const footer=blocks.find(block=>block.field==='footer')!;
+      const moneyNote=blocks.find(block=>block.field==='money-note')!;
+      const link=blocks[blocks.length-1];
       assert.ok(heading.lines.length > 1, 'long heading must wrap');
       assert.ok(footer.lines.length > 1, 'long footer must wrap');
       assert.equal(heading.lines.join('').replace(/\s/g, ''), args.heading.replace(/\s/g, ''));
@@ -86,7 +89,8 @@ for (const [locale, copy] of Object.entries(ACHIEVEMENT_COPY)) {
         lastBottom = Math.max(lastBottom, y + height);
       }
       assert.ok(lastBottom + 16 < footer.y - footer.size, 'cards/footer gap');
-      assert.ok(footer.bottom + 12 < link.y - link.size, 'footer/link gap');
+      assert.ok(footer.bottom + 4 < moneyNote.y - moneyNote.size, 'footer/estimate gap');
+      assert.ok(moneyNote.bottom + 12 < link.y - link.size, 'estimate/link gap');
       assert.deepEqual(link.lines, [repositoryUrl]);
       const height = Number(/viewBox="0 0 1000 (\d+)"/.exec(svg)![1]);
       assert.ok(link.bottom + 24 <= height, 'link fits canvas');
@@ -139,7 +143,8 @@ for (const [locale, copy] of Object.entries(ACHIEVEMENT_COPY)) {
       levels: copy.levels, milestone: copy.milestone, footer: '<&"\'>' };
     const svg = renderAchievementShareSvg(args);
     const badge = shareBadge(svg, 'sonnet-main-silver');
-    assert.equal(badge.title, `&lt;&amp;&quot;&apos;&gt; · ${copy.levels[1]}`);
+    const target='≥'+(1_000_000_000).toLocaleString(locale,{maximumFractionDigits:0})+' '+copy.units.tokens;
+    assert.equal(badge.title, `&lt;&amp;&quot;&apos;&gt; · ${copy.levels[1]} · ${target}`);
     assert.equal(badge.name, '&lt;&amp;&quot;&apos;&gt;');
     assert.equal(badge.rank, copy.levels[1]);
     assert.equal(svg, renderAchievementShareSvg(args));
@@ -157,7 +162,9 @@ for (const [locale, copy] of Object.entries(ACHIEVEMENT_COPY)) {
       const badge = shareBadge(svg, id);
       const rank = index < 5 ? copy.levels[index] : copy.milestone;
       const name = index < 5 ? sonnetNames[locale as keyof typeof sonnetNames] : copy.titles[id];
-      assert.equal(badge.title, `${name} · ${rank}`, id);
+      const target=ACHIEVEMENT_DEFINITIONS.find(row=>row.id===id)!.target;
+      const threshold='≥'+target.toLocaleString(locale,{maximumFractionDigits:0})+' '+achievementUnitFor(id,copy.units,'USD');
+      assert.equal(badge.title, [name,rank,threshold,achievementConditionFor(locale,id)].filter(Boolean).join(' · '), id);
       // Wrapping may remove one inter-word space, but must retain the whole name.
       assert.equal(badge.name.replace(/\s/g, ''), name.replace(/\s/g, ''), id);
       assert.equal(badge.rank, rank, id);

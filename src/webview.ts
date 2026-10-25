@@ -16,6 +16,7 @@ import {EFFORT_PROCESSED,EFFORT_OUTPUT,EFFORT_ROOTS} from './achievementCollabor
 import {adaptClaudeQuotaPace,adaptCodexQuotaPace,QUOTA_PACE_MAX_WINDOWS,type QuotaPaceAdapterSnapshot} from './quotaPaceAdapters';
 import {matchesClaudeQuotaPaceWindow,projectCodexQuotaPaceSource} from './quotaPaceSource';
 import { achievementConditionFor } from './achievementConditions';
+import { achievementUnitFor } from './achievementUnit';
 import {API_ACHIEVEMENT_DEFINITIONS,isAchievementMoneyId,type AchievementMoneyFacts,type AchievementMoneyId} from './achievementMoneyCatalog';
 import {cumulativeCrossings} from './achievementMoneyOrigin';
 import type {AchievementMoneyScopes} from './achievementMoneyScopes';
@@ -5701,39 +5702,7 @@ export class UsageWebviewProvider {
       const quality=rule ? this.achievementMoneyFacts[rule.group]?.coverage[rule.scope] : undefined;
       return rule && !['complete','partial','empty'].includes(quality?.status ?? '') ? 'pending' : base;
     };
-    const unitFor = (id: AchievementId): string =>
-      isAchievementMoneyId(id) ? moneyCopy.unit :
-      id.startsWith('codex-output-') ? copy.units.outputTokens :
-      id.startsWith('codex-cache-read-') ? copy.units.codexCachedTokens :
-      /^(astra|sol|luna|sonnet|opus|haiku)-days-/.test(id) ? copy.units.qualifiedDays :
-      id.startsWith('fable-days-') ? copy.units.qualifiedDays :
-      id.startsWith('dual-provider-days-') ? copy.units.sharedDays :
-      id.startsWith('active-weeks-') ? copy.units.weeks :
-      id.startsWith('weekly-average-') ? copy.units.weeklyAverage :
-      id === 'three-family-day' ? copy.units.threeFamilyDay :
-      id === 'dual-provider-day' ? copy.units.sharedDays :
-      id.startsWith('claude-output-') && !id.startsWith('claude-output-sessions-') ? copy.units.outputTokens :
-      id.startsWith('cache-wizard') ? copy.units.cacheReadTokens :
-      id.startsWith('claude-cache-creation-') ? copy.units.cacheCreationTokens :
-      id.startsWith('output-hours-') ? copy.units.hours :
-      id === 'night-output-peak' ? copy.units.nightPeak :
-      id.startsWith('settings-explorer-') ? copy.units.settings :
-      id === 'safe-feature-explorer' ? copy.units.features :
-      id === 'local-share-export' ? copy.units.exports :
-      id === 'local-advice-feedback' ? copy.units.feedback :
-      id.startsWith('root-portfolio-') ||
-      id.startsWith('model-relay-roots-') ? copy.units.roots :
-      id.startsWith('agent-participation-') ? copy.units.childSessions :
-      id.startsWith('agent-conductor') ? copy.units.agentRoots :
-      id === 'agent-standup' || id === 'tiny-ai-company' || id === 'agent-team-gold' ? copy.units.agents :
-      id.startsWith('effort-') ? copy.units.efforts :
-      id.startsWith('active-day-streak') || id === 'streak-machine' ? copy.units.streak :
-      id.startsWith('active-days-') ? copy.units.days :
-      id.startsWith('fable-sessions-') ? copy.units.sessions :
-      id.startsWith('claude-output-sessions-') ? copy.units.outputSessions :
-      id === 'fable-relay' ? copy.units.relay :
-      id.startsWith('model-rainbow') ? copy.units.families :
-      id === 'multi-core-human' || id.startsWith('same-root-models-') ? copy.units.models : copy.units.tokens;
+    const unitFor = (id: AchievementId): string => achievementUnitFor(id,copy.units,moneyCopy.unit);
     const tokenDisplayUnits = new Set([copy.units.tokens,copy.units.outputTokens,copy.units.codexCachedTokens,copy.units.cacheReadTokens,copy.units.cacheCreationTokens,copy.units.weeklyAverage]);
     const faceUnitFor = (id:AchievementId):string => {
       if(isAchievementMoneyId(id))return 'USD';

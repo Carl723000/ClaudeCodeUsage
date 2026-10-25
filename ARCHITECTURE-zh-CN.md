@@ -55,6 +55,7 @@ Codex effort 统计及仅累计范围的金额新活动收据已完成接入。
 | `achievementModels.ts` | 协作／彩虹及 Claude 家族的非金额模型标签识别，独立于固定计价别名；识别不证明远端型号身份或价格。 |
 | `achievementReferenceBooks.ts` | 三个明确已发布的 v1 参考价标签，用于读取已存金额记录，独立于当前价表选择与新增写入授权。 |
 | `achievementTitles.ts` | 公开共用标题助手：等级单独显示时，仅移除由目录中点分隔的匹配本地化等级或其旧名后缀；ID 和固定项不变。 |
+| `achievementUnit.ts` | 图鉴与正式 SVG 共用的本地化单位选择；数值门槛仍由原目录定义，不改变授奖资格。 |
 | `achievementDetailPresentation.ts`、`achievementHistoryDates.ts`、`achievementCalibration.ts` | 精确共同条件展示、仅运行期逐级日志日期归约及受 guard 保护的本地增量校准；不新增持久存储或来源解析器。 |
 | `achievementEffortStatistics.ts`、`achievementCollaboration.ts` | 当前完整索引的 Codex 根任务 × effort 统计及既有联合等级条件；可选 `CodexAchievementSignals.effortStatistics` 按证明修订缓存，仅在已有 effort 广度详情显示。 |
 | `apiHeatmapDaily.ts`、`pricing.ts#getCurrentEstimatePricing` | 最多 366 日只读投影，按次缓存选中型号／组件的内存单价准入；保留当前成本标量，排除通用未知型号回退覆盖，不联网、不读全量记录。 |
