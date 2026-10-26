@@ -61,7 +61,7 @@ only the separate publish action can perform that network operation.
 | Module | Role |
 |---|---|
 | `extension.ts` | Activation, commands, settings, provider lifecycle, refresh orchestration, watchers, status/webview wiring, and anonymous diagnostics. |
-| `claudeApiClient.ts` | Existing Claude OAuth/quota transport and runtime one-way identity signal for the credentials used by the last successful request; pace reads this signal without a new request or credential lookup. |
+| `claudeApiClient.ts` | Existing Claude OAuth/quota transport and runtime one-way identity signal for the credentials used by the last successful request; pace reads this signal without a new request or credential lookup. A read-only derivation for the credentials the selected profile currently holds matches another window's verified observation. |
 | `dataLoader.ts` | Claude parsing, validation, attribution, and content-analysis primitives retained for exact compatibility. |
 | `claudeIncrementalIndex.ts` | Production in-memory per-file Claude index: append-tail parsing, exact cross-file response deduplication, affected-group aggregation, content-analysis contributions, and materialized dashboard rows. |
 | `achievements.ts`, `achievementSnapshot.ts`, `achievementCalendar.ts`, `achievementHours.ts` | Versioned rules and numeric token/day/week/hour evidence; `codexAchievementCalendarProjection` resolves full-census ancestry before selecting witnessed dates, keeping positive subsets separate from whole-census completeness. |
@@ -157,6 +157,9 @@ materialized Claude + Codex daily aggregates
 existing successful raw quota + original observedAt + verified machine-local account HMAC
   ──> runtime continuity owner ──> bounded numeric weekly DTO ──> cycle-average pace
   ──> existing refresh callback ──> document/provider-bound dashboard patch + status tooltip
+another window's verified Claude quota observation + same account HMAC + within the quota TTL
+  ──> display-only quota value keeping its original observedAt ──> no request, never pace input
+  ──> scoped caps named from a shared ≤16-name list, each matched to the stored window HMAC
 existing Codex local-log limits ──> account trust unknown ──> forecast unavailable
 materialized Claude aggregates
   ──> unified sharing selector ──> legacy Share Card or Claude token heatmap preview

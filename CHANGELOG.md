@@ -24,6 +24,13 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
   preempts a later owner still falls back to one ordered rebuild. Measured on
   a 976-file, 1.58 GB corpus: 30 s of re-reading becomes one second and zero
   body reads for an ordinary delete.
+- **Quota missing in additional windows (#55)** — with several VS Code windows
+  open on one Claude login, a window showed the 5-hour and weekly quota only
+  after a successful request of its own, so a newly opened or rate-limited
+  window could go without it for a long time. A window now shows a fresh quota
+  that another window of the same VS Code profile has already fetched for the
+  same login, without a request of its own, and the windows no longer compete
+  for the usage endpoint.
 
 ### Changed
 - **Manifest scans stat files concurrently (#99)** — every refresh statted the

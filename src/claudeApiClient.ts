@@ -146,6 +146,19 @@ export class ClaudeApiClient {
     return this.credentialsPath;
   }
 
+  /** The getLastQuotaIdentitySignal() derivation for the credentials this
+   * profile currently holds, so another window's verified observation can be
+   * matched before this window has a successful request of its own. It uses
+   * the same credential read as the request path and never refreshes a token
+   * or sends a request. */
+  async currentQuotaIdentitySignal(): Promise<string | null> {
+    if (!this.quotaIdentitySalt) return null;
+    const refreshToken = (await this.loadCredentials())?.claudeAiOauth?.refreshToken;
+    return typeof refreshToken === 'string' && refreshToken.length > 0
+      ? claudeQuotaIdentitySignal(this.quotaIdentitySalt, refreshToken)
+      : null;
+  }
+
   /** Machine-local one-way continuity signal for the exact credentials used
    * by the last successful quota request. No token or account identifier is
    * returned to the extension host. */

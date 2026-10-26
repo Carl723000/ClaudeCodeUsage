@@ -53,12 +53,15 @@ import {
 } from './weeklyValue';
 import {
   claudeQuotaCapturesFromUsage,
+  claudeQuotaScopeLabels,
   codexQuotaCapturesFromWeeklyObservations,
   createEmptyQuotaObservationStore,
   fingerprintForStableIdentity,
+  latestClaudeQuotaUsage,
   loadQuotaObservationStore,
   mergeQuotaCaptures,
   QUOTA_OBSERVATION_FILE,
+  QUOTA_SCOPE_LABEL_FILE,
   QuotaCapture,
   QuotaObservationRepository,
   QuotaObservationScopedClearBlockedError,
@@ -516,6 +519,8 @@ export class ClaudeCodeUsageExtension {
     usageLimitsLastUpdate: Date;
     usageLimitsBackoffUntil: Date;
     usageLimitsFailStreak: number;
+    // Shown from another window's success: display only, never pace input.
+    usageLimitsShared: boolean;
   } = {
     records: [],
     contentAnalysis: null,
@@ -526,7 +531,8 @@ export class ClaudeCodeUsageExtension {
     usageLimits: null,
     usageLimitsLastUpdate: new Date(0),
     usageLimitsBackoffUntil: new Date(0),
-    usageLimitsFailStreak: 0
+    usageLimitsFailStreak: 0,
+    usageLimitsShared: false
   };
 
   private outputChannel: vscode.OutputChannel;
@@ -1123,7 +1129,9 @@ export class ClaudeCodeUsageExtension {
         return codexIndexCanonicalName(name) === canonical;
       }
       return /^quota-observations-v2\.json\.quarantine-\d+-[a-f0-9]{8}$/.test(name) ||
-        /^\.quota-observations-v2\.json\.\d+\.[a-f0-9]{12}\.tmp$/.test(name);
+        /^\.quota-observations-v2\.json\.\d+\.[a-f0-9]{12}\.tmp$/.test(name) ||
+        name === QUOTA_SCOPE_LABEL_FILE ||
+        /^\.quota-scope-labels-v1\.json\.\d+\.[a-f0-9]{12}\.tmp$/.test(name);
     });
   }
 
@@ -4846,6 +4854,11 @@ export class ClaudeCodeUsageExtension {
       identitySignal,
     );
     this.refreshQuotaObservationViews();
+    try {
+      await this.quotaObservationRepository.rememberScopeLabels(claudeQuotaScopeLabels(usage));
+    } catch {
+      // Naming a scoped cap in another window is best effort.
+    }
   }
 
   private async recordCodexQuotaObservations(
@@ -4870,7 +4883,7 @@ export class ClaudeCodeUsageExtension {
     if (this.settings.get<boolean>('showWeeklyQuotaPace') !== true ||
         this.settings.get<boolean>('usageLimitTracking') !== true) return null;
     const observedAt = this.cache.usageLimitsLastUpdate.getTime();
-    if (!(observedAt > 0) || !this.cache.usageLimits) return null;
+    if (!(observedAt > 0) || !this.cache.usageLimits || this.cache.usageLimitsShared) return null;
     const signal = this.apiClient.getLastQuotaIdentitySignal();
     return this.claudeQuotaPaceSource.project({enabled: true, usage: this.cache.usageLimits,
       observedAt, verifiedAccountFingerprint: signal
@@ -4886,10 +4899,6 @@ export class ClaudeCodeUsageExtension {
       return null;
     }
     const now = Date.now();
-    // While backing off after a 429, return the cached value without refetching.
-    if (now < this.cache.usageLimitsBackoffUntil.getTime()) {
-      return this.cache.usageLimits;
-    }
     const age = Date.now() - this.cache.usageLimitsLastUpdate.getTime();
     // Activity-aware cache: 20 s while Claude Code is actively writing (so the
     // quota keeps pace during high-consumption ultracode runs), 120 s when
@@ -4933,9 +4942,18 @@ export class ClaudeCodeUsageExtension {
       lease: quotaNetworkLease,
       settled,
     });
-    let fetched: ClaudeApiUsageResponse | null;
+    let shared: ClaudeApiUsageResponse | null = null;
+    let fetched: ClaudeApiUsageResponse | null = null;
     try {
-      fetched = await apiClient.fetchUsageLimits(controller.signal);
+      // Another window of this profile may already hold a fresher success for
+      // the same account. The lookup shares this request's ownership, so a
+      // blur, settings change or disposal cancels both.
+      shared = await this.adoptSharedQuota(ttl, controller.signal);
+      // While backing off after a 429, keep the cached value without refetching.
+      if (!shared && !controller.signal.aborted &&
+          now >= this.cache.usageLimitsBackoffUntil.getTime()) {
+        fetched = await apiClient.fetchUsageLimits(controller.signal);
+      }
     } finally {
       this.activeQuotaNetworks.delete(controller);
       markSettled();
@@ -4946,7 +4964,10 @@ export class ClaudeCodeUsageExtension {
         );
       }
     }
-    if (controller.signal.aborted) {
+    if (shared) {
+      return shared;
+    }
+    if (controller.signal.aborted || now < this.cache.usageLimitsBackoffUntil.getTime()) {
       return this.cache.usageLimits;
     }
     if (
@@ -4960,6 +4981,7 @@ export class ClaudeCodeUsageExtension {
     if (fetched) {
       const observedAt = Date.now();
       this.cache.usageLimits = fetched;
+      this.cache.usageLimitsShared = false;
       this.cache.usageLimitsLastUpdate = new Date(observedAt);
       this.cache.usageLimitsFailStreak = 0;
       // Even on success, hold off /usage for 30s — this floor also covers the
@@ -4970,11 +4992,60 @@ export class ClaudeCodeUsageExtension {
       return fetched;
     }
     // Failed (usually a 429 or invalid/expired credentials). Exponentially back
-    // off to one hour; a credentials-file change clears this immediately.
+    // off to one hour; a credentials-file change or another window's fresh
+    // success clears this immediately.
     this.cache.usageLimitsFailStreak++;
     const backoffMs = quotaFailureBackoffMs(this.cache.usageLimitsFailStreak);
     this.cache.usageLimitsBackoffUntil = new Date(now + backoffMs);
     return this.cache.usageLimits;
+  }
+
+  /** Another window of this profile may already hold a fresher success for the
+   * same account in the shared observation store; showing it costs no request.
+   * The account must match the credentials this profile currently holds, and
+   * the value keeps its original observation time, so it ages as it would in
+   * the window that fetched it. */
+  private async adoptSharedQuota(
+    ttl: number,
+    cancel: AbortSignal,
+  ): Promise<ClaudeApiUsageResponse | null> {
+    const profileGeneration = this.claudeProfileGeneration;
+    const apiClient = this.apiClient;
+    const since = this.cache.usageLimitsLastUpdate.getTime();
+    const current = (): boolean => !cancel.aborted && !this.disposed &&
+      !this.localDataClearedRequiresReload &&
+      profileGeneration === this.claudeProfileGeneration && apiClient === this.apiClient;
+    try {
+      const store = await this.quotaObservationRepository.load();
+      const now = Date.now();
+      const fresh = (observedAt: number): boolean =>
+        observedAt > since && observedAt <= now && now - observedAt < ttl;
+      if (!current() || !store.observations.some((item) =>
+        item.provider === 'claude' && fresh(item.observedAt))) return null;
+      const signal = await apiClient.currentQuotaIdentitySignal();
+      const sharedLabels = signal ? await this.quotaObservationRepository.loadScopeLabels() : [];
+      if (!signal || !current()) return null;
+      const shared = latestClaudeQuotaUsage(
+        store,
+        fingerprintForStableIdentity(this.quotaFingerprintSalt, 'claude', signal),
+        this.quotaFingerprintSalt,
+        [...claudeQuotaScopeLabels(this.cache.usageLimits), ...sharedLabels],
+      );
+      if (!shared || !fresh(shared.observedAt) || this.hasExpiredWindow(shared.usage)) return null;
+      this.cache.usageLimits = shared.usage;
+      this.cache.usageLimitsShared = true;
+      this.cache.usageLimitsLastUpdate = new Date(shared.observedAt);
+      this.cache.usageLimitsFailStreak = 0;
+      this.cache.usageLimitsBackoffUntil = new Date(shared.observedAt + 30000);
+      const ts = new Date().toLocaleTimeString(undefined, { hour12: false });
+      this.outputChannel.appendLine(
+        `[${ts}] usage: shared from another window, observed ${Math.round((now - shared.observedAt) / 1000)}s ago`,
+      );
+      return shared.usage;
+    } catch {
+      // Sharing is only a shortcut; the window's own request path still runs.
+      return null;
+    }
   }
 
   /** True if any usage window's reset time has already passed (so the cached
