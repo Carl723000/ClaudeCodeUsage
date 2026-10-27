@@ -12,6 +12,8 @@
 
 > 스크린샷에는 영어와 중국어 간체 UI가 포함됩니다. 전체 기능 설명은 [메인 README](README.md)를 참고하세요.
 
+- Codex는 선택 설정 `codex.statusBarUsageFormat`으로 입력·출력·캐시 사용량을 함께 표시할 수 있습니다. 비워 두면 현재 지표를 유지합니다. [형식 안내](CHANGELOG.md#unreleased).
+
 ## 스크린샷
 
 ### 상태 표시줄

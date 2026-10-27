@@ -37,6 +37,8 @@ export interface CodexParserState {
   model?: string;
   effort?: string;
   role: ProviderThreadRole;
+  /** False/absent cannot certify cache fields in previously retained usage. */
+  cacheInputComplete?: boolean;
   highWater?: CodexRawTokenCounts;
   snapshotSignaturesBySource?: Record<string, string>;
   previousSnapshotSignature?: string;
@@ -70,6 +72,7 @@ export function createCodexParserState(
     fileKey,
     sessionKey: fileKey,
     identityLocked: false,
+    cacheInputComplete: true,
     role: 'root',
     qualityFlags: [],
   };
@@ -107,6 +110,15 @@ function rawTokenCounts(value: unknown): CodexRawTokenCounts | null {
     reasoningOutputTokens: validTokenField('reasoning_output_tokens') ?? 0,
     totalTokens: validTokenField('total_tokens') ?? inputTokens + outputTokens,
   };
+}
+
+function reportedCacheInput(value: unknown): boolean {
+  if (!isObject(value)) return false;
+  const input = numberField(value, 'input_tokens');
+  // Same alias priority as rawTokenCounts; never certify an ignored alias.
+  const cached = [numberField(value, 'cached_input_tokens'), numberField(value, 'cache_read_input_tokens')]
+    .find(candidate => Number.isSafeInteger(candidate) && candidate! >= 0);
+  return Number.isSafeInteger(input) && input! >= 0 && cached !== undefined && cached <= input!;
 }
 
 function rawSignature(value: CodexRawTokenCounts | null): string {
@@ -629,6 +641,8 @@ function parseTokenCount(
       : state;
   let nextState: CodexParserState = {
     ...flaggedState,
+    cacheInputComplete: state.cacheInputComplete === true && !componentClamped &&
+      reportedCacheInput(last ? info.last_token_usage : info.total_token_usage),
     ...(nextHighWater ? { highWater: nextHighWater } : {}),
     previousSnapshotSignature: signature,
   };

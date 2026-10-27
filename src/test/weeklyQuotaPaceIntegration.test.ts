@@ -54,6 +54,7 @@ function harness(enabled = true, tracking = true) {
     showCost: true, showContext: false, statusBarMetric: 'tokens',
     showScopedWeekly: true, quotaFiveHourOnly: false, showResetInStatusBar: true,
     resetCountdownFormat: 'units', statusBarQuotaFormat: 'wk {weekly}',
+    'codex.statusBarUsageFormat': 'CX {input}',
     statusBarProvider: 'claude', dashboardAutoRefresh: false,
     'advice.effectiveness.enabled': false,
   };
@@ -184,7 +185,7 @@ test('actual panel pace ON/OFF dispatch only repaints cached quota and provider 
     const deliveries = h.providers.length;
     withoutActivity(() => h.extension.onSettingsChangedFromPanel('showWeeklyQuotaPace'));
     assert.deepEqual(h.visibility[h.visibility.length - 1], [true, false, true, 'tokens', true, false, true,
-      'units', 'wk {weekly}', enabled], 'tenth visibility argument carries the shared pace toggle');
+      'units', 'wk {weekly}', enabled, 'CX {input}'], 'pace and usage format keep separate visibility arguments');
     assert.strictEqual(h.quota[h.quota.length - 1]?.[0], usage, 'quota repaint uses the existing raw cache');
     const pace = h.quota[h.quota.length - 1]?.[1];
     if (enabled) {

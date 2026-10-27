@@ -57,3 +57,17 @@ test('pricing changes also invalidate sharing projections before a dashboard ref
     /if \(pricingBackendChanged\) \{\s*this\.invalidateClaudeUsagePricingCache\(\);\s*this\.webviewProvider\.invalidateShareCardPreview\(\{\s*pricingChanged:\s*true\s*\}\);/,
   );
 });
+
+test('Codex usage format edits only reformat existing status and materialized UI',()=>{
+ const Module=require('node:module'),load=Module._load;
+ Module._load=function(name:string,...args:unknown[]){return name==='vscode'?{env:{}}:load.call(this,name,...args);};
+ let Extension:any;try{Extension=require('../extension').ClaudeCodeUsageExtension;}finally{Module._load=load;}
+ const owner:any=Object.create(Extension.prototype);let ui=0,format:any;
+ owner.disposed=false;owner.cache={usageLimits:null};owner.syncProviderUi=()=>ui++;
+ owner.getConfiguration=()=>({codexStatusBarUsageFormat:'CX {input} {output}'});
+ owner.statusBar={setVisibility:(...args:any[])=>format=args[10],updateQuota:()=>undefined};
+ owner.getClaudeQuotaPaceSnapshot=()=>null;
+ for(const method of ['refreshData','onConfigurationChanged','createCodexProvider','startWatcher'])owner[method]=()=>{throw Error('Forbidden source work '+method);};
+ owner.onSettingsChangedFromPanel('codex.statusBarUsageFormat');
+ assert.equal(ui,1);assert.equal(format,'CX {input} {output}');
+});

@@ -12,6 +12,8 @@
 
 > 截圖包含英文與簡體中文介面。完整功能說明請見[主 README](README.md)。
 
+- Codex 可透過選填的 `codex.statusBarUsageFormat` 同時顯示輸入、輸出與快取用量；留空沿用目前指標。詳見[格式說明](CHANGELOG.md#unreleased)。
+
 ## 截圖
 
 ### 狀態列

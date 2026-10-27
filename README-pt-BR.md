@@ -6,6 +6,8 @@
 extensão lê registros locais e mostra cada provedor conforme o significado
 dos seus dados. **Não é uma ferramenta de cobrança.**
 
+- O Codex pode mostrar entrada, saída e cache juntos com `codex.statusBarUsageFormat` opcional; vazio mantém a métrica atual. Veja [detalhes do formato](CHANGELOG.md#unreleased).
+
 ## O essencial
 
 - **Atualização e recuperação mais claras:** a pausa vale para as duas páginas,

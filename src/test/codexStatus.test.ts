@@ -11,6 +11,7 @@ import { CodexUsageScopeView } from '../providers/codex/codexUsage';
 
 const NOW = Date.parse('2026-07-20T12:00:00.000Z');
 const scope: CodexUsageScopeView = {
+  cacheInputComplete: true,
   total: {
     processed: 1_200,
     fresh: 400,
@@ -144,4 +145,52 @@ test('expired last-observed limits are omitted', () => {
   );
   assert.equal(formatted.limitText, undefined);
   assert.equal(formatted.stale, true);
+});
+
+const TEMPLATE = 'CX | In {input} | Out {output} | Cache {cacheHitRate}%';
+const customStatus = (value: CodexUsageScopeView, template = TEMPLATE) =>
+  formatCodexStatus(value, 'processed', null, NOW, { usageFormat: template } as any);
+
+test('custom Codex usage template shows daily input, output and cached/input percentage', () => {
+  assert.equal(customStatus(scope).text, 'CX | In 1k | Out 200 | Cache 80%');
+  assert.equal(customStatus(scope, '{cachedInput}/{input} · {processed}').text, '800/1k · 1.2k');
+  assert.equal(customStatus({...scope,total:{...scope.total,input:3,cachedInput:2}}).text,
+    'CX | In 3 | Out 200 | Cache 67%');
+});
+
+test('custom usage template preserves subtotal marking and independent quota behavior', () => {
+  const value = formatCodexStatus({...scope,indexedSubtotal:true}, 'fresh', limit(NOW+60000), NOW,
+    {usageFormat:TEMPLATE} as any);
+  assert.equal(value.text, 'CX | In 1k | Out 200 | Cache 80%*');
+  assert.equal(value.limitText, '5h 58%');
+});
+
+test('zero, absent or invalid cache evidence never invents a percentage', () => {
+  for (const [input,cachedInput] of [[0,0],[100,undefined],[100,101],[NaN,10],[-1,0],[Infinity,0]]) {
+    const value = customStatus({...scope,total:{...scope.total,input,cachedInput}} as any);
+    assert.match(value.text, /Cache —%$/);
+    assert.doesNotMatch(value.text, /NaN|Infinity|Cache 0%/);
+  }
+  assert.equal(customStatus({...scope,total:{...scope.total,input:100,cachedInput:0}}).text,
+    'CX | In 100 | Out 200 | Cache 0%');
+});
+
+test('unsupported or unsafe templates fall back to the current metric without interpolation', () => {
+  const invalid=['{unknown}','CX {input','CX input}', 'CX $(sync) {input}', '{input}\n{output}',
+    'x'.repeat(121), 'CX only', '{input}\u2028{output}'];
+  for (const usageFormat of invalid) assert.equal(customStatus(scope,usageFormat).text,'CX 1.2k');
+  const validate = require('../codexStatus').isValidCodexUsageFormat;
+  for(const value of invalid) assert.equal(validate(value),false,value);
+  assert.equal(validate(TEMPLATE),true);assert.equal(validate(''),true);
+  assert.equal(validate('   '),true);assert.equal(validate(32),false);
+  assert.equal(customStatus(scope,'').text,'CX 1.2k');
+});
+
+
+test('legacy or incomplete cache evidence never turns numeric fallback zeros into reported cache', () => {
+  for (const cacheInputComplete of [undefined, false]) {
+    const value = {...scope,cacheInputComplete};
+    assert.equal(customStatus(value, '{cachedInput} ({cacheHitRate}%)').text, '— (—%)');
+    assert.equal(customStatus(value, '{input} / {output}').text, '1k / 200');
+  }
 });

@@ -721,3 +721,22 @@ test('reset sharing preferences host step clears only sharing-owned state and re
   assert.match(reset, /globalState\.update\('ccu\.heatmapPath', undefined\)/);
   assert.doesNotMatch(reset, /quota|index|secret|token|cookie|log/i);
 });
+
+test('Codex usage template persists as an opt-in bounded preference across store recreation', async () => {
+  const state = new Map<string, unknown>();
+  const context = fakeContext({state});
+  const store = new SettingsStore(context);
+  const key = 'codex.statusBarUsageFormat';
+  const template = 'CX | In {input} | Out {output} | Cache {cacheHitRate}%';
+  assert.equal(store.get(key), '');
+  await store.set(key, template);
+  assert.equal(new SettingsStore(context).get(key), template);
+  for (const value of ['{unknown}', '{input}\n{output}', 'CX $(sync) {input}', '{input}'.repeat(20)]) {
+    await store.set(key, value);
+    assert.equal(store.get(key), template, 'invalid edits retain the accepted value');
+  }
+  await store.reset(key);
+  assert.equal(new SettingsStore(context).get(key), '');
+  state.set('ccu.setting.'+key, '{unsupported}');
+  assert.equal(store.get(key), '', 'unvalidated persisted text falls back without a migration write');
+});
