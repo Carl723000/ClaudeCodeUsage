@@ -7,6 +7,12 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 ## [Unreleased]
 
 ### Fixed
+- **Quota sharing history and clearing** — adopting a shared quota now selects
+  the matching account's weekly history. Pending refreshes cannot restore cleared
+  history or scope names, and read-only sharing lookups cannot quarantine a valid
+  store that replaced an invalid snapshot.
+  中文：采用共享额度时同步选中匹配账号的每周历史；待完成刷新不能恢复已清除的历史或
+  范围名称，只读共享查询也不会误隔离替换无效快照的新有效存储。
 - **Rewriting a transcript re-read the whole history (#99)** — a mid-file edit
   or truncation (`/rewind`, session repair, an external touch) tripped the
   source-mutation guard and every file was rebuilt from its body. The rewrite

@@ -685,6 +685,14 @@ Every clear that covers Claude, including Clear All, also removes the
 `quota-scope-labels-v1.json` scope-name list and its interrupted-write
 siblings under that lease; a Codex-only clear keeps it.
 
+Observations and scope names from one successful response share a write lease;
+clear/cancellation ownership is checked inside that lease and before updating
+in-memory history. A refresh started before clearing cannot restore the cleared
+host history or recreate the scope-name file in a later write. Adopting another
+window's quota also selects the matched account's history from the same read-only
+snapshot. Invalid shared snapshots are ignored without quarantining or renaming
+files; this does not add retained fields or broaden any deletion scope.
+
 Clear All deletes an exact catalog of released setting/state names, not every
 key beginning with `ccu.setting.`. Unknown or future keys are preserved. Before
 any mutation it checks all currently visible configuration scopes; an

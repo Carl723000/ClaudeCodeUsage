@@ -139,6 +139,7 @@ Claude aggregate + Codex scope ──> 并列 Compare（不跨 provider 求和�
 其他窗口已核验的 Claude 额度观测 + 相同账号 HMAC + 额度 TTL 内
   ──> 保留原始 observedAt 的仅显示额度值 ──> 不发请求，不作节奏输入
   ──> 范围上限名称取自共享的最多 16 项名称列表，每项须与已存窗口 HMAC 匹配
+  ──> 选中匹配的账号指纹，并用同一快照刷新该账号的每周历史
 既有 Codex 本地额度 ──> 账号可信度未知 ──> 预测不可用
 已物化 Claude 聚合
   ──> 统一分享选择器 ──> 旧版分享卡或 Claude token 热力图预览
@@ -150,6 +151,12 @@ Claude aggregate + Codex scope ──> 并列 Compare（不跨 provider 求和�
   ──> 可选 host-owned Prepared 请求 ──> 预览 ──> 显式 BYOK 发送
   ──> 本地反馈 ──> 净化可比 pair ──> 冻结 comparison envelope
 ```
+
+共享额度快照的读取完全只读，包括无效文件处理：不会隔离或重命名文件，文件身份未变化时
+复用已解析快照。成功响应的观测与范围名称在同一共享 lease 内持久化。宿主将清除／取消
+所有权传入排队写入，在 lease 内读取后重新核验，并在发布历史前再次核验；清除前的异步
+任务恢复执行时，不能重新填入已清除的宿主状态，也不能另行发起延后的名称写入。
+
 
 任一 provider unavailable 或 partial 时，不清空另一 provider 最近验证的 snapshot。
 Claude-only 保持 v2.2.1 行为；Codex-only 默认显示 Codex；两者都有时 dashboard 默认 Claude。

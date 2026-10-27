@@ -561,3 +561,270 @@ test('the shared-quota identity uses the request path credential read and never 
   guard(withoutRefreshToken);
   assert.equal(await withoutRefreshToken.currentQuotaIdentitySignal(), null);
 });
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+function enableHistoryClear(extension: any, storeFile: string): void {
+  extension.context = {
+    globalStorageUri: { fsPath: path.dirname(storeFile) },
+    globalState: { keys: () => [], get: () => undefined, update: async () => undefined },
+  };
+  extension.stopQuotaColdRetry = () => undefined;
+}
+
+test('shared adoption switches the selected account history after a missed credentials watcher', async (t) => {
+  const clock = controlledClock(t);
+  const storeFile = sharedStoreFile();
+  const profileA = claudeProfile('fixture-refresh-a');
+  const window = editorWindow(storeFile, profileA);
+  window.api.status = 200;
+  window.api.payload = usage(clock.now(), 20, 8);
+  await window.refresh();
+  const fingerprintA = window.extension.activeClaudeQuotaFingerprint;
+  clock.advance(121_000);
+  const profileB = claudeProfile('fixture-refresh-b');
+  fs.copyFileSync(path.join(profileB, '.credentials.json'), path.join(profileA, '.credentials.json'));
+  const other = editorWindow(storeFile, profileB);
+  other.api.status = 200;
+  other.api.payload = usage(clock.now(), 40, 16, 12);
+  await other.refresh();
+  clock.advance(1_000);
+
+  assert.equal(barText(await window.refresh()), '5h 40% · wk 16% (fable 12%)');
+  assert.equal(window.api.requests, 1, 'only the earlier request for A');
+  assert.equal(window.extension.activeClaudeQuotaFingerprint, other.extension.activeClaudeQuotaFingerprint);
+  assert.notEqual(window.extension.activeClaudeQuotaFingerprint, fingerprintA);
+  assert.deepEqual(window.extension.claudeWeeklyQuotaHistory.map((item: any) => item.usedPercent), [16]);
+  assert.deepEqual(window.extension.quotaObservationStore, await other.extension.quotaObservationRepository.load());
+  assert.equal(window.extension.getClaudeQuotaPaceSnapshot(), null);
+
+  enableHistoryClear(window.extension, storeFile);
+  await window.extension.executeLocalDataAction('clear-quota-history', {
+    provider: 'claude', accountFingerprint: window.extension.activeClaudeQuotaFingerprint,
+  });
+  assert.deepEqual(window.extension.claudeWeeklyQuotaHistory, []);
+  const retained = await other.extension.quotaObservationRepository.load();
+  assert.ok(retained.observations.length > 0);
+  assert.ok(retained.observations.every((item: any) => item.accountFingerprint === fingerprintA),
+    'clearing B preserves the exact A history scope');
+
+  enableAllDerivedClear(window.extension, storeFile);
+  assert.equal((await window.extension.clearAllExtensionDerivedData()).ok, true);
+  await window.extension.verifyClearAllPostcondition();
+  assert.deepEqual(window.extension.quotaObservationStore.observations, []);
+  assert.deepEqual(window.extension.claudeWeeklyQuotaHistory, []);
+  assert.equal(window.extension.cache.usageLimits, null);
+});
+
+for (const scope of [{}, { provider: 'claude' as const }]) {
+  test(`a paused host append cannot restore history or labels after ${JSON.stringify(scope)} clear`, async (t) => {
+    const clock = controlledClock(t);
+    const storeFile = sharedStoreFile();
+    const window = editorWindow(storeFile, claudeProfile('fixture-refresh-a'));
+    enableHistoryClear(window.extension, storeFile);
+    window.api.status = 200;
+    window.api.payload = usage(clock.now(), 20, 8, 10);
+    const repository = window.extension.quotaObservationRepository as QuotaObservationRepository;
+    const appended = deferred();
+    const resume = deferred();
+    const append = repository.append.bind(repository);
+    repository.append = async (...args: Parameters<typeof append>) => {
+      const result = await append(...args);
+      appended.resolve();
+      await resume.promise;
+      return result;
+    };
+    const pending = window.refresh();
+    await appended.promise;
+    try {
+      await window.extension.executeLocalDataAction('clear-quota-history', scope);
+    } finally { resume.resolve(); }
+    await pending;
+    assert.equal(fs.existsSync(path.join(path.dirname(storeFile), QUOTA_SCOPE_LABEL_FILE)), false);
+    assert.deepEqual((await repository.load()).observations, []);
+    assert.deepEqual(window.extension.quotaObservationStore.observations, []);
+    assert.deepEqual(window.extension.claudeWeeklyQuotaHistory, []);
+  });
+}
+
+test('a clear while a host append waits for its lease retires that write', async (t) => {
+  const clock = controlledClock(t);
+  const storeFile = sharedStoreFile();
+  const window = editorWindow(storeFile, claudeProfile('fixture-refresh-a'));
+  enableHistoryClear(window.extension, storeFile);
+  window.api.status = 200;
+  window.api.payload = usage(clock.now(), 20, 8, 10);
+  const leaseModule = require('../providers/codex/codexIndexLease') as typeof import('../providers/codex/codexIndexLease');
+  const acquire = leaseModule.acquireCodexIndexLease;
+  const waiting = deferred();
+  const resume = deferred();
+  let held = false;
+  leaseModule.acquireCodexIndexLease = async (...args: Parameters<typeof acquire>) => {
+    if (args[0] === storeFile && !held) {
+      held = true;
+      waiting.resolve();
+      await resume.promise;
+    }
+    return acquire(...args);
+  };
+  t.after(() => { leaseModule.acquireCodexIndexLease = acquire; });
+  const pending = window.refresh();
+  await waiting.promise;
+  // A second repository represents the concurrent clearer, while the actual
+  // host clear starts its lifecycle fence before queuing behind the append.
+  const clear = window.extension.executeLocalDataAction('clear-quota-history', {});
+  const peer = new QuotaObservationRepository(storeFile, SALT);
+  await peer.clear({});
+  resume.resolve();
+  await Promise.all([pending, clear]);
+  assert.deepEqual((await peer.load()).observations, []);
+  assert.deepEqual(window.extension.quotaObservationStore.observations, []);
+  assert.deepEqual(await peer.loadScopeLabels(), []);
+});
+
+for (const invalid of ['{broken-json', JSON.stringify({ schemaVersion: 999 })]) {
+  test(`snapshot lookup never quarantines an atomic valid replacement after reading ${invalid}`, async (t) => {
+    const clock = controlledClock(t);
+    const storeFile = sharedStoreFile();
+    const window = editorWindow(storeFile, claudeProfile('fixture-refresh-a'));
+    window.extension.cache.usageLimitsBackoffUntil = new Date(clock.now() + HOUR);
+    fs.writeFileSync(storeFile, invalid);
+    const peer = new QuotaObservationRepository(storeFile, SALT);
+    // First make a real validated store, then install it atomically at the
+    // precise point after the snapshot has read the old invalid inode.
+    const validFile = sharedStoreFile();
+    await new QuotaObservationRepository(validFile, SALT).append(claudeQuotaCapturesFromUsage(
+      usage(clock.now(), 30, 12), claudeQuotaIdentitySignal(SALT, 'fixture-refresh-a'),
+      'verified-local-signal', clock.now(),
+    ));
+    const promises = require('node:fs/promises') as typeof import('node:fs/promises');
+    const readFile = promises.readFile;
+    let replaced = false;
+    promises.readFile = (async (...args: any[]) => {
+      const body = await (readFile as any)(...args);
+      if (args[0] === storeFile && !replaced) {
+        replaced = true;
+        fs.renameSync(validFile, storeFile);
+      }
+      return body;
+    }) as typeof promises.readFile;
+    t.after(() => { promises.readFile = readFile; });
+
+    assert.equal(await window.refresh(), null);
+    assert.equal(fs.existsSync(storeFile), true, 'the newer canonical store survives snapshot validation');
+    assert.deepEqual(fs.readdirSync(path.dirname(storeFile)), ['quota-observations-v2.json']);
+    assert.equal(barText(await window.refresh()), '5h 30% · wk 12%', 'the next lookup reads the replacement');
+    assert.equal((await peer.load()).observations.length, 2);
+    assert.equal(window.api.requests, 0);
+  });
+}
+
+function enableAllDerivedClear(extension: any, storeFile: string): void {
+  enableHistoryClear(extension, storeFile);
+  extension.initializationWrites = Promise.resolve();
+  extension.initializationWriteFailure = null;
+  extension.settings.preflightResetAllOwnedData = () => undefined;
+  extension.settings.resetAllOwnedData = async () => undefined;
+  extension.stopAutoRefresh = () => undefined;
+  extension.stopFileWatching = () => undefined;
+  extension.stopCredentialsWatching = () => undefined;
+  extension.cancelAdviceNetworks = async () => undefined;
+  extension.clearCodexDerivedIndex = async () => undefined;
+  extension.webviewProvider.clearAchievementGrants = async () => {
+    const { AchievementRecordRepository, ACHIEVEMENT_RECORD_FILE } =
+      require('../achievementRecordStore') as typeof import('../achievementRecordStore');
+    await new AchievementRecordRepository(path.join(path.dirname(storeFile), ACHIEVEMENT_RECORD_FILE)).clear();
+  };
+  extension.webviewProvider.clearAdviceLocalData = async () => true;
+  extension.webviewProvider.clearSharingRuntimeState = () => undefined;
+  extension.syncProviderUi = () => undefined;
+}
+
+test('Clear All keeps its actual postconditions after a pre-clear host append resumes', async (t) => {
+  const clock = controlledClock(t);
+  const storeFile = sharedStoreFile();
+  const window = editorWindow(storeFile, claudeProfile('fixture-refresh-a'));
+  enableAllDerivedClear(window.extension, storeFile);
+  window.api.status = 200;
+  window.api.payload = usage(clock.now(), 20, 8, 10);
+  const repository = window.extension.quotaObservationRepository as QuotaObservationRepository;
+  const appended = deferred();
+  const resume = deferred();
+  const append = repository.append.bind(repository);
+  repository.append = async (...args: Parameters<typeof append>) => {
+    const result = await append(...args);
+    appended.resolve();
+    await resume.promise;
+    return result;
+  };
+  const pending = window.refresh();
+  await appended.promise;
+  try {
+    assert.equal((await window.extension.clearAllExtensionDerivedData()).ok, true);
+  } finally { resume.resolve(); }
+  assert.equal(await pending, null, 'an old request cannot return its cleared cache');
+  await window.extension.verifyClearAllPostcondition();
+  assert.equal(fs.existsSync(path.join(path.dirname(storeFile), QUOTA_SCOPE_LABEL_FILE)), false);
+  assert.deepEqual(window.extension.quotaObservationStore.observations, []);
+  assert.deepEqual(window.extension.claudeWeeklyQuotaHistory, []);
+  assert.equal(window.extension.cache.usageLimits, null);
+  assert.equal(await window.refresh(), null, 'Clear All remains fenced until reload');
+});
+
+test('a peer clear between append completion and host continuation cannot resurrect scope labels', async (t) => {
+  const clock = controlledClock(t);
+  const storeFile = sharedStoreFile();
+  const window = editorWindow(storeFile, claudeProfile('fixture-refresh-a'));
+  window.api.status = 200;
+  window.api.payload = usage(clock.now(), 20, 8, 10);
+  const repository = window.extension.quotaObservationRepository as QuotaObservationRepository;
+  const append = repository.append.bind(repository);
+  repository.append = async (...args: Parameters<typeof append>) => {
+    const result = await append(...args);
+    await new QuotaObservationRepository(storeFile, SALT).clear({});
+    return result;
+  };
+  await window.refresh();
+  assert.equal(fs.existsSync(path.join(path.dirname(storeFile), QUOTA_SCOPE_LABEL_FILE)), false);
+  assert.deepEqual((await repository.load()).observations, []);
+});
+
+for (const condition of ['window-blur', 'feature-disabled', 'profile-change'] as const) {
+  test(`${condition} during an append's leased read retires queued persistence`, async (t) => {
+    const clock = controlledClock(t);
+    const storeFile = sharedStoreFile();
+    const window = editorWindow(storeFile, claudeProfile('fixture-refresh-a'));
+    window.api.status = 200;
+    window.api.payload = usage(clock.now(), 20, 8, 10);
+    const reading = deferred();
+    const resume = deferred();
+    const promises = require('node:fs/promises') as typeof import('node:fs/promises');
+    const readFile = promises.readFile;
+    let reads = 0;
+    promises.readFile = (async (...args: any[]) => {
+      try { return await (readFile as any)(...args); }
+      finally {
+        // First read is the read-only sharing lookup; second is append under
+        // its real acquired lease, before it decides whether to persist.
+        if (args[0] === storeFile && ++reads === 2) {
+          reading.resolve();
+          await resume.promise;
+        }
+      }
+    }) as typeof promises.readFile;
+    t.after(() => { promises.readFile = readFile; });
+    const pending = window.refresh();
+    await reading.promise;
+    try { await window.extension.cancelQuotaNetworks(condition); }
+    finally { resume.resolve(); }
+    await pending;
+    assert.equal(fs.existsSync(storeFile), false, 'no observation write outlives its owner');
+    assert.equal(fs.existsSync(path.join(path.dirname(storeFile), QUOTA_SCOPE_LABEL_FILE)), false);
+    assert.deepEqual(window.extension.quotaObservationStore.observations, []);
+    assert.deepEqual(window.extension.claudeWeeklyQuotaHistory, []);
+  });
+}

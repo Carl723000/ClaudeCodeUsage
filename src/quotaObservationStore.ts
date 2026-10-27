@@ -817,7 +817,7 @@ async function quarantine(filePath: string, now: number): Promise<string | undef
 
 export async function loadQuotaObservationStore(
   filePath: string,
-  options: { now?: number } = {},
+  options: { now?: number; quarantineInvalid?: boolean } = {},
 ): Promise<QuotaObservationLoadResult> {
   const now = options.now ?? Date.now();
   let body: string;
@@ -833,7 +833,8 @@ export async function loadQuotaObservationStore(
   try {
     parsed = JSON.parse(body) as unknown;
   } catch {
-    const quarantinePath = await quarantine(filePath, now);
+    const quarantinePath = options.quarantineInvalid === false
+      ? undefined : await quarantine(filePath, now);
     return {
       store: createEmptyQuotaObservationStore(),
       disposition: 'quarantined',
@@ -842,7 +843,8 @@ export async function loadQuotaObservationStore(
   }
   const store = parseStore(parsed, now);
   if (!store) {
-    const quarantinePath = await quarantine(filePath, now);
+    const quarantinePath = options.quarantineInvalid === false
+      ? undefined : await quarantine(filePath, now);
     return {
       store: createEmptyQuotaObservationStore(),
       disposition: 'quarantined',
@@ -1025,16 +1027,26 @@ export class QuotaObservationRepository {
       if (known === null || fresh.every((label) => known.includes(label))) return;
       const lease = await acquireCodexIndexLease(this.filePath);
       try {
-        const current = await readScopeLabels(this.scopeLabelPath());
-        if (current === null || fresh.every((label) => current.includes(label))) return;
-        await saveScopeLabelsAtomic(this.scopeLabelPath(), [
-          ...fresh,
-          ...current.filter((label) => !fresh.includes(label)),
-        ].slice(0, SCOPE_LABEL_LIMIT));
+        await this.writeScopeLabels(fresh);
       } finally {
         await lease.release();
       }
     });
+  }
+
+  /** Caller owns the observation lease throughout this write. */
+  private async writeScopeLabels(
+    labels: readonly string[],
+    shouldPersist: () => boolean = () => true,
+  ): Promise<void> {
+    const fresh = [...new Set(labels.filter(validScopeLabel))];
+    if (fresh.length === 0 || !shouldPersist()) return;
+    const current = await readScopeLabels(this.scopeLabelPath());
+    if (!shouldPersist() || current === null || fresh.every((label) => current.includes(label))) return;
+    await saveScopeLabelsAtomic(this.scopeLabelPath(), [
+      ...fresh,
+      ...current.filter((label) => !fresh.includes(label)),
+    ].slice(0, SCOPE_LABEL_LIMIT));
   }
 
   load(): Promise<QuotaObservationStoreV2> {
@@ -1054,27 +1066,42 @@ export class QuotaObservationRepository {
       // read later instead of hiding the newer file.
       const identity = await fileIdentity(this.filePath);
       if (identity !== null && this.snapshot?.identity === identity) return this.snapshot.store;
-      const { store } = await loadQuotaObservationStore(this.filePath, { now: this.now() });
+      const { store } = await loadQuotaObservationStore(this.filePath, {
+        now: this.now(), quarantineInvalid: false,
+      });
       this.snapshot = identity === null ? undefined : { identity, store };
       return store;
     });
   }
 
-  append(captures: readonly QuotaCapture[]): Promise<QuotaObservationStoreV2> {
+  append(
+    captures: readonly QuotaCapture[],
+    options: { shouldPersist?: () => boolean; scopeLabels?: readonly string[] } = {},
+  ): Promise<QuotaObservationStoreV2> {
     return this.serialized(async () => {
+      const shouldPersist = options.shouldPersist ?? (() => true);
       const lease = await acquireCodexIndexLease(this.filePath);
       try {
+        if (!shouldPersist()) return cloneStore(this.state ?? createEmptyQuotaObservationStore());
         // Always re-read under the process-shared lease. A second VS Code
         // Extension Host may have committed observations since our last call.
         const current = (await loadQuotaObservationStore(this.filePath, {
           now: this.now(),
         })).store;
+        if (!shouldPersist()) return cloneStore(current);
         const next = mergeQuotaCaptures(current, captures, {
           salt: this.salt,
           now: this.now(),
         });
         if (JSON.stringify(next) !== JSON.stringify(current)) {
           await saveQuotaObservationStoreAtomic(this.filePath, next);
+        }
+        // Labels belong to this successful response, not a later independent
+        // write that could recreate a file removed by clear().
+        try {
+          await this.writeScopeLabels(options.scopeLabels ?? [], shouldPersist);
+        } catch {
+          // Naming shared scoped caps is best effort; observations remain valid.
         }
         this.state = next;
         return cloneStore(next);

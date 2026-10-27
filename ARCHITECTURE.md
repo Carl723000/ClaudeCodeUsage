@@ -160,6 +160,7 @@ existing successful raw quota + original observedAt + verified machine-local acc
 another window's verified Claude quota observation + same account HMAC + within the quota TTL
   ──> display-only quota value keeping its original observedAt ──> no request, never pace input
   ──> scoped caps named from a shared ≤16-name list, each matched to the stored window HMAC
+  ──> select the matched account fingerprint and refresh its weekly history from that same snapshot
 existing Codex local-log limits ──> account trust unknown ──> forecast unavailable
 materialized Claude aggregates
   ──> unified sharing selector ──> legacy Share Card or Claude token heatmap preview
@@ -171,6 +172,15 @@ materialized provider snapshots
   ──> optional host-owned Prepared request ──> preview ──> explicit BYOK send
   ──> local feedback ──> sanitized comparable pairs ──> frozen comparison envelope
 ```
+
+Shared quota snapshots are read-only, including invalid-file handling: they never
+quarantine or rename a file, and unchanged file identities reuse the parsed snapshot.
+Successful-response observations and scope labels are persisted under one shared
+lease. The host carries clear/cancellation ownership through the queued write,
+rechecks it inside the lease after reads, and checks it again before publishing
+history; a pre-clear continuation cannot repopulate the cleared host state or
+start a later label write.
+
 
 One provider may be unavailable or partial without clearing the other
 provider's last verified snapshot. Claude-only remains the v2.2.1 behavior;
