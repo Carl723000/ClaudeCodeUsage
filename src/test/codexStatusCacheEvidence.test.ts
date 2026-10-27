@@ -13,6 +13,7 @@ const line=(cache:unknown,ordinal=0,extra={})=>JSON.stringify({type:'event_msg',
 for(const [label,body,expected] of [
  ['missing',line(undefined),'100 — —%'],
  ['mixed',line(undefined)+line(50,1),'200 — —%'],
+ ['unknown cumulative baseline',JSON.stringify({type:'event_msg',timestamp:new Date(now-1000).toISOString(),payload:{type:'token_count',info:{last_token_usage:{input_tokens:100,cached_input_tokens:80,output_tokens:20},total_token_usage:{input_tokens:100,output_tokens:20}}}})+'\n'+JSON.stringify({type:'event_msg',timestamp:new Date(now-500).toISOString(),payload:{type:'token_count',info:{total_token_usage:{input_tokens:200,cached_input_tokens:90,output_tokens:40}}}})+'\n','200 — —%'],
  ['explicit zero',line(0),'100 0 0%'],
  ['known',line(50),'100 50 50%'],
  ['invalid primary with ignored alias',line(101,0,{cache_read_input_tokens:50}),'100 — —%'],

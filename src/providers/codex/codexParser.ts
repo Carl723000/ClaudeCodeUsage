@@ -642,7 +642,8 @@ function parseTokenCount(
   let nextState: CodexParserState = {
     ...flaggedState,
     cacheInputComplete: state.cacheInputComplete === true && !componentClamped &&
-      reportedCacheInput(last ? info.last_token_usage : info.total_token_usage),
+      reportedCacheInput(last ? info.last_token_usage : info.total_token_usage) &&
+      (!current || reportedCacheInput(info.total_token_usage)),
     ...(nextHighWater ? { highWater: nextHighWater } : {}),
     previousSnapshotSignature: signature,
   };
