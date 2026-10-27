@@ -345,6 +345,42 @@ test("showing another window's success clears this window's failure backoff", as
   );
 });
 
+test('a backing-off window parses the shared store again only after it changes', async (t) => {
+  const clock = controlledClock(t);
+  const storeFile = sharedStoreFile();
+  const profile = claudeProfile('fixture-refresh-a');
+  const first = editorWindow(storeFile, profile);
+  first.api.status = 200;
+  first.api.payload = usage(clock.now(), 37, 12);
+  assert.ok(await first.refresh());
+  clock.advance(121_000);
+
+  const promises = require('node:fs/promises') as { readFile: (...args: unknown[]) => unknown };
+  const readFile = promises.readFile;
+  let storeReads = 0;
+  promises.readFile = (...args: unknown[]) => {
+    if (args[0] === storeFile) storeReads += 1;
+    return readFile(...args);
+  };
+  t.after(() => {
+    promises.readFile = readFile;
+  });
+
+  const cold = editorWindow(storeFile, profile);
+  cold.extension.cache.usageLimitsFailStreak = 4;
+  cold.extension.cache.usageLimitsBackoffUntil = new Date(clock.now() + 8 * 60_000);
+  for (let n = 0; n < 3; n++) assert.equal(await cold.refresh(), null);
+  assert.equal(storeReads, 1, 'an unchanged store is parsed once, not on every refresh');
+  assert.equal(cold.api.requests, 0);
+
+  first.api.payload = usage(clock.now(), 38, 12);
+  assert.ok(await first.refresh());
+  clock.advance(1_000);
+  storeReads = 0;
+  assert.equal(barText(await cold.refresh()), '5h 38% · wk 12%');
+  assert.equal(storeReads, 1, "another window's write is picked up with one re-read");
+});
+
 test("another window's success never feeds this window's weekly pace forecast", async (t) => {
   const clock = controlledClock(t);
   const storeFile = sharedStoreFile();
@@ -466,10 +502,10 @@ test('a blur during the shared lookup also cancels the request that would follow
     releaseLookup = resolve;
   });
   const repository = window.extension.quotaObservationRepository;
-  const load = repository.load.bind(repository);
-  repository.load = async () => {
+  const loadIfChanged = repository.loadIfChanged.bind(repository);
+  repository.loadIfChanged = async () => {
     await lookupHeld;
-    return load();
+    return loadIfChanged();
   };
 
   const pending = window.refresh();

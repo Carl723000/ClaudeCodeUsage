@@ -5016,7 +5016,7 @@ export class ClaudeCodeUsageExtension {
       !this.localDataClearedRequiresReload &&
       profileGeneration === this.claudeProfileGeneration && apiClient === this.apiClient;
     try {
-      const store = await this.quotaObservationRepository.load();
+      const store = await this.quotaObservationRepository.loadIfChanged();
       const now = Date.now();
       const fresh = (observedAt: number): boolean =>
         observedAt > since && observedAt <= now && now - observedAt < ttl;

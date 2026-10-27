@@ -5,6 +5,7 @@ import {
   readFile,
   readdir,
   rename,
+  stat,
   unlink,
 } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -976,8 +977,20 @@ async function saveScopeLabelsAtomic(filePath: string, labels: readonly string[]
   }
 }
 
+/** An atomic replacement always installs a new inode, so an equal identity
+ * means the file was not rewritten since it was last read. */
+async function fileIdentity(filePath: string): Promise<string | null> {
+  try {
+    const stats = await stat(filePath);
+    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
 export class QuotaObservationRepository {
   private state: QuotaObservationStoreV2 | undefined;
+  private snapshot: { identity: string; store: QuotaObservationStoreV2 } | undefined;
   private pending: Promise<void> = Promise.resolve();
 
   constructor(
@@ -1030,6 +1043,20 @@ export class QuotaObservationRepository {
         now: this.now(),
       })).store;
       return cloneStore(this.state);
+    });
+  }
+
+  /** A read-only snapshot, parsed again only after the shared file changes:
+   * near its retention cap the store takes tens of milliseconds to parse. */
+  loadIfChanged(): Promise<QuotaObservationStoreV2> {
+    return this.serialized(async () => {
+      // Identify before reading, so a replacement in between costs one more
+      // read later instead of hiding the newer file.
+      const identity = await fileIdentity(this.filePath);
+      if (identity !== null && this.snapshot?.identity === identity) return this.snapshot.store;
+      const { store } = await loadQuotaObservationStore(this.filePath, { now: this.now() });
+      this.snapshot = identity === null ? undefined : { identity, store };
+      return store;
     });
   }
 
