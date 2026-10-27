@@ -14358,6 +14358,8 @@ export class UsageWebviewProvider {
       .achievement-overview-badge > .achievement-legacy-rule, .achievement-record-badge > .achievement-legacy-rule { grid-column: 2; }
       .achievement-card summary::-webkit-details-marker { display: none; }
       .achievement-card summary:hover { background: var(--vscode-list-hoverBackground); }
+      .vscode-light .achievement-card summary:hover .achievement-stage-target,
+      .vscode-light .achievement-card summary:hover .achievement-current-value + span { color: var(--vscode-foreground); }
       .achievement-card summary > * { min-width: 0; max-width: 100%; }
       .achievement-card summary::after { content: '⌄'; color: var(--vscode-descriptionForeground); line-height: 1; }
       .achievement-card details[open] summary::after { content: '⌃'; }

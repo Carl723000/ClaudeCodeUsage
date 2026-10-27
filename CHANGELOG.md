@@ -26,6 +26,9 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 
 
 ### Fixed
+- **Readable achievement targets on hover** — target units and completion labels
+  retain sufficient text contrast in the light-theme gallery hover state.
+  中文：浅色主题图鉴悬浮时，目标单位及完成标签保持清晰的文字对比度。
 - **Rewriting a transcript re-read the whole history (#99)** — a mid-file edit
   or truncation (`/rewind`, session repair, an external touch) tripped the
   source-mutation guard and every file was rebuilt from its body. The rewrite

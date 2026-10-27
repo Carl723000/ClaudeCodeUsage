@@ -56,9 +56,13 @@ test('gallery size changes emblem and card geometry, keeps text and survives rel
   await expect(size).toHaveValue('medium');
   const card = page.locator('.achievement-card').first();
   const textSize = await card.locator('h4').evaluate(el=>getComputedStyle(el).fontSize);
-  for (const [value,pixels] of [['small',56],['medium',80],['large',112]]) {
+  for (const [value,artPixels,boxPixels,inset] of [['small',56,56,0],['medium',80,96,8],['large',112,128,8]]) {
     await size.selectOption(value);
-    expect(await card.locator('.achievement-emblem').evaluate(el=>el.getBoundingClientRect().width)).toBe(pixels);
+    const geometry = await card.locator('.achievement-emblem').evaluate(el => {
+      const box = el.getBoundingClientRect(), image = el.querySelector('img').getBoundingClientRect();
+      return {box:box.width,art:image.width,inset:image.left-box.left};
+    });
+    expect(geometry).toEqual({box:boxPixels,art:artPixels,inset});
     expect(await card.locator('h4').evaluate(el=>getComputedStyle(el).fontSize)).toBe(textSize);
     expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
   }

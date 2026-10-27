@@ -142,8 +142,13 @@ test('integer-only progress and folded evidence stay keyboard-accessible without
   expect(progress.length).toBe(await verified.count());
   expect(await pending.count()).toBeGreaterThan(0);
   await expect(pending.locator('progress,.achievement-progress-label')).toHaveCount(0);
-  for (const summary of await pending.locator('summary').all()) {
-    await expect(summary).toHaveAttribute('aria-label', /Evidence pending/);
+  const rollingPendingKeys = new Set(['weekly-volume', 'claude-api-week', 'codex-api-week']);
+  for (const card of await pending.all()) {
+    const rolling = rollingPendingKeys.has(await card.getAttribute('data-achievement-key'));
+    const proofLabel = rolling ? 'No verified closed seven-day window yet.' : 'Evidence pending';
+    await expect(card.locator('.achievement-disclosure > summary')).toHaveAttribute('aria-label',
+      rolling ? /No verified closed seven-day window yet\./ : /Evidence pending/);
+    await expect(card.locator('.achievement-next-target')).toHaveText(proofLabel);
   }
   for (const text of progress) expect(text).not.toMatch(/\d+[.,]\d+[kMBT]/);
   await expect(page.locator('.achievement-state')).toHaveCount(0);
