@@ -1,3 +1,4 @@
+import {isValidCodexUsageFormat} from './codexStatus';
 import * as vscode from 'vscode';
 import {
   CODEX_LIVE_REFRESH_SECONDS,
@@ -517,6 +518,12 @@ export const SETTINGS: SettingDef[] = [
     providers: ['codex'],
   },
   {
+    key: 'codex.statusBarUsageFormat', type: 'string', default: '', storage: 'state',
+    group: 'statusBar', providers: ['codex'], maxLength: 120,
+    label: 'Codex usage status-bar format',
+    help: 'Empty keeps the current metric. Example: CX | In {input} | Out {output} | Cache {cacheHitRate}%. Fields: {input}, {output}, {cachedInput}, {cacheHitRate}, {processed}. Input includes cached input; cache rate is cached/input. Unavailable values show —. Plain text only; maximum 120 characters.',
+  },
+  {
     key: 'showCost',
     type: 'boolean',
     default: true,
@@ -1026,6 +1033,7 @@ export class SettingsStore {
       STATE_PREFIX + def.key,
       defaultValue as unknown as T,
     );
+    if (def.key === 'codex.statusBarUsageFormat') return (isValidCodexUsageFormat(value) ? value.trim() : '') as T;
     return (def.key === 'displayCurrency'
       ? normalizeDisplayCurrencyCode(value)
       : value) as T;
@@ -1037,6 +1045,7 @@ export class SettingsStore {
     if (!def) {
       throw new Error(`Unknown setting: ${key}`);
     }
+    if (key === 'codex.statusBarUsageFormat' && !isValidCodexUsageFormat(value)) return;
     const coerced = this.coerce(def, value);
     if (def.storage === 'config') {
       await this.cfg().update(def.key, coerced, vscode.ConfigurationTarget.Global);
@@ -1237,7 +1246,7 @@ export class SettingsStore {
       const allowed = def.enumValues || [];
       return allowed.includes(String(value)) ? String(value) : (def.default as string);
     }
-    const stringValue = String(value);
+    const stringValue = def.key === 'codex.statusBarUsageFormat' ? String(value).trim() : String(value);
     return def.maxLength === undefined
       ? stringValue
       : Array.from(stringValue).slice(0, def.maxLength).join('');

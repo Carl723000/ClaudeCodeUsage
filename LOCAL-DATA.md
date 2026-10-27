@@ -767,6 +767,13 @@ lookup, background collection or publication path. The two shared STATE flags
 the existing settings reset/clear catalog; Reset UI State clears disclosure and
 selection state, not these feature preferences.
 
+The optional `codex.statusBarUsageFormat` adds one bounded STATE preference,
+`ccu.setting.codex.statusBarUsageFormat`: a validated string of at most 120
+characters, defaulting to empty. It follows the existing settings reset and exact
+Clear All catalog; Reset UI State does not reset this setting. Rendering uses
+existing local usage aggregates only. No new usage data, scanner, network request
+or dependency is added, and no rendered status-bar history is persisted.
+
 Numeric diagnostic DTOs and rendered results remain runtime-only. Off bypasses
 projection; source/configuration invalidation, clear/reload and disposal retire
 cached results. Daily diagnostics use materialized processed/output totals and
@@ -794,3 +801,11 @@ derived evidence, not added per-window persistent usage receipts. An older reade
 may reject unknown catalog/rule versions; this is not a universal downgrade-write
 guarantee. This supplement supersedes the earlier Monday-week wording only for
 those peak-award rules; active-week measures and real quota cycles remain separate.
+
+Cache-field availability for the optional Codex status template is one optional
+boolean in the existing per-file parser checkpoint, projected into runtime scopes.
+It records whether all retained contributing input had explicit valid cache fields;
+missing fields or older checkpoints remain unknown. Normal parsing updates it;
+there is no forced rescan, new file, timer, or change to numeric token accounting.
+中文：新状态栏仅沿既有逐文件解析检查点保留一个可选缓存字段可用性布尔值；缺失字段及
+旧检查点保持未知，由普通解析更新，不强制重扫、不增加文件／定时器，也不改变数值统计。

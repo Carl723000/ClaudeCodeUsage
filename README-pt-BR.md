@@ -13,6 +13,7 @@ dos seus dados. **Não é uma ferramenta de cobrança.**
 - O compartilhamento de valores oferece layout compacto opcional; o padrão continua sendo o normal. Claude e Codex ficam separados. Alterações exigem uma nova prévia aceita; os bytes do SVG salvo são relidos e comparados com essa prévia.
 - Conquistas de volume e valores por provedor em sete dias usam janelas móveis encerradas de sete dias civis. Prêmios existentes preservam os registros e são identificados como regras anteriores; evidência ausente não gera datas. Os ciclos reais de redefinição de cota não mudam.
 - A análise de Claude e Codex começa pelos números principais do mesmo período, seguidos de observações, evidências e sugestões. Saída por hora decorrida e mudanças observadas no uso permanecem desativadas por padrão; a cobertura parcial continua visível. Saída por hora não é TPS de geração, e mudanças não provam causas.
+- O Codex pode mostrar entrada, saída e cache juntos com `codex.statusBarUsageFormat` opcional; vazio mantém a métrica atual. Veja [detalhes do formato](CHANGELOG.md#unreleased).
 
 Estas mudanças ainda não foram lançadas. Não acrescentam leitura de logs, pedidos de autenticação, coleta em segundo plano ou publicação automática. Consulte [dados locais e limpeza](LOCAL-DATA.md).
 

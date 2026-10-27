@@ -1,3 +1,4 @@
+import {isValidCodexUsageFormat} from './codexStatus';
 import { projectChartProjection, ProjectChartScale } from './projectChartProjection';
 import * as vscode from 'vscode';
 import { ClaudeDataLoader } from './dataLoader';
@@ -6373,6 +6374,7 @@ export class UsageWebviewProvider {
     const help = tr.help !== undefined ? tr.help : it.help;
     const id = 'set_' + it.key.replace(/[^a-zA-Z0-9]/g, '_');
     const onCh = (type: string): string =>
+      it.key === 'codex.statusBarUsageFormat' ? ' onchange="setCodexUsageFormat(this)"' :
       ` onchange="setSetting('${it.key}', ${
         type === 'boolean' ? 'this.checked' : 'this.value'
       }, '${type}')"`;
@@ -6436,6 +6438,7 @@ export class UsageWebviewProvider {
         esc(String(it.value)) +
         '"' +
         (it.maxLength !== undefined ? ' maxlength="' + it.maxLength + '"' : '') +
+        (it.key === 'codex.statusBarUsageFormat' ? ' data-validation-message="' + esc(help ?? '') + '" oninput="this.setCustomValidity(\'\')"' : '') +
         (it.secret
           ? ' autocomplete="new-password" placeholder="' + (it.configured ? '••••••••' : '') + '"'
           : '') +
@@ -15820,6 +15823,14 @@ function refreshPricing() {
 
 function getAdvice() {
   vscode.postMessage({ command: 'getAdvice' });
+}
+
+const codexUsageFormatValidator = ${isValidCodexUsageFormat.toString()};
+function setCodexUsageFormat(input) {
+  const valid = codexUsageFormatValidator(input.value);
+  input.setCustomValidity(valid ? '' : input.dataset.validationMessage);
+  if (!valid) { input.reportValidity(); return; }
+  setSetting('codex.statusBarUsageFormat', input.value, 'string');
 }
 
 function setSetting(key, value, type) {

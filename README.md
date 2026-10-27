@@ -40,6 +40,7 @@ bar. See [features](#features-at-a-glance), [privacy](#privacy),
 - Amount sharing offers an optional compact layout; standard remains the default. Claude and Codex amounts stay separate. Changed settings require a new accepted preview, and saved SVG bytes are read back and checked against that preview.
 - Seven-day volume and provider amount achievements use completed rolling seven-civil-day windows. Existing awards keep their original records and are labelled as legacy rules; missing evidence does not invent dates. Actual quota reset cycles remain unchanged.
 - Claude and Codex analysis leads with same-range key numbers, then observations, evidence and advice. Optional output-per-elapsed-hour and observed-usage-change diagnostics remain off by default; partial coverage stays visible. Hourly output is not generation TPS, and changes do not establish causes.
+- Codex can show input, output and cache usage together with optional `codex.statusBarUsageFormat`; empty keeps the current metric. See [format details](CHANGELOG.md#unreleased).
 
 These changes are not yet released. They add no source-log scan, authentication request, background collection or automatic publication. See [local data and clearing](LOCAL-DATA.md).
 

@@ -53,6 +53,8 @@ export interface CodexMetricTotals {
 }
 
 export interface CodexUsageScopeView {
+  /** Explicit cache fields verified for all contributing retained input. */
+  cacheInputComplete?: boolean;
   total: CodexMetricTotals;
   rootTasks: number;
   threads: number;
@@ -438,11 +440,13 @@ function scope(
   const models = new Map<string, ProviderTokenCounts>();
   const efforts = new Map<string, ProviderTokenCounts>();
   let durationMs = 0;
+  let cacheInputComplete = true;
   let rootTasks = 0;
   let childThreads = 0;
   let approvalReviewerThreads = 0;
 
   for (const file of files) {
+    if (file.total.inputTotal > 0 && file.cacheInputComplete !== true) cacheInputComplete = false;
     addTokens(totalTokens, file.total);
     addStructural(structural, file.structural);
     addBuckets(models, file.byModel, file.total);
@@ -472,6 +476,7 @@ function scope(
     approvalReviewerThreads,
     approvalReviewerFreshShare: ratio(approval.fresh, total.fresh),
     cacheShare: Math.min(1, ratio(total.cachedInput, total.input)),
+    cacheInputComplete,
     durationMs,
     structural,
     models: bucketRows(models),
@@ -496,6 +501,7 @@ function scopeFromPeriodDays(
   const efforts = new Map<string, ProviderTokenCounts>();
   const countedSessions = new Set<string>();
   const sessionRanges = new Map<string, { first: number; last: number }>();
+  let cacheInputComplete = true;
   let rootTasks = 0;
   let childThreads = 0;
   let approvalReviewerThreads = 0;
@@ -521,6 +527,7 @@ function scopeFromPeriodDays(
     }
 
     for (const slice of slices) {
+      if (slice.total.inputTotal > 0 && file.cacheInputComplete !== true) cacheInputComplete = false;
       addTokens(totalTokens, slice.total);
       addStructural(structural, slice.structural);
       addBuckets(models, slice.byModel, slice.total);
@@ -562,6 +569,7 @@ function scopeFromPeriodDays(
     approvalReviewerThreads,
     approvalReviewerFreshShare: ratio(approval.fresh, total.fresh),
     cacheShare: Math.min(1, ratio(total.cachedInput, total.input)),
+    cacheInputComplete,
     durationMs,
     structural,
     models: bucketRows(models),

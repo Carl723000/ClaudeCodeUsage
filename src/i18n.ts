@@ -5914,6 +5914,9 @@ export function artifactLocale(value: string | undefined): SupportedLanguage {
 }
 
 const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: string; help: string }>>> = {
+  en: {
+    'codex.statusBarUsageFormat': { label: "Codex status-bar usage format", help: "Optional string, up to 120 characters; empty (default) keeps codex.statusMetric as the fallback. Today’s placeholders: {input} = total input including cached input; {output} = output; {cachedInput} = cached input; {cacheHitRate} = rounded cached input / input × 100, without %; {processed} = input + output. Example: CX | In {input} | Out {output} | Cache {cacheHitRate}%. Unsupported or malformed placeholders, control characters and VS Code $( icon syntax are rejected. Unavailable components show —; zero input makes the rate unknown. Indexed subtotals keep the existing * marker and tooltip." },
+  },
   'de-DE': {
     'language': { label: 'Anzeigesprache', help: 'UI-Sprache. "auto" folgt VS Code.' },
     'showWeeklyQuotaPace': { label: 'Wöchentliches Kontingenttempo', help: 'Standardmäßig aus. Vergleich mit gleichmäßiger Nutzung im geschätzten Wochenfenster; basiert auf vorhandenen Kontobeobachtungen, nicht nur diesem Gerät. Keine zusätzlichen Anfragen.' },
@@ -5929,6 +5932,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.optimization.enabled': { label: 'Codex-Verhaltensoptimierung anzeigen', help: 'Lokale, deterministische Codex-Verhaltensmetriken und Empfehlungen anzeigen.' },
     'statusBarProvider': { label: 'Statusleisten-Anbieter', help: 'Auto bevorzugt Claude, wenn beide Anbieter Daten haben.' },
     'codex.statusMetric': { label: 'Codex-Statusmetrik', help: 'Heute verarbeitete Token (Standard), Nutzung ohne Cache oder Ausgabe-Token.' },
+    'codex.statusBarUsageFormat': { label: "Codex: Nutzungsformat der Statusleiste", help: "Optionale Zeichenfolge mit höchstens 120 Zeichen; leer (Standard) behält codex.statusMetric als Rückfall bei. Platzhalter für heute: {input} = gesamte Eingabe einschließlich Cache; {output} = Ausgabe; {cachedInput} = Cache-Eingabe; {cacheHitRate} = gerundete Cache-Eingabe / Eingabe × 100, ohne %; {processed} = Eingabe + Ausgabe. Beispiel: CX | In {input} | Out {output} | Cache {cacheHitRate}%. Unbekannte oder fehlerhafte Platzhalter, Steuerzeichen und die VS-Code-Symbolsyntax $( werden abgelehnt. Nicht verfügbare Werte erscheinen als —; bei Eingabe null ist die Rate unbekannt. Indexierte Teilsummen behalten die bestehende *-Markierung und den Tooltip." },
     'timezone': { label: 'Zeitzone für Daten', help: 'Gängige Zone oder UTC-Offset (jeder Offset abgedeckt) oder Systemstandard. Labels zeigen den aktuellen UTC-Offset.' },
     'showWeeklyEquivalentValue': { label: 'Wöchentlichen API-Gegenwert anzeigen', help: 'Standardmäßig an. Zeigt den historischen wöchentlichen API-Gegenwert in „Seit Aufzeichnungsbeginn“ und „Vergleich“. Dies ist eine Schätzung, keine Rechnung und kein Abonnementkontingent.' },
     'showProjectUsageMatrix': { label: 'Projekt-Nutzungsmatrix anzeigen', help: 'Standardmäßig an. Ergänzt Projekte um eine lokale 30/90-Tage-Token-Heatmap und einen gestapelten Trend. Nutzt bestehende Indexaggregate und ordnet Projekten kein Abonnementkontingent zu.' },
@@ -5984,6 +5988,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.optimization.enabled': { label: '顯示 Codex 行為最佳化', help: '顯示本機、確定性的 Codex 行為指標與建議。' },
     'statusBarProvider': { label: '狀態列供應商', help: '兩個供應商都有資料時，自動模式優先顯示 Claude。' },
     'codex.statusMetric': { label: 'Codex 狀態列指標', help: '今日已處理 Token（預設）、未快取用量或輸出 Token。' },
+    'codex.statusBarUsageFormat': { label: "Codex 狀態列用量格式", help: "選填字串，最多 120 個字元；留空（預設）沿用 codex.statusMetric 作為備用指標。今日用量佔位符：{input} 為含快取的總輸入；{output} 為輸出；{cachedInput} 為快取輸入；{cacheHitRate} 為快取輸入／總輸入 × 100 四捨五入後的數值，不含 %；{processed} 為輸入＋輸出。範例：CX | In {input} | Out {output} | Cache {cacheHitRate}%。不支援或格式錯誤的佔位符、控制字元及 VS Code $( 圖示語法會被拒絕。不可用分量顯示 —；輸入為零時命中率未知。已索引小計保留既有 * 標記及提示。" },
     'timezone': { label: '日期時區', help: '常用時區或 UTC 偏移（涵蓋所有偏移），或系統預設。標籤顯示目前的 UTC 偏移。' },
     'showWeeklyEquivalentValue': { label: '顯示每週 API 等效價值', help: '預設開啟。在「所有」與「比較」中顯示歷史每週 API 等效價值；屬於估算，不是帳單或訂閱額度。' },
     'showProjectUsageMatrix': { label: '顯示專案用量矩陣', help: '預設開啟。在「專案」加入本機 30/90 天 Token 熱力圖與堆疊趨勢；沿用既有索引彙總，不會把訂閱額度分配到專案。' },
@@ -6039,6 +6044,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.optimization.enabled': { label: '显示 Codex 行为优化', help: '显示本地、确定性的 Codex 行为指标与建议。' },
     'statusBarProvider': { label: '状态栏供应商', help: '两个供应商都有数据时，自动模式优先显示 Claude。' },
     'codex.statusMetric': { label: 'Codex 状态栏指标', help: '今日已处理 Token（默认）、未缓存用量或输出 Token。' },
+    'codex.statusBarUsageFormat': { label: "Codex 状态栏用量格式", help: "可选字符串，最多 120 个字符；留空（默认）沿用 codex.statusMetric 作为备用指标。今日用量占位符：{input} 为含缓存的总输入；{output} 为输出；{cachedInput} 为缓存输入；{cacheHitRate} 为缓存输入／总输入 × 100 四舍五入后的数值，不含 %；{processed} 为输入＋输出。示例：CX | In {input} | Out {output} | Cache {cacheHitRate}%。不支持或格式错误的占位符、控制字符及 VS Code $( 图标语法会被拒绝。不可用分量显示 —；输入为零时命中率未知。已索引小计保留既有 * 标记及提示。" },
     'timezone': { label: '日期时区', help: '常用时区或 UTC 偏移（涵盖所有偏移），或系统默认。标签显示当前的 UTC 偏移。' },
     'showWeeklyEquivalentValue': { label: '显示每周 API 等效价值', help: '默认开启。在“全部时间”和“对比”中显示历史每周 API 等效价值；属于估算，不是账单或订阅额度。' },
     'showProjectUsageMatrix': { label: '显示项目用量矩阵', help: '默认开启。在“项目”中加入本地 30/90 天 Token 热力图与堆叠趋势；复用现有索引汇总，不会把订阅额度分配到项目。' },
@@ -6094,6 +6100,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.optimization.enabled': { label: 'Codex の行動最適化を表示', help: 'ローカルで決定論的な Codex の行動指標と提案を表示します。' },
     'statusBarProvider': { label: 'ステータスバーのプロバイダー', help: '両方にデータがある場合、自動は Claude を優先します。' },
     'codex.statusMetric': { label: 'Codex ステータスメトリック', help: '今日の処理済みトークン（既定）、非キャッシュ使用量、または出力トークン。' },
+    'codex.statusBarUsageFormat': { label: "Codex ステータスバー使用量の書式", help: "任意の文字列で最大 120 文字。空（既定）なら codex.statusMetric を代替表示として維持します。今日のプレースホルダー：{input} = キャッシュを含む総入力、{output} = 出力、{cachedInput} = キャッシュ入力、{cacheHitRate} = キャッシュ入力 / 総入力 × 100 を四捨五入した数値（% なし）、{processed} = 入力 + 出力。例：CX | In {input} | Out {output} | Cache {cacheHitRate}%。未対応・不正なプレースホルダー、制御文字、VS Code の $( アイコン構文は拒否します。不明な成分は —、入力ゼロの命中率は不明です。インデックス済み小計は既存の * 印とツールチップを維持します。" },
     'timezone': { label: '日付のタイムゾーン', help: '一般的なゾーンまたは UTC オフセット（全オフセット対応）、あるいはシステム既定。ラベルは現在の UTC オフセットを表示。' },
     'showWeeklyEquivalentValue': { label: '週間 API 等価価値を表示', help: '既定でオン。「すべて」と「比較」に過去の週間 API 等価価値を表示します。これは推定値であり、請求額やサブスクリプション利用枠ではありません。' },
     'showProjectUsageMatrix': { label: 'プロジェクト使用量マトリクスを表示', help: '既定でオン。「プロジェクト」にローカルの30/90日トークンヒートマップと積み上げトレンドを追加します。既存のインデックス集計を再利用し、サブスクリプション枠をプロジェクト別に配分しません。' },
@@ -6149,6 +6156,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.optimization.enabled': { label: 'Codex 행동 최적화 표시', help: '로컬의 결정론적 Codex 행동 지표와 권장 사항을 표시합니다.' },
     'statusBarProvider': { label: '상태 표시줄 공급자', help: '두 공급자 모두 데이터가 있으면 자동은 Claude를 우선합니다.' },
     'codex.statusMetric': { label: 'Codex 상태 지표', help: '오늘 처리된 토큰(기본값), 캐시되지 않은 사용량 또는 출력 토큰.' },
+    'codex.statusBarUsageFormat': { label: "Codex 상태 표시줄 사용량 형식", help: "선택 문자열로 최대 120자입니다. 비워 두면(기본값) codex.statusMetric을 대체 지표로 유지합니다. 오늘의 자리표시자: {input} = 캐시를 포함한 총 입력, {output} = 출력, {cachedInput} = 캐시 입력, {cacheHitRate} = 캐시 입력 / 총 입력 × 100의 반올림 값(% 제외), {processed} = 입력 + 출력. 예: CX | In {input} | Out {output} | Cache {cacheHitRate}%. 미지원 또는 잘못된 자리표시자, 제어 문자, VS Code $( 아이콘 구문은 거부합니다. 사용할 수 없는 구성 요소는 —로 표시하며 입력이 0이면 적중률은 알 수 없습니다. 색인된 소계는 기존 * 표시와 툴팁을 유지합니다." },
     'timezone': { label: '날짜 시간대', help: '일반 지역 또는 UTC 오프셋(모든 오프셋 지원), 또는 시스템 기본값. 라벨에 현재 UTC 오프셋 표시.' },
     'showWeeklyEquivalentValue': { label: '주간 API 등가 가치 표시', help: '기본값 켜짐. 전체 및 비교 화면에 과거 주간 API 등가 가치를 표시합니다. 이는 추정치이며 청구서나 구독 할당량이 아닙니다.' },
     'showProjectUsageMatrix': { label: '프로젝트 사용량 매트릭스 표시', help: '기본값 켜짐. 프로젝트에 로컬 30/90일 토큰 히트맵과 누적 추세를 추가합니다. 기존 인덱스 집계를 재사용하며 구독 할당량을 프로젝트별로 배분하지 않습니다.' },
@@ -6204,6 +6212,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.optimization.enabled': { label: 'Mostrar otimização de comportamento do Codex', help: 'Mostra métricas e recomendações locais e determinísticas de comportamento do Codex.' },
     'statusBarProvider': { label: 'Provedor da barra de status', help: 'Auto prioriza Claude quando ambos têm dados.' },
     'codex.statusMetric': { label: 'Métrica de status do Codex', help: 'Tokens processados hoje (padrão), uso sem cache ou tokens de saída.' },
+    'codex.statusBarUsageFormat': { label: "Formato de uso do Codex na barra de status", help: "Texto opcional de até 120 caracteres; vazio (padrão) mantém codex.statusMetric como alternativa. Campos de hoje: {input} = entrada total incluindo cache; {output} = saída; {cachedInput} = entrada em cache; {cacheHitRate} = entrada em cache / entrada × 100, arredondado e sem %; {processed} = entrada + saída. Exemplo: CX | In {input} | Out {output} | Cache {cacheHitRate}%. Campos não suportados ou malformados, caracteres de controle e a sintaxe de ícones $( do VS Code são rejeitados. Componentes indisponíveis mostram —; entrada zero torna a taxa desconhecida. Subtotais indexados mantêm o marcador * e a dica existentes." },
     'timezone': { label: 'Fuso horário das datas', help: 'Zona comum ou deslocamento UTC (todos cobertos), ou padrão do sistema. Os rótulos mostram o deslocamento UTC atual.' },
     'showWeeklyEquivalentValue': { label: 'Mostrar valor equivalente semanal da API', help: 'Ligado por padrão. Mostra o valor equivalente semanal histórico da API em Todo o período e Comparar. É uma estimativa, não uma fatura nem uma franquia de assinatura.' },
     'showProjectUsageMatrix': { label: 'Mostrar matriz de uso por projeto', help: 'Ligado por padrão. Adiciona a Projetos um heatmap local de tokens de 30/90 dias e uma tendência empilhada. Reutiliza agregados indexados e não distribui a franquia da assinatura por projeto.' },
@@ -6260,6 +6269,7 @@ const SETTINGS_I18N: Partial<Record<SupportedLanguage, Record<string, { label: s
     'codex.optimization.enabled': { label: 'Tampilkan optimasi perilaku Codex', help: 'Tampilkan metrik dan rekomendasi perilaku Codex yang lokal dan deterministik.' },
     'statusBarProvider': { label: 'Penyedia status bar', help: 'Otomatis memprioritaskan Claude saat keduanya memiliki data.' },
     'codex.statusMetric': { label: 'Metrik status Codex', help: 'Token diproses hari ini (bawaan), penggunaan tanpa cache, atau token output.' },
+    'codex.statusBarUsageFormat': { label: "Format penggunaan Codex di status bar", help: "String opsional, maksimal 120 karakter; kosong (bawaan) mempertahankan codex.statusMetric sebagai cadangan. Placeholder hari ini: {input} = total input termasuk cache; {output} = output; {cachedInput} = input cache; {cacheHitRate} = input cache / input × 100 yang dibulatkan, tanpa %; {processed} = input + output. Contoh: CX | In {input} | Out {output} | Cache {cacheHitRate}%. Placeholder tidak didukung atau salah format, karakter kontrol, dan sintaks ikon $( VS Code ditolak. Komponen yang tidak tersedia menampilkan —; input nol membuat rasio tidak diketahui. Subtotal terindeks mempertahankan penanda * dan tooltip yang ada." },
     'timezone': { label: 'Zona waktu untuk tanggal', help: 'Pilih zona umum atau offset UTC (semua offset tersedia), atau default sistem. Label menampilkan offset UTC saat ini.' },
     'showWeeklyEquivalentValue': { label: 'Tampilkan nilai ekuivalen API mingguan', help: 'Aktif secara default. Tampilkan riwayat nilai ekuivalen API mingguan di Sepanjang Waktu dan Perbandingan. Ini perkiraan, bukan tagihan atau jatah langganan.' },
     'showProjectUsageMatrix': { label: 'Tampilkan matriks penggunaan proyek', help: 'Aktif secara default. Menambahkan heatmap Token lokal 30/90 hari dan tren bertumpuk ke Proyek. Menggunakan kembali agregat indeks dan tidak membagi jatah langganan per proyek.' },
@@ -6686,8 +6696,7 @@ export class I18n {
   }
 
   /** Localised label / help for a settings-panel entry, for the current UI
-   * language. Returns {} for English (the panel then falls back to the catalog
-   * English in settings.ts). */
+   * language. Missing entries fall back to the English catalog in settings.ts. */
   static settingText(key: string): { label?: string; help?: string } {
     const m = SETTINGS_I18N[this.currentLanguage];
     return (m && m[key]) || {};

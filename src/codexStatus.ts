@@ -6,6 +6,8 @@ export type CodexStatusMetric = 'fresh' | 'processed' | 'output';
 export interface CodexStatusOptions {
   /** Keep the existing opt-in preference meaningful for the Codex bar. */
   quotaFiveHourOnly?: boolean;
+  /** Empty preserves the existing single-metric display. */
+  usageFormat?: string;
 }
 
 export interface CodexStatusLimit {
@@ -39,6 +41,31 @@ function compact(value: number): string {
     return `${Number((safe / 1_000).toFixed(1))}k`;
   }
   return String(Math.round(safe));
+}
+
+/** Plain, bounded text and five exact placeholders. No icon/control expansion. */
+export function isValidCodexUsageFormat(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length > 240 || Array.from(value).length > 120 ||
+      /[\x00-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u.test(value) || value.includes('$(')) return false;
+  if (value.trim() === '') return true;
+  const remainder = value.replace(/\{(?:input|output|cachedInput|cacheHitRate|processed)\}/g, '');
+  return remainder !== value && !/[{}]/.test(remainder);
+}
+
+function formatCodexUsageTemplate(scope: CodexUsageScopeView, template: unknown): string | null {
+  if (!isValidCodexUsageFormat(template) || template.trim() === '') return null;
+  const validCount = (value: unknown): value is number =>
+    typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+  const {input, cachedInput, output, processed} = scope.total;
+  const count = (value: unknown): string => validCount(value) ? compact(value) : '—';
+  const cacheHitRate = scope.cacheInputComplete === true && validCount(input) && input > 0 && validCount(cachedInput) && cachedInput <= input
+    ? String(Math.round(cachedInput / input * 100)) : '—';
+  const values: Record<string, string> = {
+    input: count(input), output: count(output), cachedInput: scope.cacheInputComplete === true ? count(cachedInput) : '—',
+    processed: count(processed), cacheHitRate,
+  };
+  return template.trim().replace(/\{(input|output|cachedInput|cacheHitRate|processed)\}/g,
+    (_match, key: string) => values[key]);
 }
 
 export function codexQuotaWindowLabel(
@@ -142,7 +169,7 @@ export function formatCodexStatus(
     ? `${selectedLimit.label} ${Math.round(selectedLimit.remainingPercent)}%`
     : undefined;
   return {
-    text: `CX ${compact(value)}${scope.indexedSubtotal ? '*' : ''}`,
+    text: `${formatCodexUsageTemplate(scope, options.usageFormat) ?? `CX ${compact(value)}`}${scope.indexedSubtotal ? '*' : ''}`,
     limitText,
     ...(selectedLimit ? { limit: selectedLimit } : {}),
     stale: Boolean(limit && liveWindows.length === 0),
