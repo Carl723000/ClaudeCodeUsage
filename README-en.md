@@ -15,6 +15,8 @@ This is not a billing tool: Claude costs and Codex API-equivalent values are est
 
 > Screenshots include English and Simplified Chinese. See the [main README](README.md) for the full feature reference.
 
+- Codex can show input, output and cache usage together with optional `codex.statusBarUsageFormat`; empty keeps the current metric. See [format details](CHANGELOG.md#unreleased).
+
 ## Screenshots
 
 ### Status bar

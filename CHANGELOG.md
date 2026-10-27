@@ -6,6 +6,36 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Added
+- **Custom Codex status-bar usage (#132)** — optional `codex.statusBarUsageFormat`
+  shows today’s input, output and cache usage together; empty (default) keeps
+  `codex.statusMetric` as the fallback. The string accepts up to 120 characters:
+  `{input}` is total input including cached input, `{output}` is output,
+  `{cachedInput}` is cached input, `{processed}` is input + output, and
+  `{cacheHitRate}` is rounded cached input / input × 100 without the `%` suffix.
+  Example: `CX | In {input} | Out {output} | Cache {cacheHitRate}%`.
+  Unsupported/malformed placeholders, control characters and VS Code `$(` icon
+  syntax are rejected. Unavailable components render as `—`; zero input leaves
+  the rate unknown. Indexed subtotals retain the existing `*` marker and tooltip.
+  This uses existing local aggregates, with no new scanning, network requests
+  or dependencies; coverage does not establish exact account billing.
+  中文：可选 `codex.statusBarUsageFormat` 同时显示今日输入、输出与缓存用量；默认空串
+  沿用 `codex.statusMetric` 备用指标。最多 120 字符；`{input}` 为含缓存的总输入，
+  `{output}` 为输出，`{cachedInput}` 为缓存输入，`{processed}` 为输入＋输出，
+  `{cacheHitRate}` 为缓存输入／总输入 × 100 四舍五入后的数值，不含 `%` 后缀。
+  示例：`CX | In {input} | Out {output} | Cache {cacheHitRate}%`。
+  不支持或格式错误的占位符、控制字符及 VS Code `$(` 图标语法会被拒绝；不可用分量
+  显示 `—`，输入为零时命中率未知。已索引小计保留既有 `*` 标记和提示。复用本地聚合，
+  不新增扫描、网络请求或依赖；覆盖状态不保证与账户账单精确一致。
+Cache-field availability for the optional Codex status template is one optional
+boolean in the existing per-file parser checkpoint, projected into runtime scopes.
+It records whether all retained contributing input had explicit valid cache fields;
+missing fields or older checkpoints remain unknown. Normal parsing updates it;
+there is no forced rescan, new file, timer, or change to numeric token accounting.
+中文：新状态栏仅沿既有逐文件解析检查点保留一个可选缓存字段可用性布尔值；缺失字段及
+旧检查点保持未知，由普通解析更新，不强制重扫、不增加文件／定时器，也不改变数值统计。
+
+
 ### Fixed
 - **Quota sharing history and clearing** — adopting a shared quota now selects
   the matching account's weekly history. Pending refreshes cannot restore cleared

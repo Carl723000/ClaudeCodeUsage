@@ -12,6 +12,8 @@
 
 > Screenshot mencakup UI bahasa Inggris dan Tionghoa Sederhana. Lihat [README utama](README.md) untuk referensi lengkap.
 
+- Codex dapat menampilkan input, output, dan cache bersama lewat `codex.statusBarUsageFormat` opsional; kosong mempertahankan metrik saat ini. Lihat [detail format](CHANGELOG.md#unreleased).
+
 ## Screenshot
 
 ### Status bar

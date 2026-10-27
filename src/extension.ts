@@ -2419,7 +2419,7 @@ export class ClaudeCodeUsageExtension {
     this.activePricingBackend = config.pricingBackend;
     setPricingBackend(config.pricingBackend);
     this.applyFormattingConfiguration(config);
-    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace);
+    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace, config.codexStatusBarUsageFormat);
 
     // Listen for configuration changes
     vscode.workspace.onDidChangeConfiguration(e => {
@@ -2468,6 +2468,7 @@ export class ClaudeCodeUsageExtension {
       codexStatusMetric: s.get<'fresh' | 'processed' | 'output'>(
         'codex.statusMetric',
       ),
+      codexStatusBarUsageFormat: s.get<string>('codex.statusBarUsageFormat'),
       language: s.get<string>('language'),
       decimalPlaces: s.get<number>('decimalPlaces'),
       displayCurrency: s.get<string>('displayCurrency'),
@@ -3820,7 +3821,7 @@ export class ClaudeCodeUsageExtension {
     // next tick.
     'showCost', 'showContext', 'statusBarMetric',
     'showScopedWeekly', 'quotaFiveHourOnly', 'showResetInStatusBar', 'resetCountdownFormat',
-    'statusBarQuotaFormat', 'statusBarProvider', 'codex.statusMetric',
+    'statusBarQuotaFormat', 'statusBarProvider', 'codex.statusMetric', 'codex.statusBarUsageFormat',
     'showWeeklyQuotaPace',
   ]);
 
@@ -3869,7 +3870,7 @@ export class ClaudeCodeUsageExtension {
     }
     if (key && ClaudeCodeUsageExtension.STATUS_BAR_ONLY_SETTINGS.has(key)) {
       const config = this.getConfiguration();
-      this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace);
+      this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace, config.codexStatusBarUsageFormat);
       this.statusBar.updateQuota(this.cache.usageLimits ?? null, this.getClaudeQuotaPaceSnapshot());
       if (key === 'showWeeklyQuotaPace') this.webviewProvider.updateQuotaPace?.(
         this.getClaudeQuotaPaceSnapshot(),this.cache.usageLimits ?? null);
@@ -3942,7 +3943,7 @@ export class ClaudeCodeUsageExtension {
       this.webviewProvider.invalidateShareCardPreview({pricingChanged:true});
     }
     this.applyFormattingConfiguration(config);
-    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace);
+    this.statusBar.setVisibility(config.showCost, config.showContext, config.usageLimitTracking, config.statusBarMetric, config.showScopedWeekly, config.quotaFiveHourOnly, config.showResetInStatusBar, config.resetCountdownFormat, config.statusBarQuotaFormat, config.showWeeklyQuotaPace, config.codexStatusBarUsageFormat);
     this.webviewProvider.updateQuotaPace?.(this.getClaudeQuotaPaceSnapshot(),this.cache.usageLimits ?? null);
 
     // Restart auto-refresh with new interval

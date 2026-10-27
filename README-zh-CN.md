@@ -18,6 +18,8 @@ Claude 成本与 Codex API 等效价格均为估算，不是账单。
 
 ---
 
+- Codex 可通过可选的 `codex.statusBarUsageFormat` 同时显示输入、输出与缓存用量；留空沿用当前指标。详见[格式说明](CHANGELOG.md#unreleased)。
+
 ## 截图
 
 ### 状态栏

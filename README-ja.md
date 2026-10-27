@@ -12,6 +12,8 @@
 
 > スクリーンショットには英語と簡体字中国語を使用しています。詳細は[メイン README](README.md) を参照してください。
 
+- Codex は任意の `codex.statusBarUsageFormat` で入力・出力・キャッシュ使用量をまとめて表示できます。空なら現在の指標を維持します。[書式の詳細](CHANGELOG.md#unreleased)。
+
 ## スクリーンショット
 
 ### ステータスバー
