@@ -3,9 +3,8 @@
 // provider APIs or normal extension persistence are read by this fixture.
 const {buildCodexUsageView}=require('../../../out/providers/codex/codexUsage.js');
 const {buildScopedCodexInsights}=require('../../../out/providers/codex/codexInsights.js');
-const {QuotaDiagnosticsProjector}=require('../../../out/usageDiagnosticsQuota.js');
 const {dayKeyInZone,rollingDayKeysFromDayKey}=require('../../../out/dateKeys.js');
-const KEYS=new Set(['showUsageThroughput','showUsageChange','showQuotaDeclineRate']);
+const KEYS=new Set(['showUsageThroughput','showUsageChange']);
 exports.applyUsageDiagnosticsFixture=function(provider,baseSnapshot,{fixture,timeZone,now,locale}){
  const enabled=fixture!=='usage-diagnostics-off';
  const changed=fixture==='usage-diagnostics-updated';
@@ -36,17 +35,6 @@ exports.applyUsageDiagnosticsFixture=function(provider,baseSnapshot,{fixture,tim
  provider.allTimeData=claude(changed?9500:7500);provider.achievementCalendarTimeZone=timeZone;
  provider.contentAnalysis={categories:[{key:'toolResults',estimatedTokens:7000},{key:'assistantText',estimatedTokens:3000}],
   toolResultBreakdown:[{key:'synthetic-tool-with-a-long-localized-label',estimatedTokens:7000}],totalEstimatedTokens:10000,recentPrompts:[]};
- const projector=new QuotaDiagnosticsProjector();
- const account='SYNTHETIC_ACCOUNT_FINGERPRINT',window='SYNTHETIC_WINDOW_FINGERPRINT';
- const makeRows=selected=>[.4,.46].map((usedFraction,index)=>({schemaVersion:2,provider:selected,accountFingerprint:account,
-  accountAttribution:'verified-local-signal',observedAt:now-(1-index)*7200000,periodType:'seven-day',usedFraction,remainingFraction:1-usedFraction,
-  resetAt:now+86400000,source:selected==='codex'?'codex-official-api':'claude-official-api',windowId:window,
-  providerWindowFingerprint:null,confidence:'high',captureReason:'refresh',flags:[]}));
- const source={claude:makeRows('claude'),codex:makeRows('codex')};
- provider.setQuotaDiagnosticsProjector((selected,time)=>{
-  if(!enabled)throw Error('Disabled diagnostics touched the fixture projector');
-  return projector.project(source[selected],{provider:selected,accountFingerprint:account,observedAt:now,resetAt:now+86400000,now:time});
- },()=>projector.clear());
  const render=provider.renderUsageDiagnostics.bind(provider);
  provider.renderUsageDiagnostics=selected=>{
   const html=render(selected);return html?'<p class="table-hint" data-synthetic-diagnostics>'+

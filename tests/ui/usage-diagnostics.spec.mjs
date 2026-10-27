@@ -5,6 +5,8 @@ for(const provider of ['claude','codex'])for(const locale of locales){
  test(`${provider} diagnostics ${locale}: real renderer, 320px, no raw identity`,async({page},info)=>{
   await open(page,provider,{locale,theme:'dark'});await page.locator('#tab-content').click();
   const panel=page.locator(`[data-usage-diagnostics="${provider}"]`);await expect(panel).toBeVisible();
+  await expect(panel.locator('[data-diagnostic]')).toHaveCount(2);
+  await expect(panel.locator('[data-diagnostic="quota"]')).toHaveCount(0);
   await expect(panel).toContainText('TPS');await expect(panel).toContainText('Token');
   await panel.locator('details').first().locator('summary').click();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);

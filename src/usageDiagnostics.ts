@@ -1,5 +1,4 @@
 import type {UsageData} from './types';
-import type {WeeklyQuotaObservation} from './weeklyValue';
 import {rollingSevenDay, type RollingSevenDayResult} from './rollingSevenDay';
 
 export interface DiagnosticDay {
@@ -12,10 +11,9 @@ export interface DiagnosticDay {
   roles?: Record<string, number>;
 }
 export interface DiagnosticRate {
-  status: 'ready' | 'partial' | 'unknown' | 'time' | 'identity' | 'boundary' | 'regression' | 'conflict' | 'samples' | 'expired' | 'stale' | 'invalid';
+  status: 'ready' | 'partial' | 'unknown' | 'time';
   value: number | null;
   hours?: number;
-  samples?: number;
   start?: number;
   end?: number;
 }
@@ -68,48 +66,6 @@ export function diagnosticChange(before:DiagnosticDay|undefined,after:Diagnostic
   if(rows.some(row=>!count(row.before)||!count(row.after))||rows.reduce((s,r)=>s+r.before,0)!==before.output||rows.reduce((s,r)=>s+r.after,0)!==after.output)return unavailable;
   return {delta:after.output-before.output,rows};
 }
-/** Host-only account/window keys never appear in the result. This is an endpoint
- * historical mean, not acceleration, source precision or a live burn forecast. */
-export function diagnosticQuotaRate(input:readonly WeeklyQuotaObservation[],now:number):DiagnosticRate {
-  if(input.length<2)return {status:'samples',value:null};
-  if(input.some(row=>!Number.isFinite(row.observedAt)))return {status:'invalid',value:null};
-  const rows=[...input].sort((a,b)=>a.observedAt-b.observedAt);
-  const last=rows[rows.length-1];
-  if(!Number.isFinite(now)||!Number.isFinite(last.resetAt)||last.resetAt<=now)return {status:'expired',value:null};
-  if(now-last.observedAt>30*60_000)return {status:'stale',value:null};
-  // Do not silently discard an unverified observation to manufacture continuity.
-  if(rows.some(row=>row.accountAttribution!=='verified-local-signal'||!row.seriesKey||!row.windowId||row.flags?.some(flag=>flag==='clock-anomaly'||flag==='account-ambiguous')))return {status:'identity',value:null};
-  if(rows.some(row=>row.provider!==last.provider||row.seriesKey!==last.seriesKey||row.windowId!==last.windowId||row.resetAt!==last.resetAt))return {status:'boundary',value:null};
-  if(rows.some(row=>row.flags?.includes('approximate-boundary')))return {status:'boundary',value:null};
-  const unique:WeeklyQuotaObservation[]=[];
-  for(const row of rows){
-    if(!Number.isFinite(row.observedAt)||row.observedAt<0||row.observedAt>now||row.observedAt>=row.resetAt||!Number.isFinite(row.usedPercent)||row.usedPercent<0||row.usedPercent>100)return {status:'invalid',value:null};
-    const previous=unique[unique.length-1];
-    if(previous?.observedAt===row.observedAt){if(previous.usedPercent!==row.usedPercent)return {status:'conflict',value:null};continue;}
-    if(previous&&row.usedPercent<previous.usedPercent)return {status:'regression',value:null};
-    unique.push(row);
-  }
-  if(unique.length<2)return {status:'samples',value:null};
-  const first=unique[0],hours=(last.observedAt-first.observedAt)/3600000;
-  // Conservative interpretation gates, not provider billing or timing rules.
-  if(hours<1||unique.some((row,index)=>index>0&&row.observedAt-unique[index-1].observedAt>24*3600000))return {status:'samples',value:null};
-  return {status:'ready',value:(last.usedPercent-first.usedPercent)/hours,hours,samples:unique.length,start:first.observedAt,end:last.observedAt};
-}
-/** Select only the final contiguous identity/cycle segment of existing host
- * observations. Never join separated points across an account/reset transition. */
-export function diagnosticCurrentQuotaRate(input:readonly WeeklyQuotaObservation[],now:number):DiagnosticRate {
-  if(!input.length)return {status:'samples',value:null};
-  const sorted=[...input].sort((a,b)=>a.observedAt-b.observedAt);
-  const last=sorted[sorted.length-1];
-  const compatible=(row:WeeklyQuotaObservation):boolean=>row.provider===last.provider&&
-    row.seriesKey===last.seriesKey&&row.windowId===last.windowId&&row.resetAt===last.resetAt;
-  let first=sorted.length-1;
-  while(first>0&&compatible(sorted[first-1]))first--;
-  // Equal original timestamps cannot be ordered into a safe transition.
-  if(first>0&&sorted[first-1].observedAt===sorted[first].observedAt)return {status:'conflict',value:null};
-  return diagnosticQuotaRate(sorted.slice(first),now);
-}
-
 export function adaptClaudeDiagnosticDays(rows:readonly {date:string;data:UsageData}[],complete:boolean):DiagnosticDay[] {
   return rows.map(({date,data})=>({day:date,output:data.totalOutputTokens,
     processed:data.totalInputTokens+data.totalOutputTokens+data.totalCacheCreationTokens+data.totalCacheReadTokens,

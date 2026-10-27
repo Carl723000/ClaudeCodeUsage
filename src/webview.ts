@@ -2,7 +2,6 @@ import { projectChartProjection, ProjectChartScale } from './projectChartProject
 import * as vscode from 'vscode';
 import { ClaudeDataLoader } from './dataLoader';
 import {adaptClaudeDiagnosticDays, diagnosticThroughput, diagnosticChange, diagnosticSevenDayPeak, type DiagnosticDay} from './usageDiagnostics';
-import type {QuotaDiagnosticsProjection} from './usageDiagnosticsQuota';
 import type { ClaudeUsageRecord } from './types';
 import {achievementTitleWithoutRank} from './achievementTitles';
 import {achievementUiIcon} from './achievementUiIcons';
@@ -4232,15 +4231,13 @@ export class UsageWebviewProvider {
     // claudeCodeUsage.enableContentAnalysis (the analyser returned null).
     // Retire diagnostic runtime state even when disabling the last optional
     // panel also hides the Content tab entirely. No source projection occurs.
-    if (!this.setting<boolean>('showQuotaDeclineRate', false)) this.clearQuotaDiagnosticsProjection?.();
-    if (!this.setting<boolean>('showUsageThroughput', false) && !this.setting<boolean>('showUsageChange', false) &&
-        !this.setting<boolean>('showQuotaDeclineRate', false)) this.usageDiagnosticsRenderCache = undefined;
+    if (!this.setting<boolean>('showUsageThroughput', false) && !this.setting<boolean>('showUsageChange', false))
+      this.usageDiagnosticsRenderCache = undefined;
     const contentEnabled = provider === 'codex'
       ? Boolean(this.codexView && (this.setting<boolean>('codex.optimization.enabled', true) ||
-        this.setting<boolean>('showUsageThroughput', false) || this.setting<boolean>('showUsageChange', false) ||
-        this.setting<boolean>('showQuotaDeclineRate', false)))
+        this.setting<boolean>('showUsageThroughput', false) || this.setting<boolean>('showUsageChange', false)))
       : this.contentAnalysis !== null || this.setting<boolean>('showUsageThroughput', false) ||
-        this.setting<boolean>('showUsageChange', false) || this.setting<boolean>('showQuotaDeclineRate', false);
+        this.setting<boolean>('showUsageChange', false);
     const contentTabButton = contentEnabled
       ? dashboardTab('content', contentTab, contentActive)
       : '';
@@ -10481,21 +10478,8 @@ export class UsageWebviewProvider {
     );
   }
 
-  private quotaDiagnosticsProjector?: (provider: SettingProvider, now: number) => QuotaDiagnosticsProjection | null;
-  private clearQuotaDiagnosticsProjection?: () => void;
-  setQuotaDiagnosticsProjector(projector: (provider: SettingProvider, now: number) => QuotaDiagnosticsProjection | null, clear?: () => void): void {
-    this.quotaDiagnosticsProjector = projector;
-    this.clearQuotaDiagnosticsProjection = clear;
-    this.usageDiagnosticsRenderCache = undefined;
-  }
-  /** Host callback owns all identity/source checks. OFF does not call it. */
-  getQuotaDiagnostics(provider: SettingProvider, now: number): QuotaDiagnosticsProjection | null {
-    if (!this.setting<boolean>('showQuotaDeclineRate', false)) { this.clearQuotaDiagnosticsProjection?.(); return null; }
-    return this.quotaDiagnosticsProjector?.(provider, now) ?? null;
-  }
-
   private usageDiagnosticsRenderCache?: Partial<Record<SettingProvider, {
-    source: unknown; diagnosticSource: unknown; observations: unknown; key: string; html: string;
+    source: unknown; diagnosticSource: unknown; key: string; html: string;
   }>>;
 
   /** Default-off, numeric-only diagnostics in the existing Content panel. The
@@ -10503,9 +10487,7 @@ export class UsageWebviewProvider {
   private renderUsageDiagnostics(provider: SettingProvider): string {
     const throughput = this.setting<boolean>('showUsageThroughput', false);
     const changes = this.setting<boolean>('showUsageChange', false);
-    const quota = this.setting<boolean>('showQuotaDeclineRate', false);
-    if (!quota) this.clearQuotaDiagnosticsProjection?.();
-    if (!throughput && !changes && !quota) {
+    if (!throughput && !changes) {
       this.usageDiagnosticsRenderCache = undefined;
       return '';
     }
@@ -10516,14 +10498,11 @@ export class UsageWebviewProvider {
     const today = dayKeyInZone(new Date(now), zone);
     const source = provider === 'codex' ? this.codexView : this.dailyDataForEveryDay;
     const diagnosticSource = provider === 'codex' ? this.codexView?.diagnosticDays : undefined;
-    const quotaProjection = quota ? this.getQuotaDiagnostics(provider, now) : null;
-    const observations = quotaProjection;
-    const expired = JSON.stringify(quotaProjection);
     const claudeComplete = this.achievementCalendarTimeZone === zone && !!this.allTimeData &&
       !this.revokedAchievementEvidence?.has('claude');
-    const key = [I18n.getCurrentLanguage(), zone, today, throughput, changes, quota, expired, claudeComplete].join('|');
+    const key = [I18n.getCurrentLanguage(), zone, today, throughput, changes, claudeComplete].join('|');
     const previous = this.usageDiagnosticsRenderCache?.[provider];
-    if (previous && previous.source === source && previous.diagnosticSource === diagnosticSource && previous.observations === observations && previous.key === key) return previous.html;
+    if (previous && previous.source === source && previous.diagnosticSource === diagnosticSource && previous.key === key) return previous.html;
     const selectedDays = rollingDayKeysFromDayKey(today, 30);
     const selected = new Set(selectedDays);
     let days: readonly DiagnosticDay[] = [];
@@ -10594,22 +10573,9 @@ export class UsageWebviewProvider {
           esc(copy.seven+' · '+(provider==='codex'?I18n.t.providers.codex.processed:I18n.t.popup.totalTokens))+': '+
           (peak&&peak.value.status==='exact'?esc(peak.value.units.toLocaleString(I18n.getLocale())+' Token · '+peak.startDay+' → '+peak.endDay):esc(copy.sevenUnavailable))+'</p>'));
     }
-    if (quota) {
-      const projected=quotaProjection;
-      const rate={value:projected?.rate??null,status:projected?.status??'unknown',start:projected?.from,end:projected?.through,samples:projected?.count};
-      const value=rate.value===null?'—':rate.value>0&&rate.value<1?'&lt;1':I18n.formatNumber(Math.round(rate.value));
-      const quality=rate.value!==null?copy.quotaNote:rate.status==='identity'?copy.identity:
-        rate.status==='expired'?I18n.visualization.expired:rate.status==='stale'?I18n.visualization.stale:
-        ['boundary','regression','conflict'].includes(rate.status)?copy.boundary:rate.status==='samples'?copy.samples:copy.unavailable;
-      body += section('quota',copy.quota,'<p class="diagnostic-primary" data-diagnostic-result><strong>'+value+'</strong> <span>'+esc(copy.quotaUnit)+'</span></p>'+
-        '<p class="diagnostic-quality">'+esc(quality)+'</p>'+(rate.samples===undefined?'':'<p class="diagnostic-context">n = '+rate.samples+'</p>')+
-        method('quota',(rate.start===undefined||rate.end===undefined?'':'<p class="table-hint">'+esc(new Date(rate.start).toISOString()+' → '+new Date(rate.end).toISOString()+' · n='+rate.samples)+'</p>')+
-          (projected?.resetAt===undefined?'':'<p class="table-hint">'+esc(copy.reset+': '+new Date(projected.resetAt).toISOString())+'</p>')+
-          '<p class="table-hint">'+esc(copy.quotaPolicy)+'</p>'));
-    }
     const html = '<div class="daily-breakdown" data-usage-diagnostics="' + provider + '"><div class="section-header"><h3>' +
       esc(copy.title) + '</h3></div>' + body + '</div>';
-    (this.usageDiagnosticsRenderCache ??= {})[provider] = {source,diagnosticSource,observations,key,html};
+    (this.usageDiagnosticsRenderCache ??= {})[provider] = {source,diagnosticSource,key,html};
     return html;
   }
 

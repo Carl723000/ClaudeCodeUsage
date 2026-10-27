@@ -1708,39 +1708,19 @@ and accessible structure. Layout participates in client config identity, host
 normalization, accepted receipts, restoration and reset; export reuses the
 accepted bytes and verifies the same saved URI by readback before success.
 
-`usageDiagnostics.ts` defines numeric-only output-per-elapsed-hour, observed
-usage-change and quota-rate projections. The STATE settings
-`showUsageThroughput`, `showUsageChange` and `showQuotaDeclineRate` are all false
-by default and available to both providers. Their UI stays in the existing
-Content/optimization panel. Claude uses already materialized daily aggregates;
-Codex exposes a lazy host-only `diagnosticDays()` view of at most 30 days, with
-current-manifest, timezone, lineage and total checks. Off skips the diagnostic
-projection; rendered results are memoized by provider, source and relevant
-configuration, not stored as a new history.
+`usageDiagnostics.ts` defines numeric-only output-per-elapsed-hour and observed
+usage-change projections. The shared STATE settings `showUsageThroughput` and
+`showUsageChange` default to false. Claude uses materialized daily aggregates;
+Codex supplies a lazy host-only view of at most 30 days with current-manifest,
+timezone, lineage and total checks. Off bypasses projection. Results are cached
+only in memory by provider, source and relevant configuration.
 
-Hourly output divides recorded output by the closed civil day's actual elapsed
-hours, including idle/tool wait and DST; it is not generation TPS. Change views
-compare the two preceding complete, equal-duration civil days. Model and role
-breakdowns are overlapping marginal views, not additive causes; unsupported
-partitions remain unavailable. The retained-range complete seven-day peak is
-textual context, not another local usage chart. Quota-rate computation requires
-compatible verified-account/cycle observations and reports only their historical
-endpoint mean. The conservative one-hour minimum interval, 30-minute freshness
-limit and 24-hour maximum gap are local interpretation guards, not provider
-rules. Missing identity, timing, coverage, conflicting timestamps or counter
-regressions yield an explicit unavailable state; no TPS, acceleration or
-exhaustion prediction is inferred.
-
-`usageDiagnosticsQuota.ts` is the read-only quota adapter. The extension registers
-`setQuotaDiagnosticsProjector` against existing P2 observations and current
-verified official source/account context. Only `claude-official-api` or
-`codex-official-api` evidence can qualify. Account/window identifiers and source
-paths stay in the host; the view receives only status/rate, historical-interval
-scope, unknown precision, endpoints, delta, reset and count. The projector holds
-at most one cached entry per provider. Off, invalidated source/configuration,
-clear/reload or disposal withdraw the result rather than fetching a replacement.
-This hook neither turns on official quota collection nor performs authentication
-or network I/O.
+Hourly output uses the closed civil day's actual elapsed hours, including idle
+time and DST; it is not generation TPS. Change views compare the two preceding
+complete, equal-duration days. Model and role partitions are overlapping marginal
+views, not additive causes. Missing coverage stays unavailable. A complete closed
+seven-day peak is textual context. No quota-decline adapter, account calibration
+or additional official quota collector is part of this integration.
 
 The unreleased rolling-seven-day migration uses `rollingSevenDay.ts` and
 `achievementRollingPeak.ts` over existing civil-day aggregates. The three

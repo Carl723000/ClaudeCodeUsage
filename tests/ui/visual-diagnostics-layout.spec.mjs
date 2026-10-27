@@ -35,12 +35,8 @@ for(const provider of ['claude','codex']) {
   const throughput=panel.locator('[data-diagnostic="throughput"]');
   await expect(throughput.locator('[data-diagnostic-result]')).toContainText('187.5');
   await expect(throughput.locator('details[data-diagnostic-method="throughput"]')).not.toHaveAttribute('open');
-  const quota=panel.locator('[data-diagnostic="quota"]');
-  await expect(quota.locator('[data-diagnostic-result]')).toContainText('3');
-  // The synthetic fixture qualifies a historical interval from only two points.
-  // Its limitation must remain visible even when calculation details are closed.
-  expect(await quota.innerText()).toMatch(/历史|样本|区间均值/);
-  await expect(quota.locator('details[data-diagnostic-method="quota"]')).not.toHaveAttribute('open');
+  await expect(panel.locator('[data-diagnostic]')).toHaveCount(2);
+  await expect(panel.locator('[data-diagnostic="quota"]')).toHaveCount(0);
   expect(await panel.innerText()).toContain('模型和角色');
   const models=panel.locator(`details[data-persist="diagnostics:${provider}:models"]`);
   await models.locator('summary').click();

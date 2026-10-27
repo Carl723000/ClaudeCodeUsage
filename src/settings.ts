@@ -441,11 +441,6 @@ export const SETTINGS: SettingDef[] = [
     help: 'Off by default. Uses existing numeric aggregates only; no extra scans, collection or requests.',
   },
   {
-    key: 'showQuotaDeclineRate', type: 'boolean', default: false, storage: 'state', group: 'features',
-    providers: ['claude', 'codex'], label: 'Quota decline rate',
-    help: 'Off by default. Uses existing numeric aggregates only; no extra scans, collection or requests.',
-  },
-  {
     key: 'showInsights',
     type: 'boolean',
     default: false,

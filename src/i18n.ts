@@ -6534,7 +6534,7 @@ for (const locale of ['en','de-DE','zh-TW','zh-CN','ja','ko','pt-BR','id'] as Su
   const copy=usageDiagnosticsCopyFor(locale);
   const entries=SETTINGS_I18N[locale] ?? (SETTINGS_I18N[locale]={});
   USAGE_DIAGNOSTIC_SETTING_KEYS.forEach((key,index)=>{
-    entries[key]={label:[copy.throughput,copy.change,copy.quota][index],help:copy.settingHelp};
+    entries[key]={label:[copy.throughput,copy.change][index],help:copy.settingHelp};
   });
 }
 

@@ -46,7 +46,6 @@ import {
 } from './settings';
 import { normalizeQuotaWindows } from './quotaWindows';
 import { ClaudeQuotaPaceSource, projectCodexQuotaPaceSource } from './quotaPaceSource';
-import {QuotaDiagnosticsProjector} from './usageDiagnosticsQuota';
 import type { QuotaPaceAdapterSnapshot } from './quotaPaceAdapters';
 import {codexAchievementEffortStatistics} from './achievementEffortStatistics';
 import {
@@ -3814,7 +3813,7 @@ export class ClaudeCodeUsageExtension {
     'dashboardAutoRefresh',
     'showWeeklyEquivalentValue',
     'showProjectUsageMatrix',
-    'showUsageThroughput', 'showUsageChange', 'showQuotaDeclineRate',
+    'showUsageThroughput', 'showUsageChange',
     'enableAchievements',
     'showAchievementNotices',
   ]);

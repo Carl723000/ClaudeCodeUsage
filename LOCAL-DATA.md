@@ -760,32 +760,19 @@ timezone. Reset UI State additionally clears the Webview state. These operations
 do not delete provider logs; rebuilding controls uses current aggregates only.
 No source-log scan, disk chart cache, upload or network path is added.
 
-These changes reuse the existing data owners. They add no raw-log scanner,
-credential lookup, background sampler, anonymous contribution or publication
-path. Existing optional official quota collection can still make its separately
-authorized network requests; enabling a diagnostic does not enable that collector.
+These changes reuse existing data owners and add no source scanner, credential
+lookup, background collection or publication path. The two shared STATE flags
+`showUsageThroughput` and `showUsageChange` default to false and persist as
+`ccu.setting.showUsageThroughput` and `ccu.setting.showUsageChange`. They follow
+the existing settings reset/clear catalog; Reset UI State clears disclosure and
+selection state, not these feature preferences.
 
-The three shared STATE flags `showUsageThroughput`, `showUsageChange` and
-`showQuotaDeclineRate` default to false and are stored as
-`ccu.setting.showUsageThroughput`, `ccu.setting.showUsageChange` and
-`ccu.setting.showQuotaDeclineRate`. They follow the existing settings reset/clear
-catalog. Reset UI State clears disclosure/selection state, not these feature
-preferences; clearing quota history does not silently opt the feature in or out.
-The diagnostic DTOs, rendered results and bounded two-provider quota projection
-cache remain runtime-only. Off bypasses daily projection and withdraws the rate;
-source/configuration invalidation, clear/reload and disposal make old observations
-ineligible. No diagnostic history file or new quota observation field is written.
-
-Daily diagnostics consume already materialized dates, numeric processed/output
-amounts and available model/role partitions. Codex exposes at most 30 days through
-a lazy host-only adapter. The official quota adapter reads existing P2 records
-only after the current account/source and original observation time match; it
-retains HMAC identity and window matching inside the host. The view receives
-only fixed status/scope/precision values and rate, interval endpoints, percentage
-point change, reset time and sample count. Unverified local-log identity,
-missing timing, gaps, conflicts and expired observations do not become a rate.
-The complete closed-seven-day statistic is a bounded textual result, not a new
-chart, award or persistent receipt.
+Numeric diagnostic DTOs and rendered results remain runtime-only. Off bypasses
+projection; source/configuration invalidation, clear/reload and disposal retire
+cached results. Daily diagnostics use materialized processed/output totals and
+available model/role partitions. Codex supplies at most 30 days through a lazy
+host-only adapter. No quota adapter, diagnostic history file or quota observation
+field is added. A complete closed-seven-day statistic is bounded textual context.
 
 Compact amount layout is one additional bounded browser preference,
 `ccu.combinedHeatmap.presentation`, cleared with the other sharing keys listed

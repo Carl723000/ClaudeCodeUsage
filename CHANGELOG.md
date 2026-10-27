@@ -6,6 +6,25 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+### Added
+- **Clearer achievements and sharing** — full artwork with rank ornaments, a
+  continuous gallery with expandable facts, centered SVG badge layouts and public
+  targets. Compact amount heatmaps remain optional and keep provider values separate.
+- **Readable project charts** — grouped range, indexed subtotal and coverage;
+  day/week/month views, filters, aligned legends and retained scroll positions.
+- **Analysis results first** — same-range key numbers precede expandable evidence
+  and advice. Output per elapsed hour and observed usage-change diagnostics are
+  optional and off by default; they do not measure generation TPS or causation.
+- **Closed rolling seven-day achievements** — volume and provider amount peaks
+  use completed seven-civil-day windows. Earlier calendar-week awards retain
+  their records, dates and pins, labelled as legacy rules. Actual quota reset
+  cycles remain separate.
+
+中文：成就保留完整原图及外缘等级饰件，连续图鉴与 SVG 分享明确目标和依据；项目图
+集中范围、小计及覆盖，保留筛选和滚动位置；分析先呈现结果，按需展开依据。小时输出
+及用量变化默认关闭。连续七天峰值奖项保留旧自然周奖项记录；实际额度周期独立。
+
+
 ### Fixed
 - **Rewriting a transcript re-read the whole history (#99)** — a mid-file edit
   or truncation (`/rewind`, session repair, an external touch) tripped the

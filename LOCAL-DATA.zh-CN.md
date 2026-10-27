@@ -9,7 +9,7 @@ Claude Code Usage 采用本地优先设计。插件只读取供应商拥有的�
 v2.3.1 字段级历史基线见
 [`docs/superpowers/specs/2026-09-02-v2.3.1-local-data-contract.zh-CN.md`](docs/superpowers/specs/2026-09-02-v2.3.1-local-data-contract.zh-CN.md)。
 本文后续压缩、分享、额度节奏和成就章节规范其新增运行期／持久字段及精确清除边界，
-包括 canonical v2 封套与十二个分享键；不放宽未变化的源日志、凭据、账号隔离或
+包括 canonical v2 封套与十三个分享键；不放宽未变化的源日志、凭据、账号隔离或
 明确网络同意限制。
 
 ## 插件读取和保留什么
@@ -535,22 +535,15 @@ Folder 配置作用域。只存在于关闭工作区中的旧值会继续保留�
 这些操作不删除供应商日志，重建控件只消费当前聚合；不新增来源扫描、磁盘图表缓存、
 上传或网络通路。
 
-这些变更复用既有数据所有者，不新增原始日志扫描器、凭据查询、后台采样、匿名贡献或
-发布通路。既有可选官方额度采集仍可能执行其单独授权的网络请求；开启诊断不会启用采集器。
+这些变更复用既有数据所有者，不新增来源扫描器、凭据查询、后台采集或发布通路。
+两个共用 STATE 开关 `showUsageThroughput`、`showUsageChange` 默认 false，保存为
+`ccu.setting.showUsageThroughput`、`ccu.setting.showUsageChange`，沿用现有设置
+重置／清除清单。“重置 UI 状态”清除展开及选择状态，不重置这些功能偏好。
 
-三个共用 STATE 开关 `showUsageThroughput`、`showUsageChange`、`showQuotaDeclineRate`
-默认 false，分别保存为 `ccu.setting.showUsageThroughput`、`ccu.setting.showUsageChange`
-和 `ccu.setting.showQuotaDeclineRate`，沿用现有设置重置／清除清单。“重置 UI 状态”清除
-展开／选择状态，不重置这些功能偏好；清除额度历史也不静默改变功能开关。诊断 DTO、
-渲染结果及最多两个供应商条目的额度投影缓存仅存运行期。关闭时跳过每日投影并撤回速率；
-来源／配置失效、清除／重载及释放会使旧观测失去资格。不写诊断历史文件或新增额度观测字段。
-
-每日诊断消费已物化日期、数值 processed／output 及可用模型／角色拆分；Codex 通过惰性
-宿主适配最多提供30日。官方额度适配器只有在当前账号／来源和原始观测时点匹配后才读
-既有 P2 记录，HMAC 身份及窗口匹配保留在宿主。视图只得到固定状态／作用域／精度值及
-速率、区间端点、百分点差额、重置时点与样本数。身份未核验的本地日志、缺失时序、间隔、
-冲突或过期观测不转换为速率。完整已闭合七天统计只是有界文字结果，不是新图表、奖项或
-持久收据。
+数值诊断 DTO 和渲染结果仅存运行期。关闭时跳过投影；来源／配置失效、清除／重载及
+释放使缓存失效。每日诊断只消费已物化的 processed／output 总量和可用模型／角色拆分；
+Codex 通过惰性宿主适配最多提供30日。不新增额度适配器、诊断历史文件或额度观测字段。
+完整闭合七天统计只是有界文字背景。
 
 紧凑金额版式只增加一个有界浏览器偏好 `ccu.combinedHeatmap.presentation`，随前文分享
 键一起清除，默认 standard。即使记住紧凑金额偏好，Token／隐藏金额的产物仍规范化为
