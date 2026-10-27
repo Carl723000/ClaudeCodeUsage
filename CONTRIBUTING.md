@@ -57,6 +57,25 @@ npm run watch            # recompile on change
 不随插件交付，不提高插件最低 VS Code 版本。发布不临时下载工具，也不自动强制修复依赖；
 升级通过审阅的 PR 完成。审计无警报只表示未命中已知漏洞，不能证明供应链绝对安全。
 
+The build-tool manifest scopes an exact MSAL Node 7.1.1 override to Azure
+Identity while its upstream range still requests the affected 6.x line
+([security advisory](https://github.com/advisories/GHSA-xcx6-jx8p-x3h5)).
+This is a deliberate build-only compatibility override, not an audit suppression.
+Its offline regression exercises the actual Identity client-secret flow against
+synthetic HTTP; npm ci, both audits and VSIX packaging remain required. MSAL 7's
+interactive responseMode removal is outside VSCE's credential chain. Reassess or
+remove the override when upstream adopts a patched compatible range; do not
+silently widen it. It adds no extension runtime dependency or engine requirement.
+The offline tool test is skipped locally only when the optional tools are absent;
+in CI missing tools fail, and the exact locked-version guard always runs.
+
+中文审阅：上游 Identity 仍要求受影响的6.x，因此仅在独立构建工具清单内把 MSAL
+精确覆盖到7.1.1，不屏蔽审计。离线测试使用真实 Identity 客户端密钥流程及合成 HTTP，
+另须通过锁定安装、两份审计和 VSIX 打包。7.x 移除的交互 responseMode 参数不属于
+VSCE 的凭据链；上游支持修复范围后再复核／移除此覆盖，不能自动放宽。不增加扩展
+运行依赖或提高引擎要求。仅本地未安装可选构建工具时跳过离线兼容检查；CI缺失仍失败，
+锁定版本守卫始终运行。
+
 The audited Axe 4.13.0 baseline is used for browser checks. The 4.14 upgrade detects
 existing `label-content-name-mismatch` failures on achievement controls. Resolve
 those with focused accessibility tests and the required native UI acceptance in

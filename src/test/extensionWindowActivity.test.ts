@@ -4640,6 +4640,9 @@ test('a quota response from the previous profile is discarded after a switch', a
   };
 
   const pending = extension.maybeFetchUsageLimits({ usageLimitTracking: true });
+  // The shared-quota lookup runs first; switch once the request is in flight.
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(releaseOldRequest, 'the old request is in flight');
   extension.apiClient = { fetchUsageLimits: async () => null };
   extension.claudeProfileGeneration += 1;
   releaseOldRequest?.({ five_hour: { utilization: 77, resets_at: null } });
@@ -4673,6 +4676,8 @@ test('a same-path credential rotation cannot persist the stale in-flight quota r
   extension.refreshData = async () => undefined;
 
   const pending = extension.maybeFetchUsageLimits({ usageLimitTracking: true });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(releaseRequest, 'the request is in flight');
   extension.handleCredentialsChange();
   releaseRequest?.({
     limits: [{

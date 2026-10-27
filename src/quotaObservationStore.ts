@@ -5,6 +5,7 @@ import {
   readFile,
   readdir,
   rename,
+  stat,
   unlink,
 } from 'node:fs/promises';
 import * as path from 'node:path';
@@ -19,6 +20,10 @@ export const QUOTA_OBSERVATION_SCHEMA_VERSION = 2 as const;
 export const QUOTA_OBSERVATION_FILE = 'quota-observations-v2.json';
 export const QUOTA_OBSERVATION_RETENTION_DAYS = 180;
 export const QUOTA_OBSERVATION_LIMIT_PER_SERIES = 512;
+/** The store keeps a scope name only as an HMAC; this account-neutral sibling
+ * keeps the names themselves, so another window can name a scoped cap. */
+export const QUOTA_SCOPE_LABEL_FILE = 'quota-scope-labels-v1.json';
+const SCOPE_LABEL_LIMIT = 16;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const FUTURE_SKEW_MS = DAY_MS;
@@ -198,7 +203,7 @@ export function fingerprintForStableIdentity(
 
 function providerWindowFingerprint(
   salt: string,
-  capture: QuotaCapture,
+  capture: Pick<QuotaCapture, 'provider' | 'periodType' | 'sourceWindowId'>,
 ): string | null {
   const raw = capture.sourceWindowId?.trim();
   return raw
@@ -812,7 +817,7 @@ async function quarantine(filePath: string, now: number): Promise<string | undef
 
 export async function loadQuotaObservationStore(
   filePath: string,
-  options: { now?: number } = {},
+  options: { now?: number; quarantineInvalid?: boolean } = {},
 ): Promise<QuotaObservationLoadResult> {
   const now = options.now ?? Date.now();
   let body: string;
@@ -828,7 +833,8 @@ export async function loadQuotaObservationStore(
   try {
     parsed = JSON.parse(body) as unknown;
   } catch {
-    const quarantinePath = await quarantine(filePath, now);
+    const quarantinePath = options.quarantineInvalid === false
+      ? undefined : await quarantine(filePath, now);
     return {
       store: createEmptyQuotaObservationStore(),
       disposition: 'quarantined',
@@ -837,7 +843,8 @@ export async function loadQuotaObservationStore(
   }
   const store = parseStore(parsed, now);
   if (!store) {
-    const quarantinePath = await quarantine(filePath, now);
+    const quarantinePath = options.quarantineInvalid === false
+      ? undefined : await quarantine(filePath, now);
     return {
       store: createEmptyQuotaObservationStore(),
       disposition: 'quarantined',
@@ -924,8 +931,68 @@ async function purgeQuotaObservationAuxiliaries(filePath: string): Promise<void>
   }
 }
 
+function validScopeLabel(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= 256;
+}
+
+/** [] when absent; null when unreadable or of a schema this version does not
+ * know, so such a file is neither used nor overwritten. */
+async function readScopeLabels(filePath: string): Promise<string[] | null> {
+  let body: string;
+  try {
+    body = await readFile(filePath, 'utf8');
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'ENOENT' ? [] : null;
+  }
+  try {
+    const item = record(JSON.parse(body) as unknown);
+    return item && exactKeys(item, ['schemaVersion', 'labels']) && item.schemaVersion === 1 &&
+      Array.isArray(item.labels) && item.labels.length <= SCOPE_LABEL_LIMIT &&
+      item.labels.every(validScopeLabel)
+      ? [...new Set(item.labels as string[])]
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+async function saveScopeLabelsAtomic(filePath: string, labels: readonly string[]): Promise<void> {
+  const directory = path.dirname(filePath);
+  await mkdir(directory, { recursive: true });
+  const temporaryPath = path.join(
+    directory,
+    `.${path.basename(filePath)}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`,
+  );
+  let handle: Awaited<ReturnType<typeof open>> | undefined;
+  try {
+    handle = await open(temporaryPath, 'wx', 0o600);
+    await handle.writeFile(JSON.stringify({ schemaVersion: 1, labels }), 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    await rename(temporaryPath, filePath);
+  } finally {
+    await handle?.close().catch(() => undefined);
+    await unlink(temporaryPath).catch((error) => {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    });
+  }
+}
+
+/** An atomic replacement always installs a new inode, so an equal identity
+ * means the file was not rewritten since it was last read. */
+async function fileIdentity(filePath: string): Promise<string | null> {
+  try {
+    const stats = await stat(filePath);
+    return `${stats.dev}:${stats.ino}:${stats.size}:${stats.mtimeMs}`;
+  } catch {
+    return null;
+  }
+}
+
 export class QuotaObservationRepository {
   private state: QuotaObservationStoreV2 | undefined;
+  private snapshot: { identity: string; store: QuotaObservationStoreV2 } | undefined;
   private pending: Promise<void> = Promise.resolve();
 
   constructor(
@@ -940,6 +1007,48 @@ export class QuotaObservationRepository {
     return result;
   }
 
+  private scopeLabelPath(): string {
+    return path.join(path.dirname(this.filePath), QUOTA_SCOPE_LABEL_FILE);
+  }
+
+  /** Scope names for caps another window's observation may carry; a name is
+   * shown only after it reproduces the stored window HMAC. */
+  async loadScopeLabels(): Promise<string[]> {
+    return (await readScopeLabels(this.scopeLabelPath())) ?? [];
+  }
+
+  /** Adds the names a successful response used, newest first and bounded,
+   * under the store's lease so a concurrent clear cannot be undone. */
+  rememberScopeLabels(labels: readonly string[]): Promise<void> {
+    const fresh = [...new Set(labels.filter(validScopeLabel))];
+    if (fresh.length === 0) return Promise.resolve();
+    return this.serialized(async () => {
+      const known = await readScopeLabels(this.scopeLabelPath());
+      if (known === null || fresh.every((label) => known.includes(label))) return;
+      const lease = await acquireCodexIndexLease(this.filePath);
+      try {
+        await this.writeScopeLabels(fresh);
+      } finally {
+        await lease.release();
+      }
+    });
+  }
+
+  /** Caller owns the observation lease throughout this write. */
+  private async writeScopeLabels(
+    labels: readonly string[],
+    shouldPersist: () => boolean = () => true,
+  ): Promise<void> {
+    const fresh = [...new Set(labels.filter(validScopeLabel))];
+    if (fresh.length === 0 || !shouldPersist()) return;
+    const current = await readScopeLabels(this.scopeLabelPath());
+    if (!shouldPersist() || current === null || fresh.every((label) => current.includes(label))) return;
+    await saveScopeLabelsAtomic(this.scopeLabelPath(), [
+      ...fresh,
+      ...current.filter((label) => !fresh.includes(label)),
+    ].slice(0, SCOPE_LABEL_LIMIT));
+  }
+
   load(): Promise<QuotaObservationStoreV2> {
     return this.serialized(async () => {
       this.state = (await loadQuotaObservationStore(this.filePath, {
@@ -949,21 +1058,50 @@ export class QuotaObservationRepository {
     });
   }
 
-  append(captures: readonly QuotaCapture[]): Promise<QuotaObservationStoreV2> {
+  /** A read-only snapshot, parsed again only after the shared file changes:
+   * near its retention cap the store takes tens of milliseconds to parse. */
+  loadIfChanged(): Promise<QuotaObservationStoreV2> {
     return this.serialized(async () => {
+      // Identify before reading, so a replacement in between costs one more
+      // read later instead of hiding the newer file.
+      const identity = await fileIdentity(this.filePath);
+      if (identity !== null && this.snapshot?.identity === identity) return this.snapshot.store;
+      const { store } = await loadQuotaObservationStore(this.filePath, {
+        now: this.now(), quarantineInvalid: false,
+      });
+      this.snapshot = identity === null ? undefined : { identity, store };
+      return store;
+    });
+  }
+
+  append(
+    captures: readonly QuotaCapture[],
+    options: { shouldPersist?: () => boolean; scopeLabels?: readonly string[] } = {},
+  ): Promise<QuotaObservationStoreV2> {
+    return this.serialized(async () => {
+      const shouldPersist = options.shouldPersist ?? (() => true);
       const lease = await acquireCodexIndexLease(this.filePath);
       try {
+        if (!shouldPersist()) return cloneStore(this.state ?? createEmptyQuotaObservationStore());
         // Always re-read under the process-shared lease. A second VS Code
         // Extension Host may have committed observations since our last call.
         const current = (await loadQuotaObservationStore(this.filePath, {
           now: this.now(),
         })).store;
+        if (!shouldPersist()) return cloneStore(current);
         const next = mergeQuotaCaptures(current, captures, {
           salt: this.salt,
           now: this.now(),
         });
         if (JSON.stringify(next) !== JSON.stringify(current)) {
           await saveQuotaObservationStoreAtomic(this.filePath, next);
+        }
+        // Labels belong to this successful response, not a later independent
+        // write that could recreate a file removed by clear().
+        try {
+          await this.writeScopeLabels(options.scopeLabels ?? [], shouldPersist);
+        } catch {
+          // Naming shared scoped caps is best effort; observations remain valid.
         }
         this.state = next;
         return cloneStore(next);
@@ -1012,6 +1150,13 @@ export class QuotaObservationRepository {
           // after this lease is released must extend that empty store instead
           // of having its new write deleted by a second lease acquisition.
           await purgeQuotaObservationAuxiliaries(this.filePath);
+        }
+        if (scope.provider !== 'codex') {
+          // Scope names come only from Claude responses.
+          await unlink(this.scopeLabelPath()).catch((error) => {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          });
+          await purgeQuotaObservationAuxiliaries(this.scopeLabelPath());
         }
         this.state = next;
         return cloneStore(next);
@@ -1093,6 +1238,77 @@ export function claudeQuotaCapturesFromUsage(
       flags: Number.isFinite(resetAt) && resetAt > 0 ? [] : ['approximate-boundary'],
     };
   });
+}
+
+/** Scope names a usage payload gives its scoped weekly caps, in API order. */
+export function claudeQuotaScopeLabels(usage: ClaudeApiUsageResponse | null): string[] {
+  return normalizeQuotaWindows(usage).flatMap((window) =>
+    window.kind === 'weekly_scoped' && window.scopeLabel ? [window.scopeLabel] : []);
+}
+
+/** The newest verified Claude observation set for one account, rebuilt as a
+ * display-only usage payload, so another window of the same profile can show
+ * that success without a request of its own. Observations keep no credits,
+ * and a scope label only as an HMAC, so a scoped window is named only when one
+ * of `knownLabels` reproduces its window fingerprint. */
+export function latestClaudeQuotaUsage(
+  store: QuotaObservationStoreV2,
+  accountFingerprint: string,
+  salt: string,
+  knownLabels: readonly string[],
+): { observedAt: number; usage: ClaudeApiUsageResponse } | null {
+  const verified = store.observations.filter((item) =>
+    item.provider === 'claude' &&
+    item.source === 'claude-official-api' &&
+    item.accountAttribution === 'verified-local-signal' &&
+    item.accountFingerprint === accountFingerprint,
+  );
+  if (verified.length === 0) return null;
+  const observedAt = Math.max(...verified.map((item) => item.observedAt));
+  const labels = new Map<string, string>();
+  for (const label of knownLabels) {
+    // The window identity claudeQuotaCapturesFromUsage HMACs before persistence.
+    const fingerprint = providerWindowFingerprint(salt, {
+      provider: 'claude',
+      periodType: 'provider-scoped-seven-day',
+      sourceWindowId: `weekly_scoped|${label}`,
+    });
+    if (fingerprint && !labels.has(fingerprint)) labels.set(fingerprint, label);
+  }
+  // Known scoped windows keep the API order; unknown ones follow, stably.
+  const known = [...labels.keys()];
+  const rank = (item: QuotaObservationV2): number => {
+    const index = known.indexOf(item.providerWindowFingerprint ?? '');
+    return index < 0 ? known.length : index;
+  };
+  const windows = new Set<string>();
+  const limits = verified
+    .filter((item) => {
+      // A same-millisecond success from another window must not repeat a window.
+      const window = `${item.periodType}|${item.providerWindowFingerprint}`;
+      if (item.observedAt !== observedAt || windows.has(window)) return false;
+      windows.add(window);
+      return true;
+    })
+    .sort((left, right) =>
+      rank(left) - rank(right) ||
+      (left.providerWindowFingerprint ?? '').localeCompare(right.providerWindowFingerprint ?? ''),
+    )
+    .map((item) => {
+      const label = labels.get(item.providerWindowFingerprint ?? '');
+      return {
+        kind: item.periodType === 'five-hour'
+          ? 'session'
+          : item.periodType === 'seven-day'
+            ? 'weekly_all'
+            : 'weekly_scoped',
+        // usedFraction is percent / 100; drop the binary rounding residue.
+        percent: Math.round(item.usedFraction * 1e8) / 1e6,
+        resets_at: item.resetAt === null ? null : new Date(item.resetAt).toISOString(),
+        ...(label ? { scope: { model: { display_name: label } } } : {}),
+      };
+    });
+  return { observedAt, usage: { limits } };
 }
 
 export function codexQuotaCapturesFromWeeklyObservations(

@@ -156,6 +156,9 @@ test('derived-file family matching accepts only exact canonical, recovery, and i
     '.quota-observations-v2.json.200.abcdef123456.tmp',
     'quota-observations-v2.json.quarantine-100-deadbeef.bak',
     'quota-observations-v2.json.lock',
+    'quota-scope-labels-v1.json',
+    '.quota-scope-labels-v1.json.200.abcdef123456.tmp',
+    'quota-scope-labels-v1.json.bak',
     'unrelated.json',
   ];
   await Promise.all(names.map((name) => writeFile(path.join(root, name), 'fixture', 'utf8')));
@@ -179,8 +182,10 @@ test('derived-file family matching accepts only exact canonical, recovery, and i
     )).sort(),
     [
       '.quota-observations-v2.json.200.abcdef123456.tmp',
+      '.quota-scope-labels-v1.json.200.abcdef123456.tmp',
       'quota-observations-v2.json',
       'quota-observations-v2.json.quarantine-100-deadbeef',
+      'quota-scope-labels-v1.json',
     ].sort(),
   );
 });
