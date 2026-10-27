@@ -43,7 +43,7 @@ Codex effort 统计及仅累计范围的金额新活动收据已完成接入。
 | 模块 | 职责 |
 |---|---|
 | `extension.ts` | 激活、命令、设置、provider 生命周期、刷新编排、watcher、状态栏/webview 接线和匿名诊断。 |
-| `claudeApiClient.ts` | 既有 Claude OAuth／额度请求及最近成功请求所用凭证的运行期单向身份信号；周节奏只读取该信号，不新增请求或凭证查询。 |
+| `claudeApiClient.ts` | 既有 Claude OAuth／额度请求及最近成功请求所用凭证的运行期单向身份信号；周节奏只读取该信号，不新增请求或凭证查询。另以只读方式为所选 Claude profile 当前持有的凭证派生同一信号，用于匹配其他窗口已核验的观测。 |
 | `dataLoader.ts` | 为精确兼容保留的 Claude 解析、校验、归因和内容分析 primitive。 |
 | `claudeIncrementalIndex.ts` | 生产环境 Claude 内存 per-file 索引：append-tail 解析、精确跨文件 response 去重、受影响 group 聚合、内容分析 contribution 和已物化 dashboard row。 |
 | `achievements.ts`、`achievementSnapshot.ts`、`achievementCalendar.ts`、`achievementHours.ts` | 带版本的规则与数值 Token／日／周／小时证据；`codexAchievementCalendarProjection` 先解析全清单祖先关系，再选择有见证的日期，区分正向子集与全清单完整性。 |
@@ -136,6 +136,10 @@ Claude aggregate + Codex scope ──> 并列 Compare（不跨 provider 求和�
 既有成功原始额度 + 原始 observedAt + 已核验本机账号 HMAC
   ──> 运行期连续性所有者 ──> 有界每周数值 DTO ──> 周期平均节奏
   ──> 既有刷新回调 ──> 绑定文档／供应商的页面补丁 + 状态栏提示
+其他窗口已核验的 Claude 额度观测 + 相同账号 HMAC + 额度 TTL 内
+  ──> 保留原始 observedAt 的仅显示额度值 ──> 不发请求，不作节奏输入
+  ──> 范围上限名称取自共享的最多 16 项名称列表，每项须与已存窗口 HMAC 匹配
+  ──> 选中匹配的账号指纹，并用同一快照刷新该账号的每周历史
 既有 Codex 本地额度 ──> 账号可信度未知 ──> 预测不可用
 已物化 Claude 聚合
   ──> 统一分享选择器 ──> 旧版分享卡或 Claude token 热力图预览
@@ -147,6 +151,12 @@ Claude aggregate + Codex scope ──> 并列 Compare（不跨 provider 求和�
   ──> 可选 host-owned Prepared 请求 ──> 预览 ──> 显式 BYOK 发送
   ──> 本地反馈 ──> 净化可比 pair ──> 冻结 comparison envelope
 ```
+
+共享额度快照的读取完全只读，包括无效文件处理：不会隔离或重命名文件，文件身份未变化时
+复用已解析快照。成功响应的观测与范围名称在同一共享 lease 内持久化。宿主将清除／取消
+所有权传入排队写入，在 lease 内读取后重新核验，并在发布历史前再次核验；清除前的异步
+任务恢复执行时，不能重新填入已清除的宿主状态，也不能另行发起延后的名称写入。
+
 
 任一 provider unavailable 或 partial 时，不清空另一 provider 最近验证的 snapshot。
 Claude-only 保持 v2.2.1 行为；Codex-only 默认显示 Codex；两者都有时 dashboard 默认 Claude。
