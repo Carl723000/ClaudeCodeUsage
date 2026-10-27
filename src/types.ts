@@ -319,6 +319,8 @@ export interface ExtensionConfig {
   codexOptimizationEnabled: boolean;
   statusBarProvider: 'auto' | 'claude' | 'codex';
   codexStatusMetric: 'fresh' | 'processed' | 'output';
+  // Optional display-only template; empty preserves codexStatusMetric.
+  codexStatusBarUsageFormat?: string;
   language: string;
   decimalPlaces: number;
   // Local-only presentation preset. All source pricing and aggregates stay USD.

@@ -101,6 +101,8 @@ export {
 export type { CodexQuotaObservation } from './codexQuotaHistory';
 
 export interface CodexFileAggregate {
+  /** Runtime projection of the parser’s additive cache-field availability bit. */
+  cacheInputComplete?: boolean;
   total: ProviderTokenCounts;
   byDay: Record<string, ProviderTokenCounts>;
   byModel: Record<string, ProviderTokenCounts>;
@@ -4028,6 +4030,7 @@ function sanitizeParserState(value: unknown, fileKey: string): CodexParserState 
     ...(model ? { model } : {}),
     ...(effort ? { effort } : {}),
     role: sanitizeRole(record.role),
+    ...(typeof record.cacheInputComplete === 'boolean' ? {cacheInputComplete: record.cacheInputComplete} : {}),
     ...(highWater ? { highWater } : {}),
     ...(snapshotSignaturesBySource ? { snapshotSignaturesBySource } : {}),
     ...(previousSnapshotSignature ? { previousSnapshotSignature } : {}),

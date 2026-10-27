@@ -86,6 +86,7 @@ function statusItem(): any {
 
 function codexScope(): any {
   return {
+    cacheInputComplete: true,
     total: {
       processed: 5_000_000,
       fresh: 1_000_000,
@@ -386,4 +387,19 @@ test('the quota format setting reaches the bar text, and its colour follows suit
   assert.equal(manager.quotaItem.text, '$(dashboard) 6% | 1% · 92%');
   assert.equal(manager.quotaItem.backgroundColor?.id, 'statusBarItem.errorBackground');
   assert.equal(manager.quotaItem.visible, true);
+});
+
+test('Codex usage template updates the existing status item immediately and preserves tooltip/quota', () => {
+  const manager = bareStatusBar();
+  manager.statusBarItem = statusItem(); manager.quotaItem = statusItem(); manager.contextItem = statusItem();
+  manager.showCost = true; manager.usageLimitTracking = true; manager.provider = 'codex';
+  manager.updateCodex(codexScope(), 'processed', null);
+  const tooltip = manager.statusBarItem.tooltip.value;
+  manager.setVisibility(true,false,true,'cost',false,false,false,'decimal','',false,
+    'CX | In {input} | Out {output} | Cache {cacheHitRate}%');
+  assert.equal(manager.statusBarItem.text,'CX | In 4.5M | Out 500k | Cache 78%');
+  assert.equal(manager.statusBarItem.tooltip.value,tooltip);
+  assert.equal(manager.lastCodex.scope.total.input,4_500_000);
+  manager.setVisibility(true,false,true);
+  assert.equal(manager.statusBarItem.text,'CX 5M');
 });

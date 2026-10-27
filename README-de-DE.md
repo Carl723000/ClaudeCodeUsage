@@ -6,6 +6,8 @@
 Die Erweiterung liest lokale Nutzungsprotokolle und zeigt Anbieter-Daten mit
 jeweils passender Bedeutung an. Sie ist **kein Abrechnungswerkzeug**.
 
+- Codex kann Eingabe, Ausgabe und Cache gemeinsam über das optionale `codex.statusBarUsageFormat` anzeigen; leer bleibt die bisherige Metrik. Siehe [Formatdetails](CHANGELOG.md#unreleased).
+
 ## Auf einen Blick
 
 - **Ruhigere Aktualisierung und klare Wiederherstellung:** Die Pause gilt für beide

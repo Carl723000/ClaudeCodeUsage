@@ -2268,6 +2268,8 @@ test('advice window is opt-in and comes only from materialized day and session a
 
 test('configured timezone rebuckets Claude Today and hours from the in-memory index without body reads', async () => {
   const previousTimeZone = I18n.getTimezone();
+  const previousNow = Date.now;
+  Date.now = () => Date.parse('2026-07-21T00:15:00.000Z');
   const root = await mkdtemp(path.join(os.tmpdir(), 'ccu-claude-timezone-index-'));
   roots.push(root);
   const project = path.join(root, 'projects', '-fixture-timezone');
@@ -2313,6 +2315,7 @@ test('configured timezone rebuckets Claude Today and hours from the in-memory in
       ['07:00'],
     );
   } finally {
+    Date.now = previousNow;
     I18n.setTimezone(previousTimeZone);
   }
 });

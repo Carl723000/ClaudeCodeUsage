@@ -33,6 +33,8 @@ bar. See [features](#features-at-a-glance), [privacy](#privacy),
 
 ---
 
+- Codex can show input, output and cache usage together with optional `codex.statusBarUsageFormat`; empty keeps the current metric. See [format details](CHANGELOG.md#unreleased).
+
 ## Features at a glance
 
 - **Claude Code and Codex, side by side:** provider-specific Today, Last 30 days,
