@@ -119,8 +119,11 @@ lineage markers after bounded body revalidation, not another store or scanner.
 When Claude quota tracking is enabled, the extension uses the selected Claude
 profile's existing access token to query `api.anthropic.com/api/oauth/usage`.
 If it is expired, the existing refresh token is sent to
-`console.anthropic.com/v1/oauth/token`; the replacement access token is written
-back to that profile's credential file or macOS Keychain item. This is separate
+`platform.claude.com/v1/oauth/token` with Claude Code's public OAuth client ID.
+A valid replacement access token and expiry, plus a rotated refresh token and
+scopes when returned, are written back to that profile's credential file or macOS
+Keychain item. Absent optional fields retain their previous values; rejected or
+cancelled refresh responses are not saved. This is separate
 from optional BYOK AI advice, which never uses Claude subscription credentials.
 
 Different anonymous account fingerprints are not merged into an account-level

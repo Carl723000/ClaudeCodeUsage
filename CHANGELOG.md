@@ -54,6 +54,15 @@ there is no forced rescan, new file, timer, or change to numeric token accountin
 
 
 ### Fixed
+- **Claude quota token refresh (#145)** — update the OAuth token endpoint and
+  include Claude Code's public client ID so expired credentials can refresh before
+  requesting five-hour and weekly quota. Validate replacement credentials and
+  preserve returned refresh-token rotation and scopes in the selected credential
+  source; absent optional fields retain their prior values. Failed or cancelled
+  refresh responses are not saved.
+  中文：更新 Claude OAuth 刷新地址并携带公开 client ID，使过期凭据可以刷新后查询
+  五小时／每周额度；校验响应，将轮换 refresh token 与 scopes 写回所选凭据来源，
+  未返回的可选字段保留旧值。失败或取消的刷新响应不会保存。
 - **Quota sharing history and clearing** — adopting a shared quota now selects
   the matching account's weekly history. Pending refreshes cannot restore cleared
   history or scope names, and read-only sharing lookups cannot quarantine a valid

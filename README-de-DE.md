@@ -14,6 +14,7 @@ jeweils passender Bedeutung an. Sie ist **kein Abrechnungswerkzeug**.
 - Siebentägige Mengen- und anbieterbezogene Betragsauszeichnungen verwenden abgeschlossene rollierende Fenster aus sieben Kalendertagen. Vorhandene Auszeichnungen behalten ihre Aufzeichnungen und werden als frühere Regeln gekennzeichnet; fehlende Evidenz erzeugt keine Daten. Tatsächliche Quoten-Resetzyklen bleiben unverändert.
 - Die Analyse von Claude und Codex zeigt zuerst Kennzahlen desselben Zeitraums, danach Beobachtungen, Belege und Hinweise. Ausgabe pro verstrichener Stunde und beobachtete Nutzungsänderungen bleiben standardmäßig aus; Teilabdeckung bleibt sichtbar. Stundenausgabe ist keine Generierungs-TPS, Änderungen belegen keine Ursachen.
 - Codex kann Eingabe, Ausgabe und Cache gemeinsam über das optionale `codex.statusBarUsageFormat` anzeigen; leer bleibt die bisherige Metrik. Siehe [Formatdetails](CHANGELOG.md#unreleased).
+- Die Claude-Quotenabfrage nutzt den aktuellen OAuth-Endpunkt und speichert erneuerte Zugangsdaten. Siehe [lokale Daten](LOCAL-DATA.md).
 
 Diese Änderungen sind noch nicht veröffentlicht. Keine zusätzlichen Log-Scans, Authentifizierungsanfragen, Hintergrundsammlungen oder automatischen Veröffentlichungen. Siehe [lokale Daten und Löschung](LOCAL-DATA.md).
 

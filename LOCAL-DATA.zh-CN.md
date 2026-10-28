@@ -94,9 +94,11 @@ Resume 重放 decoded 前缀，计入工作量并允许取消。Codec 只接受�
 
 启用 Claude 额度跟踪后，插件用所选 Claude 资料的现有 access token 查询
 `api.anthropic.com/api/oauth/usage`。如该 token 过期，会把现有 refresh token
-发送到 `console.anthropic.com/v1/oauth/token`，并将新 access token 写回该资料的
-凭证文件或 macOS 钥匙串项目。这与可选的自备密钥 AI 建议分开；后者不会使用
-Claude 订阅凭据。
+连同 Claude Code 的公开 OAuth client ID 发送到
+`platform.claude.com/v1/oauth/token`。有效的新 access token、到期时间，以及响应
+返回的轮换 refresh token 和 scopes 会写回该资料的凭证文件或 macOS 钥匙串项目；
+未返回的可选字段保留旧值，被拒绝或取消的刷新响应不会保存。
+这与可选的自备密钥 AI 建议分开；后者不会使用 Claude 订阅凭据。
 
 不同匿名账号 fingerprint 不会合并为账号级事实。账号归属不明时，当前周期的总额／
 未用 API 等价值仍保留既有的低可信本地历史估算，不是已核验账号余额或剩余订阅额度。

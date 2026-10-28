@@ -20,6 +20,7 @@
 - Pencapaian volume dan nilai per penyedia selama tujuh hari memakai jendela bergulir tujuh hari kalender yang telah berakhir. Penghargaan lama mempertahankan catatan dan ditandai sebagai aturan lama; bukti yang kurang tidak menghasilkan tanggal buatan. Siklus reset kuota sebenarnya tidak berubah.
 - Analisis Claude dan Codex menampilkan angka utama dalam rentang yang sama terlebih dahulu, lalu pengamatan, bukti, dan saran. Keluaran per jam berlalu dan perubahan penggunaan teramati tetap nonaktif secara default; cakupan parsial tetap terlihat. Keluaran per jam bukan TPS generasi, dan perubahan tidak membuktikan sebab.
 - Codex dapat menampilkan input, output, dan cache bersama lewat `codex.statusBarUsageFormat` opsional; kosong mempertahankan metrik saat ini. Lihat [detail format](CHANGELOG.md#unreleased).
+- Pengambilan kuota Claude memakai endpoint OAuth terkini dan menyimpan kredensial yang dirotasi. Lihat [data lokal](LOCAL-DATA.md).
 
 Perubahan ini belum dirilis. Tidak menambah pemindaian log, permintaan autentikasi, pengumpulan latar belakang, atau publikasi otomatis. Lihat [data lokal dan pembersihan](LOCAL-DATA.md).
 
