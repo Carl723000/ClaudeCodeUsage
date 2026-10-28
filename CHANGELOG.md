@@ -6,6 +6,8 @@ upstream release: 1.0.8). Format follows [Keep a Changelog](https://keepachangel
 
 ## [Unreleased]
 
+## [2.5.1] - 2026-10-29
+
 ### Added
 - **Custom Codex status-bar usage (#132)** — optional `codex.statusBarUsageFormat`
   shows today’s input, output and cache usage together; empty (default) keeps
